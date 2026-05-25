@@ -1,0 +1,40 @@
+[package]
+name = "outl-tui"
+description = "Terminal UI for the outl outliner."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "outl-tui"
+path = "src/main.rs"
+
+[dependencies]
+outl-core = { workspace = true }
+outl-md = { workspace = true }
+outl-exec = { workspace = true }
+anyhow = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# Bridge for crates that emit via the `log` crate (Steel does this).
+# Without it our `tracing_subscriber` sees nothing from them and the
+# logs escape onto the TUI canvas via the default `log` impl.
+tracing-log = "0.2"
+chrono = { workspace = true }
+clap = { workspace = true }
+walkdir = { workspace = true }
+toml = { workspace = true }
+ulid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
