@@ -1,0 +1,61 @@
+[package]
+name = "outl-exec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Code-block execution engine for outl: trait Runtime + sandbox + idempotent result subblock."
+
+[features]
+default = ["lang-lisp", "lang-js", "lang-python", "lang-lua", "lang-rust"]
+
+# Each language is its own feature so binaries can opt out (mobile,
+# embedded, "lisp-only" distributions, ...). Adding a new language is
+# one feature plus one runtime file in src/runtimes/.
+lang-lisp = ["dep:steel-core"]
+lang-js = ["dep:boa_engine"]
+lang-python = ["dep:rustpython-vm"]
+lang-lua = ["dep:mlua"]
+# Rust support requires the wasmtime sandbox — there is no in-process
+# Rust interpreter. We compile user source to `wasm32-wasip1` via
+# `rustc` and run the resulting module via wasmtime.
+lang-rust = ["wasm"]
+# Generic WASM sandbox. Pulls in wasmtime; enable when the host wants
+# to load drop-in `.wasm` interpreters or use language runtimes that
+# need WASM (Rust today; Steel/QuickJS-wasi tomorrow).
+wasm = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:dirs"]
+
+[dependencies]
+outl-core.workspace = true
+outl-md.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+
+# Language runtimes — pulled in via features. Each is a mature, embeddable
+# pure-Rust (or vendored-C) interpreter. The wasmtime sandbox below is
+# the *uniform* path; in-process runtimes are kept for fast iteration
+# and so users with no `rustup wasm32-wasip1` target still get Lisp/JS/
+# Python/Lua out of the box.
+steel-core = { version = "0.8", optional = true }
+boa_engine = { version = "0.21", optional = true }
+rustpython-vm = { version = "0.4", optional = true, default-features = false, features = ["compiler"] }
+mlua = { version = "0.10", optional = true, features = ["lua54", "vendored"] }
+
+# Source hashing (auto-run cache key, sidecar content hash). Used
+# unconditionally; cheap dep.
+sha2 = { workspace = true }
+
+# WASM sandbox stack (gated behind `wasm`). wasmtime 38 is the highest
+# release that still supports rustc 1.88 (our workspace MSRV).
+wasmtime = { version = "38", optional = true }
+wasmtime-wasi = { version = "38", optional = true }
+dirs = { version = "5", optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true
