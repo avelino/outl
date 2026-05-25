@@ -53,7 +53,7 @@ sha2 = { workspace = true }
 
 # WASM sandbox stack (gated behind `wasm`). wasmtime 38 is the highest
 # release that still supports rustc 1.88 (our workspace MSRV).
-wasmtime = { version = "38", optional = true }
+wasmtime = { version = "43", optional = true }
 wasmtime-wasi = { version = "38", optional = true }
 dirs = { version = "5", optional = true }
 
