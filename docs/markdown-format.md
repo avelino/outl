@@ -1,0 +1,375 @@
+# Markdown Format
+
+The outl markdown dialect, the sidecar `.outl` format, and the 3-level
+matching algorithm that bridges them.
+
+## Why this matters
+
+The user sees the `.md`. The op log uses stable IDs. We need both, without
+visible metadata in the file. Every design decision here serves that.
+
+---
+
+## The .md file
+
+```markdown
+title:: meu projeto x
+type:: project
+status:: active
+tags:: #produto #2026-q2
+created:: [[2026-05-24]]
+
+- objetivo principal #okr
+  priority:: high
+  owner:: [[avelino]]
+  - métrica: 30% redução de custo
+  - prazo: [[2026-06-30]]
+- riscos
+  - dependência de [[fornecedor y]] #risco
+```
+
+That is the **entire file**. No IDs, no UUIDs, no HTML comments, no
+frontmatter delimiter. What you see is what's on disk.
+
+### Page properties (top of file)
+
+Lines at the start of the file in the form `key:: value` are page-level
+properties. Parsing stops at the first blank line or first `-` outline item.
+
+```
+title:: my page
+type:: project
+status:: active
+
+- first block...
+```
+
+### Outline items
+
+Standard markdown unordered lists:
+
+```
+- top level block
+  - child block
+    - grandchild block
+- another top level
+```
+
+Indent is **two spaces** per level. Tab is normalized to two spaces on
+parse and rendered as two spaces.
+
+### Multi-line block text (continuation lines)
+
+A bullet's text can span multiple lines. Subsequent lines are indented
+**one level deeper** than the bullet and contain no marker of their own:
+
+```
+- first line of the block
+  second line of the same block
+  third line
+```
+
+Parsed as a single block with `text = "first line of the block\nsecond
+line of the same block\nthird line"`. Renders back identically.
+
+Continuation **ends** at the first line that is a block marker (`-`),
+a property (`key:: value`), or an unindent. After that point, plain
+indented text becomes "unrecognized" and is skipped — keeps the
+grammar unambiguous.
+
+In the TUI: `Alt+Enter` (or `Ctrl+J`, or `Shift+Enter` in
+kitty-protocol-aware terminals) inserts a soft newline inside the
+current block. Plain `Enter` commits and creates a sibling — unless
+the cursor is inside an open fenced code block, in which case `Enter`
+auto-detects and inserts a soft newline instead (see below).
+
+### Fenced code blocks inside a bullet
+
+CommonMark code fences are preserved literally:
+
+```
+- intro paragraph
+  ```lisp
+  (+ 1 2)
+  ```
+- next bullet
+```
+
+The opening ` ``` ` may live on the bullet line itself
+(`` - ```lisp ``) — parser, renderer, and the [`outl-exec`] engine
+all handle that shape correctly.
+
+What makes fences different from regular continuation:
+
+- Content between the opener and closer is preserved **verbatim**.
+  No `-`, no `key::`, no inline syntax recognition.
+- The closer is a line whose trimmed content is exactly `` ``` ``
+  (with optional trailing backticks) at the same indent as the opener.
+- A missing closer is gracefully synthesized at EOF so the rendered
+  output stays well-formed; the parser also breaks out of a fence
+  when a sibling bullet outdents below the fence indent — better
+  than swallowing the rest of the document.
+
+[`outl-exec`]: ../crates/outl-exec/
+
+### Block properties
+
+A line in the form `key:: value` *as a child of an outline item* is a block
+property:
+
+```
+- objective
+  priority:: high
+  owner:: [[avelino]]
+  - this is a regular child block
+```
+
+`priority::` and `owner::` are properties of `objective`, not children.
+The third line (`- this is a regular child block`) is a real child.
+
+### Inline syntax
+
+| Syntax | Meaning |
+|--------|---------|
+| `[[name]]` | Reference to page named "name" |
+| `[[2026-05-24]]` | Reference to journal "2026-05-24" (rendered as date) |
+| `#name` | Tag (page reference with classification semantics) |
+| `((block-id))` | Embed of block with given ID |
+| `{{query: ...}}` | Saved query (phase 3 — parse as opaque) |
+| `**bold**`, `*italic*`, `\`code\`` | Standard CommonMark |
+
+### What is **not** in the file
+
+- ❌ `id::` lines (Logseq-style) — IDs go in the sidecar
+- ❌ `<!-- block-uid: ... -->` — no HTML comments for metadata
+- ❌ YAML frontmatter (`---`) — page properties use `::` syntax instead
+- ❌ `\`\`\`outl` fenced metadata blocks
+
+---
+
+## The .outl sidecar
+
+For every `pages/foo.md` there is `pages/.foo.outl`. (Dotfile to keep
+directory listings clean.)
+
+Format: JSON.
+
+```json
+{
+  "version": 1,
+  "page_id": "01HXY8KJZQ9T8M7VN3P2R6S4A0",
+  "last_synced_hash": "sha256:e3b0c44298fc1c14...",
+  "last_synced_at": "2026-05-24T11:22:00-03:00",
+  "blocks": [
+    {
+      "id": "01HXY8KJZQ9T8M7VN3P2R6S4A1",
+      "line": 7,
+      "indent": 0,
+      "content_hash": "sha256:abc123..."
+    },
+    {
+      "id": "01HXY8KJZQ9T8M7VN3P2R6S4A2",
+      "line": 8,
+      "indent": 1,
+      "content_hash": "sha256:def456..."
+    }
+  ]
+}
+```
+
+### Fields
+
+- `version`: always present, integer. Future migrations check this.
+- `page_id`: ULID of the page itself (the top-level container).
+- `last_synced_hash`: SHA-256 of the full `.md` file at last sync. Used as
+  a fast "did this change?" check.
+- `last_synced_at`: ISO 8601 timestamp with timezone, set on last write.
+- `blocks`: array, in tree order (depth-first, preorder). Each entry:
+  - `id`: ULID of the block.
+  - `line`: 1-indexed line number in the `.md` at last sync.
+  - `indent`: 0 for top-level outline items, 1 for first child, etc.
+  - `content_hash`: SHA-256 of the block's **textual content only**,
+    not including children or property lines that belong to it.
+
+### Content hash
+
+```
+content_hash(block) = sha256(block.text_content.trim().normalize())
+```
+
+Where `normalize` collapses internal whitespace to single space and strips
+trailing whitespace. This makes the hash robust to whitespace-only edits
+in external editors.
+
+**Same hash function on read and write.** Diverging hashes silently break
+matching.
+
+### Sidecar versioning
+
+When we ship a `version: 2` someday:
+
+- Always be able to **read** v1 (forward compat).
+- New writes use the latest version.
+- `outl doctor --migrate` can rewrite v1 → v2 in place.
+
+Never delete v1 read support — old workspaces in the wild stay supported.
+
+---
+
+## Roundtrip
+
+```
+parse(render(ast)) == ast
+render(parse(md)) ≈ md
+```
+
+The second is "semantically equivalent", not byte-equivalent. We may
+normalize:
+
+- Tabs → two spaces.
+- Trailing whitespace on lines stripped.
+- Final newline added if missing.
+- Property lines with leading whitespace normalized.
+
+We never:
+
+- Reorder blocks.
+- Change content.
+- Drop properties.
+- Change inline link syntax.
+
+Roundtrip is a **property test** in `crates/outl-md/tests/roundtrip.rs`.
+Treat it as part of the spec — if your parse/render changes break it,
+either the test is wrong (rare) or your change is.
+
+---
+
+## 3-level matching
+
+When a file save lands on disk and the `.md` differs from the sidecar's
+`last_synced_hash`:
+
+1. **Parse** new `.md` → `new_ast` (no IDs).
+2. **Read** sidecar → `old_ast` (with IDs, with hashes).
+3. **Match** blocks `new ↔ old` at three confidence levels.
+
+### Level 1 — High confidence
+
+Block matches by:
+- `content_hash` exact match between `old_block` and `new_block`, AND
+- parent matches (by hash of parent, or both are root-level)
+
+→ Preserve ID. If position changed, emit `Op::Move`.
+
+### Level 2 — Medium confidence
+
+Block matches by:
+- Normalized Levenshtein similarity > 80%, AND
+- (same parent OR position within ±2 lines)
+
+→ Preserve ID. Emit `Op::Edit` (and `Op::Move` if needed). Log a warning
+to `.outl/orphans.log`:
+
+```
+2026-05-24T11:22:01-03:00 medium-confidence match block=01HXY... similarity=0.83
+```
+
+### Level 3 — No match
+
+Block in `new_ast` has no match in `old_ast`:
+
+→ New ULID assigned. Emit `Op::Create`.
+
+Block in `old_ast` has no match in `new_ast`:
+
+→ Move to TRASH_ROOT (`Op::Move` to trash). Emit before deletion:
+
+```
+2026-05-24T11:22:01-03:00 orphan block=01HXY... content="começava com..."
+```
+
+**Hard rule:** every level-3 deletion must hit `orphans.log` before the
+op is committed. Silent deletion is a P0 bug.
+
+### Tiebreakers
+
+When two new blocks would match the same old block (or vice versa) at the
+same confidence:
+
+1. Prefer matches at the same position.
+2. Prefer matches with the same parent.
+3. Prefer matches where the parent chain matches deepest.
+4. If still tied: pick the one that minimizes total moves across the
+   matching as a whole (greedy is fine for phase 1; optimal can come later).
+
+---
+
+## Edge cases
+
+### Duplicated block (Ctrl+D)
+
+User selects a block in VS Code and presses Ctrl+D. Now there are two
+blocks with identical content.
+
+- First one matches the old `content_hash` at level 1. Keeps ID.
+- Second one has the same hash but its **position** differs from the old
+  one. After the first match is consumed, no other old block has this
+  hash. → Level 3. New ULID.
+
+### Two identical blocks swap parents
+
+A and B both contain "TODO". A was under page X, B under page Y. After
+edit, A is under Y, B is under X.
+
+- Pure hash match alone is ambiguous (both new blocks match both old
+  blocks).
+- Tiebreaker: parent matches → A stays under "Y" matches the old A under
+  Y? No — the old A was under X. The "parent matches" tiebreaker breaks.
+- Fall back: minimize total moves. Either pairing requires one move.
+- Then minimize position diff. Pick the assignment that's lexicographically
+  smallest.
+
+This is the case tested in `identical_blocks_swap.rs`.
+
+### Heavy edit (>20% content change)
+
+The content hash is gone. Similarity may drop below 80%.
+
+- If still > 80%: level 2, log warning.
+- If below 80% but parent and position match: still level 2, more
+  prominent warning.
+- If below 80% AND parent doesn't match: level 3, treat as new block.
+
+### Rename of header with many children
+
+Heading text changes. Children unchanged.
+
+- Header block: hash mismatch. Probably level 2 (similarity > 80% if
+  rename is partial). New ID if rename is total.
+- Children: hash matches. Stay under the (possibly new-ID) header
+  because they were always under "the block at this position".
+
+The structure tiebreaker handles this: we match parent chains, not
+parent IDs, when parents are themselves ambiguous.
+
+---
+
+## `outl reconcile` (manual resolution)
+
+If the matching produces orphans or level-2 warnings, the user runs:
+
+```
+outl reconcile
+```
+
+A TUI opens showing one orphan at a time with candidates. Keys:
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` | next/prev candidate |
+| `enter` | accept match |
+| `d` | confirm delete (orphan stays as `Move` to trash) |
+| `s` | skip (revisit later) |
+| `q` | quit |
+
+The orphan log is cleared as items are resolved.
