@@ -7,7 +7,7 @@
 use anyhow::Result;
 
 use super::super::SlashCommand;
-use crate::state::App;
+use crate::state::{App, ToastKind};
 
 // ---------------------------------------------------------------------------
 // today — jump to today's journal
@@ -44,7 +44,7 @@ impl SlashCommand for RefreshCommand {
     }
     fn execute(&self, app: &mut App, _args: &str) -> Result<bool> {
         app.refresh_workspace();
-        app.status = "refreshed".into();
+        app.toast(ToastKind::Info, "refreshed");
         Ok(false)
     }
 }
@@ -66,7 +66,7 @@ impl SlashCommand for WriteCommand {
     }
     fn execute(&self, app: &mut App, _args: &str) -> Result<bool> {
         app.save();
-        app.status = "saved".into();
+        app.toast(ToastKind::Success, "saved");
         Ok(false)
     }
 }
@@ -87,7 +87,12 @@ impl SlashCommand for HelpCommand {
         &["h"]
     }
     fn execute(&self, app: &mut App, _args: &str) -> Result<bool> {
-        app.show_help = true;
+        // Genuine toggle so /help on an open popup closes it — matches
+        // the description and matches the `?` keybinding's behavior.
+        app.show_help = !app.show_help;
+        if !app.show_help {
+            app.help_scroll = 0;
+        }
         Ok(false)
     }
 }

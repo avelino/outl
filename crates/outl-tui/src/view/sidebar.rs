@@ -12,9 +12,9 @@
 use crate::state::{App, SidebarSection, View};
 use chrono::{Datelike, Local, NaiveDate};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 /// Width the orchestrator should reserve for the sidebar. Fixed so
 /// the main column has a predictable Rect for cursor math.
@@ -161,22 +161,26 @@ fn render_pinned(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
 
     let items: Vec<ListItem<'_>> = pinned
         .into_iter()
-        .enumerate()
-        .map(|(i, (title, icon))| {
-            let selected = focused && i == app.sidebar_cursor;
-            let style = if selected {
-                app.theme.list_selected
-            } else {
-                Style::default()
-            };
+        .map(|(title, icon)| {
             let label = match icon {
                 Some(ic) => format!(" {ic} {title}"),
                 None => format!(" 📄 {title}"),
             };
-            ListItem::new(Line::from(Span::styled(label, style)))
+            ListItem::new(Line::from(Span::raw(label)))
         })
         .collect();
-    f.render_widget(List::new(items).block(block), area);
+
+    // `ListState` carries the selected index AND the scroll offset.
+    // ratatui auto-scrolls so the highlighted row stays visible —
+    // we just feed it the cursor and let it figure out the offset.
+    let mut state = ListState::default();
+    if focused {
+        state.select(Some(app.sidebar_cursor));
+    }
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(app.theme.list_selected);
+    f.render_stateful_widget(list, area, &mut state);
 }
 
 // ─── recent ───────────────────────────────────────────────────────────
@@ -208,14 +212,7 @@ fn render_recent(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
         .recent_paths
         .iter()
         .take(20)
-        .enumerate()
-        .map(|(i, path)| {
-            let selected = focused && i == app.sidebar_cursor;
-            let style = if selected {
-                app.theme.list_selected
-            } else {
-                Style::default()
-            };
+        .map(|path| {
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("?");
             let entry = app.index.by_slug(stem);
             let (icon, label) = match entry {
@@ -226,8 +223,19 @@ fn render_recent(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
                 ),
                 None => ("📄".to_string(), stem.to_string()),
             };
-            ListItem::new(Line::from(Span::styled(format!(" {icon} {label}"), style)))
+            ListItem::new(Line::from(Span::raw(format!(" {icon} {label}"))))
         })
         .collect();
-    f.render_widget(List::new(items).block(block), area);
+
+    // ListState handles offset for us — feeding it the cursor lets
+    // ratatui keep the highlighted row inside the (variable-height)
+    // Recent panel even when the user walks past the visible window.
+    let mut state = ListState::default();
+    if focused {
+        state.select(Some(app.sidebar_cursor));
+    }
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(app.theme.list_selected);
+    f.render_stateful_widget(list, area, &mut state);
 }

@@ -82,10 +82,29 @@ cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
 Or just `/check`. The PostToolUse hook in `.claude/settings.json` runs fmt +
 clippy on the touched crate automatically after each `Edit`/`Write`.
+
+**`cargo doc` is part of CI** (`.github/workflows/ci.yml` — `docs` job, with
+`RUSTDOCFLAGS=-D warnings`). It breaks the PR on:
+
+- **Intra-doc links to private items.** A doc comment that writes
+  ``[`Foo`]`` or ``[`crate::path::Foo`]`` where `Foo` is `pub(crate)` /
+  `pub(super)` / `mod` (no `pub`) fails with
+  `rustdoc::private_intra_doc_links`. The workspace is mostly `pub(crate)`,
+  so **almost every internal type triggers this**. Mitigation: drop the
+  square brackets and use backticks only (`` `Foo` ``) — same readability,
+  no link, no warning.
+- **Broken/missing doc references.** `[`Foo`]` where `Foo` doesn't exist.
+- **Code blocks in doc comments that don't compile** (rare for us; we
+  rarely put rust code in module docs).
+
+Run `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` before
+reporting "done" on any patch that adds or changes module-level doc
+comments (`//!` blocks) — `/check` does not include this today.
 
 ### Specialized agents
 

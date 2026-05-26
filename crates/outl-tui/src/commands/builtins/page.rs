@@ -82,7 +82,12 @@ impl SlashCommand for PinCommand {
         "Toggle pinned:: on the current page (shows in sidebar Pinned)"
     }
     fn aliases(&self) -> &'static [&'static str] {
-        &["unpin", "pinned"]
+        // `pinned` is a synonym — it reads naturally in the palette
+        // ("/pinned" → "is this pinned? toggle it"). We intentionally
+        // do NOT alias `unpin`: a command named `unpin` that *toggles*
+        // would silently pin an unpinned page, which is surprising.
+        // Users wanting the explicit verb get `/pin` either way.
+        &["pinned"]
     }
     fn execute(&self, app: &mut App, _args: &str) -> Result<bool> {
         app.toggle_pinned();

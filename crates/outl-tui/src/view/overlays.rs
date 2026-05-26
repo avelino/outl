@@ -194,16 +194,30 @@ fn render_preview_pane(f: &mut ratatui::Frame<'_>, area: Rect, app: &App, qs: &Q
         return;
     };
 
+    // One-slot cache: the renderer is called on every poll tick, but
+    // the underlying file changes only when the user touches j/k (or
+    // edits a page elsewhere). Re-read only when the cached key
+    // doesn't match the current candidate.
     let path = app.index.by_slug(&candidate.key).map(|e| e.path.clone());
-    let body_lines: Vec<Line<'static>> = match path.as_deref() {
-        Some(p) => match std::fs::read_to_string(p) {
-            Ok(text) => preview_lines(&text, area.height.saturating_sub(2) as usize, app),
-            Err(_) => vec![Line::from(Span::styled(
-                "  (couldn't read file)",
-                app.theme.dim,
-            ))],
-        },
-        None => vec![Line::from(Span::styled(
+    let cached_text: Option<String> = {
+        let mut slot = qs.preview_cache.borrow_mut();
+        let hit = matches!(slot.as_ref(), Some((k, _)) if k == &candidate.key);
+        if !hit {
+            *slot = path
+                .as_deref()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .map(|text| (candidate.key.clone(), text));
+        }
+        slot.as_ref().map(|(_, text)| text.clone())
+    };
+
+    let body_lines: Vec<Line<'static>> = match (path.is_some(), cached_text) {
+        (true, Some(text)) => preview_lines(&text, area.height.saturating_sub(2) as usize, app),
+        (true, None) => vec![Line::from(Span::styled(
+            "  (couldn't read file)",
+            app.theme.dim,
+        ))],
+        (false, _) => vec![Line::from(Span::styled(
             "  (not yet indexed)",
             app.theme.dim,
         ))],
@@ -375,12 +389,19 @@ pub(crate) fn render_slash_overlay(
     buckets.sort_by_key(|(k, _)| category_order(k));
 
     let mut lines: Vec<Line<'static>> = Vec::new();
+    // Track which visual row the highlighted command landed on so
+    // we can scroll the Paragraph to keep it in view when category
+    // headers + blank rows push it past the visible height.
+    let mut highlighted_row: Option<usize> = None;
     for (cat, items) in &buckets {
         lines.push(Line::from(Span::styled(
             format!(" {} {} ", category_icon(cat), cat),
             app.theme.help_title,
         )));
         for (orig_idx, c) in items {
+            if *orig_idx == s.selected {
+                highlighted_row = Some(lines.len());
+            }
             let style = if *orig_idx == s.selected {
                 app.theme.list_selected
             } else {
@@ -398,6 +419,21 @@ pub(crate) fn render_slash_overlay(
         lines.push(Line::raw(""));
     }
 
+    // Viewport height inside the bordered block.
+    let inner_h = outer[1].height.saturating_sub(2) as usize;
+    let total = lines.len();
+    // Auto-scroll: when the highlighted row would render past the
+    // bottom of the viewport, push the scroll offset just enough to
+    // bring it back into view. Clamps so the bottom of the list
+    // doesn't scroll past the last row.
+    let scroll: u16 = match highlighted_row {
+        Some(row) if inner_h > 0 && row >= inner_h => {
+            let max = total.saturating_sub(inner_h);
+            ((row + 1).saturating_sub(inner_h)).min(max) as u16
+        }
+        _ => 0,
+    };
+
     let list = Paragraph::new(lines)
         .block(
             Block::default()
@@ -405,7 +441,8 @@ pub(crate) fn render_slash_overlay(
                 .border_style(app.theme.border)
                 .title(format!(" {} commands · ↑↓ Enter Esc ", s.candidates.len())),
         )
-        .style(Style::default().bg(app.theme.popup_bg));
+        .style(Style::default().bg(app.theme.popup_bg))
+        .scroll((scroll, 0));
     f.render_widget(list, outer[1]);
 }
 

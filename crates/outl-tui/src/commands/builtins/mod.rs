@@ -1,19 +1,19 @@
 //! Built-in slash / palette commands.
 //!
-//! Each command is a small struct implementing
-//! [`crate::commands::SlashCommand`]. They're grouped into sibling
-//! modules by concern so this file stays a glance-able index:
+//! Each command is a small struct implementing the `SlashCommand`
+//! trait from the parent `commands` module. They're grouped into
+//! sibling modules by concern so this file stays a glance-able index:
 //!
-//! - [`page`] — block / page property mutations, including `pin`
-//! - [`workspace`] — navigation, save, reload, help, quit, open
-//! - [`exec`] — search overlay, code-block runner, theme swap
-//! - [`dates`] — date / time / ISO / week-tag inserters
+//! - `page` — block / page property mutations, including `pin`
+//! - `workspace` — navigation, save, reload, help, quit, open
+//! - `exec` — search overlay, code-block runner, theme swap
+//! - `dates` — date / time / ISO / week-tag inserters
 //!
 //! Adding a new command:
 //!
 //! 1. Drop the `pub struct FooCommand;` + `impl SlashCommand for FooCommand` in the
 //!    appropriate sibling (or create a new sibling if it's a fresh concern).
-//! 2. Register it below in [`register_all`].
+//! 2. Register it below in `register_all`.
 //!
 //! Convention:
 //!
@@ -44,7 +44,7 @@ use workspace::{
     HelpCommand, OpenCommand, QuitCommand, RefreshCommand, TodayCommand, WriteCommand,
 };
 
-/// Hook for [`super::CommandRegistry::with_builtins`].
+/// Hook for `super::CommandRegistry::with_builtins`.
 pub(super) fn register_all(reg: &mut CommandRegistry) {
     // page — properties and the pinned toggle
     reg.register(PropBlockCommand);

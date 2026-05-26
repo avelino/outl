@@ -231,6 +231,15 @@ pub(crate) struct QuickSwitchState {
     pub(crate) query: String,
     pub(crate) candidates: Vec<SwitchCandidate>,
     pub(crate) selected: usize,
+    /// One-slot cache for the preview pane so the renderer doesn't
+    /// re-read the highlighted page from disk on every frame. Keyed
+    /// by the candidate's `key` (slug or ISO date); the renderer
+    /// invalidates whenever the cached key doesn't match the
+    /// currently selected candidate. `RefCell` because the
+    /// `render_app` path holds `QuickSwitchState` by shared
+    /// reference — interior mutability lets us refresh the slot
+    /// without rippling `&mut` through every view function.
+    pub(crate) preview_cache: std::cell::RefCell<Option<(String, String)>>,
 }
 
 /// One search hit — a single block matching the query.
@@ -396,7 +405,7 @@ pub(crate) struct App {
     /// LRU of recently-opened paths. Newest first; bounded to a small
     /// window so the sidebar's `Recent` section stays scannable.
     /// In-memory only for now — persisting to `.outl/state.toml` is on
-    /// the roadmap (Fase 2 stretch).
+    /// the roadmap (Phase 2 stretch).
     pub(crate) recent_paths: Vec<PathBuf>,
 
     /// Stack of transient notifications shown in the bottom-right
