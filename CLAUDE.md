@@ -116,6 +116,15 @@ Invoke proactively when relevant:
   Compares Rust against paper pseudocode line by line.
 - **`markdown-roundtrip-tester`** — after any change in `outl-md/`.
   Validates roundtrip stability + matching invariants.
+- **`refactor-architect`** — after the file-size-guard hook fires
+  (stop at 900 lines, warn at 600). Proposes a split by responsibility.
+- **`doc-keeper`** — **invoke at the end of every feature** that
+  changes public API, markdown syntax, TUI shortcut, slash command,
+  sidecar/op-log format, or user-observable behavior. Walks
+  `docs/*.md`, root `CLAUDE.md`, and per-crate `CLAUDE.md`; updates
+  what drifted, creates only what was missing. **Rule of thumb:** if
+  you'd struggle to explain the change to a contributor reading only
+  the docs, this agent runs.
 
 ### Slash commands
 

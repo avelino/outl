@@ -40,9 +40,12 @@ device. Edit in VS Code or in the TUI, doesn't matter. Journal works.
 ### `outl-md`
 - Parse `.md` (clean, no IDs) → AST.
 - Render AST → `.md` (clean).
-- Read/write `.outl` sidecar (JSON).
+- Read/write `.outl` sidecar (JSON, version `2`, reads v1).
 - 3-level matching algorithm.
-- Diff (old AST + new AST) → minimal `Op` sequence.
+- Diff (old AST + new AST + old sidecar blocks) → minimal `Op`
+  sequence; preserves `ref_handle` verbatim on level-1/2 matches.
+- Block-level index (`((blk-XXXXXX))` + reverse refs) under
+  `WorkspaceIndex` — O(1) resolve, linear `search_block_text`.
 - Tests: `roundtrip`, `external_edit`, `duplicate_block`,
   `identical_blocks_swap`, `heavy_edit`.
 
@@ -58,9 +61,14 @@ device. Edit in VS Code or in the TUI, doesn't matter. Journal works.
 - Sidebar of pages.
 - Navigation between journals (`[`, `]`, `t`, `g j`).
 - Tag panel.
-- Outline panel (read-only first pass).
-- Backlinks panel.
-- Command palette (basic).
+- Outline panel (read/write — text editing, indent/outdent, move, delete).
+- Inline backlinks below the outline (`B` toggle).
+- Command palette + slash menu sharing one registry.
+- Block-reference workflow: inline render of `((blk-XXXXXX))`,
+  embed expansion (source block + children with `↳ ` prefix) for
+  `!((blk-XXXXXX))`, `Enter` jumps to source block, `((` autocomplete
+  in Insert, `y r` / `/refer` / `/refer-embed` copy handles to the OS
+  clipboard (via `arboard`).
 - Page properties visible and editable.
 - Visual distinction page vs tag (different colors).
 

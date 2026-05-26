@@ -40,7 +40,7 @@ storage that's an interface instead of a hardcoded SQLite blob.
 | **TUI** | No | No | Yes — first-class |
 | **Daily journal** | Yes | Yes | Yes |
 | **`[[refs]]` / `#tags`** | Yes | Yes | Yes |
-| **Block embeds `((id))`** | Yes | Yes | Recognized, rendered in phase 3 |
+| **Block refs `((blk-XXXXXX))` + embeds `!((blk-XXXXXX))`** | Yes (long uids) | Yes (long uids) | Short, sidecar-backed handles; clean `.md` |
 | **Queries** | `{{query: ...}}` rich | Datalog-ish | `{{query: ...}}` DSL — phase 3 |
 
 [i1]: https://github.com/avelino/outl/issues/1

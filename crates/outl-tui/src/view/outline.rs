@@ -5,12 +5,28 @@
 use crate::outline_ops::path_for_index;
 use crate::state::{App, Focus, Mode};
 use crate::theme::Theme;
-use crate::view::inline::{highlight_inline, render_markdown_inline, split_todo_prefix};
-use outl_md::inline::byte_index_for_char;
+use crate::view::inline::{
+    highlight_inline, render_markdown_inline, render_pretty_block_text, split_todo_prefix,
+};
+use outl_md::inline::{byte_index_for_char, tokenize, InlineTok};
 use outl_md::parse::{OutlineNode, ParsedPage};
 use outl_md::view::{block_to_rows, BlockRowKind};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
+
+/// Maximum AST nesting depth we'll render inside a single embed
+/// expansion. Caps the size of the visual block we draw under one
+/// `!((blk-XXXXXX))` — a deeply nested source subtree gets truncated
+/// instead of flooding the outline.
+///
+/// **Not a cycle protector.** Embed-of-embed (a source block whose
+/// own text is another `!((blk-Y))`) is rendered inline with the `↳ `
+/// marker by `render_pretty_block_text`; it is *not* recursively
+/// expanded here. So an `A → B → A` cycle never enters this recursion
+/// and the cap doesn't need to defend against it. If recursive embed
+/// expansion ever lands, add a `visited: &HashSet<&str>` argument and
+/// short-circuit when the current handle is already in the set.
+const EMBED_MAX_DEPTH: u32 = 4;
 
 /// Render the outline into a flat list of `Line`s for ratatui, and
 /// report the visual line index where the *selected* block's bullet
@@ -106,9 +122,103 @@ pub(crate) fn render_block(
         prop_spans.push(Span::styled(v.clone(), app.theme.property_value));
         out.push(Line::from(prop_spans));
     }
+
+    // Expand `!((blk-XXXXXX))` embeds as a read-only subtree under
+    // the carrying block. Triggered when:
+    //   - the block's text resolves to a single Embed token
+    //     (mixed prose keeps the inline `↳ <text>` render);
+    //   - the handle resolves through the workspace index.
+    // The expanded rows are visual-only — they don't move `cursor`
+    // (the flat index used for navigation), so `j` / `k` cross them
+    // in one step instead of paging through borrowed content. The
+    // carrying block's own row keeps whatever render `mode` chose
+    // (raw with cursor, raw with caret, or pretty) so column-to-byte
+    // alignment is never broken by the expansion.
+    if let Some(handle) = embed_only_handle(&b.text) {
+        if let Some(entry) = app.index.resolve_block_ref(handle) {
+            // `outer_indent` matches the carrying block's own indent so
+            // the `│ ` guides line up with the outline's normal indent
+            // pattern. Embed-internal nesting comes from `depth`.
+            emit_embedded_children(&entry.children, indent, 1, app, out);
+        }
+    }
+
     *cursor += 1;
     for child in &b.children {
         render_block(child, indent + 1, cursor, app, out, selected_line);
+    }
+}
+
+/// Return the handle if `text` is a single `!((blk-XXXXXX))` token
+/// surrounded only by whitespace; `None` otherwise.
+///
+/// Mixed content (`prelude !((blk-X)) postlude`) keeps the inline
+/// `↳ <text>` render — we only expand when the user clearly meant
+/// the whole block to *be* the embed.
+fn embed_only_handle(text: &str) -> Option<&str> {
+    let mut handle: Option<&str> = None;
+    for tok in tokenize(text.trim()) {
+        match tok {
+            InlineTok::Plain(s) if s.trim().is_empty() => continue,
+            InlineTok::Embed { handle: h } if handle.is_none() => handle = Some(h),
+            _ => return None,
+        }
+    }
+    handle
+}
+
+/// Emit a source block's subtree underneath the embedding block.
+///
+/// Each row gets the same `↳ ` prefix the embed's first row carries
+/// so the whole expansion reads as one cohesive block visually. Two
+/// indent layers are stacked per row:
+///
+/// 1. `│ ` per ancestor indent of the carrying block (matches the
+///    outline's own indent guides so the embed sits under the right
+///    parent at a glance);
+/// 2. two spaces per embed-subtree depth, so a child of the embed's
+///    root lands visually under the root's `↳ ` instead of next to
+///    it (otherwise the reader can't tell whether the row is a
+///    sibling of the carrying block or a child of the source).
+///
+/// Depth-capped at [`EMBED_MAX_DEPTH`] so an embed cycle can't run
+/// forever.
+fn emit_embedded_children(
+    children: &[OutlineNode],
+    outer_indent: u32,
+    depth: u32,
+    app: &App,
+    out: &mut Vec<Line<'static>>,
+) {
+    if depth > EMBED_MAX_DEPTH {
+        return;
+    }
+    for child in children {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        // 1. Outline indent guides (mirrors what `emit_block_lines`
+        //    draws for a regular block at the same depth in the doc).
+        for _ in 0..outer_indent {
+            spans.push(Span::styled("│ ", app.theme.dim));
+        }
+        // 2. Embed-internal indent so children land **below the source
+        //    root's text**, not alongside its `↳ `. The carrying
+        //    block's first row reads `- ↳ <root-text>`: bullet + space
+        //    + `↳` + space = four cells before the root text starts.
+        //    A child needs to clear those four cells plus one more
+        //    embed-indent step (two cells) before its own `↳ `, then
+        //    another two per nested level. `(depth + 1) * 2` spaces
+        //    keeps the geometry: depth 1 → 4 spaces, depth 2 → 6, etc.
+        for _ in 0..(depth + 1) {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled("↳ ", app.theme.dim));
+        spans.extend(render_pretty_block_text(
+            &child.text,
+            &app.theme,
+            &app.index,
+        ));
+        out.push(Line::from(spans));
+        emit_embedded_children(&child.children, outer_indent, depth + 1, app, out);
     }
 }
 
@@ -280,4 +390,39 @@ fn emit_row_with_cursor(
 enum CursorStyle {
     Caret,
     Block,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embed_only_handle_detects_bare_token() {
+        assert_eq!(embed_only_handle("!((blk-r6s4a1))"), Some("blk-r6s4a1"));
+    }
+
+    #[test]
+    fn embed_only_handle_ignores_surrounding_whitespace() {
+        assert_eq!(embed_only_handle("  !((blk-r6s4a1))  "), Some("blk-r6s4a1"));
+    }
+
+    #[test]
+    fn embed_only_handle_rejects_mixed_text() {
+        assert_eq!(embed_only_handle("see !((blk-r6s4a1)) context"), None);
+    }
+
+    #[test]
+    fn embed_only_handle_rejects_inline_ref() {
+        // `((blk-X))` (no leading `!`) is a ref, not an embed —
+        // must not trigger expansion.
+        assert_eq!(embed_only_handle("((blk-r6s4a1))"), None);
+    }
+
+    #[test]
+    fn embed_only_handle_rejects_two_embeds_on_one_block() {
+        // Two embeds in the same block is ambiguous (which one expands
+        // first?) — phase 1 keeps the rule strict: exactly one token,
+        // surrounded by whitespace.
+        assert_eq!(embed_only_handle("!((blk-aaaaaa)) !((blk-bbbbbb))"), None);
+    }
 }

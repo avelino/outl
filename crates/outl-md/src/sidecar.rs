@@ -10,7 +10,39 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 /// Current sidecar format version. Bump when introducing breaking changes.
-pub const SIDECAR_VERSION: u32 = 1;
+///
+/// Version history:
+/// - **1** — initial format (page_id, last_synced_hash, blocks with id /
+///   line / indent / content_hash).
+/// - **2** — added `ref_handle` on every block to power `((blk-XXXXXX))`
+///   inline references. Backward-compatible read: v1 sidecars load fine
+///   and their handles are derived on the fly from the block id.
+pub const SIDECAR_VERSION: u32 = 2;
+
+/// Lowest sidecar version this crate is willing to read.
+///
+/// Older versions return [`SidecarError::UnsupportedVersion`]. Keeping
+/// this explicit (rather than a magic number in `read`) so the contract
+/// is greppable when a v3 ever needs to drop v1 support.
+pub const MIN_READABLE_SIDECAR_VERSION: u32 = 1;
+
+/// Prefix every block ref handle carries in the `.md` file.
+///
+/// `((blk-r6s4a1))` is what users see. The prefix lets a reader (human
+/// or parser) tell a block ref apart from page refs / tags at a glance.
+pub const REF_HANDLE_PREFIX: &str = "blk-";
+
+/// Number of base32 (Crockford, lowercased) characters taken from the
+/// **tail** of the block's ULID to form its ref handle.
+///
+/// ULIDs are 26 chars total, split as 10 chars of timestamp + 16 chars
+/// of random tail. Pulling 6 chars from the tail gives ~30 bits of
+/// entropy (~1B values). Birthday-collision probability at 100k blocks
+/// is ~5e-6 — effectively zero. Lazy expansion to 7+ chars happens at
+/// index-build time if a collision is ever observed (see
+/// `WorkspaceIndex`); the sidecar itself always stores whatever handle
+/// resolved a given block at write time.
+pub const REF_HANDLE_TAIL_LEN: usize = 6;
 
 /// One block entry in the sidecar.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +55,19 @@ pub struct SidecarBlock {
     pub indent: u32,
     /// SHA-256 of the block's textual content, formatted `sha256:<hex>`.
     pub content_hash: String,
+    /// Short, stable, human-typeable handle for `((blk-XXXXXX))` inline
+    /// references and `{{embed: ((blk-XXXXXX))}}` embeds.
+    ///
+    /// Default-derived from [`derive_ref_handle`] using the block id.
+    /// The handle is stable as long as the block keeps the same id —
+    /// editing the block's text does **not** change it. Persisted so
+    /// that a future change to the derivation scheme cannot invalidate
+    /// existing references already living in `.md` files.
+    ///
+    /// `#[serde(default)]` is what makes v1 sidecars load cleanly:
+    /// missing handles are backfilled by [`read`] from the id.
+    #[serde(default)]
+    pub ref_handle: String,
 }
 
 /// Full sidecar payload.
@@ -83,12 +128,24 @@ pub fn sidecar_path_for(md_path: &Path) -> PathBuf {
 }
 
 /// Read and validate a sidecar from disk.
+///
+/// Accepts any version in `[MIN_READABLE_SIDECAR_VERSION, SIDECAR_VERSION]`.
+/// Older payloads are upgraded in-memory: every block missing a
+/// `ref_handle` gets one [derived from its id](derive_ref_handle), and
+/// the in-memory `version` is bumped to [`SIDECAR_VERSION`]. The next
+/// [`write()`] then persists the upgraded shape.
 pub fn read(path: &Path) -> Result<Sidecar, SidecarError> {
     let s = std::fs::read_to_string(path)?;
-    let sc: Sidecar = serde_json::from_str(&s)?;
-    if sc.version != SIDECAR_VERSION {
+    let mut sc: Sidecar = serde_json::from_str(&s)?;
+    if sc.version < MIN_READABLE_SIDECAR_VERSION || sc.version > SIDECAR_VERSION {
         return Err(SidecarError::UnsupportedVersion(sc.version));
     }
+    for b in &mut sc.blocks {
+        if b.ref_handle.is_empty() {
+            b.ref_handle = derive_ref_handle(b.id);
+        }
+    }
+    sc.version = SIDECAR_VERSION;
     Ok(sc)
 }
 
@@ -100,6 +157,25 @@ pub fn write(path: &Path, sidecar: &Sidecar) -> Result<(), SidecarError> {
     let s = serde_json::to_string_pretty(sidecar)?;
     crate::atomic::write_atomic(path, s.as_bytes())?;
     Ok(())
+}
+
+/// Derive the canonical ref handle for a given block id.
+///
+/// Format: `blk-` followed by the last [`REF_HANDLE_TAIL_LEN`] characters
+/// of the ULID's Crockford base32 representation, lowercased. ULID
+/// `Display` is always exactly 26 ASCII characters today; iterating
+/// by `chars()` keeps the function safe if a future id encoding ever
+/// becomes multi-byte UTF-8.
+///
+/// Determinism matters: the same block id must always yield the same
+/// handle so that two devices building the sidecar independently agree
+/// on what `((blk-XXXXXX))` means.
+pub fn derive_ref_handle(id: NodeId) -> String {
+    let s = id.to_string();
+    let total = s.chars().count();
+    let skip = total.saturating_sub(REF_HANDLE_TAIL_LEN);
+    let tail: String = s.chars().skip(skip).collect();
+    format!("{REF_HANDLE_PREFIX}{}", tail.to_lowercase())
 }
 
 /// Compute the canonical content hash of a block's text.
@@ -177,6 +253,104 @@ mod tests {
             Err(SidecarError::InvalidJson(_)) | Err(SidecarError::UnsupportedVersion(99)) => {}
             other => panic!("expected version/json error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn derive_ref_handle_uses_last_six_chars_lowercased() {
+        // The derivation is "take the lowercased tail of the ULID's
+        // Display impl". We assert that property holds for an arbitrary
+        // id without depending on the `ulid` crate here (outl-md does
+        // not have it as a direct dependency).
+        let id = NodeId::new();
+        let display = id.to_string();
+        let expected_tail = display[display.len() - REF_HANDLE_TAIL_LEN..].to_lowercase();
+        assert_eq!(
+            derive_ref_handle(id),
+            format!("{REF_HANDLE_PREFIX}{expected_tail}")
+        );
+    }
+
+    #[test]
+    fn derive_ref_handle_is_deterministic() {
+        let id = NodeId::new();
+        assert_eq!(derive_ref_handle(id), derive_ref_handle(id));
+    }
+
+    #[test]
+    fn derive_ref_handle_format_is_blk_prefix_plus_six() {
+        let id = NodeId::new();
+        let h = derive_ref_handle(id);
+        assert!(h.starts_with(REF_HANDLE_PREFIX));
+        let tail = &h[REF_HANDLE_PREFIX.len()..];
+        assert_eq!(tail.len(), REF_HANDLE_TAIL_LEN);
+        assert!(tail.chars().all(|c| c.is_ascii_alphanumeric()));
+        assert_eq!(tail, tail.to_lowercase());
+    }
+
+    #[test]
+    fn v1_sidecar_loads_and_backfills_ref_handle() {
+        // Hand-written v1 payload (no `ref_handle` field on the block).
+        // We deserialize through `read` and assert it:
+        //   1. parses without error,
+        //   2. surfaces version == SIDECAR_VERSION on the in-memory
+        //      value (upgrade-on-read),
+        //   3. populates a non-empty `ref_handle` derived from `id`.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".legacy.outl");
+        let id = NodeId::new();
+        let v1_json = format!(
+            r#"{{
+              "version": 1,
+              "page_id": "{page}",
+              "last_synced_hash": "sha256:abc",
+              "last_synced_at": "2026-05-24T10:00:00-03:00",
+              "blocks": [
+                {{
+                  "id": "{block}",
+                  "line": 1,
+                  "indent": 0,
+                  "content_hash": "sha256:def"
+                }}
+              ]
+            }}"#,
+            page = NodeId::new(),
+            block = id,
+        );
+        std::fs::write(&path, v1_json).unwrap();
+        let sc = read(&path).unwrap();
+        assert_eq!(sc.version, SIDECAR_VERSION);
+        assert_eq!(sc.blocks.len(), 1);
+        assert_eq!(sc.blocks[0].ref_handle, derive_ref_handle(id));
+    }
+
+    #[test]
+    fn write_then_read_v2_preserves_ref_handle() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".foo.outl");
+        let page_id = NodeId::new();
+        let block_id = NodeId::new();
+        let mut sc = Sidecar::new_for_page(page_id, &file_hash("- hello\n"));
+        sc.blocks.push(SidecarBlock {
+            id: block_id,
+            line: 1,
+            indent: 0,
+            content_hash: content_hash("hello"),
+            ref_handle: derive_ref_handle(block_id),
+        });
+        write(&path, &sc).unwrap();
+
+        let loaded = read(&path).unwrap();
+        assert_eq!(loaded.version, SIDECAR_VERSION);
+        assert_eq!(loaded.blocks.len(), 1);
+        assert_eq!(loaded.blocks[0].ref_handle, derive_ref_handle(block_id));
+
+        // And the on-disk JSON actually contains the field — guards
+        // against a future serde attribute accidentally skipping it.
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk.contains("ref_handle"),
+            "v2 sidecar must persist ref_handle on disk; got: {on_disk}"
+        );
     }
 
     #[test]

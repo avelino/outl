@@ -1,26 +1,26 @@
 ---
-description: Cria um workspace outl de teste em ./playground e gera fixture data (algumas pages + journals) pra teste manual.
+description: Creates a test outl workspace at ./playground and generates fixture data (a few pages + journals) for manual testing.
 allowed-tools: Bash(cargo run:*), Bash(mkdir:*), Bash(rm:*), Bash(ls:*), Bash(find:*)
 ---
 
-Setup de workspace de teste pra smoke test manual.
+Set up a test workspace for manual smoke testing.
 
 ```bash
 rm -rf ./playground
 cargo run --bin outl -- init ./playground
 ```
 
-Confirme estrutura criada:
+Confirm the structure created:
 
 ```bash
 find ./playground -type f | head -20
 ```
 
-Esperado:
+Expected:
 - `./playground/.outl/log.db`
 - `./playground/.outl/config.toml`
-- `./playground/pages/` (vazio)
-- `./playground/journals/<hoje>.md` (criado se journal-on-init estiver ativo)
+- `./playground/pages/` (empty)
+- `./playground/journals/<today>.md` (created if journal-on-init is enabled)
 - `./playground/templates/journal.md`
 
-Se faltar algo, reporte o que está faltando.
+If anything is missing, report what is missing.

@@ -444,6 +444,15 @@ impl App {
                     selected: 0,
                 });
             }
+            Some((AutocompleteKind::BlockRef, query)) => {
+                let candidates = self.candidates_for_blockref(&query);
+                self.autocomplete = Some(AutocompleteState {
+                    kind: AutocompleteKind::BlockRef,
+                    query,
+                    candidates,
+                    selected: 0,
+                });
+            }
             Some((AutocompleteKind::SlashCommand, query)) => {
                 let candidates = self.candidates_for_slash(&query);
                 // No candidates → no popup. Keeps `/` typed in random
@@ -501,6 +510,35 @@ impl App {
         scored.into_iter().take(8).map(|(_, n)| n).collect()
     }
 
+    /// Block-ref candidates for the `((` autocomplete.
+    ///
+    /// Returns **handles** (`blk-XXXXXX`) — the popup looks each one
+    /// up in the index for its display text. Empty query shows the
+    /// most-recent blocks (ULID-sorted descending, so newest first),
+    /// which is deterministic across rebuilds. Non-empty query
+    /// delegates to `WorkspaceIndex::search_block_text` which is
+    /// case-insensitive substring + prefix-first ranking.
+    fn candidates_for_blockref(&self, q: &str) -> Vec<String> {
+        if q.is_empty() {
+            // HashMap iteration order is unstable; sort descending by
+            // NodeId (ULIDs are lexicographically time-sortable) so
+            // the popup shows the same eight rows every keystroke and
+            // newest-edited blocks surface at the top.
+            let mut entries: Vec<_> = self.index.iter_blocks().collect();
+            entries.sort_by_key(|b| std::cmp::Reverse(b.id));
+            return entries
+                .into_iter()
+                .take(8)
+                .map(|b| b.ref_handle.clone())
+                .collect();
+        }
+        self.index
+            .search_block_text(q, 8)
+            .into_iter()
+            .map(|b| b.ref_handle.clone())
+            .collect()
+    }
+
     /// Tag candidates — for now, every page title (tags resolve to pages).
     /// Filtered by fuzzy match on the query.
     fn candidates_for_tag(&self, q: &str) -> Vec<String> {
@@ -547,6 +585,7 @@ impl App {
         // completed token (closing the brackets for refs).
         let trigger_len = match ac.kind {
             AutocompleteKind::PageRef => 2 + ac.query.chars().count(), // `[[query`
+            AutocompleteKind::BlockRef => 2 + ac.query.chars().count(), // `((query`
             AutocompleteKind::Tag => 1 + ac.query.chars().count(),     // `#query`
             AutocompleteKind::SlashCommand => unreachable!("handled above"),
         };
@@ -557,6 +596,10 @@ impl App {
         match ac.kind {
             AutocompleteKind::PageRef => {
                 buffer.insert_str(&format!("[[{choice}]]"));
+            }
+            AutocompleteKind::BlockRef => {
+                // `choice` is the handle (e.g. `blk-r6s4a1`).
+                buffer.insert_str(&format!("(({choice}))"));
             }
             AutocompleteKind::Tag => {
                 buffer.insert_str(&format!("#{choice}"));
@@ -623,6 +666,16 @@ pub(crate) fn detect_trigger(chars: &[char], cursor: usize) -> Option<(Autocompl
                 return None;
             }
             return Some((AutocompleteKind::PageRef, query));
+        }
+        // `((blk-` — look for two `(` in a row. Same shape as PageRef
+        // but with parens — the trigger fires immediately after `((`
+        // so the popup is ready to filter by block text.
+        if prev == '(' && i >= 2 && chars[i - 2] == '(' {
+            let query: String = chars[i..cursor].iter().collect();
+            if query.contains(')') || query.contains('\n') {
+                return None;
+            }
+            return Some((AutocompleteKind::BlockRef, query));
         }
         if prev == '#' {
             // Tag must be word-initial: preceded by start-of-buffer or

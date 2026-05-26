@@ -11,17 +11,52 @@ same paranoia as the CRDT.
 
 - Parse `.md` (clean, no IDs) → outline AST
 - Render outline AST → `.md` (clean, no IDs)
-- Read/write `.outl` sidecar (JSON, dotfile)
+- Read/write `.outl` sidecar (JSON, dotfile) — current version `2`,
+  reads v1 transparently (handles backfilled on load)
 - The 3-level matching algorithm (external edit → reconstruct IDs)
-- Diff (old AST + new AST) → minimal sequence of `Op`s
+- Diff (old AST + new AST + old sidecar blocks) → minimal sequence of
+  `Op`s, preserving `ref_handle` verbatim on level-1/2 matches. The
+  old-handle lookup is O(N) overall (HashMap by id), not O(N²) — never
+  reintroduce a linear scan per new block.
 - **Inline tokenization** (`inline.rs`) — `**bold**`, `[[refs]]`,
-  `#tags`, etc — and `ref_at_cursor`. **UI-agnostic.** TUI, future
-  Tauri GUI, and mobile clients all consume the same `InlineTok` /
-  `RefTarget` types and map them to their own primitives (`Span`,
-  HTML, `AttributedString`, `AnnotatedString`).
+  `#tags`, `((blk-XXXXXX))`, `!((blk-XXXXXX))` — and `ref_at_cursor`
+  (resolves to `RefTarget::Page`, `Journal`, `Tag`, or `Block`).
+  **UI-agnostic.** TUI, future Tauri GUI, and mobile clients all
+  consume the same `InlineTok` / `RefTarget` types and map them to
+  their own primitives (`Span`, HTML, `AttributedString`,
+  `AnnotatedString`).
+- **Block index** (`block_index.rs`) — `NodeId → BlockEntry`,
+  `ref_handle → NodeId`, `NodeId → [BlockReference]` (reverse refs),
+  `(slug, dfs_path) → NodeId` for location lookup. Population is
+  two-phase (`collect_page_blocks` then `collect_page_refs`) so reverse
+  edges survive arbitrary page-load order during the initial build.
+  Lookups are O(1).
+- **Workspace index** (`index.rs`) — page-level (`slug → PageEntry`,
+  backlinks) plus block-level (re-exports the `BlockIndex` API).
+  Public surface includes `resolve_block_ref(handle)`, `block_by_id`,
+  `block_at_location(slug, &[usize])`, `block_refs_to(id)`,
+  `iter_blocks`, `block_count`, `search_block_text(query, limit)`.
+  `block_at_location` is the O(1) replacement for scanning
+  `iter_blocks()` to find the entry for a known `(page, dfs_path)`,
+  e.g. when the TUI translates a keyboard chord onto a specific block.
 - **Slugify** (`slug.rs`) — `[[Avelino]]` → `pages/avelino.md`. The
   user-facing name is preserved verbatim in the page's `title::`
   property.
+- **`derive_ref_handle(NodeId) -> String`** (`sidecar.rs`) —
+  deterministic: `blk-` + last 6 chars of the ULID's Crockford base32,
+  lowercased. Same input always yields the same handle so two devices
+  agree on what `((blk-XXXXXX))` means. On a collision inside a single
+  workspace, the **second** block to land gets its handle lazily
+  expanded one character at a time (drawing from the same ULID tail)
+  until unique — both the winner and the loser stay independently
+  resolvable. The sidecar still records the deterministic 6-char form;
+  the expanded handle lives in `BlockEntry.ref_handle` in memory and
+  in the workspace handle map.
+- **`BlockEntry.text_fold: String`** — lowercased cache of the block's
+  `text`, populated at index build. Powers `search_block_text` without
+  allocating per keystroke. Public field, but consumers must not build
+  `BlockEntry` by hand — go through the index population path so
+  `text_fold` stays consistent with `text`.
 
 ## What this crate does NOT own
 
@@ -49,24 +84,38 @@ before being deleted. **Silent deletion is a P0 bug.**
 
 ## Sidecar format
 
+Current version: `2`. Full spec in
+[`docs/markdown-format.md`](../../docs/markdown-format.md#the-outl-sidecar).
+
 ```json
 {
-  "version": 1,
+  "version": 2,
   "page_id": "01HXY8KJZQ9T8M7VN3P2R6S4A0",
   "last_synced_hash": "sha256:...",
+  "last_synced_at": "2026-05-24T11:22:00-03:00",
   "blocks": [
     {
       "id": "01HXY8KJZQ9T8M7VN3P2R6S4A1",
       "line": 1,
       "indent": 0,
-      "content_hash": "sha256:..."
+      "content_hash": "sha256:...",
+      "ref_handle": "blk-r6s4a1"
     }
   ]
 }
 ```
 
 - `content_hash` = SHA-256 of the **block's textual content** (not children).
+- `ref_handle` = short user-typeable handle for `((blk-XXXXXX))`. v1
+  sidecars (no field) load fine — the handle is backfilled in memory
+  via `derive_ref_handle`. The next write persists v2. On collision,
+  expansion may produce a 7+ char form (see `derive_ref_handle` above).
 - Sidecar is replicated between devices alongside the `.md`. Don't gitignore by default.
+- **Stale entries are skipped during index build.** When a sidecar
+  block's `content_hash` no longer matches the corresponding block in
+  the `.md`, that entry is left out of the workspace index instead of
+  polluting it with a wrong subtree. The block reappears in the index
+  after the next reconcile updates the sidecar.
 
 ## Outl markdown dialect
 
@@ -78,7 +127,8 @@ tags:: #project
 - top level block
   priority:: high
   - child block with [[page reference]]
-  - child block with ((block-reference))
+  - child block with ((blk-r6s4a1))
+  - expanded inline: !((blk-r6s4a1))
 - another top level
 ```
 
@@ -87,7 +137,8 @@ tags:: #project
 - `[[name]]` = page reference (bidirectional link).
 - `[[2026-05-24]]` = journal reference (renders as date).
 - `#tag` = tag (page reference with classification semantics).
-- `((block-id))` = block embed (shows content of referenced block).
+- `((blk-XXXXXX))` = inline block reference (renders as the source block's text).
+- `!((blk-XXXXXX))` = block embed (renders source block expanded with subtree).
 - `{{query: ...}}` = saved query (phase 3, parse as opaque for now).
 
 **No `id::`, no UUID, no HTML comments** — IDs go in the sidecar only.
@@ -97,19 +148,41 @@ tags:: #project
 ```
 src/
 ├── lib.rs
-├── parse.rs       # md → AST (no IDs)
-├── render.rs      # AST → md (clean)
-├── sidecar.rs     # read/write .outl JSON
-├── matching.rs    # 3-level matching algorithm
-└── diff.rs        # AST diff → Op sequence
+├── parse.rs        # md → AST (no IDs)
+├── render.rs       # AST → md (clean)
+├── sidecar.rs      # read/write .outl JSON, derive_ref_handle, content_hash
+├── matching.rs     # 3-level matching algorithm
+├── diff.rs         # AST diff → Op sequence (takes old_blocks to preserve ref_handle)
+├── inline.rs       # InlineTok (Plain/Bold/.../BlockRef/Embed), RefTarget, ref_at_cursor
+├── index.rs        # WorkspaceIndex — page-level + block-level facade
+├── block_index.rs  # BlockEntry, BlockReference, BlockIndex (id ↔ handle ↔ reverse refs)
+├── reconcile.rs    # high-level reconcile_md (parse → match → diff → apply)
+├── slug.rs         # slugify page names
+├── view.rs         # render helpers consumed by UIs
+└── atomic.rs       # crash-safe write_atomic
 
 tests/
-├── roundtrip.rs           # render(parse(md)) == md (property test)
-├── external_edit.rs       # light external edit preserves IDs
-├── duplicate_block.rs     # Ctrl+D in vscode → first keeps ID, second gets new
-├── identical_blocks_swap.rs # two identical blocks change parents
-└── heavy_edit.rs          # >20% content change → level 2 warning
+├── roundtrip.rs              # render(parse(md)) == md (property test)
+├── external_edit.rs          # light external edit preserves IDs
+├── duplicate_block.rs        # Ctrl+D in vscode → first keeps ID, second gets new
+├── identical_blocks_swap.rs  # two identical blocks change parents
+└── heavy_edit.rs             # >20% content change → level 2 warning
+
+benches/
+└── block_index.rs            # resolve / search_block_text on 100k blocks
 ```
+
+## Bench harness
+
+`cargo bench -p outl-md --bench block_index` measures the cost the
+`((blk-XXXXXX))` path adds to the index. Today's numbers (M-series
+laptop):
+
+- `resolve(handle)` — ~17 ns at 100k indexed blocks. O(1) HashMap hit.
+- `search_block_text(query, limit)` — ~12 ms at 100k blocks (linear
+  scan with case-fold + position scoring). Suitable for the
+  autocomplete popup the TUI uses today; future fzf-style scoring can
+  drop in behind the same signature.
 
 ## Invariants
 
@@ -119,6 +192,14 @@ tests/
 3. **Sidecar is JSON-valid.** Always. If you can't write valid JSON, you fail.
 4. **Sidecar `version` field always present.** Future migrations.
 5. **`content_hash`** is `sha256(block.content_text())` consistently. Same hash function across read and write.
+6. **`ref_handle` is preserved across level-1 and level-2 matches.**
+   `diff_to_ops` reads it from the previous sidecar's block list and
+   reuses it verbatim, so a `((blk-XXXXXX))` already written in
+   another `.md` keeps resolving even if the handle was once expanded
+   past the default 6-char tail.
+7. **`derive_ref_handle` is deterministic** — same `NodeId` in, same
+   handle out. Two devices building the sidecar independently must
+   agree on what `((blk-XXXXXX))` means.
 
 ## Things to never do here
 

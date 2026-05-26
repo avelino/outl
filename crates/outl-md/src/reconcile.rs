@@ -108,7 +108,14 @@ pub fn reconcile_md(
         }
     }
 
-    let plan = diff_to_ops(&new_ast.blocks, &matches, &orphans, page_id, &md_hash);
+    let plan = diff_to_ops(
+        &new_ast.blocks,
+        &matches,
+        &orphans,
+        page_id,
+        &md_hash,
+        &old_blocks,
+    );
     let mut ops_applied = 0usize;
 
     for op in plan.ops {
@@ -227,8 +234,15 @@ mod tests {
         let sidecar_path = sidecar_path_for(&md_path);
         assert!(sidecar_path.exists());
         let sc = sidecar::read(&sidecar_path).unwrap();
-        assert_eq!(sc.version, 1);
+        assert_eq!(sc.version, sidecar::SIDECAR_VERSION);
         assert_eq!(sc.blocks.len(), 2);
+        // Every block must carry a non-empty `ref_handle` after a fresh
+        // reconcile — the v2 invariant.
+        assert!(
+            sc.blocks.iter().all(|b| !b.ref_handle.is_empty()),
+            "v2 sidecar must populate ref_handle on every block: {:?}",
+            sc.blocks
+        );
     }
 
     #[test]

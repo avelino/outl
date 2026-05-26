@@ -1,55 +1,55 @@
 ---
-description: Guia pra adicionar uma nova variante ao enum Op (ex Op::Tag, Op::Link). Cobre todos os pontos que precisam mudar.
-argument-hint: <NomeDaVariante>
+description: Guide for adding a new variant to the Op enum (e.g. Op::Tag, Op::Link). Covers every place that needs to change.
+argument-hint: <VariantName>
 ---
 
-Você quer adicionar `Op::$1` ao tree CRDT do outl. Checklist OBRIGATÓRIO:
+You want to add `Op::$1` to the outl tree CRDT. MANDATORY checklist:
 
-## 1. Definir a variante em `crates/outl-core/src/op.rs`
+## 1. Define the variant in `crates/outl-core/src/op.rs`
 
 ```rust
 $1 {
     node: NodeId,
-    // ... campos da op
-    // CRÍTICO: incluir campos `old_*` pra undo.
-    // Sem old_*, undo_op não consegue reverter.
+    // ... op fields
+    // CRITICAL: include `old_*` fields for undo.
+    // Without old_*, undo_op cannot revert.
 }
 ```
 
-## 2. Implementar `do_op` em `crates/outl-core/src/tree.rs`
+## 2. Implement `do_op` in `crates/outl-core/src/tree.rs`
 
-- Preencher `old_*` no `LogOp` antes de aplicar mutação.
-- Se a op pode violar invariante (ciclo, etc), checar primeiro e tratar como no-op materialização (mas a op vai pro log).
+- Fill `old_*` in the `LogOp` before applying the mutation.
+- If the op can violate an invariant (cycle, etc), check first and treat as a no-op on materialization (but the op still goes to the log).
 
-## 3. Implementar `undo_op`
+## 3. Implement `undo_op`
 
-- Reverter usando os campos `old_*` do `LogOp`.
-- Idempotência: undo de op nunca aplicada deve ser no-op.
+- Revert using the `old_*` fields of the `LogOp`.
+- Idempotency: undo of an op that was never applied must be a no-op.
 
-## 4. Atualizar serialização
+## 4. Update serialization
 
-- Verificar que serde derive já cobre. Se houver campo binário, garantir base64 ou bincode.
-- Adicionar conversão pra schema SQLite em `storage/sqlite.rs` se a op tem campos extras.
+- Verify that serde derive already covers it. If there's a binary field, ensure base64 or bincode.
+- Add conversion to the SQLite schema in `storage/sqlite.rs` if the op has extra fields.
 
-## 5. Testes obrigatórios (em `crates/outl-core/tests/`)
+## 5. Mandatory tests (in `crates/outl-core/tests/`)
 
-- Convergência: 3 réplicas aplicam a op em ordens diferentes → mesmo estado final.
-- Idempotência: aplicar 2x = aplicar 1x.
-- Reordering: op chegando atrasada força undo/replay correto.
-- Interação com `Move`: op concorrente com Move do mesmo nó converge.
+- Convergence: 3 replicas apply the op in different orders → same final state.
+- Idempotency: applying 2x = applying 1x.
+- Reordering: a late-arriving op forces a correct undo/replay.
+- Interaction with `Move`: an op concurrent with a Move on the same node converges.
 
-## 6. Documentar em `docs/crdt.md`
+## 6. Document in `docs/crdt.md`
 
-- Adicionar parágrafo na seção "Operations" descrevendo semântica.
-- Adicionar exemplo de caso concorrente se a op tem interação não-óbvia.
+- Add a paragraph in the "Operations" section describing semantics.
+- Add a concurrent example if the op has non-obvious interactions.
 
-## 7. Pre-flight antes de PR
+## 7. Pre-flight before PR
 
 - [ ] `cargo fmt`
 - [ ] `cargo clippy -- -D warnings`
 - [ ] `cargo test -p outl-core`
-- [ ] Cobertura 100% nas branches novas de `do_op`/`undo_op`
-- [ ] Invocar agent `crdt-invariant-checker`
-- [ ] Invocar agent `paper-verifier` se a op tem analogo no paper
+- [ ] 100% coverage on the new branches in `do_op`/`undo_op`
+- [ ] Invoke the `crdt-invariant-checker` agent
+- [ ] Invoke the `paper-verifier` agent if the op has an analog in the paper
 
-**Não pule etapas.** Op nova que quebra convergência destrói confiança no outl.
+**Do not skip steps.** A new op that breaks convergence destroys trust in outl.

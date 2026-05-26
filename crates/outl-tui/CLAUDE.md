@@ -11,9 +11,18 @@ journal. That's the spec; don't change it.
   block's text).
 - Quick switcher (`Ctrl+P`) for fuzzy page/journal jumping.
 - Outline panel for current page with inline visible cursor.
+- Inline backlinks rendered below the outline (`B` toggles, `j/k`
+  crosses the separator).
+- Block references and embeds: `((blk-XXXXXX))` resolves to the source
+  block's text + page icon. `!((blk-XXXXXX))` (when the block contains a
+  single embed token) expands the source block **and its children**
+  read-only below the carrying block. `Enter` on either form opens the
+  source page and lands the cursor on the referenced block. The `y r`
+  chord plus `/refer` and `/refer-embed` slash commands copy the
+  current block's handle to the **OS clipboard** (via `arboard`) and
+  stash it in `App::last_yanked_ref` for in-app paste; the `((`
+  autocomplete fuzzy-matches block text in Insert.
 - Help popup.
-- Backlinks / tag panels and command palette are stubs (placeholder
-  modules under `ui/`) — phase 3+.
 
 ## Modes
 
@@ -38,12 +47,13 @@ we replace the AST node's `.text` and call `save()`, which writes the
 | `Tab` | indent current block |
 | `Shift-Tab` | outdent current |
 | `j` / `k` / arrows | move selection |
-| `Enter` | open `[[ref]]` / `#tag` / journal under cursor, else Insert |
+| `Enter` | open `[[ref]]` / `#tag` / journal / block ref (`((blk-X))` / `!((blk-X))`) under cursor, else Insert. On a block ref it jumps to the source page and positions the cursor on the referenced block; orphan handles surface a status message and stay put. |
 | `i` / `Enter` | enter Insert at end of current block |
 | `I` | enter Insert at start of current block |
 | `o` | new block below + Insert |
 | `O` | new block above + Insert |
 | `dd` | delete current block (chord) |
+| `y r` | copy current block's ref handle (`((blk-XXXXXX))`) to OS clipboard (via `arboard`) + `last_yanked_ref` (chord). Status flips to `yanked … (clipboard unavailable)` on headless / no-display environments. |
 | `?` | toggle help popup |
 | `q q` | quit (chord — single `q` arms; second `q` confirms) |
 | `Ctrl-C` | quit (commits pending Insert first) |
@@ -60,6 +70,10 @@ we replace the AST node's `.text` and call `save()`, which writes the
 | `Backspace` otherwise | delete previous char |
 | chars / arrows / Home / End | normal text editing |
 | `(`, `[`, `{` | auto-pair with closing |
+| `[[` | page-ref autocomplete (title fuzzy match) |
+| `#` | tag autocomplete |
+| `((` | block-ref autocomplete (block text fuzzy match → inserts `((blk-XXXXXX))`) |
+| `/` | slash command autocomplete (same registry as `:` palette) |
 
 ## Visual conventions
 
@@ -70,9 +84,27 @@ we replace the AST node's `.text` and call `save()`, which writes the
 - Other (non-focused) blocks render markdown prettily: `**bold**`
   shows as bold without asterisks, `*italic*` as italic, `~~strike~~`
   struck through, `` `code` `` in green, `[text](url)` blue-underlined,
-  `[[ref]]` cyan-underlined (no brackets), `#tag` magenta-underlined.
+  `[[ref]]` cyan-underlined (no brackets), `#tag` magenta-underlined,
+  `((blk-XXXXXX))` resolves to the source block's text + page icon
+  (orphan handles render dimmed).
+- `!((blk-XXXXXX))` — when a block contains a single embed token
+  (whitespace OK around it) — expands the source block **and its
+  children** read-only below the carrying block. Conventions:
+  - Every embed row carries a `↳ ` prefix (root + descendants) so the
+    expansion reads as one cohesive block.
+  - Descendants get `2 * (depth + 1)` spaces of padding before `↳ ` so
+    children align under the source root's *text*, not under its `↳ `.
+  - Outer indent (`│ ` guides) matches the carrying block's outline
+    depth.
+  - TODO/DONE checkboxes, page refs and tags render with their normal
+    styling inside the expansion (via `render_pretty_block_text`).
+  - Recursion is capped at depth 4 to break embed cycles.
+  - Expansion runs in every render mode — but the carrying block's
+    first row keeps the raw `!((…))` literal under the cursor so
+    column-byte alignment holds.
 - The selected/editing block renders **raw** (delimiters visible, dimmed)
-  so cursor columns map 1:1 to source bytes.
+  so cursor columns map 1:1 to source bytes — including the literal
+  `((blk-XXXXXX))` and `!((blk-XXXXXX))` forms.
 - IDs are **never** shown.
 - Mode tag (`NORMAL`/`INSERT`) appears in the header.
 
@@ -145,6 +177,7 @@ src/
 
 - `ratatui` + `crossterm` (UI).
 - `outl-core`, `outl-md` (workspace, parse/render/reconcile).
+- `arboard` (OS clipboard for `y r` / `/refer` / `/refer-embed`; degrades to status-line-only on headless).
 - `walkdir`, `toml`, `ulid`, `chrono`, `anyhow`.
 
 ## What this crate does NOT do

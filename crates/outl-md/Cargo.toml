@@ -40,3 +40,8 @@ path = "benches/index.rs"
 name = "parse"
 harness = false
 path = "benches/parse.rs"
+
+[[bench]]
+name = "block_index"
+harness = false
+path = "benches/block_index.rs"

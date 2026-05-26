@@ -9,7 +9,7 @@
 use outl_core::id::NodeId;
 use outl_md::matching::{match_blocks, MatchLevel};
 use outl_md::parse::parse;
-use outl_md::sidecar::{content_hash, SidecarBlock};
+use outl_md::sidecar::{content_hash, derive_ref_handle, SidecarBlock};
 
 #[test]
 fn heavy_edit_orphans_old_id_and_creates_new() {
@@ -19,6 +19,7 @@ fn heavy_edit_orphans_old_id_and_creates_new() {
         line: 1,
         indent: 0,
         content_hash: content_hash("the original wording of this block"),
+        ref_handle: derive_ref_handle(id),
     }];
 
     let edited = "- a wholly different sentence now\n";
@@ -41,6 +42,7 @@ fn whitespace_only_change_is_still_a_match() {
         line: 1,
         indent: 0,
         content_hash: content_hash("hello world"),
+        ref_handle: derive_ref_handle(id),
     }];
 
     let edited = "-   hello   world   \n";

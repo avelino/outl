@@ -1,26 +1,26 @@
 ---
-description: Roda fmt + clippy + test + doc do workspace inteiro. Use antes de reportar done.
+description: Runs fmt + clippy + test + doc on the whole workspace. Use before reporting done.
 allowed-tools: Bash(cargo fmt:*), Bash(cargo clippy:*), Bash(cargo test:*), Bash(cargo build:*), Bash(cargo doc:*), Bash(RUSTDOCFLAGS=*:*)
 ---
 
-Rode em sequência e reporte resultado de cada etapa:
+Run in sequence and report the result of each step:
 
-1. `cargo fmt --all -- --check` — formato
+1. `cargo fmt --all -- --check` — formatting
 2. `cargo clippy --workspace --all-targets -- -D warnings` — lints
-3. `cargo test --workspace --all-targets` — testes
+3. `cargo test --workspace --all-targets` — tests
 4. `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` — docs
-   (CI roda isso; quebra em links de intra-doc pra items privados, p.ex.
-   ``[`Foo`]`` onde `Foo` é `pub(crate)`. Drop os brackets: `` `Foo` ``.)
+   (CI runs this; breaks on intra-doc links to private items, e.g.
+   ``[`Foo`]`` where `Foo` is `pub(crate)`. Drop the brackets: `` `Foo` ``.)
 
-Se algum falhar, **pare** e mostre a saída exata. Não tente corrigir automaticamente — só relate.
+If any step fails, **stop** and show the exact output. Do not attempt to fix automatically — only report.
 
-Formato de saída:
+Output format:
 
 ```
-fmt:     PASS | FAIL (N arquivos)
+fmt:     PASS | FAIL (N files)
 clippy:  PASS | FAIL (N warnings)
-test:    PASS | FAIL (N falhas)
+test:    PASS | FAIL (N failures)
 doc:     PASS | FAIL (N warnings)
 
-[detalhes da falha, se houver]
+[failure details, if any]
 ```

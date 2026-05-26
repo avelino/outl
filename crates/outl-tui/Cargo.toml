@@ -35,6 +35,10 @@ clap = { workspace = true }
 walkdir = { workspace = true }
 toml = { workspace = true }
 ulid = { workspace = true }
+# Cross-platform OS clipboard for `yr` / `/refer` / `/refer-embed`.
+# `arboard` falls back to a no-op on headless environments (no display
+# server / no $DISPLAY), so test runs and CI stay green.
+arboard = { version = "3", default-features = false }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -14,7 +14,7 @@
 
 use crate::matching::{flatten, Match, MatchLevel};
 use crate::parse::OutlineNode;
-use crate::sidecar::{content_hash, Sidecar, SidecarBlock};
+use crate::sidecar::{content_hash, derive_ref_handle, Sidecar, SidecarBlock};
 use outl_core::fractional::Fractional;
 use outl_core::id::NodeId;
 use outl_core::op::Op;
@@ -37,12 +37,18 @@ pub struct DiffPlan {
 /// `page_id` is the root NodeId of the page (preserved across edits).
 /// `new_md_hash` is the SHA-256 of the new `.md` text (for the sidecar
 /// `last_synced_hash`).
+/// `old_blocks` is the previous sidecar's block list — used to **preserve
+/// existing `ref_handle`s** when a block matches at level 1 or 2. A
+/// preserved id keeps its handle verbatim (including a 7+ char tail if
+/// a past collision forced expansion), so any `((blk-XXXXXX))` already
+/// living in another `.md` keeps resolving.
 pub fn diff_to_ops(
     new_blocks: &[OutlineNode],
     matches: &[Match],
     orphans: &[NodeId],
     page_id: NodeId,
     new_md_hash: &str,
+    old_blocks: &[SidecarBlock],
 ) -> DiffPlan {
     let flat = flatten(new_blocks);
     assert_eq!(
@@ -62,6 +68,28 @@ pub fn diff_to_ops(
         })
         .collect();
 
+    // For each new block, decide which handle persists. Preserved
+    // blocks (level 1/2) keep the old sidecar's handle if present;
+    // newly minted blocks (level 3) derive a fresh one from their id.
+    //
+    // The pre-fix path did `.iter().find()` per block — O(N²) over
+    // pages with many blocks. A single HashMap pass up front keeps it
+    // O(N).
+    let old_by_id: std::collections::HashMap<NodeId, &SidecarBlock> =
+        old_blocks.iter().map(|b| (b.id, b)).collect();
+    let handles: Vec<String> = matches
+        .iter()
+        .zip(ids.iter())
+        .map(|(m, id)| match m.level {
+            MatchLevel::High | MatchLevel::Medium => old_by_id
+                .get(id)
+                .map(|b| b.ref_handle.clone())
+                .filter(|h| !h.is_empty())
+                .unwrap_or_else(|| derive_ref_handle(*id)),
+            MatchLevel::Low => derive_ref_handle(*id),
+        })
+        .collect();
+
     // Walk the new tree in DFS preorder, generating ops + sidecar entries.
     let mut ops = Vec::<Op>::new();
     let mut sidecar_blocks = Vec::<SidecarBlock>::new();
@@ -76,7 +104,8 @@ pub fn diff_to_ops(
         new_blocks,
         0,
         &ids,
-        &mut 0usize, // running index into `ids`
+        &handles,
+        &mut 0usize, // running index into `ids` / `handles`
         &mut ops,
         &mut sidecar_blocks,
         &mut parent_stack,
@@ -117,6 +146,7 @@ fn walk(
     blocks: &[OutlineNode],
     indent: u32,
     ids: &[NodeId],
+    handles: &[String],
     cursor: &mut usize,
     ops: &mut Vec<Op>,
     sidecar_blocks: &mut Vec<SidecarBlock>,
@@ -180,6 +210,7 @@ fn walk(
             line,
             indent,
             content_hash: content_hash(&block.text),
+            ref_handle: handles[*cursor].clone(),
         });
 
         *cursor += 1;
@@ -190,6 +221,7 @@ fn walk(
             &block.children,
             indent + 1,
             ids,
+            handles,
             cursor,
             ops,
             sidecar_blocks,
@@ -221,12 +253,14 @@ mod tests {
                 line: 1,
                 indent: 0,
                 content_hash: content_hash("a"),
+                ref_handle: derive_ref_handle(id_a),
             },
             SidecarBlock {
                 id: id_b,
                 line: 2,
                 indent: 0,
                 content_hash: content_hash("b"),
+                ref_handle: derive_ref_handle(id_b),
             },
         ];
         let (matches, orphans) = match_blocks(&ast.blocks, &old);
@@ -236,6 +270,7 @@ mod tests {
             &orphans,
             NodeId::new(),
             &file_hash(md),
+            &old,
         );
         // Each block produced 1 Create + 1 Move (no properties).
         assert_eq!(plan.ops.len(), 4);
@@ -257,12 +292,14 @@ mod tests {
                 line: 1,
                 indent: 0,
                 content_hash: content_hash("a"),
+                ref_handle: derive_ref_handle(id_a),
             },
             SidecarBlock {
                 id: id_dead,
                 line: 2,
                 indent: 0,
                 content_hash: content_hash("gone"),
+                ref_handle: derive_ref_handle(id_dead),
             },
         ];
         let (matches, orphans) = match_blocks(&ast.blocks, &old);
@@ -272,6 +309,7 @@ mod tests {
             &orphans,
             NodeId::new(),
             &file_hash(md),
+            &old,
         );
         // Last op must be Move(id_dead, TRASH).
         let last = plan.ops.last().unwrap();
@@ -294,7 +332,14 @@ mod tests {
         let ast = parse(md);
         let page_id = NodeId::new();
         let (matches, orphans) = match_blocks(&ast.blocks, &[]);
-        let plan = diff_to_ops(&ast.blocks, &matches, &orphans, page_id, &file_hash(md));
+        let plan = diff_to_ops(
+            &ast.blocks,
+            &matches,
+            &orphans,
+            page_id,
+            &file_hash(md),
+            &[],
+        );
 
         let actor = outl_core::id::ActorId::new();
         let g = outl_core::hlc::HlcGenerator::new(actor);
@@ -310,5 +355,59 @@ mod tests {
         }
         // Tree contains the four blocks (a, a1, a2, b).
         assert_eq!(ws.tree().node_count(), 4);
+    }
+
+    #[test]
+    fn level1_match_preserves_custom_ref_handle_verbatim() {
+        // Hypothetical scenario: a past collision forced the block's
+        // handle to expand to 7 chars (`blk-r6s4a1z`). Re-running the
+        // matching → diff pipeline must NOT silently rederive a 6-char
+        // handle, because any `.md` already citing `((blk-r6s4a1z))`
+        // would stop resolving.
+        let md = "- alpha\n";
+        let ast = parse(md);
+        let id = NodeId::new();
+        let custom_handle = "blk-r6s4a1z".to_string();
+        let old = vec![SidecarBlock {
+            id,
+            line: 1,
+            indent: 0,
+            content_hash: content_hash("alpha"),
+            ref_handle: custom_handle.clone(),
+        }];
+        let (matches, orphans) = match_blocks(&ast.blocks, &old);
+        let plan = diff_to_ops(
+            &ast.blocks,
+            &matches,
+            &orphans,
+            NodeId::new(),
+            &file_hash(md),
+            &old,
+        );
+        assert_eq!(plan.new_sidecar.blocks.len(), 1);
+        assert_eq!(
+            plan.new_sidecar.blocks[0].ref_handle, custom_handle,
+            "level-1 preserved blocks must keep the old sidecar's ref_handle verbatim"
+        );
+    }
+
+    #[test]
+    fn level3_block_gets_freshly_derived_handle() {
+        // A wholly new block (no old match) gets its handle from
+        // `derive_ref_handle(id)`. The format must match the canonical
+        // shape and be tied to the freshly minted id.
+        let md = "- brand new content\n";
+        let ast = parse(md);
+        let (matches, orphans) = match_blocks(&ast.blocks, &[]);
+        let plan = diff_to_ops(
+            &ast.blocks,
+            &matches,
+            &orphans,
+            NodeId::new(),
+            &file_hash(md),
+            &[],
+        );
+        let sb = &plan.new_sidecar.blocks[0];
+        assert_eq!(sb.ref_handle, derive_ref_handle(sb.id));
     }
 }

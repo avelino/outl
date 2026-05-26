@@ -36,6 +36,7 @@ pub(crate) fn render_autocomplete(
     let title = match ac.kind {
         AutocompleteKind::PageRef => format!("[[{}]]", ac.query),
         AutocompleteKind::Tag => format!("#{}", ac.query),
+        AutocompleteKind::BlockRef => format!("(({}))", ac.query),
         AutocompleteKind::SlashCommand => format!("/{}", ac.query),
     };
     let items: Vec<ListItem<'_>> = ac
@@ -66,6 +67,20 @@ pub(crate) fn render_autocomplete(
                         None => c.clone(),
                     };
                     ListItem::new(Line::from(Span::styled(label, style)))
+                }
+                AutocompleteKind::BlockRef => {
+                    // `c` is the handle. Resolve to the block's text
+                    // for display — that's what the user is hunting
+                    // for; the raw handle would be unreadable.
+                    let text = app
+                        .index
+                        .resolve_block_ref(c)
+                        .map(|b| b.text.clone())
+                        .unwrap_or_else(|| c.clone());
+                    ListItem::new(Line::from(vec![
+                        Span::styled(text, style),
+                        Span::styled(format!("  {c}"), app.theme.dim),
+                    ]))
                 }
                 AutocompleteKind::SlashCommand => {
                     let cmd = app.command_registry.get(c);

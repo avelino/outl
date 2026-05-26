@@ -50,16 +50,25 @@ fn full_workspace_lifecycle() {
     assert!(sidecar_path.exists(), "sidecar must exist after serve");
     let sidecar_text = fs::read_to_string(&sidecar_path).unwrap();
     let sidecar: serde_json::Value = serde_json::from_str(&sidecar_text).unwrap();
-    assert_eq!(sidecar["version"], 1);
+    assert_eq!(sidecar["version"], 2);
     let blocks = sidecar["blocks"].as_array().expect("blocks array");
     // Two top-level + one nested. `priority:: high` is a property, not a block.
     assert_eq!(blocks.len(), 3, "expected 3 blocks in sidecar");
-    // Each block must have a ULID-looking id and a content hash.
+    // Each block must have a ULID-looking id, a content hash, and a v2
+    // `ref_handle` of the form `blk-XXXXXX` (lowercase tail).
     for b in blocks {
         let id = b["id"].as_str().unwrap();
         let hash = b["content_hash"].as_str().unwrap();
+        let handle = b["ref_handle"].as_str().expect("ref_handle on v2 block");
         assert_eq!(id.len(), 26, "ULID should be 26 chars, got {id}");
         assert!(hash.starts_with("sha256:"));
+        assert!(handle.starts_with("blk-"), "handle prefix: {handle}");
+        assert_eq!(handle.len(), "blk-".len() + 6, "handle length: {handle}");
+        assert_eq!(
+            handle,
+            handle.to_lowercase(),
+            "handle must be lowercase: {handle}"
+        );
     }
 
     // 5. assertions on the .md — must stay CLEAN (no id::, no UUIDs)

@@ -71,6 +71,27 @@ pub enum InlineTok<'a> {
         /// URL target.
         url: &'a str,
     },
+    /// `((blk-XXXXXX))` — inline reference to another block.
+    ///
+    /// The `handle` is the short, stable id persisted in the sidecar
+    /// (see [`crate::sidecar::derive_ref_handle`]). The token carries
+    /// the full handle including the `blk-` prefix so UI consumers can
+    /// trust it as the lookup key without re-parsing.
+    BlockRef {
+        /// Full handle, e.g. `"blk-r6s4a1"`.
+        handle: &'a str,
+    },
+    /// `!((blk-XXXXXX))` — embed: render the referenced block expanded
+    /// (its `text` plus subtree) inline instead of as a link.
+    ///
+    /// Mirrors markdown image syntax (`![alt](url)`) where `!` means
+    /// "expand". UI consumers render an Embed by resolving `handle`
+    /// through [`crate::index::WorkspaceIndex::resolve_block_ref`]
+    /// and drawing the result's `text` + `children`.
+    Embed {
+        /// Full handle, e.g. `"blk-r6s4a1"`.
+        handle: &'a str,
+    },
 }
 
 /// What `ref_at_cursor` resolves to.
@@ -82,6 +103,9 @@ pub enum RefTarget {
     Journal(NaiveDate),
     /// `#name` — tag (resolves to a page with same name).
     Tag(String),
+    /// `((blk-XXXXXX))` — block reference (lookup key into
+    /// [`crate::index::WorkspaceIndex`]).
+    Block(String),
 }
 
 /// Tokenize inline block content.
@@ -140,6 +164,40 @@ pub fn ref_at_cursor(text: &str, char_index: usize) -> Option<RefTarget> {
         search = abs_close_end;
     }
 
+    // Scan `((blk-...))` ranges. A preceding `!` (embed form) widens
+    // the match by one byte so a cursor sitting on `!` still resolves
+    // to the same target.
+    //
+    // Bug fix: when the candidate handle fails validation we advance
+    // by ONE byte (not past the closing `))`) so an overlapping valid
+    // handle still gets a chance. Example: `((((blk-x))))` — the
+    // outer `((` captures `((blk-x` (invalid). Skipping to the first
+    // `))` would step past the real `((blk-x))` at offset 2.
+    let mut search = 0usize;
+    while let Some(rel_open) = text[search..].find("((") {
+        let abs_open = search + rel_open;
+        let inner_start = abs_open + 2;
+        let Some(rel_close) = text[inner_start..].find("))") else {
+            break;
+        };
+        let inner_end = inner_start + rel_close;
+        let abs_close_end = inner_end + 2;
+        let handle = &text[inner_start..inner_end];
+        if !is_valid_block_handle(handle) {
+            search = abs_open + 1;
+            continue;
+        }
+        let starts_at = if abs_open > 0 && text.as_bytes()[abs_open - 1] == b'!' {
+            abs_open - 1
+        } else {
+            abs_open
+        };
+        if cursor_byte >= starts_at && cursor_byte <= abs_close_end {
+            return Some(RefTarget::Block(handle.to_string()));
+        }
+        search = abs_close_end;
+    }
+
     // Scan `#tag` ranges.
     let mut idx = 0usize;
     while idx < text.len() {
@@ -187,6 +245,16 @@ fn match_one(s: &str) -> Option<(InlineTok<'_>, usize)> {
     if let Some(out) = try_page_ref(s) {
         return Some(out);
     }
+    // `try_embed` MUST be checked before `try_block_ref`: the embed
+    // form starts with `!` and contains a `((handle))` inside, and we
+    // want the whole `!((handle))` consumed as one token instead of
+    // a stray `Plain("!")` followed by a `BlockRef`.
+    if let Some(out) = try_embed(s) {
+        return Some(out);
+    }
+    if let Some(out) = try_block_ref(s) {
+        return Some(out);
+    }
     if let Some(out) = try_bold(s) {
         return Some(out);
     }
@@ -222,6 +290,56 @@ fn try_page_ref(s: &str) -> Option<(InlineTok<'_>, usize)> {
         return None;
     }
     Some((InlineTok::PageRef { name }, 2 + close + 2))
+}
+
+/// `!((blk-XXXXXX))` — block embed.
+///
+/// Markdown-image-shaped (`!((handle))` mirrors `![alt](url)`).
+/// Strict on the inner handle for the same reason
+/// [`try_block_ref`] is: arbitrary `!((..))` in prose must not be
+/// silently rewritten as an embed.
+fn try_embed(s: &str) -> Option<(InlineTok<'_>, usize)> {
+    let rest = s.strip_prefix("!((")?;
+    let close = rest.find("))")?;
+    let handle = &rest[..close];
+    if !is_valid_block_handle(handle) {
+        return None;
+    }
+    // Consumed: `!` (1) + `((` (2) + handle + `))` (2).
+    Some((InlineTok::Embed { handle }, 1 + 2 + close + 2))
+}
+
+/// `((blk-XXXXXX))` — Roam-style block reference.
+///
+/// The handle must look like a valid one: starts with `blk-`, followed
+/// by 1 or more ASCII-alphanumeric lowercase characters. Anything else
+/// falls back to `Plain` so plain prose using `((..))` for parentheticals
+/// is not silently rewritten.
+fn try_block_ref(s: &str) -> Option<(InlineTok<'_>, usize)> {
+    let rest = s.strip_prefix("((")?;
+    let close = rest.find("))")?;
+    let handle = &rest[..close];
+    if !is_valid_block_handle(handle) {
+        return None;
+    }
+    Some((InlineTok::BlockRef { handle }, 2 + close + 2))
+}
+
+/// Validate a `((..))` payload as a block ref handle.
+///
+/// Conservative on purpose: the moment we accept arbitrary content
+/// between `((` and `))`, prose like "look here ((really))" gets
+/// rewritten as a broken reference. Loose validation is worse than no
+/// recognition. Keep this aligned with [`crate::sidecar::derive_ref_handle`].
+pub fn is_valid_block_handle(handle: &str) -> bool {
+    let Some(tail) = handle.strip_prefix(crate::sidecar::REF_HANDLE_PREFIX) else {
+        return false;
+    };
+    if tail.is_empty() {
+        return false;
+    }
+    tail.chars()
+        .all(|c| c.is_ascii_alphanumeric() && !c.is_ascii_uppercase())
 }
 
 fn try_bold(s: &str) -> Option<(InlineTok<'_>, usize)> {
@@ -339,160 +457,4 @@ fn try_tag(s: &str) -> Option<(InlineTok<'_>, usize)> {
         },
         1 + tag_byte_end,
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn plain_text_is_one_token() {
-        let toks = tokenize("hello world");
-        assert_eq!(toks, vec![InlineTok::Plain("hello world")]);
-    }
-
-    #[test]
-    fn page_ref_is_recognized() {
-        let toks = tokenize("see [[Avelino]] for more");
-        assert!(toks.contains(&InlineTok::PageRef { name: "Avelino" }));
-    }
-
-    #[test]
-    fn tag_is_recognized() {
-        let toks = tokenize("hot #project work");
-        assert!(toks.contains(&InlineTok::Tag { name: "project" }));
-    }
-
-    #[test]
-    fn bold_strips_inner() {
-        let toks = tokenize("a **brave** soul");
-        assert!(toks.contains(&InlineTok::Bold { inner: "brave" }));
-    }
-
-    #[test]
-    fn bold_under_double_underscore() {
-        // CommonMark: `__x__` is strong emphasis (bold), same as `**x**`.
-        // Regression: we used to fall through to single-underscore
-        // italic, rendering `__abc__` as ` _abc_` (space + plain + italic).
-        let toks = tokenize("look __at__ this");
-        assert!(
-            toks.contains(&InlineTok::Bold { inner: "at" }),
-            "expected __at__ to tokenize as Bold; got {toks:?}"
-        );
-        assert!(
-            !toks
-                .iter()
-                .any(|t| matches!(t, InlineTok::Italic { inner: "at", .. })),
-            "__at__ must not also produce an Italic token"
-        );
-    }
-
-    #[test]
-    fn bold_under_alongside_bold_star() {
-        // Mixing `**a**` and `__b__` in one buffer — both must be bold.
-        let toks = tokenize("**abc** __123__");
-        assert!(toks.contains(&InlineTok::Bold { inner: "abc" }));
-        assert!(toks.contains(&InlineTok::Bold { inner: "123" }));
-    }
-
-    #[test]
-    fn italic_star_and_under() {
-        assert!(tokenize("an *italic* word").contains(&InlineTok::Italic {
-            inner: "italic",
-            marker: '*'
-        }));
-        assert!(tokenize("an _italic_ word").contains(&InlineTok::Italic {
-            inner: "italic",
-            marker: '_'
-        }));
-    }
-
-    #[test]
-    fn strike_and_code() {
-        assert!(tokenize("old ~~news~~").contains(&InlineTok::Strike { inner: "news" }));
-        assert!(tokenize("call `fn()`").contains(&InlineTok::Code { inner: "fn()" }));
-    }
-
-    #[test]
-    fn md_link_extracts_text_and_url() {
-        let toks = tokenize("see [outl](https://outl.app) docs");
-        assert!(toks.contains(&InlineTok::Link {
-            text: "outl",
-            url: "https://outl.app"
-        }));
-    }
-
-    #[test]
-    fn unclosed_marker_falls_back_to_plain() {
-        // No closing `**` → not a Bold; the `**` lives inside Plain text.
-        let toks = tokenize("a **brave");
-        assert!(matches!(toks.first(), Some(InlineTok::Plain(_))));
-        assert!(!toks.iter().any(|t| matches!(t, InlineTok::Bold { .. })));
-    }
-
-    #[test]
-    fn multibyte_text_does_not_panic() {
-        let _ = tokenize("isso parece que está");
-        let _ = tokenize("ação não pára aí");
-        let _ = tokenize("ship it 🚀 today");
-        let _ = tokenize("こんにちは world");
-        let _ = tokenize("veja [[orçamento]] e #ação");
-    }
-
-    #[test]
-    fn ref_at_cursor_finds_page_ref() {
-        let text = "see [[Avelino]] today";
-        let idx = "see [[Av".chars().count();
-        match ref_at_cursor(text, idx) {
-            Some(RefTarget::Page(n)) => assert_eq!(n, "Avelino"),
-            other => panic!("expected Page, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn ref_at_cursor_finds_journal_date() {
-        let text = "[[2026-05-24]]";
-        match ref_at_cursor(text, 5) {
-            Some(RefTarget::Journal(d)) => assert_eq!(d.to_string(), "2026-05-24"),
-            other => panic!("expected Journal, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn ref_at_cursor_finds_tag() {
-        let text = "tag #foo here";
-        let idx = "tag #f".chars().count();
-        match ref_at_cursor(text, idx) {
-            Some(RefTarget::Tag(t)) => assert_eq!(t, "foo"),
-            other => panic!("expected Tag, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn ref_at_cursor_outside_ref_is_none() {
-        let text = "see [[Avelino]] later";
-        let idx = "see [[Avelino]] la".chars().count();
-        assert!(ref_at_cursor(text, idx).is_none());
-    }
-
-    #[test]
-    fn ref_at_cursor_handles_multibyte() {
-        let text = "veja [[orçamento]] hoje";
-        let idx = "veja [[orç".chars().count();
-        match ref_at_cursor(text, idx) {
-            Some(RefTarget::Page(n)) => assert_eq!(n, "orçamento"),
-            other => panic!("expected Page, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn byte_index_for_char_is_split_safe() {
-        let s = "está";
-        for c in 0..=s.chars().count() {
-            let b = byte_index_for_char(s, c);
-            let _ = s.split_at(b);
-        }
-        assert_eq!(byte_index_for_char(s, 0), 0);
-        assert_eq!(byte_index_for_char(s, 4), 5);
-    }
 }

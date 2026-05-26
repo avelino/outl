@@ -1,5 +1,5 @@
 ---
-description: Roda bateria de roundtrip md ↔ ops do outl-md e dispara o markdown-roundtrip-tester pra validação adicional.
+description: Runs the md ↔ ops roundtrip battery for outl-md and triggers markdown-roundtrip-tester for extra validation.
 allowed-tools: Bash(cargo test:*)
 ---
 
@@ -7,6 +7,6 @@ allowed-tools: Bash(cargo test:*)
 cargo test -p outl-md
 ```
 
-Se tudo passar, invoque o agent `markdown-roundtrip-tester` pra rodar checagens adicionais (property tests, sidecar validity, orphan logging).
+If everything passes, invoke the `markdown-roundtrip-tester` agent for additional checks (property tests, sidecar validity, orphan logging).
 
-Se falhar, pare e mostre saída exata.
+If it fails, stop and show the exact output.

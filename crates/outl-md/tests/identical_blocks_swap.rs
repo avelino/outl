@@ -11,7 +11,7 @@
 use outl_core::id::NodeId;
 use outl_md::matching::{match_blocks, MatchLevel};
 use outl_md::parse::parse;
-use outl_md::sidecar::{content_hash, SidecarBlock};
+use outl_md::sidecar::{content_hash, derive_ref_handle, SidecarBlock};
 
 #[test]
 fn identical_blocks_get_first_fit_matching() {
@@ -24,12 +24,14 @@ fn identical_blocks_get_first_fit_matching() {
             line: 2,
             indent: 1,
             content_hash: content_hash("TODO"),
+            ref_handle: derive_ref_handle(id_a),
         },
         SidecarBlock {
             id: id_b,
             line: 4,
             indent: 1,
             content_hash: content_hash("TODO"),
+            ref_handle: derive_ref_handle(id_b),
         },
     ];
 

@@ -27,6 +27,7 @@
 mod dates;
 mod exec;
 mod page;
+mod refer;
 mod workspace;
 
 use super::CommandRegistry;
@@ -40,6 +41,7 @@ use dates::{
 };
 use exec::{RunCommand, SearchCommand, ThemeCommand};
 use page::{PinCommand, PropBlockCommand, PropPageCommand};
+use refer::{ReferCommand, ReferEmbedCommand};
 use workspace::{
     HelpCommand, OpenCommand, QuitCommand, RefreshCommand, TodayCommand, WriteCommand,
 };
@@ -63,6 +65,10 @@ pub(super) fn register_all(reg: &mut CommandRegistry) {
     reg.register(SearchCommand);
     reg.register(RunCommand);
     reg.register(ThemeCommand);
+
+    // refer — capture block ref / embed handles
+    reg.register(ReferCommand);
+    reg.register(ReferEmbedCommand);
 
     // dates — Insert-mode inserters. The slash dispatcher uses
     // `inserts_inline()` (set true in each command) to skip

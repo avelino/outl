@@ -29,7 +29,7 @@ characters insert themselves — every key is a command.
 | `i` | Edit current block (Insert mode) |
 | `I` | Edit, cursor at start of block |
 | `o` / `O` | New block below / above |
-| `Enter` | Open `[[ref]]` / `#tag` / journal under cursor (otherwise edit) |
+| `Enter` | Open `[[ref]]` / `#tag` / journal / block ref (`((blk-X))` / `!((blk-X))`) under cursor (otherwise edit). On a block ref it opens the source page and lands the cursor on the referenced block; orphan handles surface a status message and stay put. |
 | `j` / `k` / `↑` / `↓` | Move between blocks |
 | `h` / `l` / `←` / `→` | Move cursor inside the current block |
 | `w` / `b` | Cursor to next / previous word |
@@ -37,6 +37,7 @@ characters insert themselves — every key is a command.
 | `Tab` / `Shift-Tab` | Indent / outdent the current block |
 | `K` / `J` (or `Alt+↑/↓`) | Move block up / down |
 | `dd` | Delete the current block (chord) |
+| `y r` | Yank the current block's ref handle (`((blk-XXXXXX))`) to the OS clipboard + `last_yanked_ref` (chord). On headless / no-clipboard environments it falls back to the status line only. |
 | `Ctrl+Enter` / `Ctrl+T` | Cycle the block's TODO / DONE / none prefix (`Ctrl+T` is the portable fallback for tmux / Terminal.app, which collapse `Ctrl+Enter` into plain `Enter`) |
 | `u` / `Ctrl+R` | Undo / redo |
 | `V` | Enter Visual mode (multi-block select) |
@@ -69,6 +70,7 @@ Text input goes into the buffer. Esc commits (writes back to the
 | `(`, `[`, `{` | Auto-pair with closing |
 | `[[` | Page reference autocomplete (titles indexed across workspace) |
 | `#` | Tag autocomplete |
+| `((` | Block reference autocomplete — fuzzy-match on block text, inserts `((blk-XXXXXX))`. Empty query lists newest-first (NodeId descending = ULID time order) so the popup is deterministic and the same eight rows show on every keystroke. |
 | `↑` / `↓` in popup | Navigate completion |
 | `Enter` / `Tab` in popup | Accept completion |
 | `Esc` in popup | Cancel completion |
@@ -158,6 +160,20 @@ Unknown commands surface in the status line as `unknown command:
 | `prop-block <key> <value>` | `prop` | Set property on current block (empty value deletes) |
 | `prop-page <key> <value>` | — | Set page-level property (`title::`, `icon::`, …) |
 
+#### Block references
+
+| Command | Aliases | Action |
+|---------|---------|--------|
+| `refer` | — | Copy `((blk-XXXXXX))` of the current block to the OS clipboard + `last_yanked_ref`. Same as the `y r` chord. |
+| `refer-embed` | — | Copy the embed form `!((blk-XXXXXX))` of the current block to the OS clipboard + `last_yanked_ref`. |
+
+> **Clipboard fallback**: `y r` / `/refer` / `/refer-embed` use
+> [`arboard`](https://crates.io/crates/arboard) to talk to the OS
+> clipboard. The status line reads `copied … to clipboard` on success
+> and `yanked … (clipboard unavailable)` on terminals / SSH sessions
+> without a clipboard backend — the token still lives in
+> `last_yanked_ref` so the in-app paste path keeps working.
+
 #### Code execution
 
 | Command | Aliases | Action |
@@ -240,7 +256,20 @@ Garbage input (`/date nope`, `/date +3x`, invalid date) shows
 
 - **Outline** — the current view (journal or named page). Markdown
   renders inline (bold/italic/code/strike); the selected/editing block
-  is shown raw so cursor columns align with source bytes.
+  is shown raw so cursor columns align with source bytes. Block
+  references (`((blk-XXXXXX))`) resolve to the source block's text
+  plus its page icon; orphaned handles render dimmed. Embeds
+  (`!((blk-XXXXXX))`) — when the block contains a single embed token
+  (whitespace OK) — render the source block **and its children**
+  expanded read-only below the carrying block. Every embed row carries
+  a `↳ ` prefix (root + descendants), so the expansion reads as one
+  cohesive block; descendants are indented by `2 * (depth + 1)` spaces
+  before their `↳ ` so children align under the source's *text*, not
+  under the parent's `↳ `. TODO/DONE checkboxes, page refs, and tags
+  render with their normal styling inside the expansion. Recursion is
+  capped at depth 4 to break embed cycles. The cursor-bearing block
+  always keeps the raw `((…))` / `!((…))` literal on its first row so
+  column counting stays exact.
 - **Backlinks (inline)** — rendered below the outline, separated by a
   full-width `─` rule. Every block in any other page that contains
   `[[this]]` or `#this` shows up with its children, grouped by source
@@ -324,8 +353,6 @@ and how to set a theme via config or CLI.
 Phase 1 lands the core editor and most-used surfaces. Some things are
 explicitly deferred:
 
-- **Embed `((block-id))`** — recognized as opaque text for now;
-  inline render of the target block is phase 3.
 - **`{{query: ...}}`** — inline saved queries; phase 3.
 - **Visual mode batch indent / yank / paste** — only delete is wired
   today.

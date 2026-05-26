@@ -21,6 +21,40 @@ pub(crate) fn split_todo_prefix(text: &str) -> (Option<bool>, &str) {
     (None, text)
 }
 
+/// Render a block's body the way the outline renders it in read-only
+/// mode: strip and visualize a `TODO`/`DONE` prefix, then pass the
+/// remainder through [`render_markdown_inline`].
+///
+/// Used by the outline (for single-line bullets) **and** by the embed
+/// expansion (which needs the same affordance — a `TODO` inside an
+/// embedded block should still render as `☐` so the reader sees
+/// state, not the raw word).
+pub(crate) fn render_pretty_block_text(
+    text: &str,
+    theme: &Theme,
+    index: &outl_md::index::WorkspaceIndex,
+) -> Vec<Span<'static>> {
+    let (todo_state, body) = split_todo_prefix(text);
+    let mut out: Vec<Span<'static>> = Vec::new();
+    match todo_state {
+        Some(false) => {
+            out.push(Span::styled("☐ ", theme.todo_open));
+            out.extend(render_markdown_inline(body, theme, index));
+        }
+        Some(true) => {
+            out.push(Span::styled("☑ ", theme.todo_done));
+            for sp in render_markdown_inline(body, theme, index) {
+                out.push(Span::styled(
+                    sp.content.into_owned(),
+                    sp.style.patch(theme.todo_done_body),
+                ));
+            }
+        }
+        None => out.extend(render_markdown_inline(text, theme, index)),
+    }
+    out
+}
+
 /// Render with markdown stripped — bold/italic/code/strike applied as
 /// styles, `[[ref]]` / `#tag` / `[text](url)` shown without their
 /// delimiters. Used when the block is read-only (not selected, not in
@@ -61,6 +95,57 @@ pub(crate) fn render_markdown_inline(
             InlineTok::Strike { inner } => out.push(Span::styled(inner.to_string(), theme.strike)),
             InlineTok::Code { inner } => out.push(Span::styled(inner.to_string(), theme.code)),
             InlineTok::Link { text, .. } => out.push(Span::styled(text.to_string(), theme.md_link)),
+            InlineTok::BlockRef { handle } => {
+                // Resolve the handle to the source block's text and
+                // surface it inline, Roam-style. Citing-block readers
+                // see content, not a UUID-ish handle.
+                //
+                // Unresolved handles (orphan reference: source block
+                // deleted or never indexed) render dimmed with the
+                // handle visible so `outl doctor` (#10) has something
+                // to point at and the user understands what broke.
+                match index.resolve_block_ref(handle) {
+                    Some(entry) => {
+                        // Source page icon — same affordance as PageRef.
+                        if let Some(icon) = index
+                            .by_slug(&entry.source_slug)
+                            .and_then(|p| p.icon.as_deref())
+                        {
+                            out.push(Span::styled(format!("{icon} "), theme.dim));
+                        }
+                        out.push(Span::styled(entry.text.clone(), theme.ref_link));
+                    }
+                    None => {
+                        out.push(Span::styled(format!("(({handle}))"), theme.dim));
+                    }
+                }
+            }
+            InlineTok::Embed { handle } => {
+                // Inline read-only render: `↳ ` prefix marks "this row
+                // belongs to an embed", and the source block's text is
+                // pushed through `render_pretty_block_text` so TODO /
+                // DONE prefixes, `[[refs]]`, `#tags`, bold etc. all
+                // render properly — same affordance the carrying
+                // block would get if it lived in the outline directly.
+                // The subtree below this row (rendered by
+                // `emit_embedded_children`) uses the same `↳ ` prefix
+                // so the whole embed reads as one visual block.
+                match index.resolve_block_ref(handle) {
+                    Some(entry) => {
+                        if let Some(icon) = index
+                            .by_slug(&entry.source_slug)
+                            .and_then(|p| p.icon.as_deref())
+                        {
+                            out.push(Span::styled(format!("{icon} "), theme.dim));
+                        }
+                        out.push(Span::styled("↳ ".to_string(), theme.dim));
+                        out.extend(render_pretty_block_text(&entry.text, theme, index));
+                    }
+                    None => {
+                        out.push(Span::styled(format!("!(({handle}))"), theme.dim));
+                    }
+                }
+            }
         }
     }
     out
@@ -107,6 +192,22 @@ pub(crate) fn highlight_inline(text: &str, theme: &Theme) -> Vec<Span<'static>> 
                 out.push(Span::styled("[".to_string(), dim));
                 out.push(Span::styled(text.to_string(), theme.md_link));
                 out.push(Span::styled(format!("]({url})"), dim));
+            }
+            InlineTok::BlockRef { handle } => {
+                // Cursor-bearing render keeps the `((...))` delimiters
+                // dimmed so column-to-byte alignment for the visible
+                // cursor stays 1:1 with the source bytes.
+                out.push(Span::styled("((".to_string(), dim));
+                out.push(Span::styled(handle.to_string(), theme.ref_link));
+                out.push(Span::styled("))".to_string(), dim));
+            }
+            InlineTok::Embed { handle } => {
+                // Cursor-bearing render: full raw source so column
+                // accounting stays exact while the user is editing
+                // the embed token itself.
+                out.push(Span::styled("!((".to_string(), dim));
+                out.push(Span::styled(handle.to_string(), theme.ref_link));
+                out.push(Span::styled("))".to_string(), dim));
             }
         }
     }

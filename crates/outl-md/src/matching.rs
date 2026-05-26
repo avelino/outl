@@ -139,6 +139,7 @@ mod tests {
             line,
             indent,
             content_hash: content_hash(text),
+            ref_handle: crate::sidecar::derive_ref_handle(id),
         }
     }
 

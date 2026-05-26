@@ -96,13 +96,13 @@ content hashes:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "page_id": "01J...",
   "last_synced_hash": "sha256:...",
   "last_synced_at": "2026-05-25T...",
   "blocks": [
-    {"id": "01J...", "line": 3, "indent": 0, "content_hash": "sha256:..."},
-    {"id": "01J...", "line": 4, "indent": 1, "content_hash": "sha256:..."}
+    {"id": "01J...", "line": 3, "indent": 0, "content_hash": "sha256:...", "ref_handle": "blk-r6s4a1"},
+    {"id": "01J...", "line": 4, "indent": 1, "content_hash": "sha256:...", "ref_handle": "blk-r6s4a2"}
   ]
 }
 ```
@@ -110,6 +110,10 @@ content hashes:
 Filename is a dotfile: `pages/avelino.md` ↔ `pages/.avelino.outl`.
 Hidden from `ls` by default; gitignorable if you want (but you'd lose
 ID stability across devices).
+
+`ref_handle` is the short, stable handle used by inline block
+references (`((blk-XXXXXX))`) and embeds (`!((blk-XXXXXX))`). See
+[`docs/markdown-format.md`](markdown-format.md#block-refs-and-embeds).
 
 ### Op log
 

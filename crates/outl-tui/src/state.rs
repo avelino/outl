@@ -292,6 +292,10 @@ pub(crate) enum AutocompleteKind {
     PageRef,
     /// User typed `#`; pick a tag (any existing page name).
     Tag,
+    /// User typed `((`; pick a block by its text. Candidates are
+    /// **handles** (`blk-XXXXXX`); the popup looks each handle's
+    /// `BlockEntry.text` up in the index for display.
+    BlockRef,
     /// User typed `/` at the start of a word; pick a slash command.
     /// On accept, the trigger + query are removed from the buffer
     /// and the command runs (or pops the `:` palette for arg entry).
@@ -365,6 +369,12 @@ pub(crate) struct App {
     /// Yank register — one or more blocks copied via `yy` (Normal) or
     /// `y` (Visual). `p` / `P` paste these.
     pub(crate) yank_register: Vec<OutlineNode>,
+
+    /// Last `((blk-XXXXXX))` token yanked via the `yr` chord. Lets the
+    /// user pick a block ref handle without leaving the keyboard:
+    /// `yr` to capture, then type / paste manually somewhere else.
+    /// `None` means the chord was never invoked in this session.
+    pub(crate) last_yanked_ref: Option<String>,
 
     /// Derived index of pages, titles and backlinks. Used by the
     /// backlinks panel, quick switcher, autocomplete, icon decoration.

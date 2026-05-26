@@ -6,6 +6,8 @@
 use crate::workspace_layout::{read_config, Paths};
 use anyhow::{Context, Result};
 use outl_core::storage::{SqliteStorage, Storage};
+use outl_md::index::WorkspaceIndex;
+use outl_md::inline::{tokenize, InlineTok};
 use outl_md::sidecar::{self, sidecar_path_for};
 use std::collections::HashSet;
 use std::path::Path;
@@ -114,7 +116,18 @@ pub fn run(path: &Path) -> Result<()> {
         check_orphan_sidecars(&mut f, &sidecar_files, &md_files);
     }
 
-    // 4. Orphan log presence (informational).
+    // 4. Block ref integrity — every `((blk-XXXXXX))` mentioned in a
+    //    block's text must resolve to an indexed block. Orphans show
+    //    up here so the user can clean them up before they ship a
+    //    broken link to another device.
+    //
+    // Build the workspace index ONCE and pass it down — the previous
+    // implementation built it locally inside the check, paying the
+    // full scan twice on every doctor run.
+    let workspace_index = WorkspaceIndex::build(&paths.root);
+    check_orphan_block_refs(&mut f, &workspace_index);
+
+    // 5. Orphan log presence (informational).
     if paths.orphans.exists() {
         let bytes = std::fs::metadata(&paths.orphans)
             .map(|m| m.len())
@@ -126,7 +139,7 @@ pub fn run(path: &Path) -> Result<()> {
         }
     }
 
-    // 5. Lock file warning if held by something else (we can't acquire it).
+    // 6. Lock file warning if held by something else (we can't acquire it).
     match outl_core::WorkspaceLock::acquire(&paths.root) {
         Ok(_lock) => f.ok("workspace lock is free (no other outl process attached)"),
         Err(outl_core::LockError::AlreadyHeld(_)) => {
@@ -197,6 +210,39 @@ fn check_md_files(
                 f.err(format!("{}: sidecar unreadable: {e}", md.display()));
             }
         }
+    }
+}
+
+/// Walk every indexed block, tokenize its text, and warn for every
+/// `((blk-XXXXXX))` or `!((blk-XXXXXX))` whose handle doesn't resolve
+/// to an indexed block.
+///
+/// Surfaces the citing page so the user can navigate straight to the
+/// broken reference. Lookup is O(1) per handle via
+/// [`WorkspaceIndex::resolve_block_ref`], so total cost is linear in
+/// the number of inline block refs across the workspace. Takes the
+/// pre-built index from the caller so doctor doesn't pay for a
+/// duplicate workspace scan.
+fn check_orphan_block_refs(f: &mut Findings, idx: &WorkspaceIndex) {
+    let mut orphans = 0usize;
+    for block in idx.iter_blocks() {
+        for tok in tokenize(&block.text) {
+            let handle = match tok {
+                InlineTok::BlockRef { handle } | InlineTok::Embed { handle } => handle,
+                _ => continue,
+            };
+            if idx.resolve_block_ref(handle).is_none() {
+                orphans += 1;
+                f.warn(format!(
+                    "{}: orphan block ref (({})) — source block missing or not indexed",
+                    block.source_path.display(),
+                    handle
+                ));
+            }
+        }
+    }
+    if orphans == 0 {
+        f.ok("no orphan ((blk-XXXXXX)) references");
     }
 }
 

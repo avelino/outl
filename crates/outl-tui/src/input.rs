@@ -360,6 +360,15 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                 app.yank_current();
                 return Ok(false);
             }
+            ('y', KeyCode::Char('r')) => {
+                // `yr` — yank the **block ref handle** of the
+                // currently selected block. Surfaces `((blk-XXXXXX))`
+                // in the status line and stashes it in
+                // `last_yanked_ref` so a later paste/insert command
+                // can use it.
+                app.yank_current_ref();
+                return Ok(false);
+            }
             ('q', KeyCode::Char('q')) => {
                 // Confirmed quit. The first `q` armed the chord; the
                 // second within one keystroke window seals the deal.

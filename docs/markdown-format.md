@@ -134,9 +134,46 @@ The third line (`- this is a regular child block`) is a real child.
 | `[[name]]` | Reference to page named "name" |
 | `[[2026-05-24]]` | Reference to journal "2026-05-24" (rendered as date) |
 | `#name` | Tag (page reference with classification semantics) |
-| `((block-id))` | Embed of block with given ID |
+| `((blk-XXXXXX))` | Block reference — renders as the source block's text, links to it |
+| `!((blk-XXXXXX))` | Block embed — renders the source block expanded with its subtree |
 | `{{query: ...}}` | Saved query (phase 3 — parse as opaque) |
 | `**bold**`, `*italic*`, `\`code\`` | Standard CommonMark |
+
+#### Block refs and embeds
+
+`((blk-XXXXXX))` is an inline reference to another block. The handle is
+short, lowercase, and human-typeable — it's the last 6 Crockford base32
+characters of the block's ULID, prefixed with `blk-`. Renderers resolve
+the handle through the workspace index and display the source block's
+text in place; the on-disk `.md` keeps the literal `((blk-XXXXXX))`.
+
+`!((blk-XXXXXX))` is the embed form. Same lookup, but the consumer
+expands the source block **and its subtree** inline. Mirrors the markdown
+image syntax (`![alt](url)` → "expand") so the `!` reads as the visual
+hint for inflation.
+
+```
+- decide which database to use #decision
+- in [[Project X]], see ((blk-r6s4a1)) for context
+- the whole thread: !((blk-r6s4a1))
+```
+
+Handles are persisted in the sidecar (see [§sidecar](#the-outl-sidecar))
+so a future change to the derivation scheme cannot break references
+already living in `.md` files. An orphaned handle (citation points at a
+block that no longer exists) renders dimmed in the TUI and is flagged
+by `outl doctor`.
+
+Handle collisions are vanishingly unlikely — 6 lowercase base32 chars is
+~30 bits, ~5×10⁻⁶ birthday probability at 100k blocks. When two blocks
+do land on the same base handle, the second block's handle is lazily
+expanded one character at a time (from the ULID's Crockford base32 tail)
+until unique within the workspace, so both the winner and the loser stay
+resolvable through their own (distinct) handles. The on-disk sidecar
+still records the deterministic 6-char handle — the divergence lives in
+memory until a future reconcile rewrites it. Workspaces that ever
+expanded a handle to 7+ characters keep working forever because lookup
+goes through the in-memory handle, not the literal sidecar field.
 
 ### What is **not** in the file
 
@@ -156,7 +193,7 @@ Format: JSON.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "page_id": "01HXY8KJZQ9T8M7VN3P2R6S4A0",
   "last_synced_hash": "sha256:e3b0c44298fc1c14...",
   "last_synced_at": "2026-05-24T11:22:00-03:00",
@@ -165,13 +202,15 @@ Format: JSON.
       "id": "01HXY8KJZQ9T8M7VN3P2R6S4A1",
       "line": 7,
       "indent": 0,
-      "content_hash": "sha256:abc123..."
+      "content_hash": "sha256:abc123...",
+      "ref_handle": "blk-r6s4a1"
     },
     {
       "id": "01HXY8KJZQ9T8M7VN3P2R6S4A2",
       "line": 8,
       "indent": 1,
-      "content_hash": "sha256:def456..."
+      "content_hash": "sha256:def456...",
+      "ref_handle": "blk-r6s4a2"
     }
   ]
 }
@@ -190,6 +229,11 @@ Format: JSON.
   - `indent`: 0 for top-level outline items, 1 for first child, etc.
   - `content_hash`: SHA-256 of the block's **textual content only**,
     not including children or property lines that belong to it.
+  - `ref_handle`: short, stable, user-typeable handle for
+    `((blk-XXXXXX))` references. Default-derived from the id (last 6
+    chars of the ULID's Crockford base32, lowercased, with the `blk-`
+    prefix). Persisted verbatim so future changes to the derivation
+    cannot invalidate references already in the wild.
 
 ### Content hash
 
@@ -206,13 +250,19 @@ matching.
 
 ### Sidecar versioning
 
-When we ship a `version: 2` someday:
+Current version is **`2`** (added `ref_handle` per block to power
+`((blk-XXXXXX))` references). Reading is backward-compatible:
 
-- Always be able to **read** v1 (forward compat).
-- New writes use the latest version.
-- `outl doctor --migrate` can rewrite v1 → v2 in place.
+- A v1 sidecar (no `ref_handle` field) loads fine; the field is
+  backfilled in memory by deriving it from the block id.
+- The first write after a load upgrades the on-disk payload to the
+  current version.
+- Sidecars below `MIN_READABLE_SIDECAR_VERSION` (currently `1`) fail
+  loudly — old workspaces in the wild stay supported until that
+  constant moves.
 
-Never delete v1 read support — old workspaces in the wild stay supported.
+When v3 ever ships, v1 + v2 read paths stay until they're explicitly
+retired. Silent format drops are not allowed.
 
 ---
 

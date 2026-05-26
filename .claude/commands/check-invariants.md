@@ -1,9 +1,9 @@
 ---
-description: Roda apenas a bateria de testes de invariante do tree CRDT em outl-core. Mais rápido que /check, foca no que pode quebrar sync.
+description: Runs only the tree CRDT invariant test battery in outl-core. Faster than /check, focused on what can break sync.
 allowed-tools: Bash(cargo test:*)
 ---
 
-Rode em sequência:
+Run in sequence:
 
 ```bash
 cargo test -p outl-core --test convergence -- --nocapture
@@ -18,6 +18,6 @@ cargo test -p outl-core --test large_log
 cargo test -p outl-core --test property_based
 ```
 
-Para no primeiro fail. Reporte saída exata da falha.
+Stop on the first failure. Report the exact failure output.
 
-Se todos passarem, conclua chamando o agent `crdt-invariant-checker` pra validação adicional (cobertura + diff estático).
+If they all pass, finish by invoking the `crdt-invariant-checker` agent for extra validation (coverage + static diff).

@@ -56,6 +56,16 @@ the algorithm and the op-log infrastructure are already in.
   is standard CommonMark bullets. No metadata smuggled in.
 - **Page icons** — `icon:: 🚀` on a page surfaces everywhere it's
   referenced (header, switcher, backlinks panel, `[[ref]]` inline).
+- **Block references and embeds** — `((blk-XXXXXX))` resolves inline
+  to the source block's text + page icon. `!((blk-XXXXXX))` expands
+  the source block **and its children** read-only below the carrying
+  block (each row prefixed with `↳ `, children indented to align with
+  the source's text). `Enter` on any handle jumps to the source page
+  and lands the cursor on the referenced block. Short, deterministic,
+  sidecar-backed handles — the `.md` stays human-typeable. `((` in
+  Insert mode pops a fuzzy-match autocomplete; `y r` (or `/refer` /
+  `/refer-embed`) copies the current block's handle to the OS
+  clipboard for paste anywhere.
 - **Code blocks that run** — ` ```lisp / ```js / ```python / ```lua /
   ```rust `, the result lands as a `> **result:**` subblock under
   the source. Re-runs are idempotent. Set `auto-run::` on a block

@@ -50,6 +50,7 @@ impl App {
             autocomplete: None,
             last_search: None,
             yank_register: Vec::new(),
+            last_yanked_ref: None,
             index: WorkspaceIndex::default(),
             index_rx: None,
             show_backlinks: true,

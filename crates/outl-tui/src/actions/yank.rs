@@ -2,9 +2,101 @@
 //! Visual `y` copies the range, `p` / `P` paste after / before.
 
 use crate::outline_ops::{flat_count, index_for_path, node_at_path, path_for_index, siblings_mut};
-use crate::state::{App, Mode};
+use crate::state::{App, Mode, View};
+
+/// Best-effort copy of `text` to the OS clipboard.
+///
+/// Returns `true` on success. Failures (no display server, missing
+/// clipboard daemon, sandboxed terminal, headless CI) are swallowed
+/// — the caller still has `last_yanked_ref` + status as the fallback
+/// surface. We never panic over clipboard plumbing.
+fn copy_to_os_clipboard(text: &str) -> bool {
+    arboard::Clipboard::new()
+        .and_then(|mut c| c.set_text(text.to_string()))
+        .is_ok()
+}
+
+/// Build the status-line message after a yank attempt.
+///
+/// `kind` is the human label (`"ref"`, `"embed"`); `token` is the
+/// thing that landed on the clipboard. `copied` flips the wording so
+/// the user knows whether to expect a paste to work.
+fn clipboard_message(kind: &str, token: &str, copied: bool) -> String {
+    if copied {
+        format!("copied {kind} {token} to clipboard")
+    } else {
+        format!("yanked {kind} {token} (clipboard unavailable)")
+    }
+}
 
 impl App {
+    /// `yr` — capture the block ref handle of the currently selected
+    /// block.
+    ///
+    /// Looks up the block in the workspace index by `(source_slug,
+    /// source_block_path)` and stashes its `((blk-XXXXXX))` form on
+    /// `last_yanked_ref` + the status line. UI clients with a real
+    /// OS clipboard can read `last_yanked_ref` and pipe it through;
+    /// the TUI today surfaces the handle visually so the user can
+    /// copy it with the terminal's own selection.
+    ///
+    /// Lookup is linear in the indexed block count. For the workspace
+    /// sizes we ship in phase 1 that's well under a millisecond — the
+    /// bench in #12 will revisit if profiling proves otherwise.
+    pub(crate) fn yank_current_ref(&mut self) {
+        match self.current_block_ref_handle() {
+            Some(h) => {
+                let token = format!("(({h}))");
+                self.last_yanked_ref = Some(token.clone());
+                self.status = clipboard_message("ref", &token, copy_to_os_clipboard(&token));
+            }
+            None => {
+                self.status = "no ref handle yet — save and retry".into();
+            }
+        }
+    }
+
+    /// Yank the **embed** form of the current block: `!((blk-XXXXXX))`.
+    ///
+    /// Same lookup as [`yank_current_ref`] but stores the embed
+    /// formatting so a downstream paste expands the source block
+    /// inline instead of linking to it.
+    pub(crate) fn yank_current_embed(&mut self) {
+        match self.current_block_ref_handle() {
+            Some(h) => {
+                let token = format!("!(({h}))");
+                self.last_yanked_ref = Some(token.clone());
+                self.status = clipboard_message("embed", &token, copy_to_os_clipboard(&token));
+            }
+            None => {
+                self.status = "no ref handle yet — save and retry".into();
+            }
+        }
+    }
+
+    /// Resolve the selected block's stable ref handle by looking up
+    /// `(source_slug, source_block_path)` in the workspace index.
+    ///
+    /// O(1) thanks to `WorkspaceIndex::block_at_location`. Returns
+    /// `None` when:
+    /// - the cursor isn't on a real block (empty page edge case), or
+    /// - the block was just created in-memory and the sidecar hasn't
+    ///   landed yet (no `BlockEntry` to find).
+    pub(crate) fn current_block_ref_handle(&self) -> Option<String> {
+        let path = path_for_index(&self.page.blocks, self.selected)?;
+        let slug = match &self.view {
+            View::Page(p) => p
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+                .unwrap_or_default(),
+            View::Journal(d) => d.format("%Y-%m-%d").to_string(),
+        };
+        self.index
+            .block_at_location(&slug, &path)
+            .map(|b| b.ref_handle.clone())
+    }
+
     /// Copy the current block (with its subtree) into the yank
     /// register. Doesn't mutate the page.
     pub(crate) fn yank_current(&mut self) {

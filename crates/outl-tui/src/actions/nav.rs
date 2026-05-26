@@ -323,8 +323,64 @@ impl App {
             RefTarget::Page(name) | RefTarget::Tag(name) => {
                 self.open_page_by_name(&name)?;
             }
+            RefTarget::Block(handle) => {
+                self.open_block_ref(&handle)?;
+            }
         }
         Ok(true)
+    }
+
+    /// Open the source page of a `((blk-XXXXXX))` reference and put
+    /// the selection on the referenced block.
+    ///
+    /// Resolution path:
+    ///   1. Look the handle up in `WorkspaceIndex::resolve_block_ref`.
+    ///      Orphan handles (no resolution) leave a status message and
+    ///      otherwise no-op — the user keeps their current view.
+    ///   2. Switch `view` to the source page (journal or regular page,
+    ///      detected by the `journals/` ancestor segment in the path).
+    ///   3. Load the page and translate `source_block_path` (a DFS
+    ///      path) into a flat block index via
+    ///      [`crate::outline_ops::index_for_path`]. Falls back to the
+    ///      top of the page if the path no longer resolves (block
+    ///      moved/deleted since the index was built).
+    pub(crate) fn open_block_ref(&mut self, handle: &str) -> Result<()> {
+        let Some(entry) = self.index.resolve_block_ref(handle) else {
+            self.status = format!("ref (({handle})) does not resolve");
+            return Ok(());
+        };
+        let source_path = entry.source_path.clone();
+        let source_block_path = entry.source_block_path.clone();
+
+        // Detect journal vs page from the path layout. Workspace
+        // layout pins journals under `journals/` and pages under
+        // `pages/`; everything else falls back to a page view.
+        let is_journal = source_path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            == Some("journals");
+        if is_journal {
+            if let Some(stem) = source_path.file_stem().and_then(|s| s.to_str()) {
+                if let Ok(date) = chrono::NaiveDate::parse_from_str(stem, "%Y-%m-%d") {
+                    self.view = View::Journal(date);
+                    self.selected = 0;
+                    self.cursor_col = 0;
+                    self.load_current();
+                    self.selected =
+                        crate::outline_ops::index_for_path(&self.page.blocks, &source_block_path)
+                            .unwrap_or(0);
+                    return Ok(());
+                }
+            }
+        }
+        self.view = View::Page(source_path);
+        self.selected = 0;
+        self.cursor_col = 0;
+        self.load_current();
+        self.selected =
+            crate::outline_ops::index_for_path(&self.page.blocks, &source_block_path).unwrap_or(0);
+        Ok(())
     }
 
     /// Open (or create) the page corresponding to a user-visible name.

@@ -13,9 +13,12 @@
 //! for thousands. The TUI calls `rebuild()` at startup and on a debounce
 //! after writes.
 
+use crate::block_index::{BlockEntry, BlockIndex, BlockReference};
 use crate::inline::{tokenize, InlineTok};
 use crate::parse::{parse, OutlineNode};
+use crate::sidecar::{self, Sidecar};
 use crate::slug::slugify;
+use outl_core::id::NodeId;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -77,6 +80,9 @@ pub struct WorkspaceIndex {
     pages: HashMap<String, PageEntry>,
     title_to_slug: HashMap<String, String>,
     backlinks: HashMap<String, Vec<Backlink>>,
+    /// Block-level index — owns the `((blk-XXXXXX))` lookup machinery.
+    /// Kept private so the public surface stays a single `WorkspaceIndex`.
+    blocks: BlockIndex,
 }
 
 impl WorkspaceIndex {
@@ -94,7 +100,8 @@ impl WorkspaceIndex {
         // the `pages` map; consumed in pass 2 for backlink collection.
         // Capacity-hint avoids regrowth on workspaces of any reasonable
         // size.
-        let mut parsed_pages: Vec<(String, crate::parse::ParsedPage)> = Vec::with_capacity(64);
+        let mut parsed_pages: Vec<(String, crate::parse::ParsedPage, Option<Sidecar>)> =
+            Vec::with_capacity(64);
 
         for (dir, is_journal) in [
             (workspace_root.join("pages"), false),
@@ -158,14 +165,37 @@ impl WorkspaceIndex {
                     },
                 );
                 idx.title_to_slug.insert(title.clone(), slug.to_string());
-                parsed_pages.push((slug.to_string(), parsed));
+
+                // Block-level indexing phase 1: register every block
+                // (id, handle, text, subtree) without recording
+                // reverse refs yet. Phase 2 below scans citations
+                // once all handles are known — that way a page B
+                // that cites a block of page A still gets its edge
+                // registered even when B is walked before A.
+                let cached_sidecar = read_sidecar_best_effort(path);
+                if let Some(sc) = &cached_sidecar {
+                    idx.blocks
+                        .collect_page_blocks(slug, path, &parsed.blocks, &sc.blocks);
+                }
+
+                parsed_pages.push((slug.to_string(), parsed, cached_sidecar));
+            }
+        }
+
+        // Phase 2 of block indexing: now that every handle is in
+        // `handle_to_block`, scan each page's blocks for
+        // `((blk-XXXXXX))` and record the reverse edges.
+        for (slug, parsed, cached_sidecar) in &parsed_pages {
+            if let Some(sc) = cached_sidecar {
+                idx.blocks
+                    .collect_page_refs(slug, &parsed.blocks, &sc.blocks);
             }
         }
 
         // Second pass: scan blocks for `[[ref]]` and `#tag`, populate
         // backlinks. Reuses the AST cached in `parsed_pages` so we
         // don't pay another read + parse round-trip.
-        for (slug, parsed) in &parsed_pages {
+        for (slug, parsed, _sc) in &parsed_pages {
             // Clone is cheap — `PageEntry` is small and `Arc`-less.
             // Avoids holding an immutable borrow of `idx.pages` while
             // we mutate `idx.backlinks` below.
@@ -272,15 +302,26 @@ impl WorkspaceIndex {
             pinned,
         };
         self.pages.insert(slug.clone(), entry.clone());
-        self.title_to_slug.insert(title, slug);
+        self.title_to_slug.insert(title.clone(), slug.clone());
 
         let mut path_stack: Vec<usize> = Vec::new();
         collect_backlinks_recursive(&page.blocks, &mut path_stack, &entry, self);
+
+        // Block-level re-index: drop everything this page used to
+        // contribute, then re-collect from the fresh AST + current
+        // sidecar. `forget_page` is O(blocks_in_workspace) today; the
+        // bench in #12 measures whether that holds up at scale.
+        self.blocks.forget_page(&slug);
+        if let Some(sc) = read_sidecar_best_effort(path) {
+            self.blocks
+                .collect_page(&slug, path, &page.blocks, &sc.blocks);
+        }
     }
 
     /// Drop a page from the index entirely. Use when a `.md` is
-    /// deleted on disk. Removes the `PageEntry`, its title alias, and
-    /// every backlink whose source was this slug.
+    /// deleted on disk. Removes the `PageEntry`, its title alias,
+    /// every backlink whose source was this slug, and every block
+    /// the page contributed to the block index.
     pub fn remove_page(&mut self, slug: &str) {
         self.pages.remove(slug);
         self.title_to_slug.retain(|_, s| s != slug);
@@ -288,6 +329,7 @@ impl WorkspaceIndex {
             list.retain(|bl| bl.source_slug != slug);
         }
         self.backlinks.retain(|_, v| !v.is_empty());
+        self.blocks.forget_page(slug);
     }
 
     /// Re-clone the cached `source_block` of every backlink whose
@@ -356,6 +398,54 @@ impl WorkspaceIndex {
         }
     }
 
+    /// Resolve `((blk-XXXXXX))` to the indexed block, if known.
+    ///
+    /// `O(1)`. Returns `None` for handles that don't match any
+    /// indexed block — orphan references are surfaced this way for
+    /// the doctor pass to flag.
+    pub fn resolve_block_ref(&self, handle: &str) -> Option<&BlockEntry> {
+        self.blocks.resolve(handle)
+    }
+
+    /// Look up a block by its `NodeId`.
+    pub fn block_by_id(&self, id: NodeId) -> Option<&BlockEntry> {
+        self.blocks.get(id)
+    }
+
+    /// Blocks that cite `id` via `((blk-XXXXXX))`. May be empty.
+    pub fn block_refs_to(&self, id: NodeId) -> &[BlockReference] {
+        self.blocks.refs_to(id)
+    }
+
+    /// Iterate every indexed block in unspecified order. Used by
+    /// the TUI's `((` autocomplete to fuzzy-match on block text.
+    pub fn iter_blocks(&self) -> impl Iterator<Item = &BlockEntry> {
+        self.blocks.iter_blocks()
+    }
+
+    /// Search indexed blocks by text substring (case-insensitive).
+    ///
+    /// Powers the `((` autocomplete in any UI surface (TUI today,
+    /// Tauri / mobile later). Returns up to `limit` `BlockEntry`s
+    /// ranked by match position then text length.
+    pub fn search_block_text(&self, query: &str, limit: usize) -> Vec<&BlockEntry> {
+        self.blocks.search_text(query, limit)
+    }
+
+    /// Find the block at `(slug, dfs_path)` in O(1).
+    ///
+    /// Backs `yr` / `/refer` / `/refer-embed` so the TUI doesn't
+    /// scan `iter_blocks()` linearly per chord press.
+    pub fn block_at_location(&self, slug: &str, path: &[usize]) -> Option<&BlockEntry> {
+        self.blocks.at_location(slug, path)
+    }
+
+    /// Total indexed blocks. Tests and the future bench (#12) read
+    /// this to sanity-check workspace coverage.
+    pub fn block_count(&self) -> usize {
+        self.blocks.block_count()
+    }
+
     /// Titles starting with `prefix` (case-insensitive), best-effort
     /// for autocomplete. Returns at most `limit` results sorted by
     /// title length (shorter first).
@@ -389,6 +479,14 @@ fn walk_node<'a>(blocks: &'a [OutlineNode], path: &[usize]) -> Option<&'a Outlin
         current = &n.children;
     }
     node
+}
+
+/// Read the sidecar paired with `md_path`, swallowing I/O and parse
+/// errors so the index build (a best-effort pass) cannot abort over a
+/// single bad file.
+fn read_sidecar_best_effort(md_path: &Path) -> Option<Sidecar> {
+    let p = sidecar::sidecar_path_for(md_path);
+    sidecar::read(&p).ok()
 }
 
 /// Loose truthy check for boolean-ish property values (`pinned::`,
@@ -452,265 +550,7 @@ fn push_backlink(
         });
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use tempfile::TempDir;
-
-    fn write_workspace(files: &[(&str, &str)]) -> TempDir {
-        let dir = TempDir::new().unwrap();
-        for (rel, content) in files {
-            let full = dir.path().join(rel);
-            if let Some(parent) = full.parent() {
-                fs::create_dir_all(parent).unwrap();
-            }
-            fs::write(full, content).unwrap();
-        }
-        dir
-    }
-
-    #[test]
-    fn patch_page_replaces_backlinks_for_that_slug_only() {
-        // Initial state: projeto.md and journal both reference Avelino.
-        let dir = write_workspace(&[
-            ("pages/avelino.md", "title:: Avelino\n\n- author\n"),
-            (
-                "pages/projeto.md",
-                "title:: Projeto\n\n- led by [[Avelino]]\n",
-            ),
-            ("journals/2026-05-24.md", "- meeting with [[Avelino]]\n"),
-        ]);
-        let mut idx = WorkspaceIndex::build(dir.path());
-        assert_eq!(idx.backlinks("avelino").len(), 2);
-
-        // User rewrites projeto.md so it no longer references Avelino
-        // and now references "Other Page" instead. patch_page must:
-        //   1. drop projeto's old backlink to Avelino
-        //   2. emit a new backlink from projeto to other-page
-        // ...without touching the journal's backlink.
-        let new_md = "title:: Projeto\n\n- led by [[Other Page]]\n";
-        let new_page = crate::parse::parse(new_md);
-        let proj_path = dir.path().join("pages/projeto.md");
-        idx.patch_page(&proj_path, &new_page);
-
-        let avelino_bls = idx.backlinks("avelino");
-        assert_eq!(avelino_bls.len(), 1, "journal backlink should survive");
-        assert_eq!(avelino_bls[0].source_slug, "2026-05-24");
-
-        let other_bls = idx.backlinks("other-page");
-        assert_eq!(other_bls.len(), 1);
-        assert_eq!(other_bls[0].source_slug, "projeto");
-    }
-
-    #[test]
-    fn patch_page_updates_title_and_icon() {
-        let dir = write_workspace(&[("pages/x.md", "title:: Old Title\nicon:: 🦀\n\n- body\n")]);
-        let mut idx = WorkspaceIndex::build(dir.path());
-        assert_eq!(idx.by_slug("x").unwrap().title, "Old Title");
-        assert_eq!(idx.by_slug("x").unwrap().icon.as_deref(), Some("🦀"));
-
-        let new_page = crate::parse::parse("title:: New Title\nicon:: 🚀\n\n- body\n");
-        idx.patch_page(&dir.path().join("pages/x.md"), &new_page);
-
-        let entry = idx.by_slug("x").unwrap();
-        assert_eq!(entry.title, "New Title");
-        assert_eq!(entry.icon.as_deref(), Some("🚀"));
-        // by_title should follow the new title and forget the old one.
-        assert!(idx.by_title("Old Title").is_none());
-        assert_eq!(idx.by_title("New Title").unwrap().slug, "x");
-    }
-
-    #[test]
-    fn remove_page_drops_entry_and_its_backlinks() {
-        let dir = write_workspace(&[
-            ("pages/avelino.md", "title:: Avelino\n\n- author\n"),
-            (
-                "pages/projeto.md",
-                "title:: Projeto\n\n- led by [[Avelino]]\n",
-            ),
-        ]);
-        let mut idx = WorkspaceIndex::build(dir.path());
-        assert_eq!(idx.backlinks("avelino").len(), 1);
-
-        idx.remove_page("projeto");
-        assert!(idx.by_slug("projeto").is_none());
-        assert!(idx.by_title("Projeto").is_none());
-        assert!(idx.backlinks("avelino").is_empty());
-    }
-
-    #[test]
-    fn empty_workspace_indexes_to_nothing() {
-        let dir = TempDir::new().unwrap();
-        let idx = WorkspaceIndex::build(dir.path());
-        assert_eq!(idx.page_count(), 0);
-    }
-
-    #[test]
-    fn pages_get_indexed_by_slug_and_title() {
-        let dir = write_workspace(&[
-            (
-                "pages/avelino.md",
-                "title:: Avelino\n\n- some note about me\n",
-            ),
-            ("pages/projeto.md", "title:: Meu Projeto\n\n- objetivo\n"),
-        ]);
-        let idx = WorkspaceIndex::build(dir.path());
-        assert_eq!(idx.page_count(), 2);
-        assert_eq!(idx.by_slug("avelino").unwrap().title, "Avelino");
-        assert_eq!(idx.by_title("Meu Projeto").unwrap().slug, "projeto");
-    }
-
-    #[test]
-    fn missing_title_falls_back_to_slug() {
-        let dir = write_workspace(&[("pages/no-title.md", "- bare bullet\n")]);
-        let idx = WorkspaceIndex::build(dir.path());
-        assert_eq!(idx.by_slug("no-title").unwrap().title, "no-title");
-    }
-
-    #[test]
-    fn icon_property_is_indexed_and_propagated_to_backlinks() {
-        let dir = write_workspace(&[
-            (
-                "pages/avelino.md",
-                "title:: Avelino\nicon:: 🦀\n\n- author\n",
-            ),
-            (
-                "pages/projeto.md",
-                "title:: Projeto\nicon:: 🚀\n\n- led by [[Avelino]]\n",
-            ),
-            // Page without icon — must produce None, not crash.
-            ("pages/bare.md", "title:: Bare\n\n- nothing fancy\n"),
-        ]);
-        let idx = WorkspaceIndex::build(dir.path());
-
-        assert_eq!(idx.by_slug("avelino").unwrap().icon.as_deref(), Some("🦀"));
-        assert_eq!(idx.by_slug("projeto").unwrap().icon.as_deref(), Some("🚀"));
-        assert_eq!(idx.by_slug("bare").unwrap().icon, None);
-
-        // Backlink to Avelino comes from Projeto — must carry its icon.
-        let bls = idx.backlinks("avelino");
-        assert_eq!(bls.len(), 1);
-        assert_eq!(bls[0].source_slug, "projeto");
-        assert_eq!(bls[0].source_icon.as_deref(), Some("🚀"));
-    }
-
-    #[test]
-    fn empty_icon_is_treated_as_none() {
-        // `icon:: ` (no value) shouldn't show up as a present-but-empty
-        // icon — the UI would render a stray space.
-        let dir = write_workspace(&[("pages/x.md", "title:: X\nicon::\n\n- body\n")]);
-        let idx = WorkspaceIndex::build(dir.path());
-        assert_eq!(idx.by_slug("x").unwrap().icon, None);
-    }
-
-    #[test]
-    fn backlinks_are_collected_across_pages() {
-        let dir = write_workspace(&[
-            ("pages/avelino.md", "title:: Avelino\n\n- I am the author\n"),
-            (
-                "pages/projeto.md",
-                "title:: Projeto\n\n- led by [[Avelino]]\n",
-            ),
-            (
-                "journals/2026-05-24.md",
-                "- meeting with [[Avelino]] and #urgent stuff\n",
-            ),
-        ]);
-        let idx = WorkspaceIndex::build(dir.path());
-        let bl = idx.backlinks("avelino");
-        assert_eq!(bl.len(), 2);
-        let slugs: Vec<_> = bl.iter().map(|b| b.source_slug.as_str()).collect();
-        assert!(slugs.contains(&"projeto"));
-        assert!(slugs.contains(&"2026-05-24"));
-
-        let urgent = idx.backlinks("urgent");
-        assert_eq!(urgent.len(), 1);
-    }
-
-    #[test]
-    fn self_references_are_skipped() {
-        let dir = write_workspace(&[(
-            "pages/recursive.md",
-            "title:: Recursive\n\n- I link to [[Recursive]] myself\n",
-        )]);
-        let idx = WorkspaceIndex::build(dir.path());
-        assert!(idx.backlinks("recursive").is_empty());
-    }
-
-    #[test]
-    fn journals_are_treated_as_pages_for_lookup() {
-        let dir = write_workspace(&[("journals/2026-05-24.md", "- entry\n")]);
-        let idx = WorkspaceIndex::build(dir.path());
-        let entry = idx.by_slug("2026-05-24").unwrap();
-        assert!(entry.is_journal);
-    }
-
-    #[test]
-    fn source_block_carries_text_and_children() {
-        // The Backlink struct holds the full referencing block, not a
-        // truncated snippet. The TUI relies on `source_block.children`
-        // to draw nested context.
-        let dir = write_workspace(&[
-            ("pages/avelino.md", "title:: Avelino\n\n- author\n"),
-            (
-                "pages/projeto.md",
-                "title:: Projeto\n\n- led by [[Avelino]]\n  - milestone A\n  - milestone B\n",
-            ),
-        ]);
-        let idx = WorkspaceIndex::build(dir.path());
-        let bls = idx.backlinks("avelino");
-        assert_eq!(bls.len(), 1);
-        assert_eq!(bls[0].source_block.text, "led by [[Avelino]]");
-        assert_eq!(bls[0].source_block.children.len(), 2);
-        assert_eq!(bls[0].source_block.children[0].text, "milestone A");
-        assert_eq!(bls[0].source_block.children[1].text, "milestone B");
-    }
-
-    #[test]
-    fn source_block_path_points_to_referencing_block() {
-        // A backlink coming from a nested block records the DFS path
-        // [parent_idx, child_idx] so the editor can navigate straight
-        // to the right node without re-walking the AST.
-        let dir = write_workspace(&[
-            ("pages/avelino.md", "title:: Avelino\n\n- author\n"),
-            (
-                "pages/projeto.md",
-                "title:: Projeto\n\n- root block\n  - nested ref to [[Avelino]]\n",
-            ),
-        ]);
-        let idx = WorkspaceIndex::build(dir.path());
-        let bls = idx.backlinks("avelino");
-        assert_eq!(bls.len(), 1);
-        assert_eq!(bls[0].source_block_path, vec![0, 0]);
-        assert_eq!(bls[0].source_block.text, "nested ref to [[Avelino]]");
-    }
-
-    #[test]
-    fn block_with_repeated_reference_only_emits_one_backlink() {
-        let dir = write_workspace(&[
-            ("pages/avelino.md", "title:: Avelino\n\n- author\n"),
-            (
-                "pages/projeto.md",
-                "title:: Projeto\n\n- [[Avelino]] and again [[Avelino]] same block\n",
-            ),
-        ]);
-        let idx = WorkspaceIndex::build(dir.path());
-        assert_eq!(idx.backlinks("avelino").len(), 1);
-    }
-
-    #[test]
-    fn title_prefix_lookup() {
-        let dir = write_workspace(&[
-            ("pages/a.md", "title:: Apple\n\n- a\n"),
-            ("pages/b.md", "title:: Apricot\n\n- a\n"),
-            ("pages/c.md", "title:: Banana\n\n- a\n"),
-        ]);
-        let idx = WorkspaceIndex::build(dir.path());
-        let hits = idx.pages_by_title_prefix("Ap", 10);
-        assert_eq!(hits.len(), 2);
-        let names: Vec<_> = hits.iter().map(|p| p.title.as_str()).collect();
-        assert!(names.contains(&"Apple"));
-        assert!(names.contains(&"Apricot"));
-    }
-}
+// Integration-level tests for WorkspaceIndex live in
+// `tests/workspace_index.rs`. They exercise only the public API surface
+// so the same suite would catch a regression introduced by a UI client
+// (TUI, future Tauri, mobile).

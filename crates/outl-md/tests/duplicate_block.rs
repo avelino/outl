@@ -4,7 +4,7 @@
 use outl_core::id::NodeId;
 use outl_md::matching::{match_blocks, MatchLevel};
 use outl_md::parse::parse;
-use outl_md::sidecar::{content_hash, SidecarBlock};
+use outl_md::sidecar::{content_hash, derive_ref_handle, SidecarBlock};
 
 #[test]
 fn ctrl_d_first_keeps_id_second_gets_new() {
@@ -14,6 +14,7 @@ fn ctrl_d_first_keeps_id_second_gets_new() {
         line: 1,
         indent: 0,
         content_hash: content_hash("hello"),
+        ref_handle: derive_ref_handle(id),
     }];
 
     // After Ctrl+D in VS Code.
@@ -40,6 +41,7 @@ fn three_copies_of_same_content_two_get_new_ids() {
         line: 1,
         indent: 0,
         content_hash: content_hash("hi"),
+        ref_handle: derive_ref_handle(id),
     }];
 
     let edited = "- hi\n- hi\n- hi\n";
