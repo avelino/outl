@@ -117,17 +117,28 @@ reconcile path; the sidecar `last_synced_hash` short-circuits no-ops.
 src/
 ├── main.rs              # binary entry (clap + outl_tui::run)
 ├── lib.rs               # exposes `run` so outl-cli can reuse the TUI
-├── app.rs               # state, mode, key handling, render, AST helpers
+├── app.rs               # thin re-export shim + cross-module tests
+├── state.rs             # plain data: App, Mode, Focus, Overlay, snapshots
+├── actions/             # impl App { ... } blocks, one per concern
+│   ├── lifecycle.rs     # load / save / external-edit polling / new
+│   ├── nav.rs           # page/journal jumps, cursor, ref open, Focus-aware move
+│   ├── block.rs         # Insert mode, create/indent/outdent/delete blocks
+│   ├── history.rs       # undo / redo snapshots
+│   ├── visual.rs        # Visual mode + range ops
+│   ├── yank.rs          # yank register, paste
+│   ├── exec.rs          # run code block via outl_exec
+│   └── overlay.rs       # quick switcher, search, palette, autocomplete
+├── input.rs             # key → action routing
+├── view.rs              # render_app orchestrator; thin
+├── view/
+│   ├── inline.rs        # span-level markdown (highlight + pretty)
+│   ├── outline.rs       # outline rendering (render_outline, render_block, …)
+│   ├── overlays.rs      # every modal popup
+│   └── backlinks.rs     # inline backlinks section (below outline, ─ rule)
+├── outline_ops.rs       # pure AST helpers (flat_count, paths, flatten_backlink_subtree)
 ├── edit_buffer.rs       # cursor + chars; isolated, well-tested
-├── input.rs             # keymap documentation
 ├── editor.rs            # placeholder for phase 4 (block-level editor widgets)
-└── ui/
-    ├── pages.rs         # phase 3+ placeholder
-    ├── journal.rs       # phase 3+ placeholder
-    ├── outline.rs       # phase 3+ placeholder (logic lives in app::render_outline)
-    ├── tags.rs          # phase 3+ placeholder
-    ├── backlinks.rs     # phase 3+ placeholder
-    └── command.rs       # phase 3+ placeholder
+└── ui/                  # legacy placeholders; logic lives in view/
 ```
 
 ## Dependencies

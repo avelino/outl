@@ -202,13 +202,13 @@ things:
 
 - **`Ctrl+P`** — quick switcher. Fuzzy match by title or filename.
   Type `dist` and `distsys` jumps to the top.
-- **`/`** — workspace-wide search. Type a fragment of any block.
-  Hits show page label + snippet; Enter jumps you to the block.
-  After the popup closes, `n` and `N` walk through the rest of the
-  matches.
-- **`:`** — command palette. `:open Avelino` opens by title.
-  `:today` jumps to today's journal. `:theme nord` swaps the theme.
-  `:q` quits.
+- **`/`** — slash command menu. Notion-style filterable list of every
+  registered command. Type `/search` and `Enter` for workspace-wide
+  block search; after the search popup closes, `n` and `N` walk
+  through the rest of the matches.
+- **`:`** — command palette (vim-style). Same registry as `/`, same
+  aliases. `:open Avelino` opens by title, `:today` jumps to today's
+  journal, `:theme nord` swaps the theme, `:q` quits.
 
 Try them. Press `?` if you forget a key — the help popup lists
 everything.
@@ -226,15 +226,48 @@ A few things that compound:
 - **`yy`** — yank the current block (and its subtree). `p` pastes
   after, `P` pastes before. Works in Visual mode too: press `V`,
   extend with `j`/`k`, then `y`.
-- **`Ctrl+Enter`** — cycle the block's TODO/DONE/none prefix. In
-  Insert mode it cycles inline without moving your cursor relative
-  to the text.
+- **`Ctrl+Enter`** (or **`Ctrl+T`** as a portable fallback) — cycle
+  the block's TODO/DONE/none prefix. In Insert mode it cycles inline
+  without moving your cursor relative to the text. Use `Ctrl+T` on
+  terminals/multiplexers (tmux, Terminal.app) that collapse
+  `Ctrl+Enter` into plain `Enter`.
 - **`Ctrl+L`** — re-read the workspace from disk. Useful when
   another editor changed a `.md` behind your back.
 - **`Ctrl+S`** — force save. (Edits auto-save on every commit, but
   this is for muscle memory.)
 
 You're now using outl roughly the way it's meant to be used.
+
+---
+
+## Day 8 — Date & time inserters
+
+Journal-first means a lot of cross-linking between days. Typing
+`[[2026-05-26]]` by hand gets old fast, so outl ships slash commands
+for it.
+
+In Insert mode, type `/`, filter, pick:
+
+- **`/date-today`** → `[[2026-05-26]]` (also `/dt`)
+- **`/date-tomorrow`** → `[[2026-05-27]]` (also `/dtm`)
+- **`/date-yesterday`** → `[[2026-05-25]]` (also `/dy`)
+- **`/date-next-monday`** → next Monday's journal ref (also `/dnmon`,
+  and one per weekday: `dntue`, `dnwed`, `dnthu`, `dnfri`, `dnsat`,
+  `dnsun`)
+- **`/date-next-week`** / **`/date-last-week`** → today ±7 days
+  (`/dnw`, `/dlw`)
+- **`/date +3d`** / **`/date -2w`** / **`/date +1m`** /
+  **`/date 2026-06-15`** → flexible offset or absolute
+- **`/time-now`** → `14:32` (plain text, no brackets — for "I started
+  at" notes)
+- **`/datetime-now`** → `[[2026-05-26]] 14:32` (stamp this moment)
+- **`/iso-date-today`** → `2026-05-26` without brackets, for property
+  values like `due:: 2026-05-26`
+- **`/week-num`** → `#2026-W21` (ISO week as a tag — clusters weekly
+  notes via the tag index)
+
+All of these write at the cursor without committing your in-flight
+edit — type away.
 
 ---
 
