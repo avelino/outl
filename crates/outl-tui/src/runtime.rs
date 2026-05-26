@@ -36,6 +36,15 @@ use std::time::Duration;
 /// filesystem.
 const POLL_INTERVAL: Duration = Duration::from_millis(750);
 
+/// Shorter poll cadence used while a background workspace-index
+/// rebuild is in flight. The worker finishes in tens of ms on a small
+/// vault but the result only reaches the UI on the next event-loop
+/// iteration — without this, the user waits up to `POLL_INTERVAL`
+/// (750 ms) to see backlinks fill in after opening the app. ~60 fps
+/// while we wait costs nothing on idle hardware and disappears the
+/// moment the index lands.
+const POLL_INTERVAL_PENDING_INDEX: Duration = Duration::from_millis(16);
+
 /// Run the TUI against the workspace at `path`.
 ///
 /// Picks the active theme from `.outl/config.toml`'s `[theme] preset`
@@ -210,7 +219,17 @@ fn event_loop(
         // changed under us (external editor saved). This is the
         // simplest hot-reload path — no filesystem watcher, no
         // background thread — and good enough at human latency.
-        if !event::poll(POLL_INTERVAL).unwrap_or(false) {
+        //
+        // While a background index rebuild is in flight, shorten the
+        // timeout so the freshly-built `WorkspaceIndex` shows up in
+        // the UI within ~16 ms of arriving (instead of waiting up to
+        // 750 ms for the next external-edit poll).
+        let poll_timeout = if app.has_pending_index() {
+            POLL_INTERVAL_PENDING_INDEX
+        } else {
+            POLL_INTERVAL
+        };
+        if !event::poll(poll_timeout).unwrap_or(false) {
             app.check_external_changes();
             continue;
         }

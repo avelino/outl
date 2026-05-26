@@ -6,8 +6,8 @@
 //! `self.selected`, and `self.cursor_col`. The lifecycle module is
 //! the one that touches disk.
 
-use crate::outline_ops::{node_at_path, path_for_index};
-use crate::state::{App, Mode, View};
+use crate::outline_ops::{flatten_backlink_subtree, node_at_path, path_for_index};
+use crate::state::{App, Focus, Mode, View};
 use anyhow::Result;
 use chrono::{Duration, Local};
 use outl_md::inline::{ref_at_cursor, RefTarget};
@@ -89,28 +89,160 @@ impl App {
     }
 
     pub(crate) fn move_selection(&mut self, delta: i32) {
-        if self.flat_len == 0 {
+        if self.flat_len == 0 && matches!(self.focus, Focus::Outline) {
             self.selected = 0;
             self.cursor_col = 0;
             return;
         }
-        let cur = self.selected as i32;
-        let next = (cur + delta).clamp(0, self.flat_len as i32 - 1) as usize;
-        if next != self.selected {
-            self.selected = next;
-            // Each block has its own cursor context; reset to start.
-            self.cursor_col = 0;
+        if delta > 0 {
+            for _ in 0..delta {
+                if !self.step_forward() {
+                    break;
+                }
+            }
+        } else {
+            for _ in 0..(-delta) {
+                if !self.step_backward() {
+                    break;
+                }
+            }
         }
     }
 
+    /// Advance the cursor by one position in the virtual flat list
+    /// `outline blocks ++ backlink section blocks`. Returns `true` if
+    /// the cursor moved, `false` when already at the bottom.
+    ///
+    /// Crosses the boundary between outline and backlinks transparently
+    /// when the inline section is shown and non-empty.
+    fn step_forward(&mut self) -> bool {
+        match self.focus.clone() {
+            Focus::Outline => {
+                if self.selected + 1 < self.flat_len {
+                    self.selected += 1;
+                    self.cursor_col = 0;
+                    return true;
+                }
+                // Bottom of outline → try entering the backlinks zone.
+                if self.backlinks_navigable() {
+                    self.focus = Focus::Backlink {
+                        idx: 0,
+                        sub_path: Vec::new(),
+                    };
+                    self.cursor_col = 0;
+                    return true;
+                }
+                false
+            }
+            Focus::Backlink { idx, sub_path } => {
+                let backlinks = self.index.backlinks(&self.current_slug()).to_vec();
+                let Some(bl) = backlinks.get(idx) else {
+                    return false;
+                };
+                let paths = flatten_backlink_subtree(&bl.source_block);
+                let cur_pos = paths.iter().position(|p| p == &sub_path).unwrap_or(0);
+                if cur_pos + 1 < paths.len() {
+                    self.focus = Focus::Backlink {
+                        idx,
+                        sub_path: paths[cur_pos + 1].clone(),
+                    };
+                    self.cursor_col = 0;
+                    return true;
+                }
+                if idx + 1 < backlinks.len() {
+                    self.focus = Focus::Backlink {
+                        idx: idx + 1,
+                        sub_path: Vec::new(),
+                    };
+                    self.cursor_col = 0;
+                    return true;
+                }
+                false
+            }
+        }
+    }
+
+    /// Mirror of [`step_forward`], moving one position upward.
+    fn step_backward(&mut self) -> bool {
+        match self.focus.clone() {
+            Focus::Outline => {
+                if self.selected > 0 {
+                    self.selected -= 1;
+                    self.cursor_col = 0;
+                    return true;
+                }
+                false
+            }
+            Focus::Backlink { idx, sub_path } => {
+                let backlinks = self.index.backlinks(&self.current_slug()).to_vec();
+                let Some(bl) = backlinks.get(idx) else {
+                    return false;
+                };
+                let paths = flatten_backlink_subtree(&bl.source_block);
+                let cur_pos = paths.iter().position(|p| p == &sub_path).unwrap_or(0);
+                if cur_pos > 0 {
+                    self.focus = Focus::Backlink {
+                        idx,
+                        sub_path: paths[cur_pos - 1].clone(),
+                    };
+                    self.cursor_col = 0;
+                    return true;
+                }
+                if idx > 0 {
+                    // Jump to the last block of the previous backlink.
+                    let prev_paths = flatten_backlink_subtree(&backlinks[idx - 1].source_block);
+                    let last = prev_paths.last().cloned().unwrap_or_default();
+                    self.focus = Focus::Backlink {
+                        idx: idx - 1,
+                        sub_path: last,
+                    };
+                    self.cursor_col = 0;
+                    return true;
+                }
+                // Topping out of the backlinks zone → fall back into
+                // the outline at its last block.
+                self.focus = Focus::Outline;
+                self.selected = self.flat_len.saturating_sub(1);
+                self.cursor_col = 0;
+                true
+            }
+        }
+    }
+
+    /// `true` when the inline backlinks section is rendered *and* has
+    /// at least one block the cursor can land on. Drives the cross-zone
+    /// transition in `step_forward`/`step_backward`.
+    fn backlinks_navigable(&self) -> bool {
+        self.show_backlinks && !self.index.backlinks(&self.current_slug()).is_empty()
+    }
+
     /// Current selected block's text (or empty if no selection).
+    /// Honours `app.focus` so backlink blocks return their own text.
     pub(crate) fn current_block_text(&self) -> String {
-        let Some(path) = path_for_index(&self.page.blocks, self.selected) else {
-            return String::new();
-        };
-        node_at_path(&self.page.blocks, &path)
-            .map(|n| n.text.clone())
-            .unwrap_or_default()
+        match &self.focus {
+            Focus::Outline => {
+                let Some(path) = path_for_index(&self.page.blocks, self.selected) else {
+                    return String::new();
+                };
+                node_at_path(&self.page.blocks, &path)
+                    .map(|n| n.text.clone())
+                    .unwrap_or_default()
+            }
+            Focus::Backlink { idx, sub_path } => {
+                let backlinks = self.index.backlinks(&self.current_slug());
+                let Some(bl) = backlinks.get(*idx) else {
+                    return String::new();
+                };
+                let mut node = &bl.source_block;
+                for &i in sub_path {
+                    let Some(child) = node.children.get(i) else {
+                        return String::new();
+                    };
+                    node = child;
+                }
+                node.text.clone()
+            }
+        }
     }
 
     pub(crate) fn current_block_char_count(&self) -> usize {

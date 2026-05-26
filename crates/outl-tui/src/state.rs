@@ -21,9 +21,9 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 pub(crate) const HELP_HINT_NORMAL: &str =
-    "i edit  o new  h/l cursor  Enter open ref  K/J move  C-Enter TODO  u undo  ? help  q";
+    "i edit  o new  h/l cursor  Enter open ref  K/J move  C-T TODO  u undo  ? help  q";
 pub(crate) const HELP_HINT_INSERT: &str =
-    "Esc commit  Enter new block  Ctrl+Enter TODO  Tab indent  Shift-Tab outdent";
+    "Esc commit  Enter new block  Ctrl+T TODO  Tab indent  Shift-Tab outdent";
 pub(crate) const HELP_HINT_VISUAL: &str =
     "j/k extend  d/x delete  y yank  Tab indent  S-Tab outdent  Esc cancel";
 
@@ -35,6 +35,24 @@ pub(crate) const MAX_HISTORY: usize = 200;
 pub(crate) const TODO_PREFIX: &str = "TODO ";
 pub(crate) const DONE_PREFIX: &str = "DONE ";
 
+/// Where Insert-mode edits get committed.
+///
+/// `CurrentPage` is the historical path: mutate `App.page` and save
+/// through `current_path()`. `SourcePage` is the cross-page route used
+/// when the user edits a backlink in place — the buffer commits
+/// directly into the source page's `.md` without changing `App.view`.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum EditTarget {
+    CurrentPage,
+    SourcePage {
+        path: PathBuf,
+        /// Working copy of the source page's AST. Mutated by the
+        /// buffer commit, then written back to `path` via
+        /// `App::save_page`.
+        page: ParsedPage,
+    },
+}
+
 /// Insert vs Normal vs Visual.
 ///
 /// Visual is a Normal sibling that adds a range anchor: every block
@@ -43,8 +61,11 @@ pub(crate) const DONE_PREFIX: &str = "DONE ";
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Mode {
     Normal,
-    /// Editing the block at `path` (index into the flattened outline).
+    /// Editing the block at `path`. `block_path` is interpreted
+    /// against `App.page` when `target == CurrentPage`, otherwise
+    /// against `target.page` (the loaded source AST).
     Insert {
+        target: EditTarget,
         block_path: Vec<usize>,
         buffer: EditBuffer,
         original_text: String,
@@ -61,6 +82,30 @@ pub(crate) enum Mode {
 pub(crate) enum View {
     Journal(NaiveDate),
     Page(PathBuf),
+}
+
+/// Where the cursor lives — inside the current page's outline (default)
+/// or inside the inline backlinks section below it.
+///
+/// We carry focus as a *peer of `Mode`* rather than rewriting
+/// `selected: usize` because the vast majority of action methods
+/// (delete, indent, yank, visual range, undo snapshots) operate on the
+/// current page only. Splitting `selected` into a Selection enum would
+/// touch ~40 call sites for a feature that's really a different mode
+/// with a different commit target.
+///
+/// `Focus::Backlink { idx, sub_path }`:
+/// - `idx` indexes `app.index.backlinks(current_slug)`.
+/// - `sub_path` is a DFS path *inside* `Backlink.source_block` — empty
+///   means the source block itself; `[0]` its first child; etc.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) enum Focus {
+    #[default]
+    Outline,
+    Backlink {
+        idx: usize,
+        sub_path: Vec<usize>,
+    },
 }
 
 /// One reversible step.
@@ -283,8 +328,14 @@ pub(crate) struct App {
     /// date.
     pub(crate) index_rx: Option<std::sync::mpsc::Receiver<WorkspaceIndex>>,
 
-    /// Whether to draw the backlinks panel to the right of the outline.
+    /// Whether to draw the inline backlinks section below the outline.
+    /// Toggled with `B`. Default `true` so users discover the feature.
     pub(crate) show_backlinks: bool,
+
+    /// Where the cursor lives — outline (default) or inside the inline
+    /// backlinks section. Reset to `Focus::Outline` whenever the view
+    /// changes (page open, journal navigation, etc).
+    pub(crate) focus: Focus,
 
     /// First visible line of the outline (vertical scroll offset). The
     /// view module keeps this in sync with `selected` — when navigation

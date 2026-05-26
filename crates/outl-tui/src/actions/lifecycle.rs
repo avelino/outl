@@ -6,7 +6,7 @@
 
 use crate::commands::CommandRegistry;
 use crate::outline_ops::flat_count;
-use crate::state::{App, Mode, View};
+use crate::state::{App, Focus, Mode, View};
 use crate::theme::Theme;
 use anyhow::{Context, Result};
 use chrono::Local;
@@ -51,6 +51,7 @@ impl App {
             index: WorkspaceIndex::default(),
             index_rx: None,
             show_backlinks: true,
+            focus: Focus::Outline,
             scroll_y: 0,
             viewport_height: 0,
             last_mtime: None,
@@ -104,6 +105,14 @@ impl App {
             })
             .expect("spawning the index worker thread should not fail");
         self.index_rx = Some(rx);
+    }
+
+    /// `true` while a workspace-index rebuild is in flight on a worker
+    /// thread. The event loop uses this to shorten its
+    /// `event::poll` timeout so the freshly-built index shows up in
+    /// the UI within a frame, not after the next 750 ms key timeout.
+    pub(crate) fn has_pending_index(&self) -> bool {
+        self.index_rx.is_some()
     }
 
     /// Non-blocking check: if the background index build has finished,
@@ -205,6 +214,10 @@ impl App {
         if self.selected >= self.flat_len {
             self.selected = self.flat_len.saturating_sub(1);
         }
+        // Any view change snaps focus back to the outline. Carrying a
+        // stale `Focus::Backlink { idx, … }` across pages would point
+        // at the wrong backlink list (the new page has its own).
+        self.focus = Focus::Outline;
         // Snapshot the file's mtime so the polling loop can tell when
         // an *external* edit lands (vs. our own save).
         self.last_mtime = file_mtime(&path);
@@ -247,9 +260,62 @@ impl App {
         }
 
         self.load_current();
-        self.spawn_index_rebuild();
+        // External edit changes one file — incremental patch is enough
+        // to bring the index in sync. (A full rebuild is the wrong
+        // tool: it would block on rescanning every other page that
+        // didn't change.)
+        let cur_path = self.current_path();
+        self.index.patch_page(&cur_path, &self.page);
         self.status = "reloaded from disk".into();
         true
+    }
+
+    /// Render an arbitrary `ParsedPage` to `path` and reconcile.
+    ///
+    /// Used by the cross-page commit route (editing a backlink): the
+    /// caller has a working copy of a *different* page than
+    /// `current_path()`, and wants to persist it without disturbing
+    /// `app.view` / `app.page`. Updates status on failure, rebuilds
+    /// the workspace index, and keeps `last_mtime` honest when the
+    /// path happens to coincide with the open view.
+    #[allow(dead_code)]
+    pub(crate) fn save_page(&mut self, path: &Path, page: &ParsedPage) {
+        self.save_page_with(path, page, true);
+    }
+
+    /// Same as [`Self::save_page`] but skips the index rebuild when
+    /// the caller has already patched the in-memory state optimistically.
+    ///
+    /// On `rebuild_index == true`, the cheaper [`patch_page`] is used
+    /// instead of the workspace-wide rescan — single-file work
+    /// proportional to the page's block count, not to the workspace
+    /// size.
+    ///
+    /// [`patch_page`]: outl_md::index::WorkspaceIndex::patch_page
+    pub(crate) fn save_page_with(&mut self, path: &Path, page: &ParsedPage, rebuild_index: bool) {
+        let md = render(page);
+        if let Err(e) = outl_md::write_atomic(path, md.as_bytes()) {
+            self.status = format!("save (source) failed: {e}");
+            return;
+        }
+        if let Err(e) = reconcile_md(
+            &mut self.workspace,
+            &self.hlc,
+            path,
+            Some(&self.orphans_log),
+        ) {
+            self.status = format!("reconcile (source) failed: {e}");
+            return;
+        }
+        self.status.clear();
+        if rebuild_index {
+            // Incremental: just re-index this one page. Full workspace
+            // rescans are reserved for cold start and `Ctrl+L`.
+            self.index.patch_page(path, page);
+        }
+        if path == self.current_path() {
+            self.last_mtime = file_mtime(path);
+        }
     }
 
     /// Render the in-memory `page` back to disk and reconcile.
@@ -280,11 +346,11 @@ impl App {
             let _ = outl_md::write_atomic(&path, render(&self.page).as_bytes());
         }
         self.selected = self.selected.min(self.flat_len.saturating_sub(1));
-        // Refresh derived data (backlinks, icons, ...) off the
-        // critical path. The UI stays responsive while the worker
-        // re-scans; `poll_index_updates` swaps the result in when
-        // ready (usually next frame).
-        self.spawn_index_rebuild();
+        // Incremental re-index: only this page changed, so just
+        // refresh its entries (backlinks, title, icon). Cheap and
+        // synchronous — no waiting for a worker to rescan the whole
+        // workspace.
+        self.index.patch_page(&path, &self.page);
         // Update mtime AFTER the write so the polling loop doesn't
         // mistake our own save for an external edit.
         self.last_mtime = file_mtime(&path);

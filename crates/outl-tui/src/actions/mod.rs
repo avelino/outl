@@ -33,4 +33,3 @@ pub(crate) mod yank;
 // `read_page_title` directly via the submodule path — listing them
 // here too would warn-as-unused under `--release` / non-test builds.
 pub(crate) use block::cycle_todo_inline;
-pub(crate) use overlay::truncate_for_snippet;
