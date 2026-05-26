@@ -1,64 +1,19 @@
-// Each struct here is self-documenting (one `impl SlashCommand` block
-// each, name + description on the trait methods). The struct itself
-// is just a zero-sized handle.
-#![allow(missing_docs)]
-
-//! Built-in slash / palette commands.
+//! Date / time / week-tag insert commands.
 //!
-//! Each command is a small struct implementing `SlashCommand`.
-//! Adding a new one is ~20 lines + one call in `register_all`.
-//!
-//! Convention:
-//!
-//! - `name()` is lowercase, single word.
-//! - `description()` is one short sentence in present-tense English.
-//! - Args-less commands (`needs_args = false`) usually toggle UI or
-//!   navigate. They run immediately from `/` without a second prompt.
-//! - Arg-taking commands explain expected format in `description`.
+//! Sixteen single-purpose commands that all share the same shape: in
+//! Insert mode they paste a formatted timestamp at the cursor; in
+//! Normal mode they refuse politely with a status hint. Grouped here
+//! because they share helpers (`insert_or_warn`, `journal_link_offset`,
+//! `time_text`, …) and the seven `date-next-<weekday>` siblings come
+//! from a single macro.
 
 use anyhow::Result;
 use chrono::{Datelike, Duration, Local, Months, NaiveDate, Weekday};
 
-use super::{CommandRegistry, SlashCommand};
+use super::super::SlashCommand;
 use crate::state::{App, Mode};
-use crate::theme;
 
-/// Hook for [`CommandRegistry::with_builtins`].
-pub(super) fn register_all(reg: &mut CommandRegistry) {
-    reg.register(PropBlockCommand);
-    reg.register(PropPageCommand);
-    reg.register(SearchCommand);
-    reg.register(RunCommand);
-    reg.register(ThemeCommand);
-    reg.register(TodayCommand);
-    reg.register(RefreshCommand);
-    reg.register(WriteCommand);
-    reg.register(HelpCommand);
-    reg.register(QuitCommand);
-    reg.register(OpenCommand);
-    // Date / time inserters (Insert mode only — slash dispatcher
-    // skips `commit_insert` for these because they need the buffer
-    // alive at the cursor).
-    reg.register(DateTodayCommand);
-    reg.register(DateTomorrowCommand);
-    reg.register(DateYesterdayCommand);
-    reg.register(DateNextWeekCommand);
-    reg.register(DateLastWeekCommand);
-    reg.register(DateNextMondayCommand);
-    reg.register(DateNextTuesdayCommand);
-    reg.register(DateNextWednesdayCommand);
-    reg.register(DateNextThursdayCommand);
-    reg.register(DateNextFridayCommand);
-    reg.register(DateNextSaturdayCommand);
-    reg.register(DateNextSundayCommand);
-    reg.register(DateCommand);
-    reg.register(IsoDateTodayCommand);
-    reg.register(IsoDateTomorrowCommand);
-    reg.register(IsoDateYesterdayCommand);
-    reg.register(TimeNowCommand);
-    reg.register(DateTimeNowCommand);
-    reg.register(WeekNumCommand);
-}
+// ─── helpers ──────────────────────────────────────────────────────────
 
 /// Insert `text` at the cursor if we're in Insert mode; otherwise
 /// surface a status message — date commands only make sense while
@@ -169,277 +124,7 @@ fn parse_date_arg(arg: &str, today: NaiveDate) -> Option<NaiveDate> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// prop-block — add or update a property on the current block
-// ---------------------------------------------------------------------------
-
-pub struct PropBlockCommand;
-impl SlashCommand for PropBlockCommand {
-    fn name(&self) -> &'static str {
-        "prop-block"
-    }
-    fn description(&self) -> &'static str {
-        "Set a property on the current block — `prop-block <key> <value>` (empty value deletes)"
-    }
-    fn needs_args(&self) -> bool {
-        true
-    }
-    fn aliases(&self) -> &'static [&'static str] {
-        // `prop` defaults to the block scope — that's the common case.
-        &["prop"]
-    }
-    fn execute(&self, app: &mut App, args: &str) -> Result<bool> {
-        let (key, value) = args.split_once(' ').unwrap_or((args, ""));
-        let key = key.trim();
-        let value = value.trim();
-        if key.is_empty() {
-            app.status = "usage: prop-block <key> <value>".into();
-            return Ok(false);
-        }
-        app.set_property_on_current_block(key, value);
-        Ok(false)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// prop-page — add or update a property at page level
-// ---------------------------------------------------------------------------
-
-pub struct PropPageCommand;
-impl SlashCommand for PropPageCommand {
-    fn name(&self) -> &'static str {
-        "prop-page"
-    }
-    fn description(&self) -> &'static str {
-        "Set a property on the page itself (`title::`, `icon::`, …) — `prop-page <key> <value>`"
-    }
-    fn needs_args(&self) -> bool {
-        true
-    }
-    fn execute(&self, app: &mut App, args: &str) -> Result<bool> {
-        let (key, value) = args.split_once(' ').unwrap_or((args, ""));
-        let key = key.trim();
-        let value = value.trim();
-        if key.is_empty() {
-            app.status = "usage: prop-page <key> <value>".into();
-            return Ok(false);
-        }
-        app.set_property_on_page(key, value);
-        Ok(false)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// search — workspace-wide block search
-// ---------------------------------------------------------------------------
-
-pub struct SearchCommand;
-impl SlashCommand for SearchCommand {
-    fn name(&self) -> &'static str {
-        "search"
-    }
-    fn description(&self) -> &'static str {
-        "Open the workspace search overlay"
-    }
-    fn aliases(&self) -> &'static [&'static str] {
-        &["s", "find"]
-    }
-    fn execute(&self, app: &mut App, _args: &str) -> Result<bool> {
-        app.open_search();
-        Ok(false)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// run — execute the code block under the cursor
-// ---------------------------------------------------------------------------
-
-pub struct RunCommand;
-impl SlashCommand for RunCommand {
-    fn name(&self) -> &'static str {
-        "run"
-    }
-    fn description(&self) -> &'static str {
-        "Run the code block under the cursor through outl-exec"
-    }
-    fn aliases(&self) -> &'static [&'static str] {
-        &["x", "execute"]
-    }
-    fn execute(&self, app: &mut App, _args: &str) -> Result<bool> {
-        app.run_current_block();
-        Ok(false)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// theme — switch palette at runtime
-// ---------------------------------------------------------------------------
-
-pub struct ThemeCommand;
-impl SlashCommand for ThemeCommand {
-    fn name(&self) -> &'static str {
-        "theme"
-    }
-    fn description(&self) -> &'static str {
-        "Switch the active theme — `theme <preset>`"
-    }
-    fn needs_args(&self) -> bool {
-        true
-    }
-    fn execute(&self, app: &mut App, args: &str) -> Result<bool> {
-        if args.is_empty() {
-            app.status = "usage: theme <preset>".into();
-            return Ok(false);
-        }
-        if let Some(t) = theme::by_name(args) {
-            let name = t.name;
-            app.theme = t;
-            app.status = format!("theme: {name}");
-        } else {
-            app.status = format!("unknown theme: {args}");
-        }
-        Ok(false)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// today — jump to today's journal
-// ---------------------------------------------------------------------------
-
-pub struct TodayCommand;
-impl SlashCommand for TodayCommand {
-    fn name(&self) -> &'static str {
-        "today"
-    }
-    fn description(&self) -> &'static str {
-        "Jump to today's journal"
-    }
-    fn execute(&self, app: &mut App, _args: &str) -> Result<bool> {
-        app.go_today()?;
-        Ok(false)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// refresh — re-read the workspace from disk
-// ---------------------------------------------------------------------------
-
-pub struct RefreshCommand;
-impl SlashCommand for RefreshCommand {
-    fn name(&self) -> &'static str {
-        "refresh"
-    }
-    fn description(&self) -> &'static str {
-        "Re-read the workspace from disk (rebuilds index)"
-    }
-    fn aliases(&self) -> &'static [&'static str] {
-        &["reload", "r"]
-    }
-    fn execute(&self, app: &mut App, _args: &str) -> Result<bool> {
-        app.refresh_workspace();
-        app.status = "refreshed".into();
-        Ok(false)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// write — force-save the current page
-// ---------------------------------------------------------------------------
-
-pub struct WriteCommand;
-impl SlashCommand for WriteCommand {
-    fn name(&self) -> &'static str {
-        "write"
-    }
-    fn description(&self) -> &'static str {
-        "Save the current page to disk"
-    }
-    fn aliases(&self) -> &'static [&'static str] {
-        &["w", "save"]
-    }
-    fn execute(&self, app: &mut App, _args: &str) -> Result<bool> {
-        app.save();
-        app.status = "saved".into();
-        Ok(false)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// help — toggle the help popup
-// ---------------------------------------------------------------------------
-
-pub struct HelpCommand;
-impl SlashCommand for HelpCommand {
-    fn name(&self) -> &'static str {
-        "help"
-    }
-    fn description(&self) -> &'static str {
-        "Toggle the help popup"
-    }
-    fn aliases(&self) -> &'static [&'static str] {
-        &["h"]
-    }
-    fn execute(&self, app: &mut App, _args: &str) -> Result<bool> {
-        app.show_help = true;
-        Ok(false)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// quit — close the TUI
-// ---------------------------------------------------------------------------
-
-pub struct QuitCommand;
-impl SlashCommand for QuitCommand {
-    fn name(&self) -> &'static str {
-        "quit"
-    }
-    fn description(&self) -> &'static str {
-        "Close the TUI (commits any pending Insert first)"
-    }
-    fn aliases(&self) -> &'static [&'static str] {
-        &["q", "exit"]
-    }
-    fn execute(&self, _app: &mut App, _args: &str) -> Result<bool> {
-        Ok(true)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// open — open (or create) a page by title
-// ---------------------------------------------------------------------------
-
-pub struct OpenCommand;
-impl SlashCommand for OpenCommand {
-    fn name(&self) -> &'static str {
-        "open"
-    }
-    fn description(&self) -> &'static str {
-        "Open (or create) a page by name — `open <name>`"
-    }
-    fn needs_args(&self) -> bool {
-        true
-    }
-    fn aliases(&self) -> &'static [&'static str] {
-        &["o", "new", "n"]
-    }
-    fn execute(&self, app: &mut App, args: &str) -> Result<bool> {
-        if args.is_empty() {
-            app.status = "usage: open <page name>".into();
-            return Ok(false);
-        }
-        app.open_page_by_name(args)?;
-        Ok(false)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// date-today / date-tomorrow / date-yesterday — insert a journal ref
-// ---------------------------------------------------------------------------
-//
-// All three insert `[[YYYY-MM-DD]]` at the cursor. ISO format matches
-// outl's journal slug, so the inserted ref is also a live link to that
-// day's journal — clickable from the rendered view.
+// ─── date-today / tomorrow / yesterday ────────────────────────────────
 
 pub struct DateTodayCommand;
 impl SlashCommand for DateTodayCommand {
@@ -501,9 +186,7 @@ impl SlashCommand for DateYesterdayCommand {
     }
 }
 
-// ---------------------------------------------------------------------------
-// time-now — plain `HH:MM`, no brackets (it's not a journal ref)
-// ---------------------------------------------------------------------------
+// ─── time-now / datetime-now ──────────────────────────────────────────
 
 pub struct TimeNowCommand;
 impl SlashCommand for TimeNowCommand {
@@ -525,10 +208,6 @@ impl SlashCommand for TimeNowCommand {
     }
 }
 
-// ---------------------------------------------------------------------------
-// datetime-now — `[[YYYY-MM-DD]] HH:MM`, the "timestamp this moment" marker
-// ---------------------------------------------------------------------------
-
 pub struct DateTimeNowCommand;
 impl SlashCommand for DateTimeNowCommand {
     fn name(&self) -> &'static str {
@@ -549,9 +228,7 @@ impl SlashCommand for DateTimeNowCommand {
     }
 }
 
-// ---------------------------------------------------------------------------
-// date-next-week / date-last-week — same weekday, ±7 days
-// ---------------------------------------------------------------------------
+// ─── date-next-week / date-last-week ──────────────────────────────────
 
 pub struct DateNextWeekCommand;
 impl SlashCommand for DateNextWeekCommand {
@@ -593,12 +270,8 @@ impl SlashCommand for DateLastWeekCommand {
     }
 }
 
-// ---------------------------------------------------------------------------
-// date-next-<weekday> — next occurrence of that weekday (skips today)
-// ---------------------------------------------------------------------------
-//
-// Seven small structs share one body via a macro because the only
-// thing that varies is the name string and the `Weekday` value.
+// ─── date-next-<weekday> ──────────────────────────────────────────────
+// Seven sibling commands share one body via a macro.
 macro_rules! next_weekday_command {
     ($struct_name:ident, $name:literal, $weekday:expr, $label:literal, $aliases:expr) => {
         pub struct $struct_name;
@@ -675,9 +348,7 @@ next_weekday_command!(
     &["dnsun"]
 );
 
-// ---------------------------------------------------------------------------
-// date — flexible: `/date +3d`, `/date -2w`, `/date +1m`, `/date 2026-06-15`
-// ---------------------------------------------------------------------------
+// ─── date (flexible offset / absolute) ────────────────────────────────
 
 pub struct DateCommand;
 impl SlashCommand for DateCommand {
@@ -708,12 +379,7 @@ impl SlashCommand for DateCommand {
     }
 }
 
-// ---------------------------------------------------------------------------
-// iso-date-{today,tomorrow,yesterday} — plain `YYYY-MM-DD` (no brackets)
-// ---------------------------------------------------------------------------
-//
-// Useful for property values like `due:: 2026-05-26` where you don't
-// want the auto-link semantics of `[[...]]`.
+// ─── iso-date-{today,tomorrow,yesterday} ──────────────────────────────
 
 pub struct IsoDateTodayCommand;
 impl SlashCommand for IsoDateTodayCommand {
@@ -775,13 +441,10 @@ impl SlashCommand for IsoDateYesterdayCommand {
     }
 }
 
-// ---------------------------------------------------------------------------
-// week-num — `#YYYY-Www` tag for the current ISO week
-// ---------------------------------------------------------------------------
-//
+// ─── week-num (`#YYYY-Www`) ───────────────────────────────────────────
 // Inserted as a `#tag` (not `[[ref]]`) so it routes through the
-// existing tag indexing — weekly notes show up in backlinks for
-// the tag page if it exists.
+// existing tag indexing — weekly notes show up in backlinks for the
+// tag page if it exists.
 
 pub struct WeekNumCommand;
 impl SlashCommand for WeekNumCommand {
@@ -803,6 +466,8 @@ impl SlashCommand for WeekNumCommand {
         Ok(false)
     }
 }
+
+// ─── tests ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -880,15 +545,6 @@ mod tests {
         assert!(IsoDateTomorrowCommand.inserts_inline());
         assert!(IsoDateYesterdayCommand.inserts_inline());
         assert!(WeekNumCommand.inserts_inline());
-    }
-
-    /// Sanity: existing non-inline commands keep the default `false`,
-    /// so we don't accidentally break the commit-then-dispatch flow.
-    #[test]
-    fn non_date_commands_stay_non_inline() {
-        assert!(!TodayCommand.inserts_inline());
-        assert!(!OpenCommand.inserts_inline());
-        assert!(!SearchCommand.inserts_inline());
     }
 
     #[test]
@@ -1007,5 +663,19 @@ mod tests {
         // differs from `%Y` (calendar year) here. Confirms we used %G.
         let last_of_year = NaiveDate::from_ymd_opt(2025, 12, 31).unwrap();
         assert_eq!(week_tag(last_of_year), "#2026-W01");
+    }
+
+    // -- non-date commands kept lean -----------------------------------------
+
+    #[test]
+    fn non_date_commands_stay_non_inline() {
+        // Sentinel — anything not in this module should keep its
+        // default `inserts_inline == false`. We re-assert here so
+        // a refactor that flips the default doesn't slip through.
+        use super::super::exec::SearchCommand;
+        use super::super::workspace::{OpenCommand, TodayCommand};
+        assert!(!TodayCommand.inserts_inline());
+        assert!(!OpenCommand.inserts_inline());
+        assert!(!SearchCommand.inserts_inline());
     }
 }

@@ -42,6 +42,8 @@ impl App {
             page_list: Vec::new(),
             mode: Mode::Normal,
             show_help: false,
+            help_tab: 0,
+            help_scroll: 0,
             pending_chord: None,
             status: String::new(),
             overlay: None,
@@ -51,10 +53,16 @@ impl App {
             index: WorkspaceIndex::default(),
             index_rx: None,
             show_backlinks: true,
+            show_sidebar: false,
+            sidebar_focus: None,
+            sidebar_cursor: 0,
+            recent_paths: Vec::new(),
+            toasts: Vec::new(),
             focus: Focus::Outline,
             scroll_y: 0,
             viewport_height: 0,
             last_mtime: None,
+            last_saved_at: None,
             undo: Vec::new(),
             redo: Vec::new(),
             theme,
@@ -221,6 +229,26 @@ impl App {
         // Snapshot the file's mtime so the polling loop can tell when
         // an *external* edit lands (vs. our own save).
         self.last_mtime = file_mtime(&path);
+        // Anchor the header's freshness chip ("⟳ 2s ago") to the load
+        // instant: from the user's perspective, what's on screen *is*
+        // what's on disk at this moment.
+        self.last_saved_at = Some(std::time::Instant::now());
+        self.touch_recent(&path);
+    }
+
+    /// Move `path` to the front of the recent-paths LRU. Used by
+    /// `load_current_no_autorun` so any view switch (journal, page,
+    /// switch-overlay open) keeps the sidebar's `Recent` list in
+    /// sync with what the user actually touched.
+    ///
+    /// Capped at 20 entries — anything past that drops off the back,
+    /// which is enough for a session's worth of context without
+    /// turning into infinite scroll.
+    pub(crate) fn touch_recent(&mut self, path: &Path) {
+        const RECENT_MAX: usize = 20;
+        self.recent_paths.retain(|p| p != path);
+        self.recent_paths.insert(0, path.to_path_buf());
+        self.recent_paths.truncate(RECENT_MAX);
     }
 
     /// Detect that the current `.md` was edited by another process
@@ -250,9 +278,13 @@ impl App {
         }
 
         if matches!(self.mode, Mode::Insert { .. }) {
-            self.status = format!(
-                "external edit detected ({}) — finish your edit, then Ctrl+L to reload",
-                path.file_name().and_then(|s| s.to_str()).unwrap_or("file")
+            let fname = path.file_name().and_then(|s| s.to_str()).unwrap_or("file");
+            // Toast the warning instead of the status line: this is a
+            // conflict the user needs to acknowledge, but the footer
+            // hint is more useful for the chord prompt next to it.
+            self.toast(
+                crate::state::ToastKind::Warning,
+                format!("external edit on {fname} — Ctrl+L to reload"),
             );
             // Don't update last_mtime — we'll keep warning until the
             // user explicitly resolves it.
@@ -266,7 +298,7 @@ impl App {
         // didn't change.)
         let cur_path = self.current_path();
         self.index.patch_page(&cur_path, &self.page);
-        self.status = "reloaded from disk".into();
+        self.toast(crate::state::ToastKind::Info, "reloaded from disk");
         true
     }
 
@@ -326,7 +358,7 @@ impl App {
         let path = self.current_path();
         let md = render(&self.page);
         if let Err(e) = outl_md::write_atomic(&path, md.as_bytes()) {
-            self.status = format!("save failed: {e}");
+            self.toast(crate::state::ToastKind::Error, format!("save failed: {e}"));
             return;
         }
         match reconcile_md(
@@ -336,7 +368,10 @@ impl App {
             Some(&self.orphans_log),
         ) {
             Ok(_) => self.status.clear(),
-            Err(e) => self.status = format!("reconcile failed: {e}"),
+            Err(e) => self.toast(
+                crate::state::ToastKind::Error,
+                format!("reconcile failed: {e}"),
+            ),
         }
         self.flat_len = flat_count(&self.page.blocks);
         if self.flat_len == 0 {
@@ -354,6 +389,7 @@ impl App {
         // Update mtime AFTER the write so the polling loop doesn't
         // mistake our own save for an external edit.
         self.last_mtime = file_mtime(&path);
+        self.last_saved_at = Some(std::time::Instant::now());
     }
 }
 

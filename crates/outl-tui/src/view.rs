@@ -14,22 +14,28 @@
 //! `pub(crate)` for cross-file reuse inside `view/`.
 
 mod backlinks;
+mod chrome;
 mod inline;
 mod outline;
 mod overlays;
+mod sidebar;
+mod toasts;
 
-use crate::state::{
-    App, Focus, Mode, Overlay, View, HELP_HINT_INSERT, HELP_HINT_NORMAL, HELP_HINT_VISUAL,
-};
+use crate::state::{App, Focus, Overlay, View};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{
+    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+};
 
 // Inline-rendering helpers used by tests in `app.rs` — keep them
 // reachable via `crate::view::…` for backwards compat with the
 // pre-split layout.
 #[cfg(test)]
 pub(crate) use inline::{highlight_inline, render_markdown_inline, split_todo_prefix};
+
+// Re-export the help-tabs constant so `input` can compute the tab
+// count without needing the whole `overlays` module visible.
+pub(crate) use overlays::HELP_TABS;
 
 pub(crate) fn render_app(f: &mut ratatui::Frame<'_>, app: &mut App) {
     let area = f.area();
@@ -52,6 +58,11 @@ pub(crate) fn render_app(f: &mut ratatui::Frame<'_>, app: &mut App) {
     if app.show_help {
         overlays::render_help_popup(f, area, app);
     }
+
+    // Toasts render last so they sit visually on top of every other
+    // surface (even open overlays). They're harmless decoration —
+    // never block input, never own focus.
+    toasts::render_toasts(f, area, app);
 }
 
 fn render_main(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
@@ -64,39 +75,31 @@ fn render_main(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
         ])
         .split(area);
 
-    // Header: page title on the left, workspace/index info on the right.
-    let workspace_label = app
-        .workspace_root
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("workspace")
-        .to_string();
-    let stats = format!(
-        "  ws:{workspace_label}  pages:{}  blocks:{}",
-        app.index.page_count(),
-        app.flat_len
-    );
-    let header = Paragraph::new(Line::from(vec![
-        Span::styled(app.current_title(), app.theme.heading),
-        Span::styled(stats, app.theme.dim),
-    ]))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(app.theme.border)
-            .title(Span::styled(
-                format!(" outl · {} ", app.theme.name),
-                app.theme.hint,
-            )),
-    );
-    f.render_widget(header, outer[0]);
+    chrome::render_header(f, outer[0], app);
+
+    // Optional left sidebar: splits the middle row horizontally when
+    // toggled on (`\` in Normal mode). Default off keeps the classic
+    // single-pane layout intact for users who never opt in.
+    let body_area = if app.show_sidebar {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(sidebar::SIDEBAR_WIDTH),
+                Constraint::Min(20),
+            ])
+            .split(outer[1]);
+        sidebar::render_sidebar(f, cols[0], app);
+        cols[1]
+    } else {
+        outer[1]
+    };
 
     // Build the single scrollable region: outline lines, then the
     // inline backlinks section. The `─` separator and headers live
     // inside `backlinks::render_backlinks_inline`.
     let (mut all_lines, sel_outline) = outline::render_outline(&app.page, app);
     let outline_len = all_lines.len();
-    let inner_width = outer[1].width.saturating_sub(2);
+    let inner_width = body_area.width.saturating_sub(2);
     let (bl_lines, sel_bl) = backlinks::render_backlinks_inline(app, inner_width);
     let bl_offset = all_lines.len();
     all_lines.extend(bl_lines);
@@ -112,10 +115,10 @@ fn render_main(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
     };
     let _ = outline_len; // kept for future scroll heuristics
 
-    // Viewport math: outer[1] is the outline area (borders included).
+    // Viewport math: body_area is the outline area (borders included).
     // Subtract 2 for top + bottom border lines to get the actually
     // drawable region.
-    let viewport_h = outer[1].height.saturating_sub(2);
+    let viewport_h = body_area.height.saturating_sub(2);
     app.viewport_height = viewport_h;
 
     // Auto-scroll: keep the selection visible. If it scrolled off the
@@ -140,21 +143,12 @@ fn render_main(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
         app.scroll_y = 0;
     }
 
-    let scroll_indicator = if total > viewport_h && viewport_h > 0 {
-        format!(
-            " ({}/{})",
-            app.scroll_y + 1,
-            total.saturating_sub(viewport_h) + 1
-        )
-    } else {
-        String::new()
-    };
     let body = Paragraph::new(all_lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(app.theme.border)
-                .title(format!("{title}{scroll_indicator}")),
+                .title(title.to_string()),
         )
         .scroll((app.scroll_y, 0));
     // NB: no `.wrap(...)`. Wrap turns one logical line into N visual
@@ -162,40 +156,25 @@ fn render_main(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
     // `selected_line` index. We trade off-screen long lines (rare,
     // and you can horizontal-scroll later) for a correct vertical
     // scroll today.
-    f.render_widget(body, outer[1]);
+    f.render_widget(body, body_area);
 
-    let (mode_label, mode_style) = match app.mode {
-        Mode::Normal => (" NORMAL ", app.theme.status_normal),
-        Mode::Insert { .. } => (" INSERT ", app.theme.status_insert),
-        Mode::Visual { .. } => (" VISUAL ", app.theme.status_visual),
-    };
-    let hint = match app.mode {
-        Mode::Insert { .. } => HELP_HINT_INSERT,
-        Mode::Visual { .. } => HELP_HINT_VISUAL,
-        Mode::Normal => HELP_HINT_NORMAL,
-    };
-    // Backlink count for this view (when it matters).
-    let bl_count = app.index.backlinks(&app.current_slug()).len();
-    let bl_label = if bl_count == 0 {
-        String::new()
-    } else {
-        format!(
-            "  ⇇ {bl_count} backlink{}",
-            if bl_count == 1 { "" } else { "s" }
-        )
-    };
-    let footer = Paragraph::new(Line::from(vec![
-        Span::styled(mode_label, mode_style),
-        Span::raw("  "),
-        Span::styled(hint, app.theme.hint),
-        Span::styled(bl_label, app.theme.dim),
-        Span::raw("  "),
-        Span::styled(&app.status, app.theme.status_message),
-    ]))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(app.theme.border),
-    );
-    f.render_widget(footer, outer[2]);
+    // Vertical scrollbar on the right border. Only meaningful when the
+    // body actually overflows the viewport; the widget renders nothing
+    // when `content_length <= viewport_height`, but we skip the call
+    // entirely to keep the body title pristine on short pages.
+    if total > viewport_h && viewport_h > 0 {
+        let mut sb_state = ScrollbarState::new(total as usize)
+            .viewport_content_length(viewport_h as usize)
+            .position(app.scroll_y as usize);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("▲"))
+            .end_symbol(Some("▼"))
+            .track_symbol(Some("│"))
+            .thumb_symbol("█")
+            .style(app.theme.dim)
+            .thumb_style(app.theme.heading);
+        f.render_stateful_widget(scrollbar, body_area, &mut sb_state);
+    }
+
+    chrome::render_footer(f, outer[2], app);
 }

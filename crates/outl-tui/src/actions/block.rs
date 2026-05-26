@@ -696,6 +696,46 @@ impl App {
         self.save();
     }
 
+    /// Toggle the `pinned:: true` page-level property. Wired to the
+    /// `gp` chord in Normal mode and to the `/pin` slash command;
+    /// commits straight to disk (no insert-mode buffer to worry
+    /// about) and toasts the new state so the user can confirm
+    /// without reading the file.
+    ///
+    /// Refuses to act on Journal pages — pinning a journal would be
+    /// semantically weird (today's note auto-rotates) and would
+    /// silently dilute the sidebar's `Pinned` list with
+    /// date-shaped junk.
+    pub(crate) fn toggle_pinned(&mut self) {
+        if matches!(self.view, crate::state::View::Journal(_)) {
+            self.toast(crate::state::ToastKind::Warning, "can't pin a journal page");
+            return;
+        }
+        self.snapshot_for_undo();
+        let was_pinned = self.page.properties.iter().any(|(k, v)| {
+            k == "pinned"
+                && matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "true" | "yes" | "1" | "on"
+                )
+        });
+        if was_pinned {
+            self.page.properties.retain(|(k, _)| k != "pinned");
+            self.save();
+            self.toast(crate::state::ToastKind::Info, "unpinned");
+        } else {
+            // Drop any existing falsy `pinned::` value first so the
+            // toggle doesn't leave two `pinned::` lines stacked at
+            // the top of the file.
+            self.page.properties.retain(|(k, _)| k != "pinned");
+            self.page
+                .properties
+                .push(("pinned".to_string(), "true".to_string()));
+            self.save();
+            self.toast(crate::state::ToastKind::Success, "pinned");
+        }
+    }
+
     pub(crate) fn toggle_todo(&mut self) {
         match self.focus.clone() {
             Focus::Outline => {

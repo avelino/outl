@@ -212,6 +212,9 @@ fn event_loop(
         // Pick up the background index build if it finished since the
         // last frame. Non-blocking; costs ~one channel try_recv.
         app.poll_index_updates();
+        // Sweep expired toasts so they don't linger on screen past
+        // their lifetime. Cheap O(n) over the small toast stack.
+        app.prune_toasts();
 
         terminal.draw(|f| render_app(f, &mut app)).context("draw")?;
         // Wait for a keystroke for up to POLL_INTERVAL. If nothing
@@ -254,7 +257,8 @@ fn event_loop(
         // Universal: if the help popup is up, intercept the obvious
         // "close it" keys before they reach any mode-specific handler.
         // The popup is a `bool` flag (not an `Overlay`) so the overlay
-        // close path doesn't catch it.
+        // close path doesn't catch it. Also resets `help_scroll` so
+        // reopening starts from the top instead of a stale offset.
         if app.show_help
             && matches!(
                 key.code,
@@ -262,6 +266,7 @@ fn event_loop(
             )
         {
             app.show_help = false;
+            app.help_scroll = 0;
             continue;
         }
 
@@ -272,7 +277,7 @@ fn event_loop(
             } else {
                 app.save();
             }
-            app.status = "saved".into();
+            app.toast(crate::state::ToastKind::Success, "saved");
             continue;
         }
 

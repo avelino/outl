@@ -227,6 +227,104 @@ fn run_command(app: &mut App, line: &str) -> Result<bool> {
 }
 
 pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
+    // Help popup owns the keyboard exclusively while open. Any key
+    // that isn't a tab switch / scroll / close is *swallowed* — we
+    // don't want `j` to move the outline behind the popup while the
+    // user thinks they're scrolling help.
+    if app.show_help {
+        match key.code {
+            KeyCode::Char('h') | KeyCode::Left => {
+                if app.help_tab == 0 {
+                    app.help_tab = crate::view::HELP_TABS.len() - 1;
+                } else {
+                    app.help_tab -= 1;
+                }
+                app.help_scroll = 0; // new tab → top
+            }
+            KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => {
+                app.help_tab = (app.help_tab + 1) % crate::view::HELP_TABS.len();
+                app.help_scroll = 0;
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                app.help_scroll = app.help_scroll.saturating_add(1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.help_scroll = app.help_scroll.saturating_sub(1);
+            }
+            KeyCode::PageDown => {
+                app.help_scroll = app.help_scroll.saturating_add(10);
+            }
+            KeyCode::PageUp => {
+                app.help_scroll = app.help_scroll.saturating_sub(10);
+            }
+            KeyCode::Char('g') | KeyCode::Home => {
+                app.help_scroll = 0;
+            }
+            KeyCode::Char('G') | KeyCode::End => {
+                // Big number — the renderer clamps against the
+                // actual body length when it draws, so we don't need
+                // to know the count here.
+                app.help_scroll = u16::MAX / 2;
+            }
+            KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') => {
+                app.show_help = false;
+                app.help_scroll = 0;
+            }
+            _ => {
+                // Swallow every other key. The popup has focus; the
+                // outline behind it must not react.
+            }
+        }
+        return Ok(false);
+    }
+
+    // Sidebar intercept: while focus is inside the sidebar, j/k
+    // navigate the focused section, Tab cycles sections, Enter opens
+    // the item, Esc returns focus to the outline (sidebar stays
+    // visible). `\` always closes the sidebar entirely, handled
+    // further down in the Normal handler.
+    if app.sidebar_focus.is_some() {
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                app.sidebar_move(1);
+                return Ok(false);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.sidebar_move(-1);
+                return Ok(false);
+            }
+            KeyCode::Char('g') => {
+                app.sidebar_cursor = 0;
+                return Ok(false);
+            }
+            KeyCode::Char('G') => {
+                app.sidebar_move(i32::MAX / 2);
+                return Ok(false);
+            }
+            KeyCode::Tab => {
+                app.sidebar_cycle_section(true);
+                return Ok(false);
+            }
+            KeyCode::BackTab => {
+                app.sidebar_cycle_section(false);
+                return Ok(false);
+            }
+            KeyCode::Enter => {
+                app.sidebar_activate()?;
+                return Ok(false);
+            }
+            KeyCode::Esc => {
+                app.sidebar_blur();
+                return Ok(false);
+            }
+            KeyCode::Char('\\') => {
+                app.sidebar_close();
+                return Ok(false);
+            }
+            _ => {}
+        }
+    }
+
     // Chord handling: a previous 'd' / 'g' / 'y' is pending.
     if let Some(pending) = app.pending_chord.take() {
         match (pending, key.code) {
@@ -247,6 +345,15 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             ('g', KeyCode::Char('g')) => {
                 // `gg` = jump to the first block (vim convention).
                 app.move_selection(i32::MIN / 2);
+                return Ok(false);
+            }
+            ('g', KeyCode::Char('p')) => {
+                // `gp` = toggle the `pinned::` page property.
+                // Mnemonic: "go pin". Chose a chord (not bare `P`)
+                // because `P` is already paste-before in Normal
+                // mode — overloading it would surprise yanker
+                // muscle memory.
+                app.toggle_pinned();
                 return Ok(false);
             }
             ('y', KeyCode::Char('y')) => {
@@ -367,6 +474,18 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         KeyCode::Char('N') => app.search_prev()?,
         // Toggle backlinks panel.
         KeyCode::Char('B') => app.show_backlinks = !app.show_backlinks,
+        // Toggle the left sidebar (mini-calendar, pinned, recent).
+        // Default off — `\` opts in. Opening jumps focus straight to
+        // the first non-empty section (Pinned by default), so the
+        // user can immediately `j/k` through items and `Enter` to
+        // open — no extra Tab to "enter" the sidebar.
+        KeyCode::Char('\\') => {
+            if app.show_sidebar {
+                app.sidebar_close();
+            } else {
+                app.sidebar_open_focused();
+            }
+        }
         // Enter Visual mode (vim-style: V selects entire blocks).
         KeyCode::Char('V') => app.enter_visual(),
         _ => {}

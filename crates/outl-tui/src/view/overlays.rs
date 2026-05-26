@@ -12,7 +12,7 @@ use crate::state::{
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs};
 
 pub(crate) fn render_autocomplete(
     f: &mut ratatui::Frame<'_>,
@@ -108,7 +108,9 @@ pub(crate) fn render_quick_switch(
     app: &App,
     qs: &QuickSwitchState,
 ) {
-    let area = centered_rect(full, 60, 60);
+    // Wider overlay (80%) so the preview pane has room to show real
+    // outline context, not 5-char truncations.
+    let area = centered_rect(full, 80, 70);
     f.render_widget(Clear, area);
 
     let outer = Layout::default()
@@ -129,6 +131,15 @@ pub(crate) fn render_quick_switch(
     )
     .style(Style::default().bg(app.theme.popup_bg));
     f.render_widget(input, outer[0]);
+
+    // Telescope-style split: list on the left, preview on the right.
+    // The preview re-reads the highlighted page from disk per frame —
+    // cheap for a single page, and avoids leaking a page cache into
+    // App state for a feature that's open for ~5 seconds at a time.
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(outer[1]);
 
     let items: Vec<ListItem<'_>> = qs
         .candidates
@@ -155,13 +166,101 @@ pub(crate) fn render_quick_switch(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(app.theme.border)
-                .title(format!(
-                    "{} matches  ↑↓ navigate · Enter open · Esc cancel",
-                    qs.candidates.len()
-                )),
+                .title(format!("{} matches  ↑↓ Enter Esc", qs.candidates.len())),
         )
         .style(Style::default().bg(app.theme.popup_bg));
-    f.render_widget(list, outer[1]);
+    f.render_widget(list, cols[0]);
+
+    render_preview_pane(f, cols[1], app, qs);
+}
+
+/// Right-hand preview pane for the quick switcher. Shows the first
+/// ~N blocks of the highlighted candidate, or a placeholder when the
+/// candidate isn't indexed yet (cold-start race) / has no body.
+fn render_preview_pane(f: &mut ratatui::Frame<'_>, area: Rect, app: &App, qs: &QuickSwitchState) {
+    let Some(candidate) = qs.candidates.get(qs.selected) else {
+        let empty = Paragraph::new(Line::from(Span::styled(
+            "  (type to search)",
+            app.theme.dim,
+        )))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(app.theme.border)
+                .title(Span::styled(" preview ", app.theme.help_title)),
+        )
+        .style(Style::default().bg(app.theme.popup_bg));
+        f.render_widget(empty, area);
+        return;
+    };
+
+    let path = app.index.by_slug(&candidate.key).map(|e| e.path.clone());
+    let body_lines: Vec<Line<'static>> = match path.as_deref() {
+        Some(p) => match std::fs::read_to_string(p) {
+            Ok(text) => preview_lines(&text, area.height.saturating_sub(2) as usize, app),
+            Err(_) => vec![Line::from(Span::styled(
+                "  (couldn't read file)",
+                app.theme.dim,
+            ))],
+        },
+        None => vec![Line::from(Span::styled(
+            "  (not yet indexed)",
+            app.theme.dim,
+        ))],
+    };
+
+    let title_prefix = match candidate.kind {
+        SwitchKind::Page => "📄 ",
+        SwitchKind::Journal => "📅 ",
+    };
+    let preview = Paragraph::new(body_lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(app.theme.border)
+                .title(Span::styled(
+                    format!(" {title_prefix}{} ", candidate.label),
+                    app.theme.help_title,
+                )),
+        )
+        .style(Style::default().bg(app.theme.popup_bg))
+        .wrap(ratatui::widgets::Wrap { trim: false });
+    f.render_widget(preview, area);
+}
+
+/// Cheap markdown → preview lines. Doesn't reuse the outline renderer
+/// (we don't want cursors, TODO checkboxes, etc.) — just enough to
+/// give the user a sense of what they're about to open.
+fn preview_lines(text: &str, max: usize, app: &App) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = Vec::new();
+    for line in text.lines() {
+        if out.len() >= max {
+            break;
+        }
+        let trimmed_start = line.trim_start();
+        if trimmed_start.is_empty() {
+            out.push(Line::raw(""));
+            continue;
+        }
+        if let Some(rest) = trimmed_start.strip_prefix("- ") {
+            let indent_chars = line.len() - trimmed_start.len();
+            let indent = " ".repeat(indent_chars);
+            out.push(Line::from(vec![
+                Span::raw(indent),
+                Span::styled("• ", app.theme.bullet),
+                Span::raw(rest.to_string()),
+            ]));
+        } else if trimmed_start.contains("::") {
+            // property line — show dimmer to de-emphasize.
+            out.push(Line::from(Span::styled(line.to_string(), app.theme.dim)));
+        } else {
+            out.push(Line::raw(line.to_string()));
+        }
+    }
+    if out.is_empty() {
+        out.push(Line::from(Span::styled("  (empty page)", app.theme.dim)));
+    }
+    out
 }
 
 pub(crate) fn render_search_overlay(
@@ -234,7 +333,7 @@ pub(crate) fn render_slash_overlay(
     app: &App,
     s: &SlashState,
 ) {
-    let area = centered_rect(full, 60, 60);
+    let area = centered_rect(full, 65, 65);
     f.render_widget(Clear, area);
 
     let outer = Layout::default()
@@ -251,43 +350,132 @@ pub(crate) fn render_slash_overlay(
         Block::default()
             .borders(Borders::ALL)
             .border_style(app.theme.border)
-            .title(Span::styled("Commands", app.theme.help_title)),
+            .title(Span::styled(" Command palette ", app.theme.help_title)),
     )
     .style(Style::default().bg(app.theme.popup_bg));
     f.render_widget(input, outer[0]);
 
-    let items: Vec<ListItem<'_>> = s
-        .candidates
-        .iter()
-        .enumerate()
-        .map(|(i, c)| {
-            let style = if i == s.selected {
+    // Group candidates by category, then render section headers
+    // inline. We need the original index (into `s.candidates`) to
+    // keep the highlight in sync with the selection, so we walk the
+    // list once and stash `(original_index, command, category)`
+    // tuples bucketed by category.
+    let mut buckets: Vec<(&str, Vec<(usize, &crate::state::SlashCommand)>)> = Vec::new();
+    for (i, c) in s.candidates.iter().enumerate() {
+        let cat = category_for(c.name);
+        // Insert preserving the canonical category order rather than
+        // first-seen, so the palette layout is stable as the user
+        // types and the candidate set shifts.
+        if let Some(b) = buckets.iter_mut().find(|(k, _)| *k == cat) {
+            b.1.push((i, c));
+        } else {
+            buckets.push((cat, vec![(i, c)]));
+        }
+    }
+    buckets.sort_by_key(|(k, _)| category_order(k));
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (cat, items) in &buckets {
+        lines.push(Line::from(Span::styled(
+            format!(" {} {} ", category_icon(cat), cat),
+            app.theme.help_title,
+        )));
+        for (orig_idx, c) in items {
+            let style = if *orig_idx == s.selected {
                 app.theme.list_selected
             } else {
                 Style::default()
             };
-            // Two-column-ish: name on the left, description dimmed
-            // on the right. The `…` glyph hints at "this one asks
-            // for args next".
             let suffix = if c.needs_args { " …" } else { "" };
-            ListItem::new(Line::from(vec![
-                Span::styled(format!(" {}{suffix}  ", c.name), style),
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("   {}  {}{suffix}  ", command_icon(c.name), c.name),
+                    style,
+                ),
                 Span::styled(c.description.to_string(), app.theme.dim),
-            ]))
-        })
-        .collect();
-    let list = List::new(items)
+            ]));
+        }
+        lines.push(Line::raw(""));
+    }
+
+    let list = Paragraph::new(lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(app.theme.border)
-                .title(format!(
-                    "{} commands  ↑↓ navigate · Enter run · Esc cancel",
-                    s.candidates.len()
-                )),
+                .title(format!(" {} commands · ↑↓ Enter Esc ", s.candidates.len())),
         )
         .style(Style::default().bg(app.theme.popup_bg));
     f.render_widget(list, outer[1]);
+}
+
+/// Bucket a command name into a coarse category. Names follow loose
+/// prefix conventions (`date-*`, `time-*`, `iso-*`, `week-*`, …) so
+/// we can group without each command having to declare its category.
+fn category_for(name: &str) -> &'static str {
+    let n = name;
+    if n.starts_with("date")
+        || n.starts_with("time")
+        || n.starts_with("iso")
+        || n.starts_with("week")
+        || n == "stamp"
+        || n == "dt"
+        || n == "dtm"
+        || n == "dy"
+    {
+        "Dates & time"
+    } else if n == "search" || n == "find" {
+        "Search"
+    } else if n == "theme" || n == "set" || n == "config" {
+        "Settings"
+    } else if n == "open" || n == "switch" || n == "quit" || n == "q" {
+        "Navigation"
+    } else {
+        "Actions"
+    }
+}
+
+/// Canonical sort order — Actions first (most common), Dates last
+/// (long list, scrolls off).
+fn category_order(cat: &str) -> u8 {
+    match cat {
+        "Actions" => 0,
+        "Navigation" => 1,
+        "Search" => 2,
+        "Settings" => 3,
+        "Dates & time" => 4,
+        _ => 5,
+    }
+}
+
+fn category_icon(cat: &str) -> &'static str {
+    match cat {
+        "Actions" => "⚡",
+        "Navigation" => "↪",
+        "Search" => "🔎",
+        "Settings" => "⚙",
+        "Dates & time" => "📅",
+        _ => "•",
+    }
+}
+
+/// Per-command leading glyph. Falls back to a dot for anything we
+/// haven't curated.
+fn command_icon(name: &str) -> &'static str {
+    match name {
+        "run" => "▶",
+        "prop" => "≡",
+        "search" | "find" => "🔎",
+        "theme" => "🎨",
+        "open" | "switch" => "↪",
+        "quit" | "q" => "✕",
+        n if n.starts_with("date") || n == "dt" || n == "dy" || n == "dtm" => "📅",
+        n if n.starts_with("time") => "🕐",
+        n if n.starts_with("iso") => "🔢",
+        n if n.starts_with("week") => "📆",
+        "stamp" => "🕒",
+        _ => "·",
+    }
 }
 
 pub(crate) fn render_error_overlay(
@@ -359,9 +547,15 @@ pub(crate) fn render_command_bar(
     f.render_widget(bar, area);
 }
 
+/// Tab titles for the help popup, in the order they appear. The
+/// `App.help_tab` index points into this slice (saturating, so an
+/// out-of-range value clamps to the last tab).
+pub(crate) const HELP_TABS: &[&str] =
+    &["Normal", "Insert", "Visual", "Sidebar", "Overlays", "Dates"];
+
 pub(crate) fn render_help_popup(f: &mut ratatui::Frame<'_>, full: Rect, app: &App) {
     let popup_w = (full.width as f32 * 0.7) as u16;
-    let popup_h = 34u16.min(full.height.saturating_sub(2));
+    let popup_h = 28u16.min(full.height.saturating_sub(2));
     let x = (full.width.saturating_sub(popup_w)) / 2;
     let y = (full.height.saturating_sub(popup_h)) / 2;
     let area = Rect {
@@ -370,75 +564,194 @@ pub(crate) fn render_help_popup(f: &mut ratatui::Frame<'_>, full: Rect, app: &Ap
         width: popup_w,
         height: popup_h,
     };
-    let body = vec![
-        Line::from(Span::styled("NORMAL mode", app.theme.help_title)),
-        Line::from("  i           edit current block"),
-        Line::from("  I           edit, cursor at start of block"),
-        Line::from("  o / O       new block below / above"),
-        Line::from("  Enter       open [[ref]] / #tag / journal under cursor"),
-        Line::from("              (falls back to edit if nothing matches)"),
-        Line::from("  j / k / ↑ ↓ move between blocks"),
-        Line::from("  PgDn/PgUp   move one viewport down/up"),
-        Line::from("  Ctrl+D / U  half-page down/up"),
-        Line::from("  g g / G     first / last block"),
-        Line::from("  h / l / ← → move cursor inside the current block"),
-        Line::from("  w / b       cursor to next / previous word"),
-        Line::from("  0 / $       cursor to start / end of block"),
-        Line::from("  Tab / S-Tab indent / outdent"),
-        Line::from("  K / J       move block up / down (Alt+↑/↓ too)"),
-        Line::from("  dd          delete block"),
-        Line::from("  yy / p / P  yank · paste after · paste before"),
-        Line::from("  Ctrl+T      cycle TODO / DONE / none (Ctrl+Enter on kitty-proto terminals)"),
-        Line::from("  u           undo"),
-        Line::from("  Ctrl+R      redo"),
-        Line::from("  Ctrl+S      force save"),
-        Line::from("  Ctrl+L      refresh workspace (re-read from disk)"),
-        Line::from("  t           today's journal"),
-        Line::from("  [ / ]       previous / next journal"),
-        Line::from("  g j         jump to today"),
-        Line::from("  g x         run code block under cursor (also `:run`)"),
-        Line::from("  B           toggle inline backlinks section"),
-        Line::from("  ?           toggle this help"),
-        Line::from("  q q         quit (chord — single `q` arms it)"),
-        Line::from(""),
-        Line::from(Span::styled("Overlays", app.theme.help_title)),
-        Line::from("  Ctrl+P      quick switcher (pages + journals)"),
-        Line::from("  /           slash commands (prop, search, run, ...)"),
-        Line::from("  n / N       next / previous search hit"),
-        Line::from("  :           vim-style palette (same registry as /)"),
-        Line::from(""),
-        Line::from(Span::styled("INSERT mode", app.theme.help_title)),
-        Line::from("  Esc         commit"),
-        Line::from("  Enter       commit + new block below"),
-        Line::from("  Ctrl+T      cycle TODO / DONE / none (stays in Insert; Ctrl+Enter on kitty-proto terminals)"),
-        Line::from("  Tab / S-Tab indent / outdent (stays in Insert)"),
-        Line::from("  [[ / #      autocomplete from existing page titles"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Date inserters (Insert mode, via /)",
-            app.theme.help_title,
-        )),
-        Line::from("  /date-today       [[YYYY-MM-DD]]  (also /dt, /dtm, /dy)"),
-        Line::from("  /date-next-monday next Monday's journal ref (and one per weekday)"),
-        Line::from("  /date +3d         offset or absolute: +Nd, -Nw, +Nm, YYYY-MM-DD"),
-        Line::from("  /time-now         HH:MM, plain (no brackets)"),
-        Line::from("  /datetime-now     [[YYYY-MM-DD]] HH:MM  (alias /stamp)"),
-        Line::from("  /iso-date-today   YYYY-MM-DD, no brackets (for `due::` etc)"),
-        Line::from("  /week-num         #YYYY-Www  (ISO week as a tag)"),
-        Line::from(""),
-        Line::from(Span::styled(
-            format!("theme: {}", app.theme.name),
-            app.theme.dim,
-        )),
-    ];
+    f.render_widget(Clear, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(3)])
+        .split(area);
+
+    let tab = app.help_tab.min(HELP_TABS.len() - 1);
+    let tabs = Tabs::new(
+        HELP_TABS
+            .iter()
+            .map(|t| Line::from(format!(" {t} ")))
+            .collect::<Vec<_>>(),
+    )
+    .select(tab)
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(app.theme.border)
+            .title(Span::styled(
+                " Help · h/l tabs · j/k scroll · PgUp/PgDn page · g/G top/end · ? close ",
+                app.theme.help_title,
+            )),
+    )
+    .style(
+        Style::default().bg(app.theme.popup_bg).fg(app
+            .theme
+            .dim
+            .fg
+            .unwrap_or(ratatui::style::Color::Gray)),
+    )
+    .highlight_style(app.theme.list_selected)
+    .divider(Span::styled("│", app.theme.dim));
+    f.render_widget(tabs, chunks[0]);
+
+    let body = help_tab_body(tab, app);
+    let body_len = body.len() as u16;
+    // Inner height = block area minus the 2 border rows.
+    let inner_h = chunks[1].height.saturating_sub(2);
+    // Clamp the requested scroll against the actual body so `G` /
+    // PgDn don't park the user past the end of the content.
+    let max_scroll = body_len.saturating_sub(inner_h);
+    let scroll = app.help_scroll.min(max_scroll);
+
+    // Title carries a scroll indicator when the content overflows —
+    // gives the user a visual cue that there's more below / above.
+    let title = if body_len > inner_h {
+        format!(" {} · ↕ {}/{} ", HELP_TABS[tab], scroll + 1, max_scroll + 1)
+    } else {
+        format!(" {} ", HELP_TABS[tab])
+    };
     let popup = Paragraph::new(body)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(app.theme.border)
-                .title(Span::styled("Help", app.theme.help_title)),
+                // Highlight the border so it reads as "this owns focus"
+                // — the dim outline border behind would otherwise
+                // suggest the popup is informational.
+                .border_style(app.theme.heading)
+                .title(Span::styled(title, app.theme.help_title)),
         )
-        .style(Style::default().bg(app.theme.popup_bg));
-    f.render_widget(Clear, area);
-    f.render_widget(popup, area);
+        .style(Style::default().bg(app.theme.popup_bg))
+        .scroll((scroll, 0))
+        .wrap(ratatui::widgets::Wrap { trim: false });
+    f.render_widget(popup, chunks[1]);
+}
+
+fn help_tab_body(tab: usize, app: &App) -> Vec<Line<'static>> {
+    match HELP_TABS.get(tab).copied().unwrap_or("Normal") {
+        "Normal" => vec![
+            Line::from(Span::styled("Editing", app.theme.help_title)),
+            Line::from("  i           edit current block"),
+            Line::from("  I           edit, cursor at start of block"),
+            Line::from("  o / O       new block below / above"),
+            Line::from("  Tab / S-Tab indent / outdent"),
+            Line::from("  K / J       move block up / down (Alt+↑/↓ too)"),
+            Line::from("  dd          delete block"),
+            Line::from("  yy / p / P  yank · paste after · paste before"),
+            Line::from("  Ctrl+T      cycle TODO / DONE / none"),
+            Line::from("  u / Ctrl+R  undo / redo"),
+            Line::from("  g p         toggle pinned:: on this page (chord)"),
+            Line::from(""),
+            Line::from(Span::styled("Navigation", app.theme.help_title)),
+            Line::from("  j/k ↑↓      move between blocks"),
+            Line::from("  PgDn/PgUp   one viewport"),
+            Line::from("  Ctrl+D / U  half-page"),
+            Line::from("  g g / G     first / last block"),
+            Line::from("  h/l ←→      cursor inside the current block"),
+            Line::from("  w / b       next / previous word"),
+            Line::from("  0 / $       start / end of block"),
+            Line::from("  Enter       open [[ref]] / #tag / journal under cursor"),
+            Line::from(""),
+            Line::from(Span::styled("Journal & workspace", app.theme.help_title)),
+            Line::from("  t           today's journal"),
+            Line::from("  [ / ]       previous / next journal"),
+            Line::from("  g j         jump to today"),
+            Line::from("  g x         run code block under cursor (also `:run`)"),
+            Line::from("  Ctrl+S      force save"),
+            Line::from("  Ctrl+L      reload workspace from disk"),
+            Line::from("  B           toggle inline backlinks"),
+            Line::from("  \\           toggle left sidebar (opens with focus on Pinned)"),
+            Line::from("  q q         quit (chord)"),
+        ],
+        "Insert" => vec![
+            Line::from(Span::styled("Commit / cancel", app.theme.help_title)),
+            Line::from("  Esc         commit (write buffer → AST → disk)"),
+            Line::from("  Enter       commit + new block below"),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Block ops (stay in Insert)",
+                app.theme.help_title,
+            )),
+            Line::from("  Tab / S-Tab indent / outdent"),
+            Line::from("  Ctrl+T      cycle TODO / DONE / none"),
+            Line::from(""),
+            Line::from(Span::styled("Text editing", app.theme.help_title)),
+            Line::from("  chars       insert at cursor"),
+            Line::from("  Backspace   delete previous (deletes block if empty)"),
+            Line::from("  arrows/home/end   move cursor"),
+            Line::from("  ( [ {       auto-pair with matching close"),
+            Line::from(""),
+            Line::from(Span::styled("Autocomplete", app.theme.help_title)),
+            Line::from("  [[          page-ref picker"),
+            Line::from("  #           tag picker"),
+            Line::from("  /           slash command picker"),
+        ],
+        "Visual" => vec![
+            Line::from(Span::styled("Selection", app.theme.help_title)),
+            Line::from("  V           enter Visual (Normal mode)"),
+            Line::from("  j / k       extend selection"),
+            Line::from("  Esc         cancel"),
+            Line::from(""),
+            Line::from(Span::styled("Batch ops on the range", app.theme.help_title)),
+            Line::from("  d / x       delete selected blocks"),
+            Line::from("  y           yank selected blocks"),
+            Line::from("  Tab / S-Tab indent / outdent the range"),
+        ],
+        "Sidebar" => vec![
+            Line::from(Span::styled("Open / close", app.theme.help_title)),
+            Line::from("  \\           toggle sidebar (opens with focus on Pinned)"),
+            Line::from("  Esc         return focus to the outline (sidebar stays open)"),
+            Line::from(""),
+            Line::from(Span::styled("Inside the sidebar", app.theme.help_title)),
+            Line::from("  j / k ↑↓    move between items in the focused section"),
+            Line::from("  g / G       first / last item"),
+            Line::from("  Tab / S-Tab cycle sections (Pinned → Recent → Calendar)"),
+            Line::from("  Enter       open the highlighted page or journal"),
+            Line::from(""),
+            Line::from(Span::styled("Sections", app.theme.help_title)),
+            Line::from("  📅 Calendar  current month — journals marked with ●"),
+            Line::from("  ⭐ Pinned    pages with `pinned:: true` property"),
+            Line::from("              (toggle with `gp` chord in Normal, or `/pin`)"),
+            Line::from("  🕘 Recent    pages opened this session (LRU, cap 20)"),
+        ],
+        "Overlays" => vec![
+            Line::from(Span::styled("Open", app.theme.help_title)),
+            Line::from("  Ctrl+P      quick switcher (pages + journals, with preview)"),
+            Line::from("  /           slash command menu (Notion-style)"),
+            Line::from("  :           vim-style palette (same registry as /)"),
+            Line::from("  ?           toggle this help"),
+            Line::from(""),
+            Line::from(Span::styled("Inside an overlay", app.theme.help_title)),
+            Line::from("  ↑↓ j k      navigate candidates"),
+            Line::from("  Enter       accept / run / open"),
+            Line::from("  Esc         dismiss"),
+            Line::from(""),
+            Line::from(Span::styled("Search hits", app.theme.help_title)),
+            Line::from("  n / N       next / previous hit (after `/` is closed)"),
+        ],
+        "Dates" => vec![
+            Line::from(Span::styled(
+                "Insert-mode slash commands",
+                app.theme.help_title,
+            )),
+            Line::from("  /date-today          [[YYYY-MM-DD]]  (also /dt, /dtm, /dy)"),
+            Line::from("  /date-next-monday    next Monday's journal ref"),
+            Line::from("                       (one alias per weekday)"),
+            Line::from("  /date +3d            offset: +Nd, -Nw, +Nm  or absolute YYYY-MM-DD"),
+            Line::from("  /time-now            HH:MM, plain (no brackets)"),
+            Line::from("  /datetime-now        [[YYYY-MM-DD]] HH:MM  (alias /stamp)"),
+            Line::from("  /iso-date-today      YYYY-MM-DD, no brackets (for `due::` etc)"),
+            Line::from("  /week-num            #YYYY-Www  (ISO week as a tag)"),
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("theme: {}", app.theme.name),
+                app.theme.dim,
+            )),
+        ],
+        _ => vec![Line::from("  (no content for this tab)")],
+    }
 }

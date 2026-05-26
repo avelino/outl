@@ -84,6 +84,41 @@ pub(crate) enum View {
     Page(PathBuf),
 }
 
+/// Visual severity of a toast notification. Drives the icon and the
+/// color the renderer applies — semantic, not free-form, so a
+/// production-mode bug ("status was overwritten before the user could
+/// read it") shows up consistently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToastKind {
+    Success,
+    Info,
+    Warning,
+    Error,
+}
+
+/// One stacked notification rendered in the bottom-right corner.
+///
+/// Toasts are *additive*: pushing a new one doesn't clobber the
+/// previous one's text the way `status` does. The renderer stacks
+/// them above the footer until each one's `until` instant has
+/// passed, then the event loop sweeps the expired ones out.
+#[derive(Debug, Clone)]
+pub(crate) struct Toast {
+    pub(crate) message: String,
+    pub(crate) kind: ToastKind,
+    pub(crate) until: std::time::Instant,
+}
+
+/// Which section of the sidebar the user is browsing when focus is on
+/// the sidebar. The three sections are stacked vertically; Tab cycles
+/// forward, Shift-Tab backward.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SidebarSection {
+    Calendar,
+    Pinned,
+    Recent,
+}
+
 /// Where the cursor lives — inside the current page's outline (default)
 /// or inside the inline backlinks section below it.
 ///
@@ -292,6 +327,16 @@ pub(crate) struct App {
 
     pub(crate) mode: Mode,
     pub(crate) show_help: bool,
+    /// Selected help tab when `show_help` is true. `h/l` cycle
+    /// horizontally between sections (Normal / Insert / Visual /
+    /// Overlays / Dates) — splits the wall-of-text help into
+    /// glance-able panes.
+    pub(crate) help_tab: usize,
+    /// Vertical scroll offset inside the active help tab. `j/k` and
+    /// `↓/↑/PgUp/PgDn/g/G` drive this while the popup is open.
+    /// Resets to 0 whenever the user switches tabs so the new tab's
+    /// content starts from the top, not at a stale offset.
+    pub(crate) help_scroll: u16,
     pub(crate) pending_chord: Option<char>,
     pub(crate) status: String,
 
@@ -332,6 +377,35 @@ pub(crate) struct App {
     /// Toggled with `B`. Default `true` so users discover the feature.
     pub(crate) show_backlinks: bool,
 
+    /// Whether the left sidebar (mini-calendar + pinned + recent) is
+    /// visible. Default `false` so first-time users land on the
+    /// classic single-pane layout — the toggle (`\`) opt-ins those who
+    /// want it. Persisted across the session in memory only.
+    pub(crate) show_sidebar: bool,
+
+    /// Sidebar focus state. Tracks which section the user is browsing
+    /// when the sidebar has focus (vs. the outline). `None` means the
+    /// outline owns the keyboard; `Some(_)` means the next `j/k/Enter`
+    /// goes to the sidebar list.
+    pub(crate) sidebar_focus: Option<SidebarSection>,
+
+    /// Sidebar cursor inside the currently focused section (0-based).
+    /// Only meaningful when `sidebar_focus.is_some()`.
+    pub(crate) sidebar_cursor: usize,
+
+    /// LRU of recently-opened paths. Newest first; bounded to a small
+    /// window so the sidebar's `Recent` section stays scannable.
+    /// In-memory only for now — persisting to `.outl/state.toml` is on
+    /// the roadmap (Fase 2 stretch).
+    pub(crate) recent_paths: Vec<PathBuf>,
+
+    /// Stack of transient notifications shown in the bottom-right
+    /// corner. Each one carries its own expiry; the event loop sweeps
+    /// the expired ones out so they don't accumulate. Independent
+    /// from `status`, which still drives the single-line footer
+    /// message (e.g. chord prompts).
+    pub(crate) toasts: Vec<Toast>,
+
     /// Where the cursor lives — outline (default) or inside the inline
     /// backlinks section. Reset to `Focus::Outline` whenever the view
     /// changes (page open, journal navigation, etc).
@@ -351,6 +425,12 @@ pub(crate) struct App {
     /// and `save`; consulted by the polling loop so external edits
     /// (e.g. `nvim` saving the same `.md`) are picked up automatically.
     pub(crate) last_mtime: Option<SystemTime>,
+
+    /// Wall-clock instant of the last successful save (or initial
+    /// load). The header renders `⟳ {N}s ago` against this so the user
+    /// has a glanceable freshness indicator. `None` means "never saved
+    /// in this session" — the header chip is hidden in that case.
+    pub(crate) last_saved_at: Option<Instant>,
 
     /// Snapshots of the page AST taken before each structural mutation.
     /// `u` pops back one step; `Ctrl+R` re-pushes. Bounded — see
