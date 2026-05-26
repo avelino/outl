@@ -70,8 +70,9 @@ Or, if you `cd ~/notes`, just `outl` works — no subcommand means
 | Jump to today | `t` |
 | Yesterday / tomorrow | `[` / `]` |
 | Find any page or journal | `Ctrl+P` (fuzzy switcher) |
-| Search the whole workspace | `/` |
-| Run a command | `:` then `theme dracula`, `open Foo`, `q`, etc. |
+| Run a command | `/` (Notion-style menu) or `:` (vim palette) |
+| Search the whole workspace | `/search` (alias `/s`) |
+| Insert today's date as `[[link]]` | `/date-today` (in Insert mode) |
 | Quit | `q` or `Ctrl+C` |
 
 Pages you reference but haven't created yet are *real* the moment you

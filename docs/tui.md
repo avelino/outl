@@ -37,16 +37,16 @@ characters insert themselves — every key is a command.
 | `Tab` / `Shift-Tab` | Indent / outdent the current block |
 | `K` / `J` (or `Alt+↑/↓`) | Move block up / down |
 | `dd` | Delete the current block (chord) |
-| `Ctrl+Enter` | Cycle the block's TODO / DONE / none prefix |
+| `Ctrl+Enter` / `Ctrl+T` | Cycle the block's TODO / DONE / none prefix (`Ctrl+T` is the portable fallback for tmux / Terminal.app, which collapse `Ctrl+Enter` into plain `Enter`) |
 | `u` / `Ctrl+R` | Undo / redo |
 | `V` | Enter Visual mode (multi-block select) |
 | `t` / `Home` | Today's journal |
 | `[` / `]` | Previous / next journal |
 | `g j` | Jump to today (chord) |
 | `Ctrl+P` | Quick switcher (fuzzy page/journal pick) |
-| `/` | Workspace-wide search |
-| `:` | Command palette |
-| `B` | Toggle the backlinks panel |
+| `/` | Slash command menu (Notion-style, fuzzy filter) |
+| `:` | Command palette (vim-style) |
+| `B` | Toggle the inline backlinks section below the outline |
 | `?` | Toggle this help popup |
 | `q q` / `Ctrl+C` | Quit — `q` alone arms a chord, second `q` confirms |
 
@@ -61,7 +61,7 @@ Text input goes into the buffer. Esc commits (writes back to the
 | `Enter` | Commit + new block below (soft newline inside open code fence — see below) |
 | `Alt+Enter` / `Ctrl+J` | Soft newline (stays in same block) — portable across terminals |
 | `Shift+Enter` | Soft newline — only on terminals that speak the kitty keyboard protocol |
-| `Ctrl+Enter` | Cycle the block's TODO / DONE / none (stays in Insert) |
+| `Ctrl+Enter` / `Ctrl+T` | Cycle the block's TODO / DONE / none (stays in Insert; `Ctrl+T` works on terminals that collapse `Ctrl+Enter`) |
 | `Tab` / `Shift-Tab` | Indent / outdent (stays in Insert) |
 | `Backspace` on empty | Delete block, move to previous |
 | `Left` at column 0 | Spill into the previous block (cursor at end) |
@@ -123,39 +123,117 @@ keystream while open; `Esc` always closes them.
 Fuzzy search across page titles, slugs, and journal dates. Today's
 date is always present even if the journal file doesn't exist yet.
 
-### Search (`/`)
+### Slash menu (`/`) and Command palette (`:`)
 
-Workspace-wide block search using the same fuzzy matcher. Hits show
-the source page label + a snippet of the block; `Enter` jumps to it.
+Two surfaces over the **same** command registry — pick whichever
+matches your muscle memory:
 
-### Command palette (`:`)
-
-Vim-style command bar. Supported commands:
-
-| Command | Action |
-|---------|--------|
-| `:q` / `:quit` | Quit |
-| `:w` / `:write` / `:save` | Force re-save current page |
-| `:open <name>` / `:o <name>` | Open page by name |
-| `:new <name>` / `:n <name>` | Create page (or open if exists) |
-| `:theme <name>` | Swap the active theme (see `outl theme list`) |
-| `:today` | Jump to today's journal |
-| `:help` / `:h` | Open the help popup |
+- **`/`** (Normal mode) opens a Notion-style filterable list. Each
+  entry shows its name + description. Inside Insert mode, typing `/`
+  triggers inline autocomplete with the same list — pick a command
+  with `Tab`/`Enter` without leaving the buffer.
+- **`:`** is the vim command line. Same registry, same args,
+  same aliases — `/q` and `:q` are interchangeable.
 
 Unknown commands surface in the status line as `unknown command:
-:<line>`.
+<name>`.
+
+#### Workspace / navigation
+
+| Command | Aliases | Action |
+|---------|---------|--------|
+| `open <name>` | `o`, `new`, `n` | Open (or create) page by name |
+| `today` | — | Jump to today's journal |
+| `search` | `s`, `find` | Workspace-wide block search |
+| `quit` | `q`, `exit` | Close the TUI |
+| `write` | `w`, `save` | Force-save current page |
+| `refresh` | `r`, `reload` | Re-read workspace from disk |
+| `theme <preset>` | — | Swap the active theme |
+| `help` | `h` | Toggle help popup |
+
+#### Properties
+
+| Command | Aliases | Action |
+|---------|---------|--------|
+| `prop-block <key> <value>` | `prop` | Set property on current block (empty value deletes) |
+| `prop-page <key> <value>` | — | Set page-level property (`title::`, `icon::`, …) |
+
+#### Code execution
+
+| Command | Aliases | Action |
+|---------|---------|--------|
+| `run` | `x`, `execute` | Run the code block under the cursor |
+
+#### Date & time inserters
+
+These write text **at the cursor** (Insert mode only). They skip the
+auto-commit step the other commands do, so your in-flight edit stays
+alive while the text lands.
+
+| Command | Aliases | Inserts |
+|---------|---------|---------|
+| `date-today` | `dt` | `[[YYYY-MM-DD]]` (today) |
+| `date-tomorrow` | `dtm` | `[[YYYY-MM-DD]]` (today + 1) |
+| `date-yesterday` | `dy` | `[[YYYY-MM-DD]]` (today − 1) |
+| `date-next-week` | `dnw` | `[[YYYY-MM-DD]]` (today + 7) |
+| `date-last-week` | `dlw` | `[[YYYY-MM-DD]]` (today − 7) |
+| `date-next-monday` | `dnmon` | next Monday's journal ref |
+| `date-next-tuesday` | `dntue` | next Tuesday's journal ref |
+| `date-next-wednesday` | `dnwed` | next Wednesday's journal ref |
+| `date-next-thursday` | `dnthu` | next Thursday's journal ref |
+| `date-next-friday` | `dnfri` | next Friday's journal ref |
+| `date-next-saturday` | `dnsat` | next Saturday's journal ref |
+| `date-next-sunday` | `dnsun` | next Sunday's journal ref |
+| `date <arg>` | — | flexible — see below |
+| `iso-date-today` | `isod` | `YYYY-MM-DD` (no brackets, for `due::` etc) |
+| `iso-date-tomorrow` | `isodtm` | `YYYY-MM-DD` |
+| `iso-date-yesterday` | `isody` | `YYYY-MM-DD` |
+| `time-now` | `now`, `tn` | `HH:MM` (no brackets, plain time) |
+| `datetime-now` | `dtn`, `stamp` | `[[YYYY-MM-DD]] HH:MM` (journal ref + time) |
+| `week-num` | `wn`, `week` | `#YYYY-Www` (ISO week as a tag) |
+
+##### `/date <arg>`
+
+| Input | Resolves to |
+|-------|-------------|
+| `/date +3d` | today + 3 days |
+| `/date -2w` | today − 2 weeks |
+| `/date +1m` | today + 1 month (Jan 31 + 1m → Feb 28/29 — clamped to last day of month) |
+| `/date 5d` | bare `Nd`/`Nw`/`Nm` is treated as positive |
+| `/date 2026-06-15` | absolute ISO date |
+
+Garbage input (`/date nope`, `/date +3x`, invalid date) shows
+`usage: date +Nd | -Nw | +Nm | YYYY-MM-DD` on the status line.
+
+> **Weekday math:** `date-next-<weekday>` always jumps to the **next**
+> occurrence of that weekday, strictly in the future. Running it on
+> the same weekday adds 7 days, not 0 — `date-next-monday` on a Monday
+> means "next Monday."
+>
+> **ISO week year:** `week-num` uses `%G-W%V` (ISO 8601), not `%Y-W%V`.
+> The ISO year can differ from the calendar year on a few days around
+> year boundaries — e.g. 2025-12-31 (Wednesday) belongs to ISO week
+> `2026-W01`, not `2025-W01`.
 
 ## Panels
 
 ```
-┌─outl · default-dark ────────────────────────────────────┬─Backlinks────┐
-│ Journal · Sunday, 2026-05-24                            │ Project X    │
-├─────────────────────────────────────────────────────────┤   • led by … │
-│ - first block                                           │              │
-│ - second block with [[Avelino]] and #tag                │ Ideas        │
-│   - nested                                              │   • saw …    │
-│                                                         │              │
-├──┌NORMAL─┐ i edit  o new  K/J move … ───────────────────┴──────────────┤
+┌─outl · default-dark ───────────────────────────────────────────────────┐
+│ Page · Avelino                                                         │
+├────────────────────────────────────────────────────────────────────────┤
+│ - I am the author                                                      │
+│ - some other note                                                      │
+│ ───────────────────────────────────────────────────────────────────────│
+│  Backlinks · 2 ref(s)                                                  │
+│                                                                        │
+│ 📄  Project X                                                          │
+│ - led by [[Avelino]]                                                   │
+│   - milestone A                                                        │
+│   - milestone B                                                        │
+│                                                                        │
+│ 📅  2026-05-24                                                         │
+│ - meeting with [[Avelino]] about Q4                                    │
+├──┌NORMAL─┐ i edit  o new  K/J move …  ⇇ 2 backlinks ───────────────────┤
 │  └───────┘                                                             │
 └────────────────────────────────────────────────────────────────────────┘
 ```
@@ -163,9 +241,15 @@ Unknown commands surface in the status line as `unknown command:
 - **Outline** — the current view (journal or named page). Markdown
   renders inline (bold/italic/code/strike); the selected/editing block
   is shown raw so cursor columns align with source bytes.
-- **Backlinks** — every block in any other page that contains
-  `[[this]]` or `#this`. Toggle with `B`. Self-references are
-  excluded.
+- **Backlinks (inline)** — rendered below the outline, separated by a
+  full-width `─` rule. Every block in any other page that contains
+  `[[this]]` or `#this` shows up with its children, grouped by source
+  page. `j`/`k` navigation crosses the separator transparently: from
+  the last outline block, `j` lands you on the first backlink; `k`
+  from the first backlink walks back into the outline. Toggle the
+  section with `B`. Self-references are excluded. Press `i` / `Enter`
+  on a backlink to jump to its source page positioned on the
+  referencing block (in-place editing lands in a follow-up).
 - **Status / hint** — mode badge, contextual key reminder, backlink
   count, status messages.
 

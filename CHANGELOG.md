@@ -4,6 +4,50 @@ All notable changes to outl are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project
 uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] — 2026-05-26
+
+Backlinks become a first-class part of the TUI: they live inline below
+the outline (no more side panel), render the referencing block with
+its children, and are fully editable in place.
+
+### TUI (`outl-tui`)
+
+- **Inline backlinks.** Replace the right-side panel with a section
+  rendered below the outline, separated by a full-width `─` rule. Each
+  source page shows up grouped under an icon + title header.
+- **Full source block + children.** Backlinks render the referencing
+  `OutlineNode` *with its subtree* (not a truncated snippet), so you
+  see context without jumping to the source page.
+- **Cursor navigation crosses the boundary.** `j`/`k` flow transparently
+  between outline and backlinks. `app.focus: Focus::{Outline,
+  Backlink{idx, sub_path}}` tracks where the cursor lives.
+- **In-place edits land on the source `.md`.** `i`/`I`/`a`/`Esc`,
+  `Ctrl+T` (TODO/DONE cycle), `o`/`O` (sibling create), `Tab`/`Shift+Tab`
+  (indent/outdent), `dd` (delete), `K`/`J` (move up/down) — all work on
+  a backlink the same way they work on the outline, persisting straight
+  to the source page via `EditTarget::SourcePage`.
+- **Optimistic index updates for snappy UX.** Edits patch the in-memory
+  `WorkspaceIndex` immediately (next frame shows the new state), then
+  save without scheduling a full workspace rebuild on the hot path.
+- Cursor column preserved when entering Insert (`i` honors vim
+  semantics; `I` still jumps home).
+- Ghost cursor on the last outline block when focus had moved into the
+  backlinks section is gone (`render_block` gates by `Focus::Outline`).
+- `view.rs` split into `view/{inline, outline, overlays, backlinks}.rs`
+  by responsibility — each file under 450 lines.
+
+### Markdown (`outl-md`)
+
+- `Backlink` carries the full `source_block: OutlineNode` and its
+  `source_block_path` (DFS path in the source AST) instead of a flat
+  index plus truncated snippet. Repeated refs to the same target inside
+  one block collapse to a single backlink.
+- `WorkspaceIndex::refresh_backlinks_from_source(path, &page)` —
+  optimistic patch of every cached `source_block` for backlinks
+  pointing at `path`. Used by the TUI's cross-page edit path.
+- `WorkspaceIndex::patch_backlink_text(path, target_path, &new_text)`
+  for text-only optimistic edits.
+
 ## [0.1.0] — 2026-05-25
 
 First public release. Single-device editor; sync transport is on the
