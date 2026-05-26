@@ -273,6 +273,11 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             return Ok(false);
         }
         KeyCode::Char('?') => app.show_help = !app.show_help,
+        // `Ctrl+T` is the portable alias for `Ctrl+Enter` (TODO toggle)
+        // — tmux without `extended-keys` and Terminal.app collapse
+        // `Ctrl+Enter` to plain `Enter`, so the chord we *want* never
+        // arrives. Must come BEFORE the bare `t` arm.
+        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => app.toggle_todo(),
         // `t` and `Home` were sharing one binding: `t` jumps to today,
         // `Home` should move the cursor to the start of the current
         // block. Split them.
@@ -309,11 +314,10 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         // Enter is overloaded: if the cursor is sitting on a `[[ref]]`
         // / `#tag` / journal date, open it. Otherwise enter Insert
         // mode (the original behavior).
-        KeyCode::Enter => {
-            if !app.try_open_under_cursor()? {
-                app.enter_insert(false);
-            }
+        KeyCode::Enter if !app.try_open_under_cursor()? => {
+            app.enter_insert(false);
         }
+        KeyCode::Enter => {}
         KeyCode::Char('i') => app.enter_insert(false),
         KeyCode::Char('I') => app.enter_insert(true),
         KeyCode::Char('o') => app.create_block_below(),
@@ -410,7 +414,15 @@ pub(crate) fn handle_insert_key(app: &mut App, key: KeyEvent) -> Result<()> {
         }
         // `Ctrl+Enter` toggles TODO directly inside the buffer — no
         // commit, no new block, cursor preserved relative to text.
+        // `Ctrl+T` is the portable alias for terminals/multiplexers
+        // (tmux, Terminal.app) that collapse `Ctrl+Enter` into plain
+        // `Enter`.
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Mode::Insert { buffer, .. } = &mut app.mode {
+                cycle_todo_inline(buffer);
+            }
+        }
+        KeyCode::Char('t') if key.modifiers == KeyModifiers::CONTROL => {
             if let Mode::Insert { buffer, .. } = &mut app.mode {
                 cycle_todo_inline(buffer);
             }
