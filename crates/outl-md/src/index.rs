@@ -38,6 +38,12 @@ pub struct PageEntry {
 }
 
 /// One backlink — a block in another page that references this slug.
+///
+/// Carries the full source `OutlineNode` (including its children
+/// subtree) so the UI can render the referencing block in context —
+/// not just as a truncated snippet. Editing surfaces resolve the
+/// target block by descending into `source_block` along an extra
+/// sub-path relative to `source_block_path`.
 #[derive(Debug, Clone)]
 pub struct Backlink {
     /// Slug of the page containing the reference.
@@ -45,15 +51,20 @@ pub struct Backlink {
     /// Title of the source page.
     pub source_title: String,
     /// Icon of the source page (if any) — propagated so backlink
-    /// panels can render the same `<icon> <title>` shape every other
+    /// surfaces can render the same `<icon> <title>` shape every other
     /// surface uses.
     pub source_icon: Option<String>,
     /// Filesystem path of the source.
     pub source_path: PathBuf,
-    /// Block index inside the source page (DFS preorder).
-    pub block_index: usize,
-    /// Block text snippet (for display).
-    pub snippet: String,
+    /// DFS path of the referencing block inside the source page's AST.
+    /// Combined with a sub-path inside `source_block`, this lets the
+    /// TUI/editor locate the exact node to mutate when the user edits
+    /// a backlink in place.
+    pub source_block_path: Vec<usize>,
+    /// The referencing `OutlineNode` itself, including children.
+    /// Cloned so backlink consumers don't need to re-read the source
+    /// page from disk to render context.
+    pub source_block: OutlineNode,
 }
 
 /// Full workspace index.
@@ -152,8 +163,8 @@ impl WorkspaceIndex {
             let Some(entry) = idx.pages.get(slug).cloned() else {
                 continue;
             };
-            let mut block_idx = 0usize;
-            collect_backlinks_recursive(&parsed.blocks, &mut block_idx, &entry, &mut idx);
+            let mut path_stack: Vec<usize> = Vec::new();
+            collect_backlinks_recursive(&parsed.blocks, &mut path_stack, &entry, &mut idx);
         }
 
         idx
@@ -190,6 +201,147 @@ impl WorkspaceIndex {
             .unwrap_or(&[])
     }
 
+    /// Re-index a single page in place — replacement for the global
+    /// scan when only one page changed.
+    ///
+    /// Removes every backlink whose source was this slug, walks the
+    /// new AST to emit fresh backlinks, and refreshes the `PageEntry`
+    /// metadata (title/icon). `is_journal` is inferred from the
+    /// parent directory of `path` (`journals/...` vs anything else).
+    ///
+    /// Roughly `O(blocks_in_this_page)` — orders of magnitude cheaper
+    /// than `build`, which walks every `.md` in the workspace. Use
+    /// this on every page save so the index stays fresh without
+    /// paying for a full rescan.
+    pub fn patch_page(&mut self, path: &Path, page: &crate::parse::ParsedPage) {
+        let Some(slug) = path.file_stem().and_then(|s| s.to_str()) else {
+            return;
+        };
+        let slug = slug.to_string();
+        let is_journal = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            == Some("journals");
+
+        let title = page
+            .properties
+            .iter()
+            .find(|(k, _)| k == "title")
+            .map(|(_, v)| v.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| slug.clone());
+        let icon = page
+            .properties
+            .iter()
+            .find(|(k, _)| k == "icon")
+            .map(|(_, v)| v.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        // Drop every backlink that used to come from this page —
+        // we'll re-emit the fresh set below.
+        for list in self.backlinks.values_mut() {
+            list.retain(|bl| bl.source_slug != slug);
+        }
+        self.backlinks.retain(|_, v| !v.is_empty());
+
+        // Forget the page's previous `title -> slug` mapping in case
+        // the title changed (otherwise a stale alias would shadow the
+        // new one for `by_title` lookups).
+        self.title_to_slug.retain(|_, s| s != &slug);
+
+        let entry = PageEntry {
+            path: path.to_path_buf(),
+            slug: slug.clone(),
+            title: title.clone(),
+            icon,
+            is_journal,
+        };
+        self.pages.insert(slug.clone(), entry.clone());
+        self.title_to_slug.insert(title, slug);
+
+        let mut path_stack: Vec<usize> = Vec::new();
+        collect_backlinks_recursive(&page.blocks, &mut path_stack, &entry, self);
+    }
+
+    /// Drop a page from the index entirely. Use when a `.md` is
+    /// deleted on disk. Removes the `PageEntry`, its title alias, and
+    /// every backlink whose source was this slug.
+    pub fn remove_page(&mut self, slug: &str) {
+        self.pages.remove(slug);
+        self.title_to_slug.retain(|_, s| s != slug);
+        for list in self.backlinks.values_mut() {
+            list.retain(|bl| bl.source_slug != slug);
+        }
+        self.backlinks.retain(|_, v| !v.is_empty());
+    }
+
+    /// Re-clone the cached `source_block` of every backlink whose
+    /// `source_path` matches, pulling fresh content from `source_page`.
+    ///
+    /// Used as an **optimistic** refresh after the TUI mutates the
+    /// source page in memory (e.g. structural ops triggered from
+    /// inside a backlink). Lets the next frame show the new tree
+    /// without paying for a full workspace rebuild. The next natural
+    /// rebuild reconverges with disk truth.
+    ///
+    /// Backlinks whose `source_block_path` no longer resolves (e.g.
+    /// the referencing block was moved or deleted) keep their stale
+    /// node — the canonical fix happens when the index rebuilds.
+    pub fn refresh_backlinks_from_source(
+        &mut self,
+        source_path: &Path,
+        source_page: &crate::parse::ParsedPage,
+    ) {
+        for list in self.backlinks.values_mut() {
+            for bl in list.iter_mut() {
+                if bl.source_path != source_path {
+                    continue;
+                }
+                if let Some(node) = walk_node(&source_page.blocks, &bl.source_block_path) {
+                    bl.source_block = node.clone();
+                }
+            }
+        }
+    }
+
+    /// Apply `new_text` to every cached `source_block` whose `(source_path,
+    /// absolute_block_path)` matches `(source_path, target_path)`.
+    ///
+    /// `target_path` is interpreted as the DFS path inside the source
+    /// page's AST — i.e. `source_block_path` (where the referencing
+    /// block lives) concatenated with the sub-path *inside* that block
+    /// (zero or more steps).
+    ///
+    /// This is an **optimistic** in-memory patch used by the TUI to
+    /// reflect a backlink edit instantly while the actual disk write
+    /// and reconcile happen out of the critical path. The next full
+    /// index rebuild reconverges this with disk truth — until then,
+    /// every backlink list that references the same source block
+    /// stays consistent because they all carry their own clone of the
+    /// node, and this method walks them all.
+    pub fn patch_backlink_text(
+        &mut self,
+        source_path: &Path,
+        target_path: &[usize],
+        new_text: &str,
+    ) {
+        for list in self.backlinks.values_mut() {
+            for bl in list.iter_mut() {
+                if bl.source_path != source_path {
+                    continue;
+                }
+                if !target_path.starts_with(&bl.source_block_path) {
+                    continue;
+                }
+                let tail = &target_path[bl.source_block_path.len()..];
+                if let Some(node) = walk_node_mut(&mut bl.source_block, tail) {
+                    node.text = new_text.to_string();
+                }
+            }
+        }
+    }
+
     /// Titles starting with `prefix` (case-insensitive), best-effort
     /// for autocomplete. Returns at most `limit` results sorted by
     /// title length (shorter first).
@@ -206,30 +358,48 @@ impl WorkspaceIndex {
     }
 }
 
+fn walk_node_mut<'a>(root: &'a mut OutlineNode, path: &[usize]) -> Option<&'a mut OutlineNode> {
+    let mut node = root;
+    for &i in path {
+        node = node.children.get_mut(i)?;
+    }
+    Some(node)
+}
+
+fn walk_node<'a>(blocks: &'a [OutlineNode], path: &[usize]) -> Option<&'a OutlineNode> {
+    let mut current = blocks;
+    let mut node: Option<&OutlineNode> = None;
+    for &i in path {
+        let n = current.get(i)?;
+        node = Some(n);
+        current = &n.children;
+    }
+    node
+}
+
 fn collect_backlinks_recursive(
     blocks: &[OutlineNode],
-    cursor: &mut usize,
+    path_stack: &mut Vec<usize>,
     source: &PageEntry,
     idx: &mut WorkspaceIndex,
 ) {
-    for b in blocks {
-        let block_index = *cursor;
-        let snippet = b.text.clone();
+    for (i, b) in blocks.iter().enumerate() {
+        path_stack.push(i);
+        // A block may reference several pages/tags — but we record one
+        // backlink per *unique* target slug so a page referenced twice
+        // in the same block doesn't show up duplicated.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for tok in tokenize(&b.text) {
-            match tok {
-                InlineTok::PageRef { name } => {
-                    let target_slug = slugify(name);
-                    push_backlink(idx, &target_slug, source, block_index, &snippet);
-                }
-                InlineTok::Tag { name } => {
-                    let target_slug = slugify(name);
-                    push_backlink(idx, &target_slug, source, block_index, &snippet);
-                }
-                _ => {}
+            let target_slug = match tok {
+                InlineTok::PageRef { name } | InlineTok::Tag { name } => slugify(name),
+                _ => continue,
+            };
+            if seen.insert(target_slug.clone()) {
+                push_backlink(idx, &target_slug, source, path_stack, b);
             }
         }
-        *cursor += 1;
-        collect_backlinks_recursive(&b.children, cursor, source, idx);
+        collect_backlinks_recursive(&b.children, path_stack, source, idx);
+        path_stack.pop();
     }
 }
 
@@ -237,8 +407,8 @@ fn push_backlink(
     idx: &mut WorkspaceIndex,
     target_slug: &str,
     source: &PageEntry,
-    block_index: usize,
-    snippet: &str,
+    source_block_path: &[usize],
+    source_block: &OutlineNode,
 ) {
     // Skip self-references: a page linking to itself is noise.
     if target_slug == source.slug {
@@ -252,8 +422,8 @@ fn push_backlink(
             source_title: source.title.clone(),
             source_icon: source.icon.clone(),
             source_path: source.path.clone(),
-            block_index,
-            snippet: snippet.to_string(),
+            source_block_path: source_block_path.to_vec(),
+            source_block: source_block.clone(),
         });
 }
 
@@ -273,6 +443,75 @@ mod tests {
             fs::write(full, content).unwrap();
         }
         dir
+    }
+
+    #[test]
+    fn patch_page_replaces_backlinks_for_that_slug_only() {
+        // Initial state: projeto.md and journal both reference Avelino.
+        let dir = write_workspace(&[
+            ("pages/avelino.md", "title:: Avelino\n\n- author\n"),
+            (
+                "pages/projeto.md",
+                "title:: Projeto\n\n- led by [[Avelino]]\n",
+            ),
+            ("journals/2026-05-24.md", "- meeting with [[Avelino]]\n"),
+        ]);
+        let mut idx = WorkspaceIndex::build(dir.path());
+        assert_eq!(idx.backlinks("avelino").len(), 2);
+
+        // User rewrites projeto.md so it no longer references Avelino
+        // and now references "Other Page" instead. patch_page must:
+        //   1. drop projeto's old backlink to Avelino
+        //   2. emit a new backlink from projeto to other-page
+        // ...without touching the journal's backlink.
+        let new_md = "title:: Projeto\n\n- led by [[Other Page]]\n";
+        let new_page = crate::parse::parse(new_md);
+        let proj_path = dir.path().join("pages/projeto.md");
+        idx.patch_page(&proj_path, &new_page);
+
+        let avelino_bls = idx.backlinks("avelino");
+        assert_eq!(avelino_bls.len(), 1, "journal backlink should survive");
+        assert_eq!(avelino_bls[0].source_slug, "2026-05-24");
+
+        let other_bls = idx.backlinks("other-page");
+        assert_eq!(other_bls.len(), 1);
+        assert_eq!(other_bls[0].source_slug, "projeto");
+    }
+
+    #[test]
+    fn patch_page_updates_title_and_icon() {
+        let dir = write_workspace(&[("pages/x.md", "title:: Old Title\nicon:: 🦀\n\n- body\n")]);
+        let mut idx = WorkspaceIndex::build(dir.path());
+        assert_eq!(idx.by_slug("x").unwrap().title, "Old Title");
+        assert_eq!(idx.by_slug("x").unwrap().icon.as_deref(), Some("🦀"));
+
+        let new_page = crate::parse::parse("title:: New Title\nicon:: 🚀\n\n- body\n");
+        idx.patch_page(&dir.path().join("pages/x.md"), &new_page);
+
+        let entry = idx.by_slug("x").unwrap();
+        assert_eq!(entry.title, "New Title");
+        assert_eq!(entry.icon.as_deref(), Some("🚀"));
+        // by_title should follow the new title and forget the old one.
+        assert!(idx.by_title("Old Title").is_none());
+        assert_eq!(idx.by_title("New Title").unwrap().slug, "x");
+    }
+
+    #[test]
+    fn remove_page_drops_entry_and_its_backlinks() {
+        let dir = write_workspace(&[
+            ("pages/avelino.md", "title:: Avelino\n\n- author\n"),
+            (
+                "pages/projeto.md",
+                "title:: Projeto\n\n- led by [[Avelino]]\n",
+            ),
+        ]);
+        let mut idx = WorkspaceIndex::build(dir.path());
+        assert_eq!(idx.backlinks("avelino").len(), 1);
+
+        idx.remove_page("projeto");
+        assert!(idx.by_slug("projeto").is_none());
+        assert!(idx.by_title("Projeto").is_none());
+        assert!(idx.backlinks("avelino").is_empty());
     }
 
     #[test]
@@ -380,6 +619,59 @@ mod tests {
         let idx = WorkspaceIndex::build(dir.path());
         let entry = idx.by_slug("2026-05-24").unwrap();
         assert!(entry.is_journal);
+    }
+
+    #[test]
+    fn source_block_carries_text_and_children() {
+        // The Backlink struct holds the full referencing block, not a
+        // truncated snippet. The TUI relies on `source_block.children`
+        // to draw nested context.
+        let dir = write_workspace(&[
+            ("pages/avelino.md", "title:: Avelino\n\n- author\n"),
+            (
+                "pages/projeto.md",
+                "title:: Projeto\n\n- led by [[Avelino]]\n  - milestone A\n  - milestone B\n",
+            ),
+        ]);
+        let idx = WorkspaceIndex::build(dir.path());
+        let bls = idx.backlinks("avelino");
+        assert_eq!(bls.len(), 1);
+        assert_eq!(bls[0].source_block.text, "led by [[Avelino]]");
+        assert_eq!(bls[0].source_block.children.len(), 2);
+        assert_eq!(bls[0].source_block.children[0].text, "milestone A");
+        assert_eq!(bls[0].source_block.children[1].text, "milestone B");
+    }
+
+    #[test]
+    fn source_block_path_points_to_referencing_block() {
+        // A backlink coming from a nested block records the DFS path
+        // [parent_idx, child_idx] so the editor can navigate straight
+        // to the right node without re-walking the AST.
+        let dir = write_workspace(&[
+            ("pages/avelino.md", "title:: Avelino\n\n- author\n"),
+            (
+                "pages/projeto.md",
+                "title:: Projeto\n\n- root block\n  - nested ref to [[Avelino]]\n",
+            ),
+        ]);
+        let idx = WorkspaceIndex::build(dir.path());
+        let bls = idx.backlinks("avelino");
+        assert_eq!(bls.len(), 1);
+        assert_eq!(bls[0].source_block_path, vec![0, 0]);
+        assert_eq!(bls[0].source_block.text, "nested ref to [[Avelino]]");
+    }
+
+    #[test]
+    fn block_with_repeated_reference_only_emits_one_backlink() {
+        let dir = write_workspace(&[
+            ("pages/avelino.md", "title:: Avelino\n\n- author\n"),
+            (
+                "pages/projeto.md",
+                "title:: Projeto\n\n- [[Avelino]] and again [[Avelino]] same block\n",
+            ),
+        ]);
+        let idx = WorkspaceIndex::build(dir.path());
+        assert_eq!(idx.backlinks("avelino").len(), 1);
     }
 
     #[test]
