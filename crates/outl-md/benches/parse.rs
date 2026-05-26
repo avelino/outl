@@ -9,8 +9,9 @@
 //! cargo bench -p outl-md --bench parse
 //! ```
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use outl_md::parse::parse;
+use std::hint::black_box;
 
 #[path = "common.rs"]
 mod common;

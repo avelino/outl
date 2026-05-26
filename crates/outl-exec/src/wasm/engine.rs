@@ -45,7 +45,6 @@ pub fn make_engine() -> Engine {
     let mut cfg = Config::new();
     cfg.consume_fuel(true);
     cfg.epoch_interruption(true);
-    cfg.async_support(false);
     cfg.cranelift_opt_level(OptLevel::Speed);
     // WASI requires multi-memory and bulk-memory; both enabled by
     // default on recent wasmtime, but be explicit.

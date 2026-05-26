@@ -48,7 +48,12 @@ pub fn cache_path_for_source(language: &str, source: &str) -> Option<PathBuf> {
     std::fs::create_dir_all(&dir).ok()?;
     let mut hasher = Sha256::new();
     hasher.update(source.as_bytes());
-    let hash = format!("{:x}", hasher.finalize());
+    let digest = hasher.finalize();
+    let mut hash = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        use std::fmt::Write;
+        let _ = write!(hash, "{b:02x}");
+    }
     dir.push(format!("{hash}.wasm"));
     Some(dir)
 }

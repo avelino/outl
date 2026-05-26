@@ -22,7 +22,7 @@ fn three_replicas_three_orders_converge() {
     let n3 = NodeId::new();
     let root = NodeId::root();
 
-    let ops = vec![
+    let ops = [
         op_at(actor_a, 1, 0, create_op(n1, root, pos("a"))),
         op_at(actor_b, 2, 0, create_op(n2, root, pos("b"))),
         op_at(actor_c, 3, 0, create_op(n3, n1, pos("a"))),

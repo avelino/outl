@@ -23,9 +23,7 @@ pub fn slugify(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     let mut prev_dash = true; // suppress leading '-'
     for ch in name.chars() {
-        let normalized = fold_char(ch);
-        if normalized.is_some() {
-            let n = normalized.unwrap();
+        if let Some(n) = fold_char(ch) {
             if n.is_ascii_alphanumeric() {
                 out.push(n.to_ascii_lowercase());
                 prev_dash = false;

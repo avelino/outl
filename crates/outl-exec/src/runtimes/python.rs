@@ -67,7 +67,7 @@ impl Runtime for PythonRuntime {
                     .call_method(&captured, "__getitem__", (idx,))
                     .map_err(|e| pyerr_string(vm, e))?;
                 let s = item.str(vm).map_err(|e| pyerr_string(vm, e))?;
-                buf.push_str(s.as_str());
+                buf.push_str(s.to_str().unwrap_or_default());
             }
             Ok(buf)
         });

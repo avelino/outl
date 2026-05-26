@@ -9,9 +9,9 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.95"
 license = "MIT"
 authors = ["Avelino <avelinorun@gmail.com>"]
 repository = "https://github.com/avelino/outl"
@@ -20,10 +20,10 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Internal crates
-outl-core = { path = "crates/outl-core", version = "0.1.0" }
-outl-md = { path = "crates/outl-md", version = "0.1.0" }
-outl-exec = { path = "crates/outl-exec", version = "0.1.0" }
-outl-tui = { path = "crates/outl-tui", version = "0.1.0" }
+outl-core = { path = "crates/outl-core", version = "0.2.0" }
+outl-md = { path = "crates/outl-md", version = "0.2.0" }
+outl-exec = { path = "crates/outl-exec", version = "0.2.0" }
+outl-tui = { path = "crates/outl-tui", version = "0.2.0" }
 
 # IDs and time
 ulid = { version = "1", features = ["serde"] }
@@ -31,11 +31,11 @@ ulid = { version = "1", features = ["serde"] }
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-bincode = "1"
-toml = "0.8"
+bincode = { version = "2", features = ["serde"] }
+toml = "1.1"
 
 # Errors
-thiserror = "1"
+thiserror = "2"
 anyhow = "1"
 
 # Logging
@@ -43,24 +43,24 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # CRDT
-yrs = "0.21"
+yrs = "0.26"
 
 # Storage
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 
 # Markdown
-comrak = { version = "0.29", default-features = false }
+comrak = { version = "0.52", default-features = false }
 
 # TUI
-ratatui = "0.28"
-crossterm = "0.28"
+ratatui = "0.30"
+crossterm = "0.29"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
 
 # Filesystem
-notify = "6"
-notify-debouncer-full = "0.3"
+notify = "8"
+notify-debouncer-full = "0.7"
 walkdir = "2"
 fs2 = "0.4"
 
@@ -68,7 +68,7 @@ fs2 = "0.4"
 parking_lot = "0.12"
 
 # Misc
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 

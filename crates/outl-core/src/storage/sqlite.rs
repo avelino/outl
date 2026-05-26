@@ -107,11 +107,17 @@ impl SqliteStorage {
 }
 
 fn serialize_op(op: &Op) -> Result<Vec<u8>, StorageError> {
-    bincode::serialize(op).map_err(|e| StorageError::Serialize(e.to_string()))
+    // `legacy()` keeps wire-compat with bincode 1.x (fixed-width ints,
+    // little-endian, no limit) so existing op logs on disk stay readable
+    // after the 1.x → 2.x bump.
+    bincode::serde::encode_to_vec(op, bincode::config::legacy())
+        .map_err(|e| StorageError::Serialize(e.to_string()))
 }
 
 fn deserialize_op(bytes: &[u8]) -> Result<Op, StorageError> {
-    bincode::deserialize(bytes).map_err(|e| StorageError::Serialize(e.to_string()))
+    let (op, _) = bincode::serde::decode_from_slice(bytes, bincode::config::legacy())
+        .map_err(|e| StorageError::Serialize(e.to_string()))?;
+    Ok(op)
 }
 
 fn op_kind(op: &Op) -> &'static str {

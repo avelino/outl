@@ -165,7 +165,7 @@ mod tests {
             .iter()
             .filter_map(|h| fuzzy_score("re", h).map(|s| (s, *h)))
             .collect();
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|b| std::cmp::Reverse(b.0));
         // The two that *start* with "re" should rank above "meals" / "remember".
         let top_two: Vec<&str> = scored.iter().take(2).map(|(_, h)| *h).collect();
         assert!(top_two.contains(&"readme"));

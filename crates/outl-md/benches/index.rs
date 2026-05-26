@@ -13,8 +13,9 @@
 //!
 //! HTML reports land in `target/criterion/`.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use outl_md::index::WorkspaceIndex;
+use std::hint::black_box;
 
 #[path = "common.rs"]
 mod common;

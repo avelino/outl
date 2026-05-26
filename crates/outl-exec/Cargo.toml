@@ -44,18 +44,17 @@ tracing.workspace = true
 # Python/Lua out of the box.
 steel-core = { version = "0.8", optional = true }
 boa_engine = { version = "0.21", optional = true }
-rustpython-vm = { version = "0.4", optional = true, default-features = false, features = ["compiler"] }
-mlua = { version = "0.10", optional = true, features = ["lua54", "vendored"] }
+rustpython-vm = { version = "0.5", optional = true, default-features = false, features = ["compiler"] }
+mlua = { version = "0.11", optional = true, features = ["lua54", "vendored"] }
 
 # Source hashing (auto-run cache key, sidecar content hash). Used
 # unconditionally; cheap dep.
 sha2 = { workspace = true }
 
-# WASM sandbox stack (gated behind `wasm`). wasmtime 38 is the highest
-# release that still supports rustc 1.88 (our workspace MSRV).
-wasmtime = { version = "38", optional = true }
-wasmtime-wasi = { version = "38", optional = true }
-dirs = { version = "5", optional = true }
+# WASM sandbox stack (gated behind `wasm`). Workspace MSRV is rust 1.95.
+wasmtime = { version = "45", optional = true }
+wasmtime-wasi = { version = "45", optional = true }
+dirs = { version = "6", optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

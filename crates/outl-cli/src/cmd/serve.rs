@@ -3,7 +3,7 @@
 use crate::sync_engine::{reconcile_dir, reconcile_md, ReconcileReport};
 use crate::workspace_layout::{is_workspace_md, read_config, Paths};
 use anyhow::{Context, Result};
-use notify::{RecursiveMode, Watcher};
+use notify::RecursiveMode;
 use notify_debouncer_full::new_debouncer;
 use outl_core::hlc::HlcGenerator;
 use outl_core::storage::SqliteStorage;
@@ -48,11 +48,10 @@ pub fn run(path: &Path, once: bool) -> Result<()> {
     })
     .with_context(|| "creating file watcher")?;
 
-    let watcher = debouncer.watcher();
-    watcher
+    debouncer
         .watch(&paths.pages, RecursiveMode::NonRecursive)
         .with_context(|| format!("watching {}", paths.pages.display()))?;
-    watcher
+    debouncer
         .watch(&paths.journals, RecursiveMode::NonRecursive)
         .with_context(|| format!("watching {}", paths.journals.display()))?;
 
