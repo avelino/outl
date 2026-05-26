@@ -47,6 +47,15 @@ pub(crate) trait SlashCommand: Send + Sync {
         &[]
     }
 
+    /// Whether the command writes text directly into the in-flight
+    /// Insert buffer (`buffer.insert_str(...)`). When `true`, the
+    /// slash dispatcher will *not* commit the Insert before
+    /// dispatching — the command needs the buffer alive at the
+    /// cursor position. Commands like `/date-today` set this.
+    fn inserts_inline(&self) -> bool {
+        false
+    }
+
     /// Run the command. May mutate `app`; returns `Ok(true)` if the
     /// app should quit (used by `:q`).
     fn execute(&self, app: &mut App, args: &str) -> Result<bool>;

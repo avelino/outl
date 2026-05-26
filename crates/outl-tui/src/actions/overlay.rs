@@ -231,7 +231,7 @@ impl App {
                 );
             }
         }
-        hits.sort_by(|a, b| b.score.cmp(&a.score));
+        hits.sort_by_key(|b| std::cmp::Reverse(b.score));
         hits.truncate(30);
         if let Some(Overlay::Search(ref mut s)) = self.overlay {
             s.hits = hits;
@@ -565,8 +565,14 @@ impl App {
     }
 
     /// Slash branch of [`accept_autocomplete`]: erase `/<query>` from
-    /// the buffer, commit the Insert (we don't want the in-flight
-    /// edit to live alongside a command run), then dispatch.
+    /// the buffer, then dispatch.
+    ///
+    /// Commands that **don't** insert text into the buffer
+    /// (`inserts_inline() == false`, i.e. the default) get the Insert
+    /// committed first — we don't want the in-flight edit alive
+    /// alongside an overlay-opening command. Inline-insert commands
+    /// (`/date-today` and friends) skip the commit so they can call
+    /// `buffer.insert_str(...)` at the cursor.
     fn accept_slash_inline(&mut self, ac: &AutocompleteState, choice: &str) {
         let trigger_len = 1 + ac.query.chars().count();
         if let Mode::Insert { buffer, .. } = &mut self.mode {
@@ -574,17 +580,16 @@ impl App {
                 buffer.delete_back();
             }
         }
-        // Commit so the page state is consistent before we run the
-        // command (which might save again or open an overlay).
-        self.commit_insert();
 
         let registry = self.command_registry.clone();
-        // Need to know `needs_args` to decide whether to drop the
-        // user into the `:` palette or run the command immediately.
         let Some(cmd) = registry.get(choice) else {
+            self.commit_insert();
             self.status = format!("unknown command: {choice}");
             return;
         };
+        if !cmd.inserts_inline() {
+            self.commit_insert();
+        }
         if cmd.needs_args() {
             self.overlay = Some(Overlay::Command(CommandState {
                 buffer: format!("{choice} "),
