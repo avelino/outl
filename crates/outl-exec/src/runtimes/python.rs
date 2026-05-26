@@ -67,7 +67,15 @@ impl Runtime for PythonRuntime {
                     .call_method(&captured, "__getitem__", (idx,))
                     .map_err(|e| pyerr_string(vm, e))?;
                 let s = item.str(vm).map_err(|e| pyerr_string(vm, e))?;
-                buf.push_str(s.to_str().unwrap_or_default());
+                // Surface non-UTF-8 conversion failures instead of
+                // silently dropping bytes from stdout. Python 3 strs
+                // are notionally UTF-8, but a buggy/native extension
+                // could feed in something we can't decode — better to
+                // fail loudly than to ship truncated output.
+                let chunk = s
+                    .to_str()
+                    .ok_or_else(|| PyErrString("python stdout has non-UTF-8 bytes".into()))?;
+                buf.push_str(chunk);
             }
             Ok(buf)
         });

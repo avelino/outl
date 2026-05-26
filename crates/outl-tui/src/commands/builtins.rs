@@ -600,18 +600,14 @@ impl SlashCommand for DateLastWeekCommand {
 // Seven small structs share one body via a macro because the only
 // thing that varies is the name string and the `Weekday` value.
 macro_rules! next_weekday_command {
-    ($struct_name:ident, $name:literal, $weekday:expr, $aliases:expr) => {
+    ($struct_name:ident, $name:literal, $weekday:expr, $label:literal, $aliases:expr) => {
         pub struct $struct_name;
         impl SlashCommand for $struct_name {
             fn name(&self) -> &'static str {
                 $name
             }
             fn description(&self) -> &'static str {
-                concat!(
-                    "Insert next ",
-                    stringify!($weekday),
-                    "'s journal ref — `[[YYYY-MM-DD]]`"
-                )
+                concat!("Insert next ", $label, "'s journal ref — `[[YYYY-MM-DD]]`")
             }
             fn aliases(&self) -> &'static [&'static str] {
                 $aliases
@@ -633,42 +629,49 @@ next_weekday_command!(
     DateNextMondayCommand,
     "date-next-monday",
     Weekday::Mon,
+    "Monday",
     &["dnmon"]
 );
 next_weekday_command!(
     DateNextTuesdayCommand,
     "date-next-tuesday",
     Weekday::Tue,
+    "Tuesday",
     &["dntue"]
 );
 next_weekday_command!(
     DateNextWednesdayCommand,
     "date-next-wednesday",
     Weekday::Wed,
+    "Wednesday",
     &["dnwed"]
 );
 next_weekday_command!(
     DateNextThursdayCommand,
     "date-next-thursday",
     Weekday::Thu,
+    "Thursday",
     &["dnthu"]
 );
 next_weekday_command!(
     DateNextFridayCommand,
     "date-next-friday",
     Weekday::Fri,
+    "Friday",
     &["dnfri"]
 );
 next_weekday_command!(
     DateNextSaturdayCommand,
     "date-next-saturday",
     Weekday::Sat,
+    "Saturday",
     &["dnsat"]
 );
 next_weekday_command!(
     DateNextSundayCommand,
     "date-next-sunday",
     Weekday::Sun,
+    "Sunday",
     &["dnsun"]
 );
 

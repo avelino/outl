@@ -135,29 +135,35 @@ impl App {
                 false
             }
             Focus::Backlink { idx, sub_path } => {
-                let backlinks = self.index.backlinks(&self.current_slug()).to_vec();
-                let Some(bl) = backlinks.get(idx) else {
-                    return false;
+                // Borrow the backlinks slice directly instead of
+                // cloning the whole `Vec<Backlink>` (each entry
+                // carries an `OutlineNode` subtree — non-trivial to
+                // clone per keystroke).
+                let slug = self.current_slug();
+                let new_focus = {
+                    let backlinks = self.index.backlinks(&slug);
+                    let Some(bl) = backlinks.get(idx) else {
+                        return false;
+                    };
+                    let paths = flatten_backlink_subtree(&bl.source_block);
+                    let cur_pos = paths.iter().position(|p| p == &sub_path).unwrap_or(0);
+                    if cur_pos + 1 < paths.len() {
+                        Focus::Backlink {
+                            idx,
+                            sub_path: paths[cur_pos + 1].clone(),
+                        }
+                    } else if idx + 1 < backlinks.len() {
+                        Focus::Backlink {
+                            idx: idx + 1,
+                            sub_path: Vec::new(),
+                        }
+                    } else {
+                        return false;
+                    }
                 };
-                let paths = flatten_backlink_subtree(&bl.source_block);
-                let cur_pos = paths.iter().position(|p| p == &sub_path).unwrap_or(0);
-                if cur_pos + 1 < paths.len() {
-                    self.focus = Focus::Backlink {
-                        idx,
-                        sub_path: paths[cur_pos + 1].clone(),
-                    };
-                    self.cursor_col = 0;
-                    return true;
-                }
-                if idx + 1 < backlinks.len() {
-                    self.focus = Focus::Backlink {
-                        idx: idx + 1,
-                        sub_path: Vec::new(),
-                    };
-                    self.cursor_col = 0;
-                    return true;
-                }
-                false
+                self.focus = new_focus;
+                self.cursor_col = 0;
+                true
             }
         }
     }
@@ -174,35 +180,41 @@ impl App {
                 false
             }
             Focus::Backlink { idx, sub_path } => {
-                let backlinks = self.index.backlinks(&self.current_slug()).to_vec();
-                let Some(bl) = backlinks.get(idx) else {
-                    return false;
+                let slug = self.current_slug();
+                // Resolve the new focus value while only borrowing the
+                // backlinks slice — no `to_vec` clone per keystroke.
+                let new_focus_opt = {
+                    let backlinks = self.index.backlinks(&slug);
+                    let Some(bl) = backlinks.get(idx) else {
+                        return false;
+                    };
+                    let paths = flatten_backlink_subtree(&bl.source_block);
+                    let cur_pos = paths.iter().position(|p| p == &sub_path).unwrap_or(0);
+                    if cur_pos > 0 {
+                        Some(Focus::Backlink {
+                            idx,
+                            sub_path: paths[cur_pos - 1].clone(),
+                        })
+                    } else if idx > 0 {
+                        // Jump to the last block of the previous backlink.
+                        let prev_paths = flatten_backlink_subtree(&backlinks[idx - 1].source_block);
+                        let last = prev_paths.last().cloned().unwrap_or_default();
+                        Some(Focus::Backlink {
+                            idx: idx - 1,
+                            sub_path: last,
+                        })
+                    } else {
+                        // Topping out → fall back into the outline.
+                        None
+                    }
                 };
-                let paths = flatten_backlink_subtree(&bl.source_block);
-                let cur_pos = paths.iter().position(|p| p == &sub_path).unwrap_or(0);
-                if cur_pos > 0 {
-                    self.focus = Focus::Backlink {
-                        idx,
-                        sub_path: paths[cur_pos - 1].clone(),
-                    };
-                    self.cursor_col = 0;
-                    return true;
+                match new_focus_opt {
+                    Some(f) => self.focus = f,
+                    None => {
+                        self.focus = Focus::Outline;
+                        self.selected = self.flat_len.saturating_sub(1);
+                    }
                 }
-                if idx > 0 {
-                    // Jump to the last block of the previous backlink.
-                    let prev_paths = flatten_backlink_subtree(&backlinks[idx - 1].source_block);
-                    let last = prev_paths.last().cloned().unwrap_or_default();
-                    self.focus = Focus::Backlink {
-                        idx: idx - 1,
-                        sub_path: last,
-                    };
-                    self.cursor_col = 0;
-                    return true;
-                }
-                // Topping out of the backlinks zone → fall back into
-                // the outline at its last block.
-                self.focus = Focus::Outline;
-                self.selected = self.flat_len.saturating_sub(1);
                 self.cursor_col = 0;
                 true
             }

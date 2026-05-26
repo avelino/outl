@@ -290,12 +290,10 @@ impl App {
                 }
             )
         {
-            // Drop the existing Insert mode *without* triggering the
-            // disk save — we already have the buffer captured via the
-            // working copy in `apply_to_backlink_source`, and we'll
-            // save once below.
-            self.mode = Mode::Normal;
-
+            // Don't drop `Mode::Insert` before calling the helper —
+            // it inspects the live mode to commit the user's in-flight
+            // buffer into the source AST. Resetting first would
+            // discard whatever was typed into the prior block.
             let result = self.apply_to_backlink_source(|page, abs_path| {
                 insert_sibling_after(&mut page.blocks, abs_path);
                 // Sibling-after lives at parent ++ [last + 1].
@@ -353,7 +351,9 @@ impl App {
     /// Create a new block above the current selection, then enter Insert.
     pub(crate) fn create_block_above(&mut self) {
         if matches!(self.focus, Focus::Backlink { .. }) {
-            self.mode = Mode::Normal;
+            // Keep `Mode::Insert` alive: `apply_to_backlink_source`
+            // needs it to commit the in-flight buffer before the
+            // sibling-before is inserted.
             let result = self.apply_to_backlink_source(|page, abs_path| {
                 insert_sibling_before(&mut page.blocks, abs_path);
                 // The new block now occupies the slot the focused
@@ -412,7 +412,10 @@ impl App {
             } else {
                 None
             };
-            self.mode = Mode::Normal;
+            // Don't reset Mode::Insert before the helper — it needs
+            // to see the live buffer to commit it into the source AST
+            // before the indent. (Resetting first would save a
+            // structural change against stale text.)
             let mut moved = false;
             let result = self.apply_to_backlink_source(|page, abs_path| {
                 if let Some(new_path) = indent_at_path(&mut page.blocks, abs_path) {
@@ -492,7 +495,8 @@ impl App {
             } else {
                 None
             };
-            self.mode = Mode::Normal;
+            // Same rationale as `indent_current`: keep Mode::Insert
+            // so the helper commits the buffer before the outdent.
             let mut moved = false;
             let result = self.apply_to_backlink_source(|page, abs_path| {
                 if let Some(new_path) = outdent_at_path(&mut page.blocks, abs_path) {

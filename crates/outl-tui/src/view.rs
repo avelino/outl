@@ -3,11 +3,11 @@
 //! This file is the orchestrator — it composes the panels but delegates
 //! the actual painting to siblings:
 //!
-//! - [`overlays`] — every modal popup (quick switcher, search, slash,
+//! - `overlays` — every modal popup (quick switcher, search, slash,
 //!   command bar, error, help, inline autocomplete).
-//! - [`outline`] — the current page's block tree.
-//! - [`backlinks`] — the inline backlinks section below the outline.
-//! - [`inline`] — span-level markdown (used by `outline` and
+//! - `outline` — the current page's block tree.
+//! - `backlinks` — the inline backlinks section below the outline.
+//! - `inline` — span-level markdown (used by `outline` and
 //!   `backlinks`).
 //!
 //! Only `render_app` is callable from outside the module — the rest is

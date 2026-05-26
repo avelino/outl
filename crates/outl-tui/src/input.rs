@@ -422,7 +422,7 @@ pub(crate) fn handle_insert_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 cycle_todo_inline(buffer);
             }
         }
-        KeyCode::Char('t') if key.modifiers == KeyModifiers::CONTROL => {
+        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if let Mode::Insert { buffer, .. } = &mut app.mode {
                 cycle_todo_inline(buffer);
             }
