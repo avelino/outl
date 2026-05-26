@@ -20,6 +20,34 @@ pub fn flat_count(blocks: &[OutlineNode]) -> usize {
     blocks.iter().map(|b| 1 + flat_count(&b.children)).sum()
 }
 
+/// TODO/DONE counters: `(done, total)`. A block is counted when its
+/// trimmed text starts with `TODO ` or `DONE `; `DONE` counts toward
+/// `done` and toward `total`.
+///
+/// The header chip in the TUI uses this for the `●● 3/7` indicator,
+/// so the count walks the whole tree (nested children included).
+pub fn count_todos(blocks: &[OutlineNode]) -> (usize, usize) {
+    let mut done = 0usize;
+    let mut total = 0usize;
+    walk_todos(blocks, &mut done, &mut total);
+    (done, total)
+}
+
+fn walk_todos(blocks: &[OutlineNode], done: &mut usize, total: &mut usize) {
+    for b in blocks {
+        let t = b.text.trim_start();
+        if let Some(rest) = t.strip_prefix("TODO ") {
+            let _ = rest;
+            *total += 1;
+        } else if let Some(rest) = t.strip_prefix("DONE ") {
+            let _ = rest;
+            *total += 1;
+            *done += 1;
+        }
+        walk_todos(&b.children, done, total);
+    }
+}
+
 /// Return the path of indices to reach the block at `target_index`
 /// in DFS preorder. `None` if the index is out of range.
 pub fn path_for_index(blocks: &[OutlineNode], target: usize) -> Option<Vec<usize>> {

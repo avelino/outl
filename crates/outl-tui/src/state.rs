@@ -18,7 +18,7 @@ use outl_exec::RuntimeRegistry;
 use outl_md::index::WorkspaceIndex;
 use outl_md::parse::{OutlineNode, ParsedPage};
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 pub(crate) const HELP_HINT_NORMAL: &str =
     "i edit  o new  h/l cursor  Enter open ref  K/J move  C-T TODO  u undo  ? help  q";

@@ -26,6 +26,7 @@ impl App {
         }
     }
 
+    #[allow(dead_code)] // header now uses chrome::breadcrumb; kept for future reuse
     pub(crate) fn current_title(&self) -> String {
         let mode_tag = match self.mode {
             Mode::Normal => "NORMAL",
