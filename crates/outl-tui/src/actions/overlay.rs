@@ -103,6 +103,7 @@ impl App {
             query: String::new(),
             candidates,
             selected: 0,
+            preview_cache: std::cell::RefCell::new(None),
         }));
     }
 

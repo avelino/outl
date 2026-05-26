@@ -69,4 +69,37 @@ if [ "$clippy_status" -ne 0 ]; then
   exit 2
 fi
 
+# Run rustdoc with -D warnings — CI gates on this, so catch
+# intra-doc-link-to-private-item issues (and friends) before
+# pushing. Only triggers when the edited file looks like it
+# might carry doc comments (mod.rs, lib.rs, or any file with
+# `//!` block docs).
+case "$file_path" in
+  */mod.rs|*/lib.rs)
+    doc_check=1
+    ;;
+  *)
+    if grep -q '^//!' "$file_path" 2>/dev/null; then
+      doc_check=1
+    else
+      doc_check=0
+    fi
+    ;;
+esac
+
+if [ "$doc_check" = "1" ]; then
+  doc_output=$(
+    cd "${CLAUDE_PROJECT_DIR}" 2>/dev/null || cd .
+    RUSTDOCFLAGS="-D warnings" cargo doc -p "$crate_dir" --no-deps --quiet 2>&1
+  )
+  doc_status=$?
+  if [ "$doc_status" -ne 0 ]; then
+    # Most common cause: `[\`Foo\`]` intra-doc link where Foo is
+    # pub(crate) / pub(super) / mod (no pub). Drop brackets.
+    printf 'cargo doc emitted warnings in crate %s after edit of %s:\n%s\n' \
+      "$crate_dir" "$file_path" "$doc_output" >&2
+    exit 2
+  fi
+fi
+
 exit 0

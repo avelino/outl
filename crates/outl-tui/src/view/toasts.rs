@@ -52,7 +52,9 @@ pub(crate) fn render_toasts(f: &mut ratatui::Frame<'_>, full: Rect, app: &App) {
                 format!(" {icon} "),
                 Style::default().fg(accent).add_modifier(Modifier::BOLD),
             ),
-            Span::raw(toast.message.clone()),
+            // Borrow rather than clone — render runs every poll
+            // tick; a per-frame allocation per toast adds up.
+            Span::raw(toast.message.as_str()),
         ]);
         let card = Paragraph::new(body)
             .block(

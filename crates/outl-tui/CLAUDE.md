@@ -173,4 +173,9 @@ src/
 1. `cargo fmt`
 2. `cargo clippy -p outl-tui --all-targets -- -D warnings`
 3. `cargo test -p outl-tui` (lib + bin + e2e tests)
-4. Manual smoke in a real terminal: `outl init /tmp/x && outl --path /tmp/x`
+4. **`RUSTDOCFLAGS="-D warnings" cargo doc -p outl-tui --no-deps`** —
+   CI runs this and it catches things `clippy` won't. Most common bite:
+   ``[`SomeType`]`` in a `//!` module doc where the type is `pub(crate)`
+   triggers `rustdoc::private_intra_doc_links`. Drop the brackets, keep
+   the backticks: `` `SomeType` ``.
+5. Manual smoke in a real terminal: `outl init /tmp/x && outl --path /tmp/x`
