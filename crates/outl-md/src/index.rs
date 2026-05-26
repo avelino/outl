@@ -35,6 +35,10 @@ pub struct PageEntry {
     pub icon: Option<String>,
     /// Whether the file lives in `journals/`.
     pub is_journal: bool,
+    /// `pinned:: true` page-level property. Surfaces that ship a
+    /// sidebar (TUI, future Tauri) list pinned pages prominently so
+    /// frequently-touched notes are a single click away.
+    pub pinned: bool,
 }
 
 /// One backlink — a block in another page that references this slug.
@@ -137,6 +141,10 @@ impl WorkspaceIndex {
                     .find(|(k, _)| k == "icon")
                     .map(|(_, v)| v.trim().to_string())
                     .filter(|s| !s.is_empty());
+                let pinned = parsed
+                    .properties
+                    .iter()
+                    .any(|(k, v)| k == "pinned" && is_truthy(v));
 
                 idx.pages.insert(
                     slug.to_string(),
@@ -146,6 +154,7 @@ impl WorkspaceIndex {
                         title: title.clone(),
                         icon,
                         is_journal,
+                        pinned,
                     },
                 );
                 idx.title_to_slug.insert(title.clone(), slug.to_string());
@@ -237,6 +246,10 @@ impl WorkspaceIndex {
             .find(|(k, _)| k == "icon")
             .map(|(_, v)| v.trim().to_string())
             .filter(|s| !s.is_empty());
+        let pinned = page
+            .properties
+            .iter()
+            .any(|(k, v)| k == "pinned" && is_truthy(v));
 
         // Drop every backlink that used to come from this page —
         // we'll re-emit the fresh set below.
@@ -256,6 +269,7 @@ impl WorkspaceIndex {
             title: title.clone(),
             icon,
             is_journal,
+            pinned,
         };
         self.pages.insert(slug.clone(), entry.clone());
         self.title_to_slug.insert(title, slug);
@@ -375,6 +389,17 @@ fn walk_node<'a>(blocks: &'a [OutlineNode], path: &[usize]) -> Option<&'a Outlin
         current = &n.children;
     }
     node
+}
+
+/// Loose truthy check for boolean-ish property values (`pinned::`,
+/// `archived::`, etc). Accepts `true`, `yes`, `1`, `on` (case
+/// insensitive). Empty string is treated as falsy so a stray
+/// `pinned:: ` doesn't flip a page into the pinned list.
+fn is_truthy(v: &str) -> bool {
+    matches!(
+        v.trim().to_ascii_lowercase().as_str(),
+        "true" | "yes" | "1" | "on"
+    )
 }
 
 fn collect_backlinks_recursive(
