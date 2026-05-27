@@ -34,23 +34,47 @@ pub(crate) fn render_pretty_block_text(
     theme: &Theme,
     index: &outl_md::index::WorkspaceIndex,
 ) -> Vec<Span<'static>> {
+    render_pretty_block_text_impl(text, theme, index, true)
+}
+
+/// Internal variant that controls whether `InlineTok::Embed` tokens
+/// inside `text` are expanded again. Set `expand_embed = false` when
+/// the caller is *already* rendering an embed's body — otherwise
+/// `A` embedding `B` while `B` embeds `A` (or even `A` itself) would
+/// recurse forever and blow the stack.
+fn render_pretty_block_text_impl(
+    text: &str,
+    theme: &Theme,
+    index: &outl_md::index::WorkspaceIndex,
+    expand_embed: bool,
+) -> Vec<Span<'static>> {
     let (todo_state, body) = split_todo_prefix(text);
     let mut out: Vec<Span<'static>> = Vec::new();
     match todo_state {
         Some(false) => {
             out.push(Span::styled("☐ ", theme.todo_open));
-            out.extend(render_markdown_inline(body, theme, index));
+            out.extend(render_markdown_inline_impl(
+                body,
+                theme,
+                index,
+                expand_embed,
+            ));
         }
         Some(true) => {
             out.push(Span::styled("☑ ", theme.todo_done));
-            for sp in render_markdown_inline(body, theme, index) {
+            for sp in render_markdown_inline_impl(body, theme, index, expand_embed) {
                 out.push(Span::styled(
                     sp.content.into_owned(),
                     sp.style.patch(theme.todo_done_body),
                 ));
             }
         }
-        None => out.extend(render_markdown_inline(text, theme, index)),
+        None => out.extend(render_markdown_inline_impl(
+            text,
+            theme,
+            index,
+            expand_embed,
+        )),
     }
     out
 }
@@ -71,6 +95,20 @@ pub(crate) fn render_markdown_inline(
     text: &str,
     theme: &Theme,
     index: &outl_md::index::WorkspaceIndex,
+) -> Vec<Span<'static>> {
+    render_markdown_inline_impl(text, theme, index, true)
+}
+
+/// Internal variant: when `expand_embed = false`, `InlineTok::Embed`
+/// renders as its raw `!((handle))` form (dim) instead of recursing
+/// into the source block. The Embed arm passes `false` to its own
+/// recursive call so an A → B → A cycle terminates after a single
+/// expansion. Doctor still surfaces the citation in either direction.
+fn render_markdown_inline_impl(
+    text: &str,
+    theme: &Theme,
+    index: &outl_md::index::WorkspaceIndex,
+    expand_embed: bool,
 ) -> Vec<Span<'static>> {
     let mut out = Vec::new();
     for tok in tokenize(text) {
@@ -121,12 +159,20 @@ pub(crate) fn render_markdown_inline(
                 }
             }
             InlineTok::Embed { handle } => {
+                // Cycle / recursion guard: when this call is itself
+                // rendering an embedded block's body, treat the inner
+                // embed as raw text. That breaks `A → B → A` cycles
+                // and bounds rendering work at one level of expansion.
+                if !expand_embed {
+                    out.push(Span::styled(format!("!(({handle}))"), theme.dim));
+                    continue;
+                }
                 // Inline read-only render: `↳ ` prefix marks "this row
                 // belongs to an embed", and the source block's text is
-                // pushed through `render_pretty_block_text` so TODO /
-                // DONE prefixes, `[[refs]]`, `#tags`, bold etc. all
-                // render properly — same affordance the carrying
-                // block would get if it lived in the outline directly.
+                // pushed through `render_pretty_block_text_impl` (with
+                // `expand_embed = false`) so TODO / DONE prefixes,
+                // `[[refs]]`, `#tags`, bold etc. render but a nested
+                // `!((blk-Y))` inside `entry.text` doesn't recurse.
                 // The subtree below this row (rendered by
                 // `emit_embedded_children`) uses the same `↳ ` prefix
                 // so the whole embed reads as one visual block.
@@ -139,7 +185,15 @@ pub(crate) fn render_markdown_inline(
                             out.push(Span::styled(format!("{icon} "), theme.dim));
                         }
                         out.push(Span::styled("↳ ".to_string(), theme.dim));
-                        out.extend(render_pretty_block_text(&entry.text, theme, index));
+                        // `expand_embed = false`: stop recursive embed
+                        // expansion at this depth so a nested embed in
+                        // `entry.text` shows up raw and doesn't cycle.
+                        out.extend(render_pretty_block_text_impl(
+                            &entry.text,
+                            theme,
+                            index,
+                            false,
+                        ));
                     }
                     None => {
                         out.push(Span::styled(format!("!(({handle}))"), theme.dim));

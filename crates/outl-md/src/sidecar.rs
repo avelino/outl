@@ -56,7 +56,7 @@ pub struct SidecarBlock {
     /// SHA-256 of the block's textual content, formatted `sha256:<hex>`.
     pub content_hash: String,
     /// Short, stable, human-typeable handle for `((blk-XXXXXX))` inline
-    /// references and `{{embed: ((blk-XXXXXX))}}` embeds.
+    /// references and `!((blk-XXXXXX))` embeds.
     ///
     /// Default-derived from [`derive_ref_handle`] using the block id.
     /// The handle is stable as long as the block keeps the same id —

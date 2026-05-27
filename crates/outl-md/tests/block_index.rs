@@ -188,34 +188,53 @@ fn nested_blocks_record_correct_dfs_path() {
     assert_eq!(child.source_block_path, vec![0, 0]);
 }
 
+/// Build a (smaller, larger) pair of `NodeId`s. The smaller id is the
+/// deterministic winner of any handle collision — see
+/// `BlockIndex::assign_handle`. Helpers here use it to write tests
+/// whose outcome is stable regardless of which ULID `NodeId::new()`
+/// happens to produce first.
+fn ordered_pair() -> (NodeId, NodeId) {
+    let a = NodeId::new();
+    let b = NodeId::new();
+    if a < b {
+        (a, b)
+    } else {
+        (b, a)
+    }
+}
+
 #[test]
 fn collision_expands_handle_for_loser_and_keeps_winner_resolvable() {
     let mut idx = BlockIndex::default();
-    let id_winner = NodeId::new();
-    let id_loser = NodeId::new();
+    // Smaller NodeId wins the base handle deterministically.
+    let (id_winner, id_loser) = ordered_pair();
     let base = "blk-aaaaaa".to_string();
     let mut sb_w = sb(id_winner, "winner", 1, 0);
     let mut sb_l = sb(id_loser, "loser", 1, 0);
     sb_w.ref_handle = base.clone();
     sb_l.ref_handle = base.clone();
 
-    idx.collect_page(
-        "winner",
-        &PathBuf::from("pages/winner.md"),
-        &parse("- winner\n").blocks,
-        &[sb_w],
-    );
+    // Insert the loser first to prove the winner displaces it
+    // regardless of insertion order.
     idx.collect_page(
         "loser",
         &PathBuf::from("pages/loser.md"),
         &parse("- loser\n").blocks,
         &[sb_l],
     );
+    idx.collect_page(
+        "winner",
+        &PathBuf::from("pages/winner.md"),
+        &parse("- winner\n").blocks,
+        &[sb_w],
+    );
 
-    let w = idx.resolve(&base).expect("winner still resolvable");
+    let w = idx
+        .resolve(&base)
+        .expect("winner owns base after dethroning");
     assert_eq!(w.id, id_winner);
 
-    let loser_entry = idx.get(id_loser).expect("loser indexed");
+    let loser_entry = idx.get(id_loser).expect("loser still indexed");
     assert_ne!(loser_entry.ref_handle, base);
     let l = idx
         .resolve(&loser_entry.ref_handle)
@@ -226,8 +245,7 @@ fn collision_expands_handle_for_loser_and_keeps_winner_resolvable() {
 #[test]
 fn forget_page_does_not_unresolve_winner_on_collision_removal() {
     let mut idx = BlockIndex::default();
-    let id_winner = NodeId::new();
-    let id_loser = NodeId::new();
+    let (id_winner, id_loser) = ordered_pair();
     let base = "blk-bbbbbb".to_string();
     let mut sb_w = sb(id_winner, "winner", 1, 0);
     let mut sb_l = sb(id_loser, "loser", 1, 0);

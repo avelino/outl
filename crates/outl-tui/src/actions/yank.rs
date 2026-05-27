@@ -35,14 +35,14 @@ impl App {
     ///
     /// Looks up the block in the workspace index by `(source_slug,
     /// source_block_path)` and stashes its `((blk-XXXXXX))` form on
-    /// `last_yanked_ref` + the status line. UI clients with a real
-    /// OS clipboard can read `last_yanked_ref` and pipe it through;
-    /// the TUI today surfaces the handle visually so the user can
-    /// copy it with the terminal's own selection.
+    /// `last_yanked_ref` + the status line. `arboard` also writes it
+    /// to the OS clipboard so a regular paste works in other apps;
+    /// the status line falls back to `(clipboard unavailable)` on
+    /// headless / no-display environments.
     ///
-    /// Lookup is linear in the indexed block count. For the workspace
-    /// sizes we ship in phase 1 that's well under a millisecond — the
-    /// bench in #12 will revisit if profiling proves otherwise.
+    /// Lookup is O(1) — `WorkspaceIndex::block_at_location` uses the
+    /// `(slug, dfs_path) → NodeId` secondary index, so the chord stays
+    /// snappy regardless of workspace size.
     pub(crate) fn yank_current_ref(&mut self) {
         match self.current_block_ref_handle() {
             Some(h) => {

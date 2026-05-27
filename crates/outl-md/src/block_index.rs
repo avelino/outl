@@ -295,15 +295,19 @@ impl BlockIndex {
                     } else {
                         sb.ref_handle.clone()
                     };
-                    let handle = self.unique_handle(sb.id, &base_handle);
 
+                    // Insert the BlockEntry first (with a placeholder
+                    // handle) so `assign_handle` can patch a displaced
+                    // owner's `ref_handle` even when that displaced
+                    // owner is the same block being inserted right
+                    // now (re-index path).
                     let text = b.text.clone();
                     let text_fold = text.to_lowercase();
                     self.blocks.insert(
                         sb.id,
                         BlockEntry {
                             id: sb.id,
-                            ref_handle: handle.clone(),
+                            ref_handle: base_handle.clone(),
                             source_slug: source_slug.to_string(),
                             source_path: source_path.to_path_buf(),
                             source_block_path: path_stack.clone(),
@@ -312,7 +316,10 @@ impl BlockIndex {
                             children: b.children.clone(),
                         },
                     );
-                    self.handle_to_block.insert(handle, sb.id);
+                    let final_handle = self.assign_handle(sb.id, base_handle);
+                    if let Some(entry) = self.blocks.get_mut(&sb.id) {
+                        entry.ref_handle = final_handle;
+                    }
                     self.pages
                         .entry(source_slug.to_string())
                         .or_default()
@@ -334,18 +341,48 @@ impl BlockIndex {
         }
     }
 
-    /// Return a handle that's unique within the index — `base_handle`
-    /// itself when it isn't claimed by a *different* id, otherwise the
-    /// next-longer ULID tail until uniqueness is reached.
+    /// Assign a final handle to `id` and update `handle_to_block`.
     ///
-    /// Same id reclaiming its own handle (re-indexing path) is allowed
-    /// and returns `base_handle` unchanged.
-    fn unique_handle(&self, id: NodeId, base_handle: &str) -> String {
-        match self.handle_to_block.get(base_handle) {
-            Some(&owner) if owner == id => return base_handle.to_string(),
-            None => return base_handle.to_string(),
-            Some(_) => {} // genuine collision, fall through to expansion
+    /// Determinism: when `base_handle` is already taken by a different
+    /// block, the **smaller** `NodeId` (ULIDs sort lexicographically
+    /// by creation time) keeps the base handle and the bigger one is
+    /// expanded. Same outcome regardless of which device — or which
+    /// workspace traversal order — first observed the collision.
+    ///
+    /// If `id` itself displaces the current owner, that owner's
+    /// `BlockEntry.ref_handle` is rewritten in place so the new
+    /// expanded form propagates everywhere it's read from.
+    fn assign_handle(&mut self, id: NodeId, base_handle: String) -> String {
+        match self.handle_to_block.get(&base_handle).copied() {
+            Some(owner) if owner == id => base_handle,
+            None => {
+                self.handle_to_block.insert(base_handle.clone(), id);
+                base_handle
+            }
+            Some(owner) if id < owner => {
+                // `id` wins the base; current owner is dethroned.
+                let owner_expanded = self.next_unused_expansion(owner, &base_handle);
+                if let Some(entry) = self.blocks.get_mut(&owner) {
+                    entry.ref_handle = owner_expanded.clone();
+                }
+                self.handle_to_block.remove(&base_handle);
+                self.handle_to_block.insert(owner_expanded, owner);
+                self.handle_to_block.insert(base_handle.clone(), id);
+                base_handle
+            }
+            Some(_) => {
+                // `id` is bigger; existing owner keeps the base.
+                let expanded = self.next_unused_expansion(id, &base_handle);
+                self.handle_to_block.insert(expanded.clone(), id);
+                expanded
+            }
         }
+    }
+
+    /// Smallest expanded handle (tail length > [`REF_HANDLE_TAIL_LEN`])
+    /// for `id` that isn't already owned by a different block. Used as
+    /// the displaced / losing side of a collision in [`assign_handle`].
+    fn next_unused_expansion(&self, id: NodeId, _base: &str) -> String {
         let ulid_str = id.to_string();
         let total = ulid_str.chars().count();
         for tail_len in (REF_HANDLE_TAIL_LEN + 1)..=total {

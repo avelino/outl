@@ -330,12 +330,15 @@ fn try_block_ref(s: &str) -> Option<(InlineTok<'_>, usize)> {
 /// Conservative on purpose: the moment we accept arbitrary content
 /// between `((` and `))`, prose like "look here ((really))" gets
 /// rewritten as a broken reference. Loose validation is worse than no
-/// recognition. Keep this aligned with [`crate::sidecar::derive_ref_handle`].
+/// recognition. Keep this aligned with [`crate::sidecar::derive_ref_handle`]
+/// — handles are `blk-` plus at least [`crate::sidecar::REF_HANDLE_TAIL_LEN`]
+/// lowercase ASCII alphanumerics; collision expansion only ever makes
+/// them longer, never shorter.
 pub fn is_valid_block_handle(handle: &str) -> bool {
     let Some(tail) = handle.strip_prefix(crate::sidecar::REF_HANDLE_PREFIX) else {
         return false;
     };
-    if tail.is_empty() {
+    if tail.chars().count() < crate::sidecar::REF_HANDLE_TAIL_LEN {
         return false;
     }
     tail.chars()

@@ -227,22 +227,25 @@ fn check_orphan_block_refs(f: &mut Findings, idx: &WorkspaceIndex) {
     let mut orphans = 0usize;
     for block in idx.iter_blocks() {
         for tok in tokenize(&block.text) {
-            let handle = match tok {
-                InlineTok::BlockRef { handle } | InlineTok::Embed { handle } => handle,
+            // Keep the literal form (`((handle))` vs `!((handle))`) so
+            // the user can grep for it in the source page exactly.
+            let (handle, literal) = match tok {
+                InlineTok::BlockRef { handle } => (handle, format!("(({handle}))")),
+                InlineTok::Embed { handle } => (handle, format!("!(({handle}))")),
                 _ => continue,
             };
             if idx.resolve_block_ref(handle).is_none() {
                 orphans += 1;
                 f.warn(format!(
-                    "{}: orphan block ref (({})) — source block missing or not indexed",
+                    "{}: orphan block ref {} — source block missing or not indexed",
                     block.source_path.display(),
-                    handle
+                    literal,
                 ));
             }
         }
     }
     if orphans == 0 {
-        f.ok("no orphan ((blk-XXXXXX)) references");
+        f.ok("no orphan ((blk-XXXXXX)) / !((blk-XXXXXX)) references");
     }
 }
 
