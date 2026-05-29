@@ -17,7 +17,22 @@ same paranoia as the CRDT.
 - Diff (old AST + new AST + old sidecar blocks) → minimal sequence of
   `Op`s, preserving `ref_handle` verbatim on level-1/2 matches. The
   old-handle lookup is O(N) overall (HashMap by id), not O(N²) — never
-  reintroduce a linear scan per new block.
+  reintroduce a linear scan per new block. **`diff_to_ops` only emits
+  structural ops (Create / Move / SetProp); a second pass inside
+  `reconcile_md::sync_block_text` walks the AST + new sidecar in
+  lockstep and emits one `Op::Edit` per block whose text differs from
+  the workspace. Skipping that pass silently zeroes text across
+  devices — local stays fine, peer replays an empty tree, iCloud
+  ships the empty `.md` back.**
+- **`outline_ops`** — pure `Vec<OutlineNode>` AST helpers
+  (`flat_count`, `path_for_index`, `insert_sibling_after/before`,
+  `indent_at_path`, `outdent_at_path`, `delete_at_path`,
+  `move_up_at_path`, `move_down_at_path`, …). They operate on an
+  in-flight AST that hasn't been parsed back into a workspace yet, so
+  they sit in `outl-md` (UI-agnostic, no `Workspace`) rather than in
+  `outl-actions`. The TUI re-exports them through a one-line shim at
+  `outl-tui/src/outline_ops.rs`; the mobile client consumes them
+  directly.
 - **Inline tokenization** (`inline.rs`) — `**bold**`, `[[refs]]`,
   `#tags`, `((blk-XXXXXX))`, `!((blk-XXXXXX))` — and `ref_at_cursor`
   (resolves to `RefTarget::Page`, `Journal`, `Tag`, or `Block`).
@@ -70,7 +85,7 @@ same paranoia as the CRDT.
 When an external save lands on `pages/foo.md`:
 
 1. **Parse** new `.md` → AST without IDs.
-2. **Load** `.foo.outl` → AST with old IDs and content hashes.
+2. **Load** `foo.outl` (sibling of `foo.md`) → AST with old IDs and content hashes.
 3. **Match** new ↔ old blocks at 3 confidence levels:
 
 | Level | Confidence | Criteria | Action |
@@ -110,7 +125,11 @@ Current version: `2`. Full spec in
   sidecars (no field) load fine — the handle is backfilled in memory
   via `derive_ref_handle`. The next write persists v2. On collision,
   expansion may produce a 7+ char form (see `derive_ref_handle` above).
-- Sidecar is replicated between devices alongside the `.md`. Don't gitignore by default.
+- Sidecar lives next to the `.md` as `pages/<slug>.outl` (no leading
+  dot). Replicated between devices alongside the `.md`. Don't
+  gitignore by default. The dotfile form (`.foo.outl`) was abandoned
+  because iCloud Documents skips dotted paths during cross-device
+  sync.
 - **Stale entries are skipped during index build.** When a sidecar
   block's `content_hash` no longer matches the corresponding block in
   the `.md`, that entry is left out of the workspace index instead of

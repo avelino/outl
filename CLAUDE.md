@@ -22,7 +22,9 @@ These are the non-negotiables. Violating any one breaks user trust irreversibly.
    The materialized tree and `.md` files are projections. Never edit `.md` to "fix" state.
 
 2. **Markdown stays 100% clean.** No `id::`, no UUID inline, no HTML comments, nothing.
-   IDs live ONLY in the `.outl` sidecar (JSON dotfile next to the `.md`).
+   IDs live ONLY in the `.outl` sidecar (JSON file next to the `.md`, e.g. `pages/foo.outl`).
+   The sidecar is **not** a dotfile — iCloud Documents drops dotted paths during cross-device
+   sync, which silently breaks multi-device workspaces. Same rule applies to `ops/`.
 
 3. **CRDT follows Kleppmann 2022 literally.** `do_op` / `undo_op` / `apply_op` /
    `creates_cycle` must match the paper. 100% coverage on these four is non-negotiable.
@@ -56,9 +58,36 @@ outl/
 └── crates/
     ├── outl-core/             # tree CRDT, op log, storage trait
     ├── outl-md/               # parser, sidecar, matching
+    ├── outl-actions/          # UI-agnostic workspace ops (shared by every client)
+    ├── outl-exec/             # code-block runtime (desktop)
     ├── outl-cli/              # `outl` binary
-    └── outl-tui/              # `outl-tui` binary
+    ├── outl-tui/              # `outl-tui` binary
+    └── outl-mobile/           # Tauri 2 mobile app (iOS first)
 ```
+
+## Shared logic: `outl-actions`
+
+Every workspace mutation a client needs to perform (edit a block,
+toggle TODO, indent / outdent, delete, render today's `.md`) lives in
+**`outl-actions`**, not in the client crate. The mobile app and the
+TUI must call the **same** functions for the same semantics; if a new
+operation needs more than one client, it goes in `outl-actions`
+before its first use.
+
+The contract is short:
+
+- Functions take `&mut Workspace` and `&HlcGenerator`.
+- They route every mutation through `Workspace::apply` (op log
+  stays source of truth).
+- They never hold UI state and never touch storage backends directly.
+
+See `crates/outl-actions/CLAUDE.md` for the full surface and the
+"what this crate does NOT own" list. **If you find yourself writing
+tree-walking or op-building helpers inside `outl-tui/`,
+`outl-mobile/`, or any future client, stop and put them in
+`outl-actions` first.** The TUI's `outline_ops.rs` is the one
+deliberate exception (it manipulates an in-flight AST that hasn't
+been parsed back to a workspace yet — see that file's module doc).
 
 Per-crate context lives in `crates/<name>/CLAUDE.md`. Read it before editing
 that crate.
@@ -72,6 +101,7 @@ User-facing docs in `docs/`:
 - `docs/tui.md` — TUI manual (modes, keys, overlays).
 - `docs/theming.md` — palette, presets, how to add a new theme.
 - `docs/roadmap.md` — phase plan.
+- `docs/clients.md` — shared workspace operations and how each client (TUI, mobile) plugs into them.
 
 ## How we work in this repo
 
@@ -147,23 +177,25 @@ and ask the user** before changing. Don't unilaterally pivot.
 | Yrs for block text | Battle-tested CRDT for strings, lets us focus on the tree |
 | `comrak` for markdown | CommonMark-compliant, fast, customizable |
 | `iroh` for P2P (phase 2) | QUIC + hole punching, no central server |
+| iCloud Drive as v0 transport (mobile + TUI today) | Zero infra, ships now, replaceable behind the same `outl-actions::SyncEngine` when iroh lands |
+| Tauri 2 for mobile (replaces earlier uniffi plan) | Single Rust surface across TUI + mobile via `outl-actions`, Solid + Tailwind frontend, ObjC bridge only for iCloud watcher |
 | Tauri for desktop (phase 5) | Rust core reuse, smaller than Electron |
-| `uniffi` for mobile (phase 6) | Single FFI surface, native UI per platform |
+| One `ops-<actor>.jsonl` per device, never shared | iCloud (and any file transport) is last-write-wins per file; per-actor files turn that into a non-issue |
 | MIT license | Simple, widely understood, no patent grant baggage |
 | `outl.app` domain owned | Use for docs/landing later |
 | Repo at `github.com/avelino/outl` | Personal profile, not org (small enough team) |
 
 ## What you're NOT building yet
 
-Phases 2–6 are out of scope until phase 1 is solid. Don't add code for them
-unless explicitly asked:
+Don't add code for these unless explicitly asked:
 
-- P2P sync transport (`iroh`)
+- P2P sync transport (`iroh`) — iCloud is the v0 transport; iroh replaces it later, behind the same `SyncEngine` interface.
 - Query DSL (`{{query: ...}}`)
-- Tauri desktop app
-- Mobile via `uniffi`
+- Tauri desktop app (Mac/Windows shells beyond the mobile crate)
 - Plugin system (`rhai`)
 - `ChronDbStorage` backend (issue #1, tracked publicly)
+- Android mobile build (only iOS today; Android needs an `NSMetadataQuery` equivalent)
+- Per-page op log shards ([`docs/sync.md` Part 2 — Phase A](docs/sync.md#phase-a--per-page-op-log-shards-for-10k-pages); only land it when the single-jsonl-per-device layout hits the 10k-page wall)
 
 ## Coding conventions
 

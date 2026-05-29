@@ -88,6 +88,12 @@ device. Edit in VS Code or in the TUI, doesn't matter. Journal works.
 
 ## Phase 2 — P2P sync (1 → N devices)
 
+> Note: cross-device sync is already working today over iCloud Drive
+> (see Phase 6 below — the mobile client landed early). The phase 2
+> work below replaces iCloud with iroh so the project stops depending
+> on a third-party cloud and starts working across non-Apple devices.
+> The `outl-actions::SyncEngine` interface stays the same.
+
 - `outl-sync` crate with iroh transport.
 - Discovery via shareable ticket (`outl share` generates,
   `outl join <ticket>` adds a peer).
@@ -117,17 +123,22 @@ device. Edit in VS Code or in the TUI, doesn't matter. Journal works.
 
 ## Phase 5 — Desktop (Tauri 2)
 
-- Tauri shell over `outl-core` + `outl-md`.
+- Tauri shell over `outl-core` + `outl-md` + `outl-actions`.
 - Block-level rich editing with live preview.
 - Graph view (visual backlinks).
 - macOS + Linux + Windows builds.
 
-## Phase 6 — Mobile
+## Phase 6 — Mobile (landed early as Tauri 2 + Solid)
 
-- `uniffi` FFI surface over `outl-core` + `outl-md`.
-- SwiftUI app (iOS, native).
-- Compose app (Android, native).
-- Sync via iroh (same protocol as desktop).
+The mobile client shipped ahead of schedule and replaces the original
+`uniffi` + SwiftUI plan. `outl-mobile` is a Tauri 2 app with a
+SolidJS + Tailwind frontend; the Rust side is a thin command shell
+over `outl-actions`, plus an Objective-C iCloud watcher
+(`NSMetadataQuery` + `NSFileCoordinator`) in
+`gen/apple/Sources/outl-mobile/main.mm`. Sync today is iCloud Drive
+(per-actor `ops-<actor>.jsonl`); iroh becomes the wire transport when
+phase 2 lands. iOS is shipping; Android follows the same Tauri 2
+surface and needs an Android-side equivalent of the iCloud watcher.
 
 ---
 
@@ -139,7 +150,5 @@ These are tracked publicly to signal intent and invite contributions:
   (labels: `roadmap`, `storage`, `help wanted`)
 - **#2** — Tauri desktop app
   (labels: `roadmap`, `phase-5`)
-- **#3** — Mobile via uniffi
-  (labels: `roadmap`, `phase-6`)
 - **#4** — Plugin system with rhai
   (labels: `roadmap`, `phase-4`)

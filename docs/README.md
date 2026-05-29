@@ -29,8 +29,8 @@ a time:
 
 - **Markdown is on disk, untouched.** No `id::` lines. No HTML
   comments. No frontmatter delimiters. What you wrote is what's saved.
-  Stable IDs live in a sidecar dotfile (`.foo.outl`) you'll never
-  have to look at.
+  Stable IDs live in a sidecar file (`foo.outl`, next to `foo.md`)
+  you'll never have to look at.
 - **The op log is the source of truth.** Not the file. Not the
   database. A sequence of [`Move` / `Edit` / `Create` / `SetProp`][crdt]
   ops with HLC timestamps. The tree you see is a projection.
