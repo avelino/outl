@@ -46,7 +46,7 @@ fn full_workspace_lifecycle() {
     must_ok(&cargo_run(&["serve", root_str, "--once"]), "serve --once");
 
     // 4. assertions on sidecar
-    let sidecar_path = root.join("pages").join(".hello.outl");
+    let sidecar_path = root.join("pages").join("hello.outl");
     assert!(sidecar_path.exists(), "sidecar must exist after serve");
     let sidecar_text = fs::read_to_string(&sidecar_path).unwrap();
     let sidecar: serde_json::Value = serde_json::from_str(&sidecar_text).unwrap();
