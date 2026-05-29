@@ -3,9 +3,11 @@ resolver = "2"
 members = [
     "crates/outl-core",
     "crates/outl-md",
+    "crates/outl-actions",
     "crates/outl-exec",
     "crates/outl-cli",
     "crates/outl-tui",
+    "crates/outl-mobile/src-tauri",
 ]
 
 [workspace.package]
@@ -22,6 +24,7 @@ readme = "README.md"
 # Internal crates
 outl-core = { path = "crates/outl-core", version = "0.2.0" }
 outl-md = { path = "crates/outl-md", version = "0.2.0" }
+outl-actions = { path = "crates/outl-actions", version = "0.2.0" }
 outl-exec = { path = "crates/outl-exec", version = "0.2.0" }
 outl-tui = { path = "crates/outl-tui", version = "0.2.0" }
 

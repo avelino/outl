@@ -10,8 +10,10 @@ use crate::op::LogOp;
 use std::collections::HashMap;
 use thiserror::Error;
 
+pub mod jsonl;
 pub mod sqlite;
 
+pub use jsonl::JsonlStorage;
 pub use sqlite::SqliteStorage;
 
 /// Errors a `Storage` implementation may produce.
