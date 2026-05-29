@@ -24,8 +24,8 @@ specifically for trees. Two devices that edit a workspace offline
 and then sync produce **exactly the same tree**, with **no data
 loss**, **without a server**, and **without polluting your
 `.md`**. The IDs CRDTs need to operate live in a separate sidecar
-file (`.foo.outl`), so the markdown you see is the markdown you
-wrote — no `id::` lines, no UUIDs, no HTML comments.
+file (`foo.outl` next to `foo.md`), so the markdown you see is the
+markdown you wrote — no `id::` lines, no UUIDs, no HTML comments.
 
 Five formal guarantees, each backed by a test in
 [`crates/outl-core/tests/`](crates/outl-core/tests/):
@@ -41,8 +41,12 @@ Logseq and Git fail, then the algorithm step by step.
 
 → **[Tree CRDT walkthrough](docs/crdt.md)** is the algorithm with code.
 
-P2P sync transport (phase 2) is on [the roadmap](docs/roadmap.md);
-the algorithm and the op-log infrastructure are already in.
+**Working sync today.** outl already syncs across a macOS TUI and an
+iOS mobile app via iCloud Drive: one `ops-<actor>.jsonl` per device,
+no central server, no merge dialogs. The Kleppmann move-op core sits
+under everything; iCloud is just transport. P2P (iroh) on
+[the roadmap](docs/roadmap.md) replaces the transport later without
+touching the algorithm.
 
 [paper]: https://martin.kleppmann.com/papers/move-op.pdf
 
@@ -108,12 +112,15 @@ can't resolve stays as `((unresolved:UID))` for manual triage.
 
 ## Status
 
-**0.1.0 — single-device editor, daily-driver-ready.** Algorithm and
-op log infrastructure for sync are in place; the network transport
-(phase 2) is the next major piece. Desktop (Tauri, phase 5) and
-mobile (uniffi, phase 6) reuse the same `outl-core` + `outl-md`
-crates that the TUI already drives — see
-[the roadmap](docs/roadmap.md).
+**0.2.0 — cross-device daily driver.** Workspace, TUI, and iOS mobile
+app share the same `outl-core` + `outl-md` + `outl-actions` stack and
+sync across devices via iCloud Drive. The CRDT, op log, sidecar, and
+reconcile pipeline are working end-to-end (edit on the laptop, the
+iPhone updates within seconds; concurrent edits converge without
+prompts). The P2P transport (iroh, phase 2) and the Tauri desktop
+shell (phase 5) are still ahead — see [the roadmap](docs/roadmap.md).
+The mobile client is Tauri 2 + SolidJS, which replaces the earlier
+uniffi plan (decision in [`docs/architecture.md`](docs/architecture.md)).
 
 ## Docs
 

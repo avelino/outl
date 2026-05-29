@@ -6,14 +6,27 @@ server, and doesn't pollute your markdown to do it.**
 
 If you want the algorithm walked through with code, jump to the
 [Tree CRDT walkthrough](crdt.md). This page is about *why* — what
-breaks in the other tools, what we picked instead, and what the
-trade-offs are.
+breaks in the other tools, what's running in production today, and
+what's still ahead before we call this "state of the art".
+
+The doc is split in two:
+
+- **[Part 1 — What's in production today](#part-1--whats-in-production-today)**
+  is the design that ships now: tree CRDT core, op log on disk, iCloud
+  Drive transport, the shared `SyncEngine`, what we explicitly trade
+  off to get here.
+- **[Part 2 — What's still ahead](#part-2--whats-still-ahead)** is the
+  designed-but-not-built work: per-page op log shards for 10k+ pages,
+  per-page snapshots, the iroh P2P transport, and the migration path
+  from today's layout to that one.
 
 ---
 
-## Where Roam and Logseq fail
+# Part 1 — What's in production today
 
-Both got the outliner UX right. Both fall apart on sync.
+## Where the alternatives break
+
+Both Roam and Logseq got the outliner UX right. Both fall apart on sync.
 
 ### Roam Research — sync as a service
 
@@ -79,7 +92,7 @@ Try it once. You'll never do it twice.
 
 ---
 
-## What outl does instead
+## The architecture: op log + projections
 
 The core idea is two layers:
 
@@ -87,15 +100,15 @@ The core idea is two layers:
 flowchart TB
     subgraph DISK["ON DISK"]
         md["pages/foo.md<br/>(clean markdown)"]
-        sc[".foo.outl<br/>(block IDs)"]
-        db[".outl/log.db<br/>(op log)"]
+        sc["pages/foo.outl<br/>(block IDs)"]
+        jsonl["ops/ops-&lt;actor&gt;.jsonl<br/>(op log, one per device)"]
     end
     subgraph MEM["IN MEMORY"]
-        log["Op log<br/>(truth)"]
+        log["Merged op log<br/>(truth)"]
         tree["Tree CRDT<br/>(materialized)"]
         log -->|materialize| tree
     end
-    db -. projection .-> log
+    jsonl -. load + merge by HLC .-> log
     sc -. projection .-> tree
     md -. projection .-> tree
 ```
@@ -107,14 +120,15 @@ flowchart TB
    produces the tree.
 
 2. **The materialized tree and the `.md` are projections.** Both can
-   be thrown away. If your sidecar is lost, `outl doctor`
-   regenerates it from the op log. If your `.md` is deleted, the op
-   log still has every block.
+   be thrown away. If your sidecar is lost, `outl doctor` regenerates
+   it from the op log. If your `.md` is deleted, the op log still has
+   every block.
 
 3. **Markdown on disk is *clean*.** No `id::`, no HTML comments, no
-   YAML frontmatter delimiters. Block IDs live in
-   `.foo.outl` (a JSON dotfile). When you edit `pages/foo.md`
-   externally, outl's [3-level matching algorithm][matching]
+   YAML frontmatter delimiters. Block IDs live in `pages/foo.outl`
+   (JSON, next to the `.md`, not dotted — iCloud Documents skips
+   dotted paths when syncing across devices). When you edit
+   `pages/foo.md` externally, outl's [3-level matching algorithm][matching]
    reconstructs which block had which ID.
 
 [hlc]: https://cse.buffalo.edu/tech-reports/2014-04.pdf
@@ -131,6 +145,52 @@ The pieces that make this work:
 | **Slugified filenames** | `[[Avelino]]` resolves to `pages/avelino.md` with `title:: Avelino` set automatically. The display name stays human; the filename is stable. |
 
 [paper]: https://martin.kleppmann.com/papers/move-op.pdf
+
+---
+
+## Five formal guarantees the CRDT provides
+
+It's worth being specific. The algorithm in outl provides these:
+
+### 1. Strong eventual consistency
+
+Two devices that have observed the same set of ops produce *exactly*
+the same tree, regardless of delivery order or duplication.
+
+Tested via `convergence.rs`: three replicas apply 100+ ops in three
+different permutations and the resulting trees are byte-identical.
+
+### 2. Commutativity after reordering
+
+The order in which a replica *receives* ops doesn't matter. Internally
+the algorithm undoes newer ops, applies the late arrival in HLC
+position, then replays the undone ones. The user-visible state is the
+same as if everything had arrived in HLC order from the start.
+
+### 3. Idempotency
+
+Applying the same op N times is the same as applying it once. You can
+re-sync a workspace that's already in sync and nothing changes.
+Tested in `idempotency.rs`.
+
+### 4. Tree invariant preservation
+
+The materialized tree is always a valid tree. No node ever has two
+parents. No cycle ever forms. Every node is reachable from `ROOT` or
+the soft-delete bucket `TRASH_ROOT`. Tested in `cycle.rs` and
+`cycle_chain.rs`.
+
+### 5. No silent loss
+
+Every op delivered to `apply_op` ends up in the log. Including the
+ones turned into no-ops by cycle detection. Nothing is ever silently
+dropped — if it was, the algorithm couldn't replay history correctly.
+
+The first four are properties Roam/Logseq can't even claim. The fifth
+is why outl can offer time-travel later (it's the entire premise of
+the [ChronDB backend][chrondb] tracked in issue #1).
+
+[chrondb]: https://github.com/avelino/outl/issues/1
 
 ---
 
@@ -179,7 +239,7 @@ Both are sensible local edits. Now they sync.
 
 **outl** does this:
 
-1. Both devices receive both ops via P2P sync.
+1. Both devices receive both ops via the transport.
 2. Each device sorts the two ops by HLC. The earlier one applies
    normally.
 3. The later one would close a cycle (A under B, B under A — a
@@ -195,53 +255,6 @@ forgets what you intended.
 
 This worked example is implemented as the `cycle.rs` test in
 `outl-core`. Every change to the algorithm has to pass it.
-
----
-
-## What "do it right" actually means
-
-It's worth being specific. The algorithm in outl provides these
-**five formal guarantees**:
-
-### 1. Strong eventual consistency
-
-Two devices that have observed the same set of ops produce *exactly*
-the same tree, regardless of delivery order or duplication.
-
-Tested via `convergence.rs`: three replicas apply 100+ ops in three
-different permutations and the resulting trees are byte-identical.
-
-### 2. Commutativity after reordering
-
-The order in which a replica *receives* ops doesn't matter. Internally
-the algorithm undoes newer ops, applies the late arrival in HLC
-position, then replays the undone ones. The user-visible state is the
-same as if everything had arrived in HLC order from the start.
-
-### 3. Idempotency
-
-Applying the same op N times is the same as applying it once. You can
-re-sync a workspace that's already in sync and nothing changes.
-Tested in `idempotency.rs`.
-
-### 4. Tree invariant preservation
-
-The materialized tree is always a valid tree. No node ever has two
-parents. No cycle ever forms. Every node is reachable from `ROOT` or
-the soft-delete bucket `TRASH_ROOT`. Tested in `cycle.rs` and
-`cycle_chain.rs`.
-
-### 5. No silent loss
-
-Every op delivered to `apply_op` ends up in the log. Including the
-ones turned into no-ops by cycle detection. Nothing is ever silently
-dropped — if it was, the algorithm couldn't replay history correctly.
-
-The first four are properties Roam/Logseq can't even claim. The fifth
-is why outl can offer time-travel later (it's the entire premise of
-the [ChronDB backend][chrondb] tracked in issue #1).
-
-[chrondb]: https://github.com/avelino/outl/issues/1
 
 ---
 
@@ -272,30 +285,112 @@ four critical functions (`do_op`, `undo_op`, `apply_op`,
 
 ---
 
-## What sync looks like once phase 2 ships
+## Transport: iCloud Drive
 
-Phase 1 is single-device — the algorithm runs, but there's no
-network transport yet. Phase 2 adds [iroh][iroh] for the wire:
+The algorithm runs on every device; the transport is whatever ships
+each actor's `ops-*.jsonl` to every other device. Today that is
+iCloud Drive, used by the iOS mobile client and reachable from the
+macOS TUI by pointing `--path` at the same iCloud ubiquity container
+(`~/Library/Mobile Documents/iCloud~app~outl~mobile-app/Documents`).
 
-- QUIC + automatic hole punching. No central server. No STUN/TURN
-  unless your network is genuinely awful.
-- Discovery via shareable ticket: `outl share` prints a string, the
-  other device runs `outl join <ticket>`, both are now in the same
-  swarm.
-- Each replica keeps a vector clock (`last_ts_per_actor`). The sync
-  protocol sends only the ops the other peer hasn't seen.
-- E2E encrypted by default. Your notes never leave the devices you
-  own.
+The layout is:
 
-[iroh]: https://www.iroh.computer
+```
+<container>/Documents/
+├── journals/YYYY-MM-DD.md
+├── pages/<slug>.md
+├── pages/<slug>.outl                ← sidecar
+└── ops/
+    ├── ops-<this_device>.jsonl      ← only this device writes here
+    ├── ops-<other_device>.jsonl
+    └── ...
+```
 
-The algorithm in phase 1 is already designed for this — it handles
-ops arriving in any order, any number of times, with any delay. The
-network is just plumbing.
+Each device only writes its own `ops-<actor>.jsonl`. iCloud syncs
+each file independently. When a peer's jsonl arrives, the local
+client merges it with the others by HLC and replays through the
+move-op algorithm. The materialised `.md` + sidecar then get
+re-projected from the new tree.
+
+Two iCloud-specific decisions fall out of this transport:
+
+- **The ops directory is `ops/`, not `.ops/`.** iCloud Documents
+  silently skips dotted paths across devices. Same rule keeps the
+  sidecar at `pages/foo.outl` rather than the original `.foo.outl`.
+- **Peer files must be force-materialised before reads.** iCloud
+  syncs metadata before content; a `std::fs::open` on a freshly
+  notified file may read an empty placeholder. The mobile client
+  wraps every read in `NSFileCoordinator` after calling
+  `startDownloadingUbiquitousItemAtURL` so the Rust side never sees
+  a placeholder. Details in
+  [`crates/outl-mobile/CLAUDE.md`](../crates/outl-mobile/CLAUDE.md#peer-file-materialisation-the-icloud-catch).
 
 ---
 
-## Honest trade-offs
+## The shared sync engine
+
+Both clients (TUI and mobile) use `outl_actions::SyncEngine` for the
+reload-workspace + reproject-page flow. **Detection** is
+client-specific (each transport has its own notification mechanism),
+**policy** is client-specific (the TUI defers reloads while the user
+is in Insert mode; mobile commits each mutation atomically), **the
+work itself is shared**.
+
+```rust
+let engine = SyncEngine::new(workspace_root, actor);
+let fresh = engine.reload_workspace()?;          // merge every peer jsonl
+engine.reproject_page(&fresh, focused_page_id)?; // rewrite the focused .md + sidecar
+```
+
+| Method | What it does |
+|--------|--------------|
+| `reload_workspace()` | Reopens the workspace from disk, merging every `ops-<actor>.jsonl` by HLC and replaying through the move-op algorithm. |
+| `reproject_page(ws, page_id)` | Re-emits the page's `.md` + sidecar from the materialised tree. Other pages get re-projected lazily when the user navigates to them. |
+| `refresh_page(page_id)` | Convenience: reload + reproject in one call. The typical "peer fired, pull the new state in" entry point. |
+| `snapshot()` | Lists every `ops-*.jsonl` in the workspace with size + mtime. Used by polling detectors (TUI) to decide whether to fire a reload. |
+| `snapshot_peers()` | Like `snapshot()` but **filters out the local actor's file**. Reacting to your own writes closes a destructive save-reload-race loop; only peer files should trigger reloads. |
+| `scan_for_orphans()` | Walks `journals/` and `pages/` for `.md` files whose sidecar is missing or whose `last_synced_hash` no longer matches the file's current hash. Both conditions mean the op log doesn't reflect this content yet (fresh import, peer-shipped projection without sidecar, vim edits). Each path feeds `outl_md::reconcile::reconcile_md`. |
+
+### TUI policy: defer reloads while typing
+
+The TUI has an Insert mode with an in-memory `ParsedPage` AST that
+hasn't been written back to the op log yet. A reload mid-edit would
+swap the workspace under the cursor and the user's keystrokes would
+land on the new AST. The poller therefore checks mode:
+
+```rust
+if matches!(self.mode, Mode::Insert { .. }) {
+    self.pending_reload = true;   // defer
+    return false;
+}
+self.reload_workspace_from_disk(); // safe now
+```
+
+When the user commits (Esc, Enter, structural ops), the commit path
+drains `pending_reload` and runs the deferred reload. The local edit
+is now a real op in the log; the peer's ops merge in; the CRDT does
+its job.
+
+### Mobile policy: every mutation is atomic
+
+Mobile commits every mutation as one Tauri command. There is no
+multi-keystroke window where a reload could clobber unsaved state, so
+the watcher applies reloads immediately. Same engine, simpler policy.
+
+### Orphan scanning
+
+`scan_for_orphans()` is the entry point for `.md` files that arrived
+without an op-log history: a user dumps a Roam export into
+`journals/`, a peer ships only the projection, someone edits a `.md`
+in vim and saves. The TUI runs the scan every 10 seconds on a worker
+thread; mobile runs it once at boot. Both call into
+`outl_md::reconcile::reconcile_md`, which uses 3-level matching to
+emit the minimum ops that translate the on-disk state into the op
+log.
+
+---
+
+## Honest trade-offs (today)
 
 Be skeptical of any sync story that claims zero compromises. Here are
 ours:
@@ -313,10 +408,203 @@ ours:
   `crdt.md#text-content`.
 - **Conflict surfacing is silent.** Today outl just resolves and
   moves on. A future feature could pop up "concurrent edits on this
-  block" the way Notion does. Not in phase 1.
+  block" the way Notion does. Not now.
 - **No causal delivery enforcement.** HLC is total order, not
   causal. In practice this is fine — `apply_op` handles any delivery
   order — but we don't promise vector-clock semantics.
+- **Single jsonl per device caps practical scale.** Today everything
+  the device has ever done lives in one `ops-<actor>.jsonl` file. The
+  whole file gets loaded at boot. Works comfortably up to roughly
+  **1k pages × 50 ops/page = 50k ops** (boot 0.5–5 s, memory
+  proportional to the history). Beyond that we need per-page op log
+  shards — designed in Part 2.
+- **iCloud is a third-party transport.** It's the v0 shortcut for
+  shipping a working multi-device experience without writing
+  network code. Replacing iCloud with iroh (Part 2) removes the
+  dependency on a cloud provider and brings non-Apple devices into
+  the same sync pool, without changing the algorithm or the
+  on-disk layout.
+
+---
+
+# Part 2 — What's still ahead
+
+What's in Part 1 ships and works. What follows is designed,
+referenced from the code, and waiting for the right moment to land —
+the order is roughly the order in which we expect the constraints to
+bite.
+
+## Phase A — Per-page op log shards (for 10k+ pages)
+
+### Why the monolithic jsonl breaks at scale
+
+The current layout has one `ops-<actor>.jsonl` per device for **the
+entire workspace**. Boot replays the full file; memory holds every
+op in history. Past ~1k pages × 50 ops/page the boot starts showing
+visibly (1–5 s on a laptop, more on a phone), and the iCloud
+sync window for a single growing file gets wider as the file grows.
+
+### New layout
+
+```
+ops/
+├── <page-slug>/
+│   ├── ops-<actor>.jsonl              ← ops for this page, this actor
+│   └── ops-<peer-actor>.jsonl         ← ops for this page, synced from a peer
+├── <other-page-slug>/
+│   └── …
+└── global/
+    └── ops-<actor>.jsonl              ← cross-page ops (move block between pages)
+```
+
+Each page gets its own op log directory. iCloud syncs page by page.
+Reading "ops for this page" is `O(ops_for_this_page)`, not
+`O(total_ops)`.
+
+### Boot
+
+```
+list_pages()           → walk pages/ and journals/ on the filesystem  (O(pages))
+                         ↑ doesn't touch the op log
+open_page(slug):
+    read ops/<slug>/ops-*.jsonl
+    materialise just this page
+    render → outline
+```
+
+Boot total = **O(pages)** to list + **O(ops for the home page)** to
+show. Independent of total history size.
+
+### Single-page mutations
+
+The vast majority (edit, toggle TODO, indent, delete, create_after):
+
+```
+mutation → workspace.apply(op) with page_id implicit
+         → append to ops/<slug>/ops-<actor>.jsonl
+         → render .md + sidecar (already loaded for this page)
+```
+
+Cost: `O(1)` append + `O(blocks_in_page)` render.
+
+### Cross-page mutations
+
+Rare but real (dragging a block to another page, refactors):
+
+```
+cross-page mutation → append to ops/global/ops-<actor>.jsonl
+                    → also touch the two affected pages
+```
+
+Boot needs to replay the global ops too. The `global/` directory is
+expected to stay small in normal use.
+
+### Incremental sync
+
+When iCloud delivers a new `ops/<slug>/ops-<peer>.jsonl`:
+
+- the watcher (`NSMetadataQuery`) fires *for that page*
+- only that page reloads (not the whole workspace)
+- the local `.md` + sidecar for that page get re-projected
+
+There's no "reload everything" path anymore. Granularity stays at
+the page.
+
+## Phase B — Snapshots
+
+Even with per-page op logs, a very active page (1k+ ops) still pays
+the replay cost on open.
+
+```
+journals/2026-05-29.md
+journals/2026-05-29.outl              ← sidecar (block ids + hashes)
+ops/2026-05-29/
+   ├── snapshot.bin                   ← serialised materialised state (binary)
+   ├── snapshot.cursor                ← last HLC included in the snapshot
+   ├── ops-<actor>.jsonl              ← ops since the snapshot
+   └── ops-<peer>.jsonl
+```
+
+Opening a page:
+
+1. Read `snapshot.bin` → materialised base state (fast, binary).
+2. Read ops past `snapshot.cursor` → apply delta.
+3. Render.
+
+Snapshots get re-compacted every N=200 ops or on a periodic schedule.
+Trade-off:
+
+- stale snapshot → more ops to replay on open
+- fresh snapshot → more I/O on every write
+
+Working rule: each `apply_page_md_with_sidecar` checks whether the
+ops since the snapshot exceed N; if so, re-snapshot.
+
+## Phase C — iroh transport (replaces iCloud)
+
+iCloud is the v0 transport. Phase C swaps it for [iroh][iroh] so the
+project stops depending on a third-party cloud and starts working
+across non-Apple devices:
+
+- QUIC + automatic hole punching. No central server. No STUN/TURN
+  unless your network is genuinely awful.
+- Discovery via shareable ticket: `outl share` prints a string, the
+  other device runs `outl join <ticket>`, both are now in the same
+  swarm.
+- Each replica keeps a vector clock (`last_ts_per_actor`). The sync
+  protocol sends only the ops the other peer hasn't seen.
+- E2E encrypted by default. Your notes never leave the devices you
+  own.
+
+[iroh]: https://www.iroh.computer
+
+The algorithm doesn't change between transports. iCloud-today and
+iroh-tomorrow both deliver per-actor jsonls; the CRDT handles
+arrival order, duplication, and delay regardless of which medium got
+the bytes there. The `outl-actions::SyncEngine` API stays the same
+— only the *detector* (replaces `NSMetadataQuery` / file polling
+with iroh event streams) changes.
+
+## Migration path
+
+Workspaces from Part 1 have a monolithic `ops/ops-<actor>.jsonl`.
+The migration to per-page shards is one-shot and idempotent:
+
+```
+outl migrate-to-per-page-ops --path <root>
+  for each op in ops-<actor>.jsonl:
+      identify page-slug (parent walk + earlier Create ops)
+      dispatch to ops/<slug>/ops-<actor>.jsonl
+  ops with no page-slug → ops/global/ops-<actor>.jsonl
+  rename ops-<actor>.jsonl → ops-<actor>.jsonl.v0.bak
+```
+
+Reversible via restoring the `.bak`. No change to the `.md` + `.outl`
+wire format, so older clients reading the projection still work
+during the transition.
+
+### API impact
+
+- `outl-core::JsonlStorage` gains a `PageScope` concept (today: one
+  scope per workspace; Part 2: one per page). Backward compatibility:
+  `PageScope::Global` matches today's behaviour byte for byte.
+- `outl-actions::open_or_create` keeps the same signature.
+  Internally it dispatches to the right scope based on the page-slug
+  property.
+- Mobile: `JsonlStorage::open` at boot only for preflight. Each Tauri
+  command that opens a page calls `open_page_scope(slug)`.
+- TUI: same. `App::new` no longer materialises the entire workspace;
+  it calls `open_page_scope` lazily on navigation.
+
+### Order of execution
+
+1. Implement `PageScope` in `JsonlStorage` and the `Storage` trait
+   (backward compatibility via `PageScope::Global`).
+2. Add `outl-cli migrate-to-per-page-ops` + tests.
+3. Update mobile to use scopes in every Tauri command.
+4. Update TUI likewise.
+5. Add snapshots (Phase B — independent, can land as a follow-up).
+6. Document the cross-page operation trade-off in the migration notes.
 
 ---
 
@@ -328,6 +616,8 @@ ours:
   external edits get reconciled with the sidecar.
 - **[Storage trait](storage.md)** — why `Storage` is a trait and how
   the ChronDB backend slots in.
+- **[Clients](clients.md)** — how the TUI and mobile share the
+  `SyncEngine` and where they diverge.
 - **Original paper:** Kleppmann, Mulligan, Gomes, Beresford.
   *"A highly-available move operation for replicated trees."* IEEE
   TPDS 2022. <https://martin.kleppmann.com/papers/move-op.pdf>

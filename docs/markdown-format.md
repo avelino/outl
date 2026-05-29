@@ -186,8 +186,12 @@ goes through the in-memory handle, not the literal sidecar field.
 
 ## The .outl sidecar
 
-For every `pages/foo.md` there is `pages/.foo.outl`. (Dotfile to keep
-directory listings clean.)
+For every `pages/foo.md` there is `pages/foo.outl` (sibling file, not
+a dotfile). The dotted form was abandoned in v0: iCloud Documents
+silently skips paths starting with `.` when syncing across devices,
+so a dotted sidecar never reached peers and "sync" appeared to lose
+block IDs. Same rule keeps the op directory at `ops/` rather than
+`.ops/`.
 
 Format: JSON.
 

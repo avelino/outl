@@ -118,15 +118,18 @@ logic that's not strictly about ratatui rendering lives in `outl-md`
 |-------|------|
 | `outl-core` | Op log, CRDT, storage, workspace |
 | `outl-md` | Parse/render, sidecar, matching, reconcile, **inline tokens (`InlineTok`, `RefTarget`)**, **slugify** |
+| `outl-actions` | UI-agnostic workspace operations (edit, indent, move, toggle TODO, page model, backlinks). **TUI now imports from here** — `cycle_todo`, `split_todo`, and `TodoState` live in `outl-actions`. |
 | `outl-tui` | Terminal-specific: ratatui mapping, key handling, raw-mode lifecycle |
-| `outl-desktop` (phase 5) | Tauri shell: maps `InlineTok` → React/HTML |
-| `outl-mobile` (phase 6) | uniffi bridge: maps `InlineTok` → SwiftUI `AttributedString` / Compose `AnnotatedString` |
+| `outl-mobile` (shipping today) | Tauri 2 + Solid: consumes `InlineTok` / `RefTarget` from `outl-md` and renders to JSX. Shares every workspace operation with the TUI via `outl-actions`. |
+| `outl-desktop` (phase 5) | Future Tauri shell for macOS/Linux/Windows: same pattern as mobile, different host. |
 
 Pattern when adding a new feature:
 
 1. If it's data or pure logic → put in `outl-md` (or `outl-core`).
-2. If it's how it's drawn on a terminal → put in `outl-tui`.
-3. Never write a function in `outl-tui` that a Tauri/mobile client
+2. If it's a workspace mutation two clients would call the same way →
+   put it in `outl-actions`.
+3. If it's how it's drawn on a terminal → put in `outl-tui`.
+4. Never write a function in `outl-tui` that a Tauri/mobile client
    would also need byte-for-byte. Extract upstream first.
 
 ## Persistence model
@@ -167,7 +170,7 @@ src/
 │   ├── outline.rs       # outline rendering (render_outline, render_block, …)
 │   ├── overlays.rs      # every modal popup
 │   └── backlinks.rs     # inline backlinks section (below outline, ─ rule)
-├── outline_ops.rs       # pure AST helpers (flat_count, paths, flatten_backlink_subtree)
+├── outline_ops.rs       # one-line re-export shim — helpers moved to outl_md::outline_ops so the mobile client can share them
 ├── edit_buffer.rs       # cursor + chars; isolated, well-tested
 ├── editor.rs            # placeholder for phase 4 (block-level editor widgets)
 └── ui/                  # legacy placeholders; logic lives in view/
@@ -180,12 +183,37 @@ src/
 - `arboard` (OS clipboard for `y r` / `/refer` / `/refer-embed`; degrades to status-line-only on headless).
 - `walkdir`, `toml`, `ulid`, `chrono`, `anyhow`.
 
+## Peer sync coordination
+
+The TUI is a peer in a multi-device workspace. Two threads' worth of
+sync logic live here on top of `outl_actions::SyncEngine`:
+
+| Thread / path | Responsibility |
+|---------------|----------------|
+| `spawn_jsonl_poller` (worker thread, ~2s tick) | Calls `engine.snapshot_peers()` (own `ops-<actor>.jsonl` filtered out) and signals the main loop when a peer file grew. |
+| `poll_jsonl_updates` (main loop, per tick) | Drains the signal. **In Insert mode**, sets `pending_reload = true` and returns — the in-flight `ParsedPage` would be clobbered by a reload mid-edit. Outside Insert, calls `engine.reload_workspace()` and `engine.reproject_page()`. |
+| `commit_insert` | After the user's edit lands in the op log, drains `pending_reload` and runs the deferred reload. The CRDT merges peer ops with the freshly-committed local edit. |
+| `spawn_orphan_md_scanner` (worker thread, 10s tick) | Calls `engine.scan_for_orphans()` to find `.md` files whose sidecar is missing or stale (Roam import, peer-shipped projection without sidecar, vim edits). Signals the main loop, which runs `outl_md::reconcile::reconcile_md` on each path (also deferred during Insert mode). |
+
+The two filters that make this safe:
+
+- `snapshot_peers` (not `snapshot`) — never react to your own jsonl
+  growing, or every save closes a reload-race loop.
+- `pending_reload` flag — never swap the workspace while an Insert
+  buffer has unsaved keystrokes; the unsaved buffer is not in any op
+  log yet and the CRDT can't help with state it doesn't know about.
+
+Mobile shares the same `SyncEngine` but does not need the
+`pending_reload` flag: every mutation is one atomic Tauri command, so
+there's no multi-keystroke window. Different policy, same engine.
+
 ## What this crate does NOT do
 
 - ❌ Mutate the op log directly — every change goes through
   `outl_md::reconcile_md`, which routes ops through `Workspace`.
 - ❌ Parse markdown by hand — use `outl-md`.
-- ❌ Network — phase 2.
+- ❌ Re-implement workspace operations that another client needs —
+  put them in `outl-actions` first.
 - ❌ Render outside the AST — the AST is the source of truth between
   the TUI and disk.
 

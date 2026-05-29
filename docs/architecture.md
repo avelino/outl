@@ -4,23 +4,28 @@ High-level structure and the major design decisions behind it.
 
 ## Overview
 
-outl is split into four crates:
+outl is split into six crates today:
 
 ```mermaid
 flowchart TB
-    bins["<b>Binaries</b><br/>outl-cli → outl-tui → (phase 5: Tauri, phase 6: mobile)"]
-    md["<b>outl-md</b><br/>parse / render / sidecar / 3-level matching / diff"]
+    bins["<b>Clients</b><br/>outl-cli · outl-tui · outl-mobile (Tauri 2 + Solid, iOS) · (phase 5: Tauri desktop)"]
+    actions["<b>outl-actions</b><br/>UI-agnostic workspace operations + SyncEngine<br/>(edit, indent, toggle TODO, render md, reload workspace, scan orphans)"]
+    md["<b>outl-md</b><br/>parse / render / sidecar / 3-level matching / diff / inline tokens / outline_ops"]
     core["<b>outl-core</b><br/>Tree CRDT, op log, storage trait, domain models<br/>(Workspace, Page, Journal, Block, Property, Tag)"]
-    bins --> md
-    md --> core
+    bins --> actions --> md --> core
 ```
 
 `outl-core` knows nothing about files, markdown, or networks.
-`outl-md` knows about markdown and sidecars but nothing about TUI or IPC.
-`outl-cli` and `outl-tui` are I/O shells around the two libraries.
+`outl-md` knows about markdown and sidecars but nothing about a
+workspace mutation pipeline. `outl-actions` is the **only** crate
+where workspace-changing logic lives; every client routes through it
+so TUI and mobile cannot diverge on what "indent" or "toggle TODO"
+means. `outl-cli`, `outl-tui`, and `outl-mobile` are I/O shells (key
+handling, Tauri commands, frontend wiring).
 
-This split exists so phase 2 (P2P sync) and phases 5–6 (Tauri, mobile) can
-reuse the same core without inheriting CLI baggage.
+This split is what makes cross-device sync possible — both clients
+operate on the same op log, through the same operations, with the
+same matching algorithm.
 
 ---
 
@@ -39,14 +44,21 @@ current state from `.md` + sidecar.
 overhead of writing `.md` after every op. The alternative (DB-only) is what
 Logseq moved to and what broke their community.
 
-### 2. Op log lives in SQLite (default)
+### 2. Op log on disk: JSONL per actor (default), SQLite available
 
-Phase 1 uses a single `.outl/log.db` file in the workspace. WAL mode,
-ACID, concurrent reads. Boring, proven, embeddable, zero-config.
+Each device appends to a single `ops/ops-<actor>.jsonl` file inside
+the workspace. iCloud Drive (and any other file-level sync transport)
+syncs each actor's jsonl independently, so two devices never collide
+at the filesystem layer — the CRDT merges the per-actor streams after
+reading them. `SqliteStorage` is still available for single-device
+workspaces that prefer ACID, but JSONL is the default everywhere
+multi-device sync is in play.
 
-**Trade-off:** SQLite is great until you want git-style history-as-feature.
-That's why `Storage` is a trait — `ChronDbStorage` (issue #1) can replace
-it later without touching `outl-core` logic.
+**Trade-off:** JSONL is easy to inspect, easy to ship across the
+network, and trivial to reason about. SQLite is great until you want
+git-style history-as-feature. That's why `Storage` is a trait —
+`ChronDbStorage` (issue #1) can replace either backend later without
+touching `outl-core` logic.
 
 ### 3. `Storage` is a trait, not a concrete struct
 
@@ -70,10 +82,12 @@ is a PR adding `storage/chrondb.rs`.
 
 Logseq writes `id:: 01HXY...` lines into the `.md`. We refused that.
 
-We write the IDs into a sidecar file `.foo.outl` (dotfile, JSON). The
-`.md` stays clean. VS Code shows what the user wrote. GitHub renders it
-beautifully. Obsidian doesn't get confused. The sidecar is hidden by
-default in `ls`.
+We write the IDs into a sidecar file `foo.outl` (JSON next to
+`foo.md`). The `.md` stays clean. VS Code shows what the user wrote.
+GitHub renders it beautifully. Obsidian doesn't get confused. The
+sidecar lives in the same directory so iCloud Drive ships it alongside
+the `.md` — the dotfile form was abandoned because iCloud Documents
+skips dotted paths when syncing across devices.
 
 **Trade-off:** external edits require **matching** to reconstruct IDs.
 That's a real algorithm (`outl-md/src/matching.rs`) with three confidence
@@ -145,10 +159,27 @@ Rust core reuse, smaller binary than Electron, native webview. Slightly
 worse UX consistency than fully-native, but acceptable for an outliner
 where the bulk of the UX is text and lists.
 
-### 13. uniffi for mobile (phase 6)
+### 13. Tauri 2 for mobile (replaces the earlier uniffi plan)
 
-Single FFI surface (Mozilla's approach in Firefox mobile). Native UI on
-each platform (SwiftUI on iOS, Compose on Android). Rust core unchanged.
+Originally planned around `uniffi` with SwiftUI / Compose native UIs.
+The plan changed when the mobile client landed: Tauri 2 ships a
+single Rust binary that hosts a `WKWebView` running a SolidJS +
+Tailwind frontend, with native bits (`NSMetadataQuery`, accessory
+toolbar, ref suggester) written in Objective-C alongside the Tauri
+shell in `gen/apple/Sources/outl-mobile/main.mm`. Trade-offs:
+
+- **Win:** the entire workspace operation surface is shared with the
+  TUI via `outl-actions`. Zero duplicated business logic. Adding a
+  feature on one client means adding it on the other for free.
+- **Win:** Solid + Tailwind iterates fast and we control the
+  rendering pipeline end-to-end.
+- **Loss vs. uniffi:** the UI is webview-hosted, not native widgets.
+  Acceptable for an outliner where the bulk of the UX is text and
+  bullets; would be a worse trade for a graphics-heavy app.
+
+Android lands on the same Tauri 2 surface when it's prioritised; only
+the `main.mm`-equivalent layer (iCloud watcher) needs an Android
+counterpart.
 
 ---
 
@@ -195,15 +226,44 @@ flowchart TB
 
 ---
 
-## Concurrency model (single device, phase 1)
+## Concurrency model
 
-- `outl serve` owns the file watcher and the write-through pipeline.
-- `outl-tui` reads through `Workspace` (which wraps a `Mutex<Storage>` or
-  similar).
-- A single sqlite file with WAL mode allows concurrent reads from TUI
-  while the watcher is writing.
-- Phase 2 adds the sync transport as another writer; storage gains a
-  per-op lock.
+Two layers:
+
+**Within one device.** `outl-tui` and `outl-mobile` each hold a single
+`Workspace` behind a `Mutex` (or its parking_lot equivalent). All
+mutations route through `outl_actions::*` functions that take
+`&mut Workspace` and append to the actor's `ops-<actor>.jsonl` via
+`Workspace::apply`. The TUI's optional file watcher and the mobile's
+Tauri command surface are the two writers; they serialise on the
+workspace lock.
+
+**Across devices.** Each device only ever writes to its own
+`ops-<actor>.jsonl`. The transport (iCloud Drive today, iroh in
+phase 2) is responsible for shipping each actor's file to every other
+device. `outl_actions::SyncEngine` is the shared piece that both the
+TUI poller and the mobile `NSMetadataQuery` watcher call when a peer
+file changes:
+
+- `snapshot_peers()` lists every `ops-*.jsonl` *except this device's*
+  so a client never reacts to its own writes (the destructive
+  save-reload-race loop is closed at this filter).
+- `reload_workspace()` reopens the workspace from disk, merging all
+  per-actor jsonls by HLC and replaying through the move-op
+  algorithm.
+- `reproject_page(workspace, page_id)` re-emits the focused page's
+  `.md` + sidecar from the new tree state.
+- `scan_for_orphans()` finds `.md` files whose sidecar is missing or
+  whose `last_synced_hash` no longer matches — fresh imports
+  (Roam/Logseq dump, peer-shipped projection without sidecar) or
+  external edits in vim. Both paths feed `outl_md::reconcile::reconcile_md`.
+
+The TUI poller checks peer snapshots every ~2s on a worker thread.
+Mobile registers `NSMetadataQuery` on the iCloud ubiquity container.
+Both call into the same `SyncEngine`. Insert mode in the TUI defers
+the reload via a `pending_reload` flag drained on commit — see
+[`crates/outl-tui/CLAUDE.md`](../crates/outl-tui/CLAUDE.md#peer-sync-coordination)
+for the policy.
 
 ---
 

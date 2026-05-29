@@ -40,10 +40,24 @@ startup we deserialize the snapshot, then replay any ops appended after it.
 
 ---
 
-## Default backend: SqliteStorage
+## Default backend: JsonlStorage (multi-device) / SqliteStorage (legacy)
 
-Phase 1 ships with `SqliteStorage`. It writes to `.outl/log.db` in the
-workspace.
+Two backends ship today:
+
+- **`JsonlStorage`** writes to `ops/ops-<actor>.jsonl` — one
+  append-only JSONL file per device. iCloud Drive (and any other
+  file-level sync transport) syncs each actor's jsonl independently,
+  so two devices never collide at the filesystem layer. This is the
+  default used by `outl-mobile` and the multi-device workflow.
+- **`SqliteStorage`** writes to `.outl/log.db` (WAL mode, ACID). The
+  original single-device backend; still useful when no sync transport
+  is in play.
+
+The `Storage` trait abstracts both. Workspaces using `JsonlStorage`
+are the multi-device path (mobile + TUI sharing an iCloud workspace);
+SQLite remains available for users who only ever edit on one machine.
+
+The SQLite schema below documents the legacy backend.
 
 ### Schema
 
