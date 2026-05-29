@@ -92,6 +92,14 @@ enum Command {
         #[command(subcommand)]
         sub: Option<ThemeSubcommand>,
     },
+    /// Copy ops from the local SQLite log into a shared `.ops/` JSONL
+    /// log so peers (mobile, future desktop) can read them via iCloud /
+    /// Syncthing / shared folder. Run this once after moving an
+    /// existing TUI-only workspace into a synced directory.
+    MigrateToShared {
+        /// Workspace path. Overrides the global `--path`.
+        path: Option<PathBuf>,
+    },
     /// Import a graph from another outliner.
     Import {
         /// Source format: `logseq` (directory) or `roam` (JSON file).
@@ -159,6 +167,10 @@ fn main() -> Result<()> {
         }
         Some(Command::Theme { sub }) => cmd::theme::run(sub.as_ref()),
         Some(Command::Import { format, src, dst }) => cmd::import::run(&format, &src, &dst),
+        Some(Command::MigrateToShared { path }) => {
+            let p = resolve_path(cli.path.as_ref(), path.as_ref())?;
+            cmd::migrate_to_shared::run(&p)
+        }
     }
 }
 
