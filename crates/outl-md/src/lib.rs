@@ -16,6 +16,7 @@ pub mod diff;
 pub mod index;
 pub mod inline;
 pub mod matching;
+pub mod outline_ops;
 pub mod parse;
 pub mod reconcile;
 pub mod render;
@@ -32,6 +33,8 @@ pub use matching::{match_blocks, Match, MatchLevel};
 pub use parse::{parse, OutlineNode, ParsedPage};
 pub use reconcile::{reconcile_dir, reconcile_md, ReconcileError, ReconcileReport};
 pub use render::render;
-pub use sidecar::{content_hash, file_hash, sidecar_path_for, Sidecar, SidecarBlock};
+pub use sidecar::{
+    content_hash, file_hash, resolve_sidecar_path, sidecar_path_for, Sidecar, SidecarBlock,
+};
 pub use slug::{slugify, UNTITLED_SLUG};
 pub use view::{block_to_rows, char_to_line_col, BlockRow, BlockRowKind};
