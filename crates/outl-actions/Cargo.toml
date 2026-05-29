@@ -1,0 +1,28 @@
+[package]
+name = "outl-actions"
+description = "UI-agnostic workspace actions (edit, indent, toggle, journal projection) shared across outl clients."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+outl-core = { workspace = true }
+outl-md = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+yrs = { workspace = true }
+ulid = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
