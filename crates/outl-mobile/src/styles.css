@@ -1,0 +1,122 @@
+@import "tailwindcss";
+
+@keyframes outl-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes outl-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes outl-sheet-up {
+  from {
+    transform: translateY(8%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.outl-fade-in {
+  animation: outl-fade-in 180ms ease-out;
+}
+
+.outl-sheet-up {
+  animation: outl-sheet-up 280ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Subtle "press" feedback for native-feeling tap targets. */
+.outl-press {
+  transition:
+    transform 80ms ease-out,
+    opacity 120ms ease-out;
+}
+.outl-press:active {
+  transform: scale(0.96);
+  opacity: 0.7;
+}
+
+@theme {
+  /* iOS system colors — light */
+  --color-ios-bg: #f2f2f7;
+  --color-ios-card: #ffffff;
+  --color-ios-divider: #c6c6c8;
+  --color-ios-text: #000000;
+  --color-ios-text-secondary: rgba(60, 60, 67, 0.6);
+  --color-ios-text-tertiary: rgba(60, 60, 67, 0.3);
+  --color-ios-accent: #007aff;
+  --color-ios-destructive: #ff3b30;
+  --color-ios-tabbar: rgba(248, 248, 248, 0.92);
+  --color-ios-tabbar-border: rgba(0, 0, 0, 0.18);
+
+  /* iOS system colors — dark */
+  --color-iosd-bg: #000000;
+  --color-iosd-card: #1c1c1e;
+  --color-iosd-divider: rgba(84, 84, 88, 0.65);
+  --color-iosd-text: #ffffff;
+  --color-iosd-text-secondary: rgba(235, 235, 245, 0.6);
+  --color-iosd-text-tertiary: rgba(235, 235, 245, 0.3);
+  --color-iosd-accent: #0a84ff;
+  --color-iosd-destructive: #ff453a;
+  --color-iosd-tabbar: rgba(22, 22, 22, 0.92);
+  --color-iosd-tabbar-border: rgba(255, 255, 255, 0.18);
+
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    system-ui, "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: var(--color-ios-bg);
+  color: var(--color-ios-text);
+  font-size: 17px;
+  line-height: 1.4;
+  overscroll-behavior: none;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    background: var(--color-iosd-bg);
+    color: var(--color-iosd-text);
+  }
+}
+
+button,
+input,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+textarea {
+  resize: none;
+}
+
+/* iOS momentum scroll polyfill */
+.ios-scroll {
+  -webkit-overflow-scrolling: touch;
+  overflow-y: auto;
+}

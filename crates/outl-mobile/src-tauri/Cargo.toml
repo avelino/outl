@@ -1,0 +1,43 @@
+[package]
+name = "outl-mobile"
+description = "Mobile companion app for outl (Tauri 2 + Solid)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "outl_mobile_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[dependencies]
+outl-core = { workspace = true }
+outl-md = { workspace = true }
+outl-actions = { workspace = true }
+
+tauri = { version = "2", features = [] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+parking_lot = { workspace = true }
+ulid = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+yrs = { workspace = true }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSFileManager",
+    "NSString",
+    "NSURL",
+] }
