@@ -114,17 +114,57 @@ pub enum SidecarError {
 
 /// Compute the sidecar path for a given `.md` path.
 ///
-/// `pages/foo.md` → `pages/.foo.outl`. The `.md` is dropped on purpose —
+/// `pages/foo.md` → `pages/foo.outl`. The `.md` is dropped on purpose —
 /// the sidecar always pairs with a markdown file, so encoding the
-/// extension twice (`.foo.md.outl`) is noise. The leading dot keeps it
-/// hidden in `ls`.
+/// extension twice (`.foo.md.outl`) is noise.
+///
+/// **The sidecar is not hidden.** Earlier releases stored it as
+/// `.foo.outl` to keep it out of casual `ls` output, but that confused
+/// iCloud Drive (it would still sync, but Files.app on iOS hides
+/// dotted entries entirely, leaving users unable to confirm a
+/// peer-side write had landed). Sitting next to its `.md` makes the
+/// relationship visible to the user and any other tool walking the
+/// directory.
 pub fn sidecar_path_for(md_path: &Path) -> PathBuf {
     let parent = md_path.parent().unwrap_or_else(|| Path::new("."));
     let stem = md_path
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "untitled".to_string());
+    parent.join(format!("{stem}.outl"))
+}
+
+/// Legacy sidecar path (dotted) used by builds before v0. Kept so the
+/// reader can transparently pick up old sidecars and rename them to
+/// the modern un-hidden form on first read.
+fn legacy_sidecar_path_for(md_path: &Path) -> PathBuf {
+    let parent = md_path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = md_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "untitled".to_string());
     parent.join(format!(".{stem}.outl"))
+}
+
+/// Find the existing sidecar for an `.md` path, migrating a dotted
+/// legacy sidecar to the un-hidden form if one is found. Returns the
+/// canonical (non-dotted) path either way.
+pub fn resolve_sidecar_path(md_path: &Path) -> PathBuf {
+    let modern = sidecar_path_for(md_path);
+    if modern.exists() {
+        return modern;
+    }
+    let legacy = legacy_sidecar_path_for(md_path);
+    if legacy.exists() {
+        // Best effort: try to rename so peers see the new name. If the
+        // rename fails (read-only filesystem, race with another
+        // writer), fall back to reading the legacy path in place.
+        if std::fs::rename(&legacy, &modern).is_ok() {
+            return modern;
+        }
+        return legacy;
+    }
+    modern
 }
 
 /// Read and validate a sidecar from disk.
@@ -211,21 +251,38 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn sidecar_path_strategy_is_dotfile() {
+    fn sidecar_path_is_visible_next_to_md() {
         let p = sidecar_path_for(Path::new("/notes/pages/foo.md"));
-        assert_eq!(p, PathBuf::from("/notes/pages/.foo.outl"));
+        assert_eq!(p, PathBuf::from("/notes/pages/foo.outl"));
     }
 
     #[test]
     fn sidecar_path_drops_md_extension() {
-        // Regression: we used to emit `.foo.md.outl`. The `.md` is
+        // Regression: we used to emit `foo.md.outl`. The `.md` is
         // redundant (sidecars always pair with `.md`) and confusing.
         let p = sidecar_path_for(Path::new("/notes/journals/2026-05-22.md"));
         assert_eq!(
             p,
-            PathBuf::from("/notes/journals/.2026-05-22.outl"),
+            PathBuf::from("/notes/journals/2026-05-22.outl"),
             "sidecar must drop the .md extension"
         );
+    }
+
+    #[test]
+    fn resolve_sidecar_migrates_dotted_legacy() {
+        let tmp = TempDir::new().unwrap();
+        let md = tmp.path().join("foo.md");
+        std::fs::write(&md, "- block\n").unwrap();
+        let legacy = tmp.path().join(".foo.outl");
+        std::fs::write(&legacy, "{\"version\":2}").unwrap();
+
+        let resolved = resolve_sidecar_path(&md);
+        assert_eq!(resolved, tmp.path().join("foo.outl"));
+        assert!(
+            resolved.exists(),
+            "modern sidecar must exist after migration"
+        );
+        assert!(!legacy.exists(), "legacy dotted sidecar must be gone");
     }
 
     #[test]
