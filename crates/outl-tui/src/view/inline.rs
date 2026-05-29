@@ -11,14 +11,17 @@ use ratatui::text::Span;
 
 /// Strip an optional `TODO`/`DONE` prefix off a block's text, returning
 /// both the stripped body and a marker describing what was present.
+///
+/// `true` means `DONE`, `false` means `TODO`, `None` means no prefix.
+/// Delegates to [`outl_actions::split_todo`] so every surface (TUI,
+/// mobile, future desktop) agrees on the wire format.
 pub(crate) fn split_todo_prefix(text: &str) -> (Option<bool>, &str) {
-    if let Some(rest) = text.strip_prefix("TODO ") {
-        return (Some(false), rest);
+    let (state, body) = outl_actions::split_todo(text);
+    match state {
+        Some(outl_actions::TodoState::Todo) => (Some(false), body),
+        Some(outl_actions::TodoState::Done) => (Some(true), body),
+        None => (None, body),
     }
-    if let Some(rest) = text.strip_prefix("DONE ") {
-        return (Some(true), rest);
-    }
-    (None, text)
 }
 
 /// Render a block's body the way the outline renders it in read-only

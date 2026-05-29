@@ -21,7 +21,7 @@ use crossterm::terminal::{
     LeaveAlternateScreen,
 };
 use outl_core::id::ActorId;
-use outl_core::storage::SqliteStorage;
+use outl_core::storage::{JsonlStorage, SqliteStorage, Storage};
 use outl_core::workspace::Workspace;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
@@ -74,6 +74,12 @@ pub fn run_with_theme_override(path: &Path, theme_override: Option<&str>) -> Res
     // `_lock` lives through the entire TUI run; dropping it releases
     // the exclusive flock on `<root>/.outl/.lock`.
     let (workspace, actor, cfg, _lock) = open_workspace(&workspace_root)?;
+
+    // No boot-time `apply_all_pages_md` here. In v0 the `.md` is the
+    // source of truth, not a projection of the op log — peers write
+    // `.md` directly and iCloud syncs each page individually. The TUI
+    // picks up peer writes via the same `parse(.md)` path the user's
+    // own edits go through.
     let theme = resolve_theme(theme_override, &cfg);
 
     // Install the panic hook BEFORE switching to raw mode. If
@@ -194,10 +200,53 @@ fn open_workspace(
         .context("workspace.actor_id missing from config.toml")?;
     let actor_ulid = ulid::Ulid::from_string(actor_str).context("actor_id is not a valid ULID")?;
     let actor = ActorId(actor_ulid);
-    let db = root.join(".outl").join("log.db");
-    let storage = SqliteStorage::open(&db)?;
-    let ws = Workspace::open_with_storage(actor, Box::new(storage), Some(root.to_path_buf()))?;
+    let storage = open_storage(root, actor, &cfg)?;
+    let ws = Workspace::open_with_storage(actor, storage, Some(root.to_path_buf()))?;
     Ok((ws, actor, cfg, lock))
+}
+
+/// Pick the right storage backend for `root`.
+///
+/// Decision is config-driven: `[workspace].storage` in
+/// `<root>/.outl/config.toml` selects either:
+///
+/// - `"jsonl"` — shared mode. Op log under `<root>/ops/`, one JSONL
+///   file per actor. Peers merge it through whatever filesystem-level
+///   sync the user has (iCloud Drive, Syncthing, shared NFS). The
+///   directory is created on open if missing — syncing platforms
+///   sometimes garbage-collect empty dirs, so we never rely on its
+///   prior existence. Not named `.ops/` because iCloud skips dotted
+///   paths.
+/// - `"sqlite"` (default) — local-only. Op log at `<root>/.outl/log.db`.
+///
+/// Missing key falls back to `"sqlite"` so workspaces created before
+/// the flag existed keep working.
+fn open_storage(root: &Path, actor: ActorId, cfg: &toml::Value) -> Result<Box<dyn Storage>> {
+    let backend = cfg
+        .get("workspace")
+        .and_then(|w| w.get("storage"))
+        .and_then(|s| s.as_str())
+        .unwrap_or("sqlite");
+
+    match backend {
+        "jsonl" => {
+            let ops_dir = root.join("ops");
+            fs::create_dir_all(&ops_dir)
+                .with_context(|| format!("creating ops dir at {}", ops_dir.display()))?;
+            let storage = JsonlStorage::open(ops_dir, actor)
+                .with_context(|| format!("opening jsonl storage at {}", root.display()))?;
+            Ok(Box::new(storage))
+        }
+        other => {
+            if other != "sqlite" {
+                tracing::warn!("unknown storage backend {other:?}, falling back to sqlite");
+            }
+            let db = root.join(".outl").join("log.db");
+            let storage = SqliteStorage::open(&db)
+                .with_context(|| format!("opening sqlite storage at {}", db.display()))?;
+            Ok(Box::new(storage))
+        }
+    }
 }
 
 fn event_loop(
@@ -212,6 +261,15 @@ fn event_loop(
         // Pick up the background index build if it finished since the
         // last frame. Non-blocking; costs ~one channel try_recv.
         app.poll_index_updates();
+        // Pick up any peer ops the jsonl poller saw arrive via iCloud
+        // (or another sync transport). Reopens the workspace from
+        // disk so the merged op log shows up in the next render.
+        app.poll_jsonl_updates();
+        // Reconcile `.md` files dropped in by importers (Roam, Logseq)
+        // or edited externally (vim, VS Code). The scanner picks them
+        // up in the background; we emit Create/Move/Edit ops here on
+        // the main thread.
+        app.poll_orphan_md_updates();
         // Sweep expired toasts so they don't linger on screen past
         // their lifetime. Cheap O(n) over the small toast stack.
         app.prune_toasts();

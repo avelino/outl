@@ -20,6 +20,7 @@ path = "src/main.rs"
 [dependencies]
 outl-core = { workspace = true }
 outl-md = { workspace = true }
+outl-actions = { workspace = true }
 outl-exec = { workspace = true }
 anyhow = { workspace = true }
 ratatui = { workspace = true }
