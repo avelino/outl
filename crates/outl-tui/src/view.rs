@@ -24,7 +24,7 @@ mod toasts;
 use crate::state::{App, Focus, Overlay, View};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::widgets::{
-    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 
 // Inline-rendering helpers used by tests in `app.rs` — keep them
@@ -39,6 +39,20 @@ pub(crate) use overlays::HELP_TABS;
 
 pub(crate) fn render_app(f: &mut ratatui::Frame<'_>, app: &mut App) {
     let area = f.area();
+    // Reset the whole frame buffer before composing the new view.
+    //
+    // Without this, navigating from a long page (many outline lines +
+    // multi-block backlinks) to a shorter one leaves behind the cells
+    // ratatui's diff renderer thinks are still up to date — the new
+    // paint covers fewer rows than the previous one. The leftover
+    // cells look like random truncated text after a journal switch,
+    // an empty page, or a TUI resize while a popup was up.
+    //
+    // `Clear` writes the default background style across `area`, so
+    // every subsequent `render_widget` paints onto a known-empty
+    // buffer. The cost is one extra full-area write per frame, which
+    // is well inside the 60fps budget the TUI targets.
+    f.render_widget(Clear, area);
     render_main(f, area, app);
 
     // Overlays draw on top of everything else.

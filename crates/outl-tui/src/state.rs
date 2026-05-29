@@ -32,8 +32,9 @@ pub(crate) const HELP_HINT_VISUAL: &str =
 /// becoming a memory issue.
 pub(crate) const MAX_HISTORY: usize = 200;
 
-pub(crate) const TODO_PREFIX: &str = "TODO ";
-pub(crate) const DONE_PREFIX: &str = "DONE ";
+// Re-exported from `outl-actions` so every client (TUI, mobile,
+// future Tauri desktop) agrees on the literal wire form.
+pub(crate) use outl_actions::{DONE_PREFIX, TODO_PREFIX};
 
 /// Where Insert-mode edits get committed.
 ///
@@ -391,6 +392,32 @@ pub(crate) struct App {
     /// [`App::poll_index_updates`]. `None` when the index is up to
     /// date.
     pub(crate) index_rx: Option<std::sync::mpsc::Receiver<WorkspaceIndex>>,
+
+    /// Receives a `()` notification whenever a peer (mobile, another
+    /// TUI) writes new ops into `<root>/ops/`. Drained by
+    /// [`App::poll_jsonl_updates`], which reopens the workspace and
+    /// refreshes the in-memory `ParsedPage`.
+    ///
+    /// `None` for workspaces that use the SQLite backend (no shared
+    /// op log to watch).
+    pub(crate) jsonl_rx: Option<std::sync::mpsc::Receiver<()>>,
+
+    /// Set by [`App::poll_jsonl_updates`] when the poller fires while
+    /// the user is in [`Mode::Insert`]. We can't safely reopen the
+    /// workspace mid-edit (the in-flight `ParsedPage` would be lost),
+    /// so we remember that a peer wrote ops and apply the reload
+    /// during the next `commit_insert` once the buffer is flushed.
+    pub(crate) pending_reload: bool,
+
+    /// Receives the list of `.md` files the background scanner
+    /// flagged as out-of-sync with the op log — either no sidecar
+    /// (just imported / dropped in by vim) or `last_synced_hash`
+    /// doesn't match.
+    ///
+    /// Drained by [`App::poll_orphan_md_updates`] which runs
+    /// `reconcile_md` on the main thread, creating the missing
+    /// ops + sidecar so future renders see the file properly.
+    pub(crate) orphan_md_rx: Option<std::sync::mpsc::Receiver<Vec<std::path::PathBuf>>>,
 
     /// Whether to draw the inline backlinks section below the outline.
     /// Toggled with `B`. Default `true` so users discover the feature.

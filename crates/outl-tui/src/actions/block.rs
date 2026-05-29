@@ -166,6 +166,13 @@ impl App {
                 }
             }
         }
+        // If the peer-ops poller fired while we were inside Insert
+        // mode, we held the reload back to avoid clobbering the
+        // in-flight buffer. Now that the edit landed (or was a
+        // no-op), it's safe to fold peer ops in.
+        if std::mem::take(&mut self.pending_reload) {
+            self.reload_workspace_from_disk();
+        }
     }
 
     /// Abort Insert: throw away the buffer, leave AST unchanged.
@@ -791,14 +798,11 @@ impl App {
 }
 
 /// Cycle a block's TODO prefix: none → `TODO ` → `DONE ` → none.
+///
+/// Delegates to [`outl_actions::cycle_todo`] so the TUI and the
+/// mobile client share the exact same rule for cycling state.
 pub(crate) fn cycle_todo_state(text: &str) -> String {
-    if let Some(rest) = text.strip_prefix("TODO ") {
-        return format!("DONE {rest}");
-    }
-    if let Some(rest) = text.strip_prefix("DONE ") {
-        return rest.to_string();
-    }
-    format!("TODO {text}")
+    outl_actions::cycle_todo(text)
 }
 
 /// Cycle the TODO prefix directly on an [`EditBuffer`], preserving the
