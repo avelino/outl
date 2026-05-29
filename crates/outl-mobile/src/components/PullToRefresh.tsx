@@ -26,6 +26,7 @@ export function PullToRefresh(props: PullToRefreshProps): JSX.Element {
   let active = false;
   let captured = false;
   let startY = 0;
+  let startX = 0;
 
   function scrollY(): number {
     const root = props.scrollRoot?.();
@@ -45,6 +46,7 @@ export function PullToRefresh(props: PullToRefreshProps): JSX.Element {
       return;
     }
     startY = e.clientY;
+    startX = e.clientX;
     active = true;
     captured = false;
   }
@@ -52,12 +54,16 @@ export function PullToRefresh(props: PullToRefreshProps): JSX.Element {
   function onPointerMove(e: PointerEvent) {
     if (!active || refreshing()) return;
     const dy = e.clientY - startY;
+    const dx = e.clientX - startX;
     if (!captured) {
       if (dy > 8 && scrollY() <= 2) {
         captured = true;
         container.setPointerCapture?.(e.pointerId);
-      } else if (dy < -8 || Math.abs(e.clientX - 0) > 10) {
-        // moved up or moved horizontally too much — bail
+      } else if (dy < -8 || Math.abs(dx) > 10) {
+        // moved up or moved horizontally too much — bail. `dx` is
+        // measured against the pointerdown X, not against 0, so an
+        // ordinary downward drag starting anywhere on screen is not
+        // mistaken for a horizontal swipe.
         active = false;
         return;
       } else {

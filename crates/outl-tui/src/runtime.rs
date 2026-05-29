@@ -75,12 +75,19 @@ pub fn run_with_theme_override(path: &Path, theme_override: Option<&str>) -> Res
     // the exclusive flock on `<root>/.outl/.lock`.
     let (workspace, actor, cfg, _lock) = open_workspace(&workspace_root)?;
 
-    // No boot-time `apply_all_pages_md` here. In v0 the `.md` is the
-    // source of truth, not a projection of the op log — peers write
-    // `.md` directly and iCloud syncs each page individually. The TUI
-    // picks up peer writes via the same `parse(.md)` path the user's
-    // own edits go through.
+    // No boot-time `apply_all_pages_md` here. The op log remains the
+    // source of truth; `.md` is its projection. We deliberately skip
+    // re-projecting at boot because peers and external editors (vim,
+    // VS Code) may have written `.md` content the op log doesn't
+    // know about yet — re-projecting blindly would clobber those
+    // edits before the orphan scanner has a chance to fold them in
+    // via `reconcile_md`.
     let theme = resolve_theme(theme_override, &cfg);
+    let shared_workspace = cfg
+        .get("workspace")
+        .and_then(|w| w.get("storage"))
+        .and_then(|s| s.as_str())
+        == Some("jsonl");
 
     // Install the panic hook BEFORE switching to raw mode. If
     // anything panics from here on — bug in the render path, OOM —
@@ -112,7 +119,14 @@ pub fn run_with_theme_override(path: &Path, theme_override: Option<&str>) -> Res
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("creating terminal")?;
 
-    let result = event_loop(&mut terminal, workspace_root, workspace, actor, theme);
+    let result = event_loop(
+        &mut terminal,
+        workspace_root,
+        workspace,
+        actor,
+        theme,
+        shared_workspace,
+    );
 
     if enhanced_keys {
         let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
@@ -255,8 +269,9 @@ fn event_loop(
     workspace: Workspace,
     actor: ActorId,
     theme: Theme,
+    shared_workspace: bool,
 ) -> Result<()> {
-    let mut app = App::new(workspace_root, workspace, actor, theme)?;
+    let mut app = App::new(workspace_root, workspace, actor, theme, shared_workspace)?;
     loop {
         // Pick up the background index build if it finished since the
         // last frame. Non-blocking; costs ~one channel try_recv.

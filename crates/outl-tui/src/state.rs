@@ -393,6 +393,17 @@ pub(crate) struct App {
     /// date.
     pub(crate) index_rx: Option<std::sync::mpsc::Receiver<WorkspaceIndex>>,
 
+    /// `true` when this workspace is using the JSONL backend (shared
+    /// across devices via iCloud / Syncthing / etc.). Set at boot
+    /// from `[workspace].storage`; controls whether the peer-ops
+    /// poller actually fires. A SQLite workspace that happens to
+    /// have an `ops/` directory on disk (manual mkdir, leftover
+    /// from a partial migration) must NOT be polled — opening
+    /// `JsonlStorage` against it would replace the materialised
+    /// workspace with an empty one and the user would see every
+    /// block disappear.
+    pub(crate) shared_workspace: bool,
+
     /// Receives a `()` notification whenever a peer (mobile, another
     /// TUI) writes new ops into `<root>/ops/`. Drained by
     /// [`App::poll_jsonl_updates`], which reopens the workspace and

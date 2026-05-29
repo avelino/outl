@@ -1,4 +1,4 @@
-import { Show, JSX, onCleanup, onMount } from "solid-js";
+import { Show, JSX, createEffect, onCleanup } from "solid-js";
 import { haptic } from "../lib/haptics";
 
 interface ConfirmDialogProps {
@@ -25,7 +25,12 @@ interface ConfirmDialogProps {
  * iOS sheet conventions.
  */
 export function ConfirmDialog(props: ConfirmDialogProps): JSX.Element {
-  onMount(() => {
+  // Side effects are tied to `props.open`, not to component mount.
+  // The component is mounted for the lifetime of its parent and toggled
+  // via `open`, so mount-time effects would fire haptic("warning") at
+  // app boot and leave a global keydown listener registered forever.
+  createEffect(() => {
+    if (!props.open) return;
     haptic("warning");
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") props.onCancel();

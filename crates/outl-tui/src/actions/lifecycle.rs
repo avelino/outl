@@ -27,6 +27,7 @@ impl App {
         workspace: Workspace,
         actor: ActorId,
         theme: Theme,
+        shared_workspace: bool,
     ) -> Result<Self> {
         let orphans_log = workspace_root.join(".outl").join("orphans.log");
         let mut s = Self {
@@ -53,6 +54,7 @@ impl App {
             last_yanked_ref: None,
             index: WorkspaceIndex::default(),
             index_rx: None,
+            shared_workspace,
             jsonl_rx: None,
             pending_reload: false,
             orphan_md_rx: None,
@@ -176,6 +178,15 @@ impl App {
     /// Workspaces using the SQLite backend don't have `ops/`; the
     /// snapshot stays empty forever and the poller never fires.
     pub(crate) fn spawn_jsonl_poller(&mut self) {
+        // Gate on the configured backend, not on whether `ops/` exists
+        // on disk. A workspace running SQLite that happens to have an
+        // `ops/` directory (manual mkdir, leftover from a partial
+        // migration) would otherwise get its workspace silently swapped
+        // for an empty `JsonlStorage` one on the next peer-poll fire,
+        // wiping the UI even though the SQLite log is intact.
+        if !self.shared_workspace {
+            return;
+        }
         let ops_dir = self.workspace_root.join("ops");
         if !ops_dir.is_dir() {
             return;

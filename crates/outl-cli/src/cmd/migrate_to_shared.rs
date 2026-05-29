@@ -5,14 +5,15 @@
 //! When a workspace started life as a local-only TUI session and later
 //! gets sym-linked or moved into a synced directory (e.g. the iCloud
 //! Ubiquity Container of the mobile app), only the new ops written after
-//! the move land in `.ops/`. Anything that was committed earlier still
+//! the move land in `ops/`. Anything that was committed earlier still
 //! lives in `.outl/log.db` and is invisible to peers.
 //!
 //! This subcommand reads every op out of the SQLite log, opens (or
-//! creates) the `.ops/` directory, and appends every op authored by the
-//! local actor to `ops-<actor>.jsonl`. Ops from other actors (rare —
-//! only present if you ever ran `outl import`) are reported and skipped
-//! because each actor owns exactly one JSONL file.
+//! creates) the `ops/` directory (not `.ops/` — iCloud Documents skips
+//! dotted paths during cross-device sync), and appends every op authored
+//! by the local actor to `ops-<actor>.jsonl`. Ops from other actors
+//! (rare — only present if you ever ran `outl import`) are reported and
+//! skipped because each actor owns exactly one JSONL file.
 //!
 //! The migration is **idempotent**: it skips ops that already exist in
 //! the JSONL log (matched by HLC timestamp), so it's safe to re-run.
@@ -86,7 +87,7 @@ pub fn run(path: &Path) -> Result<()> {
     );
     if skipped_dup > 0 {
         println!(
-            "  skipped {skipped_dup} duplicate{} (already present in .ops/)",
+            "  skipped {skipped_dup} duplicate{} (already present in ops/)",
             plural(skipped_dup)
         );
     }

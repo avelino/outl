@@ -116,7 +116,16 @@ fn outline_from_parsed(
     iter: &mut SidecarBlockCursor<'_>,
 ) -> OutlineNode {
     let entry = iter.next();
-    let id = entry.map(|b| b.id.to_string()).unwrap_or_default();
+    // When the sidecar is absent or shorter than the parsed AST, mint a
+    // fresh transient NodeId per block. Returning an empty string would
+    // give every fallback block the same id, which breaks keyed
+    // rendering on the frontend (Solid for-each, React lists). The id is
+    // unstable across renders by design — clients are expected to call
+    // back into the workspace once `reconcile_md` has populated the
+    // sidecar.
+    let id = entry
+        .map(|b| b.id.to_string())
+        .unwrap_or_else(|| outl_core::id::NodeId::new().to_string());
     let (todo, body) = split_todo(&block.text);
     let children = block
         .children

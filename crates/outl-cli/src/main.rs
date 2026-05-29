@@ -92,7 +92,7 @@ enum Command {
         #[command(subcommand)]
         sub: Option<ThemeSubcommand>,
     },
-    /// Copy ops from the local SQLite log into a shared `.ops/` JSONL
+    /// Copy ops from the local SQLite log into a shared `ops/` JSONL
     /// log so peers (mobile, future desktop) can read them via iCloud /
     /// Syncthing / shared folder. Run this once after moving an
     /// existing TUI-only workspace into a synced directory.

@@ -146,9 +146,25 @@ fn legacy_sidecar_path_for(md_path: &Path) -> PathBuf {
     parent.join(format!(".{stem}.outl"))
 }
 
-/// Find the existing sidecar for an `.md` path, migrating a dotted
-/// legacy sidecar to the un-hidden form if one is found. Returns the
-/// canonical (non-dotted) path either way.
+/// Find the path the caller should use right now to read or write the
+/// sidecar for `md_path`.
+///
+/// In the common case this is the canonical (non-dotted) `<stem>.outl`
+/// next to the `.md`. Two transitional cases also return the legacy
+/// dotted form so the caller still sees a sidecar where there is one:
+///
+/// - The modern path doesn't exist yet but a legacy `.<stem>.outl`
+///   does and the migration rename to the modern name succeeds — we
+///   return the modern path.
+/// - Same setup, but the rename fails (read-only filesystem, race with
+///   another writer) — we return the legacy dotted path so the caller
+///   can still read it. The next successful call moves it.
+///
+/// Returning the legacy path on rename failure is intentional: callers
+/// `read()` and `write()` against whatever we return. If we always
+/// returned the modern path while the file was still at the legacy one,
+/// `read()` would fail with `NotFound` and the sidecar would appear to
+/// be missing.
 pub fn resolve_sidecar_path(md_path: &Path) -> PathBuf {
     let modern = sidecar_path_for(md_path);
     if modern.exists() {
@@ -156,9 +172,6 @@ pub fn resolve_sidecar_path(md_path: &Path) -> PathBuf {
     }
     let legacy = legacy_sidecar_path_for(md_path);
     if legacy.exists() {
-        // Best effort: try to rename so peers see the new name. If the
-        // rename fails (read-only filesystem, race with another
-        // writer), fall back to reading the legacy path in place.
         if std::fs::rename(&legacy, &modern).is_ok() {
             return modern;
         }
