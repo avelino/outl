@@ -1,0 +1,87 @@
+/**
+ * Bridge between the Solid editor and the native UIKit ref suggester
+ * (the chip strip docked above the formatting toolbar; see
+ * `main.mm` → `OutlSuggestView` / `OutlAccessoryContainer`).
+ *
+ * The contract is **state-based, not message-based**: JS owns a
+ * single global `window.__outlSuggesterState` that UIKit polls every
+ * 150ms while the keyboard is up. We tried `WKScriptMessageHandler`
+ * first but the Tauri-managed `WKUserContentController` did not
+ * surface late-added handlers reliably — silent loss was worse than
+ * a tiny polling cost.
+ *
+ * - JS calls [`setNativeSuggesterState`] when the caret enters or
+ *   leaves an open `[[…]]` reference.
+ * - UIKit reads it on the next poll tick and updates the chip strip.
+ * - Tap on a chip calls back via `window.__outlSuggesterPicked(slug,
+ *   kind)`.
+ *
+ * Desktop dev (`bun run dev` without a webview) just sets the global
+ * — UIKit isn't there to read it, but Solid keeps the visual editor
+ * consistent.
+ */
+import { PageMeta } from "./api";
+
+interface WindowWithBridge extends Window {
+  __outlSuggesterState?: SuggesterMessage | null;
+  __outlSuggesterPicked?: (slug: string, kind: string) => void;
+}
+
+/** Shape UIKit reads off `window.__outlSuggesterState`. Exported for
+ *  unit tests so we can lock the wire shape down. */
+export interface SuggesterShowMessage {
+  action: "show";
+  items: Array<{ slug: string; title: string; kind: "page" | "journal" }>;
+}
+
+export interface SuggesterHideMessage {
+  action: "hide";
+}
+
+export type SuggesterMessage = SuggesterShowMessage | SuggesterHideMessage;
+
+export function buildShowMessage(items: PageMeta[]): SuggesterShowMessage {
+  return {
+    action: "show",
+    items: items.map((p) => ({
+      slug: p.slug,
+      // Journal pages render under a human-readable title server-side
+      // ("Thursday, May 28, 2026"). The mobile UI is anchored on ISO
+      // slugs (`2026-05-28`), so show the slug in the chip strip
+      // instead — matches the journal header format too.
+      title: p.kind === "journal" ? p.slug : p.title,
+      kind: p.kind,
+    })),
+  };
+}
+
+export const HIDE_MESSAGE: SuggesterHideMessage = { action: "hide" };
+
+/**
+ * Publish the next state UIKit will pick up on its poll tick. Pass
+ * `null` to clear (suggester becomes inert).
+ */
+export function setNativeSuggesterState(
+  state: SuggesterMessage | null,
+): void {
+  (window as WindowWithBridge).__outlSuggesterState = state;
+}
+
+/** Read the current published state. Mostly for tests. */
+export function getNativeSuggesterState(): SuggesterMessage | null {
+  return (window as WindowWithBridge).__outlSuggesterState ?? null;
+}
+
+/** Register a JS-side handler the native code calls back when the
+ *  user taps a chip. Returns a cleanup function. */
+export function registerPickedCallback(
+  cb: (slug: string, kind: string) => void,
+): () => void {
+  const win = window as WindowWithBridge;
+  win.__outlSuggesterPicked = cb;
+  return () => {
+    if (win.__outlSuggesterPicked === cb) {
+      delete win.__outlSuggesterPicked;
+    }
+  };
+}
