@@ -22,7 +22,7 @@ use crate::tree::Tree;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use yrs::updates::decoder::Decode;
-use yrs::{Doc, GetString, Transact};
+use yrs::{Doc, GetString, ReadTxn, Text, Transact};
 
 /// Errors a workspace may surface to its caller.
 #[derive(Debug, thiserror::Error)]
@@ -145,6 +145,48 @@ impl Workspace {
     pub fn block_text(&self, node: NodeId) -> Option<String> {
         self.content.text(node)
     }
+
+    /// Build a Yrs `update_v1` payload that, once wrapped in
+    /// `Op::Edit { node, text_op }` and pushed through [`Self::apply`],
+    /// rewrites the block's text to `new_text` exactly.
+    ///
+    /// **Side effect:** the workspace's own content `Doc` for `node`
+    /// is mutated in-place to match `new_text`. The returned update
+    /// encodes exactly that mutation, captured via the Doc's state
+    /// vector. Yrs is idempotent on `apply_update`, so the subsequent
+    /// `Workspace::apply(LogOp::Edit { … })` is a no-op on the local
+    /// Doc but still appends to the log and propagates to peers.
+    ///
+    /// Returns an empty `Vec` when the requested change is a no-op.
+    pub fn build_text_replace_update(&mut self, node: NodeId, new_text: &str) -> Vec<u8> {
+        let current = self.block_text(node).unwrap_or_default();
+        if current == new_text {
+            return Vec::new();
+        }
+        let doc = self.content.docs.entry(node).or_default();
+        let text = doc.get_or_insert_text("content");
+
+        // Snapshot the state vector before our mutation so we can
+        // encode only the resulting delta.
+        let sv_before = {
+            let txn = doc.transact();
+            txn.state_vector()
+        };
+
+        {
+            let mut txn = doc.transact_mut();
+            let len = text.len(&txn);
+            if len > 0 {
+                text.remove_range(&mut txn, 0, len);
+            }
+            if !new_text.is_empty() {
+                text.insert(&mut txn, 0, new_text);
+            }
+        }
+
+        let txn = doc.transact();
+        txn.encode_state_as_update_v1(&sv_before)
+    }
 }
 
 #[cfg(test)]
@@ -153,7 +195,6 @@ mod tests {
     use crate::fractional::Fractional;
     use crate::hlc::HlcGenerator;
     use crate::op::Op;
-    use yrs::Text as _;
 
     fn make_op(g: &HlcGenerator, op: Op) -> LogOp {
         let ts = g.next();

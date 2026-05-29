@@ -31,6 +31,9 @@ lcov.info
 /.outl/
 /lerolero/
 
+# Scratch dir for screenshots, captures, throwaway artefacts
+/.tmp/
+
 # Generated SQLite WAL files (when testing)
 *.db-wal
 *.db-shm
