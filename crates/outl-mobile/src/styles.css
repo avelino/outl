@@ -41,28 +41,39 @@
 }
 
 @theme {
-  /* iOS system colors — light */
-  --color-ios-bg: #f2f2f7;
-  --color-ios-card: #ffffff;
-  --color-ios-divider: #c6c6c8;
-  --color-ios-text: #000000;
-  --color-ios-text-secondary: rgba(60, 60, 67, 0.6);
-  --color-ios-text-tertiary: rgba(60, 60, 67, 0.3);
-  --color-ios-accent: #007aff;
-  --color-ios-destructive: #ff3b30;
-  --color-ios-tabbar: rgba(248, 248, 248, 0.92);
-  --color-ios-tabbar-border: rgba(0, 0, 0, 0.18);
+  /*
+   * Brand palette — outl (avelino.run).
+   * The variable names stay `--color-ios-*` / `--color-iosd-*` for
+   * historical reasons (every component already references them); the
+   * *values* now mirror the deep-purple palette used on the marketing
+   * site so all three surfaces (web, TUI, mobile) read as the same
+   * product.
+   */
 
-  /* iOS system colors — dark */
-  --color-iosd-bg: #000000;
-  --color-iosd-card: #1c1c1e;
-  --color-iosd-divider: rgba(84, 84, 88, 0.65);
-  --color-iosd-text: #ffffff;
-  --color-iosd-text-secondary: rgba(235, 235, 245, 0.6);
-  --color-iosd-text-tertiary: rgba(235, 235, 245, 0.3);
-  --color-iosd-accent: #0a84ff;
-  --color-iosd-destructive: #ff453a;
-  --color-iosd-tabbar: rgba(22, 22, 22, 0.92);
+  /* Light — soft purple-tinted neutrals, brand accent on actions. */
+  --color-ios-bg: #f6f4fb;
+  --color-ios-card: #ffffff;
+  --color-ios-divider: #d8d0e8;
+  --color-ios-text: #0c0814;
+  --color-ios-text-secondary: rgba(28, 21, 48, 0.62);
+  --color-ios-text-tertiary: rgba(28, 21, 48, 0.42);
+  --color-ios-accent: #7c3aed;
+  --color-ios-destructive: #e11d48;
+  --color-ios-tabbar: rgba(246, 244, 251, 0.92);
+  --color-ios-tabbar-border: rgba(12, 8, 20, 0.16);
+
+  /* Dark — site-exact tokens. Note: text-tertiary is bumped from 0.30
+     to 0.55 so the TODO checkbox outline (which uses it) stays legible
+     on the deep-purple background — was the original complaint. */
+  --color-iosd-bg: #0c0814;
+  --color-iosd-card: #15101f;
+  --color-iosd-divider: #382c54;
+  --color-iosd-text: #f4f1fa;
+  --color-iosd-text-secondary: #b4adc7;
+  --color-iosd-text-tertiary: rgba(180, 173, 199, 0.55);
+  --color-iosd-accent: #a78bfa;
+  --color-iosd-destructive: #fb7185;
+  --color-iosd-tabbar: rgba(21, 16, 31, 0.92);
   --color-iosd-tabbar-border: rgba(255, 255, 255, 0.18);
 
   --font-sans:

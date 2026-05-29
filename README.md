@@ -1,7 +1,13 @@
-# outl
+<p align="center">
+  <img src="assets/logo.png" alt="outl" width="160" height="160" />
+</p>
 
-Local-first outliner. Markdown is the source of truth. Sync that
-doesn't corrupt your tree when two devices edit offline.
+<h1 align="center">outl</h1>
+
+<p align="center">
+  Local-first outliner. Markdown is the source of truth. Sync that
+  doesn't corrupt your tree when two devices edit offline.
+</p>
 
 Inspired by [Roam Research](https://roamresearch.com) and
 [Logseq](https://logseq.com). Picks what they got right (graph,

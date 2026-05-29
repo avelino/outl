@@ -239,13 +239,11 @@ function BulletOrCheckbox(props: {
           props.onToggle();
         }}
         class="relative z-10 mt-[3px] flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border-[1.5px]"
-        style={{
-          "border-color":
-            props.todo === "DONE"
-              ? "var(--color-ios-accent)"
-              : "var(--color-ios-text-tertiary)",
-          background:
-            props.todo === "DONE" ? "var(--color-ios-accent)" : "transparent",
+        classList={{
+          "border-(--color-ios-accent) bg-(--color-ios-accent) dark:border-(--color-iosd-accent) dark:bg-(--color-iosd-accent)":
+            props.todo === "DONE",
+          "border-(--color-ios-text-secondary) bg-transparent dark:border-(--color-iosd-text-secondary)":
+            props.todo !== "DONE",
         }}
       >
         <Show when={props.todo === "DONE"}>

@@ -6,15 +6,72 @@
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no, interactive-widget=resizes-content"
     />
-    <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#0c0814" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/logo-192.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>outl</title>
+    <style>
+      /*
+       * Boot paint. iOS hands off from LaunchScreen to the Tauri
+       * WebView; the WebView's default canvas is white, which flashed
+       * before Tailwind hydrated. We paint everything brand-dark here
+       * so the LaunchScreen and the first HTML frame look identical.
+       * Tailwind / theme tokens take over right after; users in light
+       * mode just see the brand dark for a fraction of a second.
+       */
+      html,
+      body,
+      #root {
+        margin: 0;
+        background: #0c0814;
+      }
+
+      /*
+       * Static splash. Lives outside #root so Solid's mount never
+       * touches it. Auto fade-out via CSS — no JS needed, no
+       * hydration race. After the animation finishes it is
+       * display:none so it never intercepts touches.
+       */
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #0c0814;
+        animation: boot-splash-out 240ms cubic-bezier(0.4, 0, 0.2, 1) 380ms
+          forwards;
+      }
+      #boot-splash img {
+        width: 128px;
+        height: 128px;
+        filter: drop-shadow(0 8px 32px rgba(167, 139, 250, 0.35));
+        animation: boot-splash-img 240ms cubic-bezier(0.4, 0, 0.2, 1) 380ms
+          forwards;
+      }
+      @keyframes boot-splash-out {
+        to {
+          opacity: 0;
+          visibility: hidden;
+        }
+      }
+      @keyframes boot-splash-img {
+        to {
+          transform: scale(0.96);
+        }
+      }
+    </style>
   </head>
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <div id="root"></div>
+    <div id="boot-splash" aria-hidden="true">
+      <img src="/logo.png" alt="" width="128" height="128" />
+    </div>
     <script src="/src/index.tsx" type="module"></script>
   </body>
 </html>

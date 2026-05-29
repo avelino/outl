@@ -924,6 +924,107 @@ static const NSTimeInterval kRefreshEvery = 60 * 60; // 1 hour minimum
 
 @end
 
+// ---------------------------------------------------------------------------
+// Brand chrome
+//
+// iOS hands off from `LaunchScreen.storyboard` (painted brand-dark in
+// the storyboard) to the Tauri WebView. `WKWebView` defaults to
+// `opaque = YES` and a white background — that white flashed before
+// the first HTML frame rendered, breaking the visual continuity from
+// LaunchScreen → app.
+//
+// We fix it by walking the window tree as early as possible and:
+//   - tinting the UIWindow itself, which covers any gap between view
+//     transitions where the window is briefly visible;
+//   - making the WKWebView non-opaque with a brand-coloured background
+//     so even its very first frame matches the LaunchScreen;
+//   - applying the same colour to the WKWebView's scrollView so
+//     bounce / overscroll doesn't reveal a white seam.
+//
+// Brand background is `#0c0814` (RGB 12/8/20). Light mode users see
+// brand-dark for the few frames before the JS layer takes over and
+// re-paints — same as the LaunchScreen does; consistent, not jarring.
+// ---------------------------------------------------------------------------
+
+@interface OutlBrandChrome : NSObject
+@end
+
+@implementation OutlBrandChrome
+
++ (void)load {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [OutlBrandChrome apply];
+    });
+}
+
++ (UIColor *)brandBackground {
+    // #0c0814 — must match the boot splash in index.html and the
+    // LaunchScreen.storyboard background colour.
+    return [UIColor colorWithRed:12.0/255.0
+                            green:8.0/255.0
+                             blue:20.0/255.0
+                            alpha:1.0];
+}
+
++ (void)apply {
+    UIWindow *win = nil;
+    for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+        if ([s isKindOfClass:[UIWindowScene class]]) {
+            UIWindowScene *ws = (UIWindowScene *)s;
+            if (@available(iOS 15.0, *)) {
+                win = ws.keyWindow;
+            }
+            if (!win) win = ws.windows.firstObject;
+            if (win) break;
+        }
+    }
+    if (!win) win = [UIApplication sharedApplication].windows.firstObject;
+    if (!win) {
+        // Window not in scene graph yet — retry until it is. Cap at
+        // ~2s so we never loop forever if something genuinely broke.
+        static int retry = 0;
+        if (retry >= 20) return;
+        retry += 1;
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)),
+            dispatch_get_main_queue(),
+            ^{ [OutlBrandChrome apply]; }
+        );
+        return;
+    }
+
+    UIColor *brand = [OutlBrandChrome brandBackground];
+    win.backgroundColor = brand;
+    if (win.rootViewController.view) {
+        win.rootViewController.view.backgroundColor = brand;
+    }
+
+    WKWebView *web = [OutlToolbarView findWebViewIn:win];
+    if (web) {
+        web.opaque = NO;
+        web.backgroundColor = brand;
+        web.scrollView.backgroundColor = brand;
+        NSLog(@"[outl] brand chrome applied (window + webview)");
+        return;
+    }
+    // WebView not mounted yet — keep polling so we catch its first
+    // frame. The window is already tinted so the user sees brand
+    // colour throughout this window.
+    static int webRetry = 0;
+    if (webRetry >= 30) {
+        NSLog(@"[outl] brand chrome: webview never mounted, window-only");
+        return;
+    }
+    webRetry += 1;
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)),
+        dispatch_get_main_queue(),
+        ^{ [OutlBrandChrome apply]; }
+    );
+}
+
+@end
+
 int main(int argc, char * argv[]) {
     ffi::start_app();
     return 0;

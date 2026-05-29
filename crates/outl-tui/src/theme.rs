@@ -96,6 +96,7 @@ pub struct Theme {
 
 /// List of preset names exposed to users (CLI / config / `outl theme list`).
 pub const PRESETS: &[&str] = &[
+    "outl",
     "default-dark",
     "light",
     "dracula",
@@ -117,7 +118,8 @@ pub fn by_name(name: &str) -> Option<Theme> {
         })
         .collect();
     match norm.as_str() {
-        "default-dark" | "default" | "dark" => Some(default_dark()),
+        "outl" | "default" => Some(outl()),
+        "default-dark" | "dark" => Some(default_dark()),
         "light" => Some(light()),
         "dracula" => Some(dracula()),
         "solarized-dark" | "solarized" => Some(solarized_dark()),
@@ -129,10 +131,91 @@ pub fn by_name(name: &str) -> Option<Theme> {
 
 /// Default fallback when nothing is configured.
 pub fn default_theme() -> Theme {
-    default_dark()
+    outl()
 }
 
 // --- presets -------------------------------------------------------------
+
+/// outl — the project's brand palette, matched 1:1 with the marketing
+/// site (avelino.run). Deep-purple background with a lavender accent
+/// and lemon highlight; this is the default theme.
+pub fn outl() -> Theme {
+    let bg = Color::Rgb(12, 8, 20); // #0c0814
+    let bg_elev = Color::Rgb(21, 16, 31); // #15101f
+    let line_strong = Color::Rgb(56, 44, 84); // #382c54
+    let fg = Color::Rgb(244, 241, 250); // #f4f1fa
+    let fg_dim = Color::Rgb(180, 173, 199); // #b4adc7
+    let fg_dimmer = Color::Rgb(123, 115, 144); // #7b7390
+    let accent = Color::Rgb(167, 139, 250); // #a78bfa
+    let accent_soft = Color::Rgb(196, 181, 253); // #c4b5fd
+    let accent_2 = Color::Rgb(214, 255, 71); // #d6ff47
+    let warn = Color::Rgb(251, 191, 36); // #fbbf24
+    let blue = Color::Rgb(125, 211, 252); // #7dd3fc
+    let magenta = Color::Rgb(240, 171, 252); // #f0abfc
+    let red = Color::Rgb(251, 113, 133); // #fb7185
+    let _ = red;
+
+    Theme {
+        name: "outl",
+        background: bg,
+        bullet: Style::default().fg(fg_dimmer),
+        selected_bullet: Style::default()
+            .fg(bg)
+            .bg(accent)
+            .add_modifier(Modifier::BOLD),
+        cursor_block: Style::default().fg(bg).bg(fg).add_modifier(Modifier::BOLD),
+        cursor_caret: Style::default()
+            .fg(accent_soft)
+            .add_modifier(Modifier::BOLD),
+        ref_link: Style::default()
+            .fg(accent)
+            .add_modifier(Modifier::UNDERLINED),
+        tag_link: Style::default()
+            .fg(magenta)
+            .add_modifier(Modifier::UNDERLINED),
+        md_link: Style::default().fg(blue).add_modifier(Modifier::UNDERLINED),
+        bold: Style::default().fg(fg).add_modifier(Modifier::BOLD),
+        italic: Style::default()
+            .fg(accent_soft)
+            .add_modifier(Modifier::ITALIC),
+        strike: Style::default()
+            .fg(fg_dimmer)
+            .add_modifier(Modifier::CROSSED_OUT),
+        code: Style::default().fg(accent_2),
+        todo_open: Style::default().fg(warn).add_modifier(Modifier::BOLD),
+        todo_done: Style::default().fg(accent_2).add_modifier(Modifier::BOLD),
+        todo_done_body: Style::default()
+            .fg(fg_dimmer)
+            .add_modifier(Modifier::CROSSED_OUT),
+        property_key: Style::default().fg(fg_dimmer),
+        property_value: Style::default().fg(accent_soft),
+        heading: Style::default().fg(fg).add_modifier(Modifier::BOLD),
+        dim: Style::default().fg(fg_dimmer),
+        border: Style::default().fg(line_strong),
+        hint: Style::default().fg(fg_dim),
+        status_normal: Style::default()
+            .fg(bg)
+            .bg(accent)
+            .add_modifier(Modifier::BOLD),
+        status_insert: Style::default()
+            .fg(bg)
+            .bg(accent_2)
+            .add_modifier(Modifier::BOLD),
+        status_visual: Style::default()
+            .fg(bg)
+            .bg(magenta)
+            .add_modifier(Modifier::BOLD),
+        status_message: Style::default().fg(warn),
+        help_title: Style::default()
+            .fg(accent_soft)
+            .add_modifier(Modifier::BOLD),
+        popup_bg: bg_elev,
+        list_selected: Style::default()
+            .fg(bg)
+            .bg(accent)
+            .add_modifier(Modifier::BOLD),
+    }
+}
 
 /// Default dark — the original outl-tui palette.
 pub fn default_dark() -> Theme {
