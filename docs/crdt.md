@@ -472,3 +472,10 @@ Be honest about the limits:
 - Kleppmann's talk: "CRDTs: The Hard Parts" (Strange Loop 2020)
 - Yrs: <https://github.com/y-crdt/y-crdt>
 - Yjs docs: <https://docs.yjs.dev/>
+- Author write-ups on the outl implementation:
+  - [From paper to outliner](https://avelino.run/from-paper-to-outliner/)
+    — the gap between the paper's convergence proof and a shipped
+    app (projections, reconciliation, transport edge cases).
+  - [File sync isn't trivial](https://avelino.run/file-sync-isnt-trivial/)
+    — why concurrent file moves are a distributed-systems problem,
+    framed for engineers who haven't read the paper yet.

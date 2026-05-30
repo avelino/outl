@@ -1,6 +1,6 @@
 {
   "name": "outl-mobile",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Mobile companion app for outl (Tauri 2 + Solid).",
   "type": "module",
   "scripts": {

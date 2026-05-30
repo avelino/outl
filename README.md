@@ -118,7 +118,7 @@ can't resolve stays as `((unresolved:UID))` for manual triage.
 
 ## Status
 
-**0.2.0 — cross-device daily driver.** Workspace, TUI, and iOS mobile
+**0.3.0 — cross-device daily driver.** Workspace, TUI, and iOS mobile
 app share the same `outl-core` + `outl-md` + `outl-actions` stack and
 sync across devices via iCloud Drive. The CRDT, op log, sidecar, and
 reconcile pipeline are working end-to-end (edit on the laptop, the
@@ -135,6 +135,20 @@ Want to actually learn how this works?
 → **[docs.outl.app](docs/README.md)** — full GitBook, with the sync
 algorithm walked through step by step, the TUI manual, theming, and
 contributing notes.
+
+## Background reading
+
+The engineering decisions behind outl are written up on
+[avelino.run](https://avelino.run) as the project moves:
+
+- **[File sync isn't trivial](https://avelino.run/file-sync-isnt-trivial/)**
+  — why concurrent file moves are a distributed-systems problem that
+  Dropbox and Google Drive still get wrong, and what the Kleppmann
+  et al. 2022 paper proves about a path out.
+- **[From paper to outliner](https://avelino.run/from-paper-to-outliner/)**
+  — the gap between "the CRDT converges" and "the app ships":
+  projections, content-addressable reconciliation, ignoring your own
+  writes, surviving iCloud's lazy materialisation.
 
 ## License
 

@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT"
@@ -22,11 +22,11 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Internal crates
-outl-core = { path = "crates/outl-core", version = "0.2.0" }
-outl-md = { path = "crates/outl-md", version = "0.2.0" }
-outl-actions = { path = "crates/outl-actions", version = "0.2.0" }
-outl-exec = { path = "crates/outl-exec", version = "0.2.0" }
-outl-tui = { path = "crates/outl-tui", version = "0.2.0" }
+outl-core = { path = "crates/outl-core", version = "0.3.0" }
+outl-md = { path = "crates/outl-md", version = "0.3.0" }
+outl-actions = { path = "crates/outl-actions", version = "0.3.0" }
+outl-exec = { path = "crates/outl-exec", version = "0.3.0" }
+outl-tui = { path = "crates/outl-tui", version = "0.3.0" }
 
 # IDs and time
 ulid = { version = "1", features = ["serde"] }

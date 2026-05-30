@@ -4473,7 +4473,7 @@ dependencies = [
 
 [[package]]
 name = "outl-actions"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "outl-core",
@@ -4489,7 +4489,7 @@ dependencies = [
 
 [[package]]
 name = "outl-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4511,7 +4511,7 @@ dependencies = [
 
 [[package]]
 name = "outl-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bincode 2.0.1",
  "chrono",
@@ -4532,7 +4532,7 @@ dependencies = [
 
 [[package]]
 name = "outl-exec"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "boa_engine",
@@ -4553,7 +4553,7 @@ dependencies = [
 
 [[package]]
 name = "outl-md"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "comrak",
@@ -4572,7 +4572,7 @@ dependencies = [
 
 [[package]]
 name = "outl-mobile"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "objc2",
@@ -4593,7 +4593,7 @@ dependencies = [
 
 [[package]]
 name = "outl-tui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "arboard",

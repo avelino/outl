@@ -20,6 +20,13 @@ The doc is split in two:
   per-page snapshots, the iroh P2P transport, and the migration path
   from today's layout to that one.
 
+> **Companion read:** [File sync isn't trivial][avelino-file-sync] —
+> a long-form post on *why* the problem is hard before this doc
+> shows *how* outl solves it. Same author, written as the project
+> was being built.
+
+[avelino-file-sync]: https://avelino.run/file-sync-isnt-trivial/
+
 ---
 
 # Part 1 — What's in production today

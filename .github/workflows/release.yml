@@ -15,6 +15,19 @@ name: Release
 #
 # Manual GA release: bump `workspace.package.version`, merge, then push a
 # `v0.1.0` tag by hand. The `tags: ["v*"]` trigger below handles it.
+#
+# Publish layout: a single `create_release` job creates the release as a
+# DRAFT before the build matrix runs. Each matrix job uploads its own
+# assets via `gh release upload`. A final `publish_release` job flips
+# the draft to published. This avoids two known failure modes:
+#
+#   1. `softprops/action-gh-release` in parallel jobs races to create
+#      the release; the loser tries to UPDATE and fails because the
+#      repo has Immutable Releases turned on
+#      (`target_commitish cannot be changed when release is immutable`).
+#   2. Once a release is published + immutable, assets cannot be added.
+#      Draft releases accept uploads freely; we only publish after
+#      every artifact landed.
 
 on:
   push:
@@ -27,11 +40,9 @@ permissions:
 
 concurrency:
   # Only one release job per ref. New push cancels the in-flight one.
-  # Bumped suffix to escape a stuck queued macos-13 job in the `v1`
-  # group that GitHub couldn't cancel (job never got assigned to a
-  # runner, so there was no process to terminate). If we hit that
-  # again, bump the suffix.
-  group: release-v2-${{ github.ref }}
+  # Bump the suffix if a job gets stuck queued and GitHub can't cancel
+  # it (happened with macos-13 in v1/v2 — runner pool was depleted).
+  group: release-v3-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -101,11 +112,52 @@ jobs:
           git tag "${TAG}"
           git push origin "${TAG}"
 
-  build:
-    name: build ${{ matrix.target }}
+  create_release:
+    name: Create draft release
     needs: [prepare, tag]
     # `tag` is skipped for tag-triggered runs; don't let that fail us.
     if: always() && needs.prepare.result == 'success' && (needs.tag.result == 'success' || needs.tag.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Create release as draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG='${{ needs.prepare.outputs.tag }}'
+          VERSION='${{ needs.prepare.outputs.version }}'
+          PRERELEASE_FLAG=()
+          if [[ '${{ needs.prepare.outputs.prerelease }}' == 'true' ]]; then
+            PRERELEASE_FLAG=( --prerelease )
+          fi
+          # Idempotent: a re-run after partial failure may find the
+          # release already there. As long as it's still a draft we
+          # can keep uploading; once published+immutable, give up.
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            IS_DRAFT=$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)
+            if [[ "${IS_DRAFT}" == "true" ]]; then
+              echo "::notice::Release ${TAG} already exists as draft; reusing."
+              exit 0
+            fi
+            echo "::error::Release ${TAG} already exists and is not a draft; refusing to clobber."
+            exit 1
+          fi
+          gh release create "${TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --draft \
+            "${PRERELEASE_FLAG[@]}" \
+            --title "outl ${VERSION}" \
+            --generate-notes \
+            --target "${{ github.sha }}"
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: [prepare, create_release]
+    if: needs.create_release.result == 'success'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -114,7 +166,12 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: outl-macos-arm64
-          - os: macos-13
+          # Cross-compile to Intel macOS from the ARM `macos-latest`
+          # runner. We previously used `macos-13` here, but GitHub's
+          # macos-13 runner pool got depleted and jobs sat queued for
+          # ~14h before timing out. outl is pure Rust with no system
+          # libs that need linking, so cross-compile works cleanly.
+          - os: macos-latest
             target: x86_64-apple-darwin
             artifact: outl-macos-x64
           - os: ubuntu-latest
@@ -184,16 +241,49 @@ jobs:
           $hash = (Get-FileHash ${{ matrix.artifact }}.zip -Algorithm SHA256).Hash.ToLower()
           "$hash  ${{ matrix.artifact }}.zip" | Out-File -Encoding ascii ${{ matrix.artifact }}.zip.sha256
 
-      - name: Publish to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.prepare.outputs.tag }}
-          name: outl ${{ needs.prepare.outputs.version }}
-          prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
-          generate_release_notes: true
-          files: |
+      - name: Upload assets to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        # `--clobber` lets us re-run a single matrix leg without
+        # tripping over an already-uploaded asset from the previous
+        # attempt. `nullglob` keeps the loop quiet when one platform
+        # only produces .tar.gz and the other only .zip.
+        run: |
+          TAG='${{ needs.prepare.outputs.tag }}'
+          shopt -s nullglob
+          ASSETS=(
             ${{ matrix.artifact }}.tar.gz
             ${{ matrix.artifact }}.tar.gz.sha256
             ${{ matrix.artifact }}.zip
             ${{ matrix.artifact }}.zip.sha256
-          fail_on_unmatched_files: false
+          )
+          STAGED=()
+          for f in "${ASSETS[@]}"; do
+            [[ -f "$f" ]] && STAGED+=("$f")
+          done
+          if [[ ${#STAGED[@]} -eq 0 ]]; then
+            echo "::error::no assets staged for ${{ matrix.artifact }}"
+            exit 1
+          fi
+          gh release upload "${TAG}" "${STAGED[@]}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber
+
+  publish_release:
+    name: Publish release
+    needs: [prepare, build]
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Flip draft to published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG='${{ needs.prepare.outputs.tag }}'
+          gh release edit "${TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --draft=false
+          echo "::notice::Published ${TAG}"

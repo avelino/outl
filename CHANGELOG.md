@@ -4,6 +4,97 @@ All notable changes to outl are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project
 uses [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-05-30
+
+Cross-device sync goes live. A brand-new iOS app and the TUI share
+the same workspace over iCloud Drive, both driven by a shared
+`outl-actions` crate. Block refs / embeds land in the markdown
+dialect.
+
+### Mobile (`outl-mobile`) — new crate
+
+- **Tauri 2 + SolidJS iOS client.** Bundle id `app.outl.mobile-app`,
+  iCloud container `iCloud.app.outl.mobile-app`. Frontend is Solid +
+  Tailwind; the Rust shell is intentionally thin (every workspace
+  operation delegates to `outl-actions`).
+- **iCloud Drive transport.** Workspace lives at
+  `<ubiquity-container>/Documents/`. An ObjC bridge
+  (`gen/apple/.../main.mm`) uses `NSMetadataQuery` to watch for peer
+  changes and `NSFileCoordinator` + `startDownloadingUbiquitousItemAtURL`
+  to force materialisation before reads — without those two steps
+  the Rust side races the iCloud daemon and sees truncated op logs.
+- **Per-device actor id** persisted under the app sandbox so each
+  install writes to its own `ops-<actor>.jsonl`.
+- iOS boot flash fixed; outl brand (palette + icon) applied across
+  the app.
+
+### Shared client (`outl-actions`) — new crate
+
+- **Extracted every workspace mutation** (block edit, TODO toggle,
+  indent / outdent, sibling create, delete, move, journal render,
+  sync) out of `outl-tui` into a UI-agnostic crate. Functions take
+  `&mut Workspace` + `&HlcGenerator` and route through
+  `Workspace::apply` so the op log stays source of truth.
+- TUI and mobile call the **same** functions for the same
+  semantics — drift between clients is no longer possible by
+  construction.
+- `SyncEngine` interface owns the cross-device merge loop; iCloud is
+  the v0 transport, iroh (phase 2) plugs in behind the same trait.
+
+### Core (`outl-core`)
+
+- **`JsonlStorage` op-log backend.** Single-file SQLite breaks under
+  iCloud / Syncthing because the FS layer is last-write-wins per
+  file. JSONL gives each actor its own `ops-<actor>.jsonl`, writes
+  only to the local file, and merges every peer file on read.
+- Folder layout is **`ops/`**, not `.ops/`. iCloud Documents skips
+  dotted paths during cross-device sync — using a dot silently
+  breaks multi-device workspaces. Same rule applied to the sidecar
+  (`pages/<slug>.outl`, no leading dot).
+
+### Markdown (`outl-md`)
+
+- **`((blk-X))` inline refs and `!((blk-X))` embeds.** Stable
+  `ref_handle` derived from the block's ULID tail (lazy 7+ char
+  expansion on collision); sidecar bumped to v2. Embeds expand to
+  the source root + children with a `↳` marker.
+- Concurrent-safe writes over iCloud (atomic temp-file rename, no
+  partial reads exposed to peers).
+- `WorkspaceIndex` tracks block-ref backlinks alongside page-ref
+  backlinks.
+
+### TUI (`outl-tui`)
+
+- Rebuilt as a **peer of shared workspaces** — same iCloud folder,
+  same op log, same `outl-actions`. Edits on the laptop appear on
+  the iPhone within seconds and vice versa.
+- `((` autocomplete on block text, inline ref render, expanded
+  embed view, Enter navigation to the source block, `/refer` and
+  `/refer-embed` slash commands.
+- `yr` chord copies the block's ref handle to the OS clipboard via
+  arboard.
+- outl brand (palette, icon, chrome) applied; mobile and TUI now
+  look like the same product.
+
+### CLI (`outl-cli`)
+
+- **`outl migrate-to-shared` subcommand** rewrites a legacy SQLite
+  workspace into the JSONL + sidecar layout consumed by both
+  clients.
+- `outl doctor` flags orphan `((blk-X))` and `!((blk-X))` handles.
+
+### CI / release
+
+- Release workflow rewritten as `prepare → tag → create_release
+  (draft) → build matrix → publish_release`. Single `gh release
+  create --draft` before the matrix and `gh release upload
+  --clobber` per matrix leg, so paralleled jobs don't race each
+  other on a repo with Immutable Releases turned on.
+- macOS Intel binary now cross-compiles from `macos-latest` (ARM)
+  instead of relying on the depleted `macos-13` runner pool.
+- `outl-mobile` excluded from Linux CI jobs (Tauri iOS toolchain is
+  macOS-only).
+
 ## [0.2.0] — 2026-05-26
 
 Backlinks become a first-class part of the TUI: they live inline below

@@ -59,6 +59,19 @@ a time:
 
 [tests]: https://github.com/avelino/outl/actions
 
+## Background reading
+
+Long-form posts about the engineering behind outl, published on
+[avelino.run](https://avelino.run):
+
+- **[File sync isn't trivial](https://avelino.run/file-sync-isnt-trivial/)**
+  — the distributed-systems problem behind concurrent file moves,
+  and what a formally-verified algorithm gives you that ad-hoc merge
+  doesn't.
+- **[From paper to outliner](https://avelino.run/from-paper-to-outliner/)**
+  — the engineering between a CRDT proof and a shipped app:
+  projections, reconciliation, transport edge cases, editor state.
+
 ## Contributing
 
 The README on GitHub has the install bits and the dev workflow. Open
