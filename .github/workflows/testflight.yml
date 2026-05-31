@@ -111,6 +111,16 @@ jobs:
           echo "build_number=${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "::notice::TestFlight ${SHORT_VERSION} (build ${BUILD_NUMBER})"
 
+      # `macos-latest` (and earlier macos-* labels) default to Xcode
+      # 16.4, which ships the iOS 18.5 SDK. App Store Connect
+      # requires the iOS 26 SDK (Xcode 26+) for all uploads as of
+      # 2026-04. Pin to the latest stable Xcode installed on the
+      # runner image — that's Xcode 26.x on macos-15 today.
+      - name: Select latest-stable Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
       - name: Show toolchain versions
         run: |
           xcodebuild -version
@@ -333,6 +343,33 @@ jobs:
           echo "::group::libapp.a phase membership after strip"
           grep -nE "libapp\.a in (Resources|Frameworks)" "$PBX" || true
           echo "::endgroup::"
+
+      # --------------------------------------------------------------
+      # Strip alpha from the marketing icon (1024x1024).
+      #
+      # App Store Connect rejects uploads whose marketing icon has
+      # any transparency: "The large app icon in the asset catalog
+      # in 'outl.app' can't be transparent or contain an alpha
+      # channel." (validation error 409, ID 2c272586-...)
+      #
+      # Solution: composite the existing RGBA PNG over a solid
+      # black background and strip the alpha channel. ImageMagick
+      # is preinstalled on macos-* runners. We only touch
+      # `AppIcon-512@2x.png` (the 1024x1024 marketing icon) —
+      # smaller icons may keep alpha without breaking validation.
+      # --------------------------------------------------------------
+      - name: Strip alpha from marketing icon
+        run: |
+          ICON="crates/outl-mobile/src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png"
+          if [[ ! -f "$ICON" ]]; then
+            echo "::error::Marketing icon not found at $ICON"
+            exit 1
+          fi
+          echo "Before:"
+          sips -g hasAlpha -g pixelWidth -g pixelHeight "$ICON" | tail -3
+          magick "$ICON" -background black -alpha remove -alpha off "$ICON"
+          echo "After:"
+          sips -g hasAlpha -g pixelWidth -g pixelHeight "$ICON" | tail -3
 
       # --------------------------------------------------------------
       # Build. `cargo tauri ios build` runs xcodegen, compiles the
