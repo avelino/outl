@@ -284,6 +284,57 @@ jobs:
           echo "::endgroup::"
 
       # --------------------------------------------------------------
+      # Drop the static `libapp.a` from the Resources build phase.
+      #
+      # `cargo tauri ios init` adds the Rust output (`libapp.a`) to
+      # BOTH the Frameworks phase (correct — it must be linked) AND
+      # the Resources phase (wrong — Resources copies files into the
+      # bundle, and the file ref is hardcoded to
+      # `Externals/arm64/debug/libapp.a`, not `${CONFIGURATION}`).
+      #
+      # In a Debug build the path happens to line up. A Release/
+      # archive build writes to `arm64/release/libapp.a`, so the
+      # Resources copy step fails with `lstat ... debug/libapp.a:
+      # No such file or directory` — exactly the failure we hit on
+      # the previous TestFlight attempt.
+      #
+      # Removing the Resources entry is safe: the lib still links
+      # via the Frameworks phase, and a `.a` has no business being
+      # copied as a runtime resource anyway.
+      # --------------------------------------------------------------
+      - name: Patch xcodeproj — strip libapp.a from Resources
+        run: |
+          PBX="crates/outl-mobile/src-tauri/gen/apple/outl-mobile.xcodeproj/project.pbxproj"
+          python3 - "$PBX" <<'PY'
+          import re, sys, pathlib
+          path = pathlib.Path(sys.argv[1])
+          text = path.read_text()
+          m = re.search(
+              r'(\w+) /\* libapp\.a in Resources \*/ = '
+              r'\{isa = PBXBuildFile; fileRef = \w+ /\* libapp\.a \*/; \};',
+              text,
+          )
+          if not m:
+              print("::warning::libapp.a Resources entry not found; nothing to strip")
+              sys.exit(0)
+          bid = m.group(1)
+          # Remove the PBXBuildFile declaration line.
+          pat_def = re.compile(
+              rf'\s*{bid} /\* libapp\.a in Resources \*/ = '
+              rf'\{{isa = PBXBuildFile; fileRef = \w+ /\* libapp\.a \*/; \}};\n'
+          )
+          text, n1 = pat_def.subn('', text)
+          # Remove the entry from the Resources phase `files = (...)` list.
+          pat_ref = re.compile(rf'\s*{bid} /\* libapp\.a in Resources \*/,\n')
+          text, n2 = pat_ref.subn('', text)
+          path.write_text(text)
+          print(f"::notice::Stripped libapp.a from Resources (def={n1}, ref={n2})")
+          PY
+          echo "::group::libapp.a phase membership after strip"
+          grep -nE "libapp\.a in (Resources|Frameworks)" "$PBX" || true
+          echo "::endgroup::"
+
+      # --------------------------------------------------------------
       # Build. `cargo tauri ios build` runs xcodegen, compiles the
       # Rust libs for aarch64-apple-ios, archives via xcodebuild and
       # writes the signed IPA to `gen/apple/build/outl.ipa`.
