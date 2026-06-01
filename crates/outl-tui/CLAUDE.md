@@ -53,6 +53,7 @@ we replace the AST node's `.text` and call `save()`, which writes the
 | `o` | new block below + Insert |
 | `O` | new block above + Insert |
 | `dd` | delete current block (chord) |
+| `c` | fold / unfold the current block. Bullet row shows `▼ `/`▶ ` for parents (two-space gap on leaves so columns stay flush). Hidden subtrees are skipped by `j`/`k`. Persisted as `Op::SetCollapsed` in the op log — converges across devices through the CRDT, no per-file last-write-wins. |
 | `y r` | copy current block's ref handle (`((blk-XXXXXX))`) to OS clipboard (via `arboard`) + `last_yanked_ref` (chord). Status flips to `yanked … (clipboard unavailable)` on headless / no-display environments. |
 | `?` | toggle help popup |
 | `q q` | quit (chord — single `q` arms; second `q` confirms) |

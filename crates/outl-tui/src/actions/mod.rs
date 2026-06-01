@@ -20,6 +20,7 @@
 //! consumed by `input` / `view`) is re-exported from this file.
 
 pub(crate) mod block;
+pub(crate) mod collapsed;
 pub(crate) mod exec;
 pub(crate) mod history;
 pub(crate) mod lifecycle;

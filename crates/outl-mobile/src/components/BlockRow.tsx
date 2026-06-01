@@ -27,6 +27,13 @@ interface BlockRowProps {
   onIndent: (id: string) => void;
   onOutdent: (id: string) => void;
   onCreateAfter: (id: string) => void;
+  /**
+   * Flip the block's collapsed flag. Implemented by the parent so
+   * the persistence path (Tauri → sidecar) is shared with every
+   * other block-mutating action and the parent can re-render with
+   * the fresh `PageView`.
+   */
+  onToggleCollapse: (id: string, next: boolean) => void;
   onRefClick?: (target: string) => void;
   onTagClick?: (tag: string) => void;
   onTextareaMount?: (el: HTMLTextAreaElement) => void;
@@ -41,6 +48,7 @@ const INDENT_PX = 22;
 
 export function BlockRow(props: BlockRowProps): JSX.Element {
   const isEditing = () => props.editingId === props.block.id;
+  const hasChildren = () => props.block.children.length > 0;
 
   return (
     <div class="relative">
@@ -56,6 +64,11 @@ export function BlockRow(props: BlockRowProps): JSX.Element {
           editing={isEditing()}
           draftText={props.draftText}
           depth={props.depth}
+          hasChildren={hasChildren()}
+          onToggleCollapse={() => {
+            haptic("light");
+            props.onToggleCollapse(props.block.id, !props.block.collapsed);
+          }}
           onStartEdit={() =>
             props.onStartEdit(props.block.id, rawTextWithTodo(props.block))
           }
@@ -80,7 +93,7 @@ export function BlockRow(props: BlockRowProps): JSX.Element {
         />
       </SwipeRow>
 
-      <Show when={props.block.children.length > 0}>
+      <Show when={hasChildren() && !props.block.collapsed}>
         <div class="relative">
           {/* Guide line connecting parent bullet to children */}
           <span
@@ -103,6 +116,7 @@ export function BlockRow(props: BlockRowProps): JSX.Element {
                 onIndent={props.onIndent}
                 onOutdent={props.onOutdent}
                 onCreateAfter={props.onCreateAfter}
+                onToggleCollapse={props.onToggleCollapse}
                 onRefClick={props.onRefClick}
                 onTagClick={props.onTagClick}
                 onTextareaMount={props.onTextareaMount}
@@ -122,6 +136,12 @@ function BlockBody(props: {
    *  editing rows don't subscribe to `draft()`. */
   draftText: () => string;
   depth: number;
+  /** `true` when the block has at least one child. Drives the
+   *  triangle marker (▶/▼). */
+  hasChildren: boolean;
+  /** Flip `block.collapsed`. No-op visually when `hasChildren` is
+   *  `false`; the tap target hides itself in that case. */
+  onToggleCollapse: () => void;
   onStartEdit: () => void;
   onDraftChange: (text: string) => void;
   onCommitEdit: () => void;
@@ -211,6 +231,14 @@ function BlockBody(props: {
       onPointerCancel={onPointerUp}
       onClick={onClick}
     >
+      <CollapseTriangle
+        visible={props.hasChildren}
+        collapsed={props.block.collapsed}
+        onToggle={() => {
+          props.onToggleCollapse();
+        }}
+      />
+
       <BulletOrCheckbox
         todo={props.editing ? null : props.block.todo}
         onToggle={() => {
@@ -255,6 +283,37 @@ function BlockBody(props: {
         </Show>
       </div>
     </div>
+  );
+}
+
+function CollapseTriangle(props: {
+  visible: boolean;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  // Always reserve the slot — even on leaves — so the bullet column
+  // stays put regardless of whether a sibling has children. Width
+  // matches the bullet (`w-[26px]`).
+  return (
+    <Show
+      when={props.visible}
+      fallback={<span aria-hidden="true" class="w-[18px] shrink-0" />}
+    >
+      <button
+        type="button"
+        aria-label={props.collapsed ? "Expand block" : "Collapse block"}
+        aria-expanded={!props.collapsed}
+        onClick={(e) => {
+          e.stopPropagation();
+          props.onToggle();
+        }}
+        class="relative z-10 -my-1.5 -ml-1 flex h-[30px] w-[18px] shrink-0 items-center justify-center text-(--color-ios-text-tertiary) dark:text-(--color-iosd-text-tertiary)"
+      >
+        <span aria-hidden="true" class="text-[10px] leading-none">
+          {props.collapsed ? "▶" : "▼"}
+        </span>
+      </button>
+    </Show>
   );
 }
 

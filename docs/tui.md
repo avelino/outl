@@ -37,6 +37,7 @@ characters insert themselves — every key is a command.
 | `Tab` / `Shift-Tab` | Indent / outdent the current block |
 | `K` / `J` (or `Alt+↑/↓`) | Move block up / down |
 | `dd` | Delete the current block (chord) |
+| `c` | Fold / unfold the current block. The bullet row shows `▼ ` (expanded) or `▶ ` (collapsed) when the block has children, two spaces otherwise. Children are hidden from the outline while collapsed and `j` / `k` skip past them, but the underlying tree is untouched. State is persisted as an `Op::SetCollapsed` in the op log — every device replays the same sequence, so the fold layout converges across iCloud / Syncthing peers without relying on file-level last-write-wins (which would lose concurrent flips). No-op on a block whose sidecar entry hasn't been written yet (save first). |
 | `y r` | Yank the current block's ref handle (`((blk-XXXXXX))`) to the OS clipboard + `last_yanked_ref` (chord). On headless / no-clipboard environments it falls back to the status line only. |
 | `Ctrl+Enter` / `Ctrl+T` | Cycle the block's TODO / DONE / none prefix (`Ctrl+T` is the portable fallback for tmux / Terminal.app, which collapse `Ctrl+Enter` into plain `Enter`) |
 | `u` / `Ctrl+R` | Undo / redo |

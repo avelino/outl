@@ -160,7 +160,18 @@ fn render_backlink_node(
     };
 
     let has_auto_run = node.properties.iter().any(|(k, _)| k == "auto-run");
-    emit_block_lines(indent, bullet_style, &mode, has_auto_run, app, out);
+    // Backlinks render a *projection* of a source block — fold state
+    // belongs to the source page's outline, not here. Always pass
+    // `None` so the layout stays flush.
+    emit_block_lines(
+        indent,
+        bullet_style,
+        &mode,
+        has_auto_run,
+        crate::view::outline::FoldMarker::None,
+        app,
+        out,
+    );
 
     for (k, v) in &node.properties {
         let mut spans: Vec<Span<'_>> = Vec::new();

@@ -109,8 +109,33 @@ pub(crate) fn render_block(
         }
     };
 
+    // Fold indicator for the bullet row.
+    //   - `▼ ` when the block has children and is expanded
+    //   - `▶ ` when it has children and is collapsed
+    //   - `  ` (two spaces) when it has no children — keeps column
+    //     alignment with the other two cases so the bullet column
+    //     never jitters across blocks on the same indent.
+    let block_id = app.id_by_flat.get(*cursor).copied();
+    let is_collapsed = block_id
+        .map(|id| app.collapsed.contains(&id))
+        .unwrap_or(false);
+    let has_children = !b.children.is_empty();
+    let fold_marker = match (has_children, is_collapsed) {
+        (false, _) => FoldMarker::None,
+        (true, false) => FoldMarker::Expanded,
+        (true, true) => FoldMarker::Collapsed,
+    };
+
     let has_auto_run = b.properties.iter().any(|(k, _)| k == "auto-run");
-    emit_block_lines(indent, bullet_style, &mode, has_auto_run, app, out);
+    emit_block_lines(
+        indent,
+        bullet_style,
+        &mode,
+        has_auto_run,
+        fold_marker,
+        app,
+        out,
+    );
 
     for (k, v) in &b.properties {
         let mut prop_spans: Vec<Span<'_>> = Vec::new();
@@ -144,8 +169,17 @@ pub(crate) fn render_block(
     }
 
     *cursor += 1;
-    for child in &b.children {
-        render_block(child, indent + 1, cursor, app, out, selected_line);
+    if is_collapsed {
+        // Children are hidden — but the flat cursor still has to
+        // skip past them because `App.selected` and friends index
+        // the full DFS preorder (collapsed or not). Without this
+        // bump, selection bookkeeping for blocks *below* the
+        // collapsed subtree would shift up by `flat_count(children)`.
+        *cursor += outl_md::outline_ops::flat_count(&b.children);
+    } else {
+        for child in &b.children {
+            render_block(child, indent + 1, cursor, app, out, selected_line);
+        }
     }
 }
 
@@ -222,6 +256,21 @@ fn emit_embedded_children(
     }
 }
 
+/// Fold indicator drawn before the bullet on the bullet row.
+///
+/// `None` keeps a two-cell gap so leaf rows align with their parent
+/// at the same indent — without it, a leaf's `-` would slide left
+/// the moment a sibling grew children.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FoldMarker {
+    /// Block has no children — no marker, gap only.
+    None,
+    /// Block has children and they're visible. `▼ ` prefix.
+    Expanded,
+    /// Block has children but they're folded away. `▶ ` prefix.
+    Collapsed,
+}
+
 /// Where the cursor sits on a block being rendered, and what style
 /// the renderer should use for it. The UI-agnostic decomposition
 /// lives in [`outl_md::view`]; this enum carries the *TUI-flavored*
@@ -250,6 +299,7 @@ pub(crate) fn emit_block_lines(
     bullet_style: Style,
     mode: &RenderMode,
     has_auto_run: bool,
+    fold: FoldMarker,
     app: &App,
     out: &mut Vec<Line<'static>>,
 ) {
@@ -276,6 +326,15 @@ pub(crate) fn emit_block_lines(
         }
         match row.kind {
             BlockRowKind::Bullet => {
+                // Fold indicator goes first — two-cell slot whether
+                // the marker is visible or not. Keeps the bullet `-`
+                // column stable across siblings (leaf next to a
+                // parent must line up).
+                match fold {
+                    FoldMarker::None => spans.push(Span::raw("  ")),
+                    FoldMarker::Expanded => spans.push(Span::styled("▼ ", app.theme.dim)),
+                    FoldMarker::Collapsed => spans.push(Span::styled("▶ ", app.theme.hint)),
+                }
                 // Blocks with `auto-run::` get a ⚡ before the bullet
                 // so the user can see at a glance which cells re-run
                 // themselves on page open.
@@ -287,8 +346,11 @@ pub(crate) fn emit_block_lines(
             BlockRowKind::Continuation
             | BlockRowKind::CodeFenceMarker
             | BlockRowKind::CodeFenceBody => {
-                // Indent the continuation rows by the same width
-                // the ⚡ added on the bullet row so columns align.
+                // Mirror the bullet-row's pre-bullet padding so
+                // continuation rows stay aligned with the bullet
+                // column above them (two cells for the fold slot,
+                // one extra cell when `⚡` is present).
+                spans.push(Span::raw("  "));
                 if has_auto_run {
                     spans.push(Span::raw(" "));
                 }

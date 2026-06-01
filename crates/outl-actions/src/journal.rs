@@ -261,7 +261,7 @@ fn build_sidecar_from_ast(
         &mut blocks,
     );
     Sidecar {
-        version: 2,
+        version: outl_md::sidecar::SIDECAR_VERSION,
         page_id,
         last_synced_hash: file_hash(md),
         last_synced_at: chrono::Local::now().fixed_offset(),

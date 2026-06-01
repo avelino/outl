@@ -176,7 +176,8 @@ fn collect_internal(path: &Path, probe_lock: bool) -> Result<DoctorReport, ApiEr
                             outl_core::op::Op::Move { node, .. }
                             | outl_core::op::Op::Edit { node, .. }
                             | outl_core::op::Op::SetProp { node, .. }
-                            | outl_core::op::Op::Create { node, .. } => *node,
+                            | outl_core::op::Op::Create { node, .. }
+                            | outl_core::op::Op::SetCollapsed { node, .. } => *node,
                         };
                         ids.insert(node);
                     }

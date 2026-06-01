@@ -695,6 +695,8 @@ fn help_tab_body(tab: usize, app: &App) -> Vec<Line<'static>> {
             Line::from("  dd          delete block"),
             Line::from("  yy / p / P  yank · paste after · paste before"),
             Line::from("  Ctrl+T      cycle TODO / DONE / none"),
+            Line::from("  c           fold / unfold the selected block"),
+            Line::from("              (▼ expanded · ▶ collapsed · synced via sidecar)"),
             Line::from("  u / Ctrl+R  undo / redo"),
             Line::from("  g p         toggle pinned:: on this page (chord)"),
             Line::from(""),

@@ -8,6 +8,7 @@
 //! materialise straight from the op log (e.g. doctor, debug dumps).
 
 use std::path::Path;
+use std::str::FromStr;
 
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
@@ -34,6 +35,15 @@ pub struct OutlineNode {
     /// `None` for a plain bullet, `Some(Todo)` / `Some(Done)` otherwise.
     #[serde(serialize_with = "serialize_todo_state")]
     pub todo: Option<TodoState>,
+    /// Whether the block is rendered collapsed (children hidden) in
+    /// the outline. UI-state echoed from the sidecar; clients SHOULD
+    /// still send `children` so the renderer can show a "(N hidden)"
+    /// hint without a second round trip.
+    ///
+    /// Mutated via `outl_actions::block::toggle_block_collapsed` /
+    /// `set_block_collapsed`, which write directly to the sidecar
+    /// (no `Op` — UI state never enters the op log).
+    pub collapsed: bool,
     /// Children, in their fractional-index order.
     pub children: Vec<OutlineNode>,
 }
@@ -60,6 +70,7 @@ pub fn project_outline(workspace: &Workspace, parent: NodeId) -> Vec<OutlineNode
                 id: id.to_string(),
                 text: body.to_string(),
                 todo,
+                collapsed: workspace.tree().is_collapsed(id),
                 children: project_outline(workspace, id),
             }
         })
@@ -97,6 +108,36 @@ pub fn read_page_view(root: &Path, meta: &PageMeta) -> Result<Vec<OutlineNode>, 
     Ok(nodes)
 }
 
+/// Same as [`read_page_view`] but overlays the workspace's
+/// `Op::SetCollapsed` state so each [`OutlineNode`] reports the
+/// authoritative `collapsed` flag. UI clients (TUI, mobile) **must**
+/// use this variant — the bare `read_page_view` leaves `collapsed`
+/// at `false` because it has no op log in scope.
+pub fn read_page_view_with_workspace(
+    root: &Path,
+    meta: &PageMeta,
+    workspace: &Workspace,
+) -> Result<Vec<OutlineNode>, ActionError> {
+    let mut nodes = read_page_view(root, meta)?;
+    overlay_collapsed(&mut nodes, workspace);
+    Ok(nodes)
+}
+
+/// Walk `nodes` in place, setting `collapsed` from
+/// `workspace.tree().is_collapsed(id)` for every node whose id parses
+/// as a valid `NodeId`. Transient ids (the ones minted by
+/// `outline_from_parsed` when the sidecar is missing / short) skip
+/// the overlay — they're not in the op log yet.
+fn overlay_collapsed(nodes: &mut [OutlineNode], workspace: &Workspace) {
+    for node in nodes {
+        if let Ok(ulid) = ulid::Ulid::from_str(&node.id) {
+            let id = NodeId(ulid);
+            node.collapsed = workspace.tree().is_collapsed(id);
+        }
+        overlay_collapsed(&mut node.children, workspace);
+    }
+}
+
 enum SidecarBlockCursor<'a> {
     Some(std::slice::Iter<'a, SidecarBlock>),
     None,
@@ -132,10 +173,15 @@ fn outline_from_parsed(
         .iter()
         .map(|child| outline_from_parsed(child, iter))
         .collect();
+    // `collapsed` is overlaid by the caller using the workspace as the
+    // source of truth (`Op::SetCollapsed` lives in the op log). The
+    // bare `read_page_view` path leaves it `false`; the workspace-
+    // aware `read_page_view_with_workspace` patches it.
     OutlineNode {
         id,
         text: body.to_string(),
         todo,
+        collapsed: false,
         children,
     }
 }

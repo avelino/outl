@@ -220,6 +220,12 @@ Format: JSON.
 }
 ```
 
+> The sidecar is **structural matching metadata only** — block id,
+> position, content hash, ref handle. State that must converge
+> between devices (fold flags, etc.) lives in the op log
+> (`outl-core`), never here. iCloud syncs the sidecar with LWW
+> per-file, which would silently drop concurrent writes.
+
 ### Fields
 
 - `version`: always present, integer. Future migrations check this.

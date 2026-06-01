@@ -12,7 +12,10 @@ same paranoia as the CRDT.
 - Parse `.md` (clean, no IDs) → outline AST
 - Render outline AST → `.md` (clean, no IDs)
 - Read/write `.outl` sidecar (JSON, dotfile) — current version `2`,
-  reads v1 transparently (handles backfilled on load)
+  reads v1 transparently (handles backfilled on load). The sidecar
+  is **structural metadata only** (id, line, indent, content hash,
+  ref handle). State that must converge between devices (fold flags,
+  pinned, etc.) goes through the op log in `outl-core`, never here.
 - The 3-level matching algorithm (external edit → reconstruct IDs)
 - Diff (old AST + new AST + old sidecar blocks) → minimal sequence of
   `Op`s, preserving `ref_handle` verbatim on level-1/2 matches. The
@@ -125,6 +128,15 @@ Current version: `2`. Full spec in
   sidecars (no field) load fine — the handle is backfilled in memory
   via `derive_ref_handle`. The next write persists v2. On collision,
   expansion may produce a 7+ char form (see `derive_ref_handle` above).
+
+**Sidecar is not a sync surface.** UI state that must converge between
+devices — fold flags, pinned, selection, anything user-meaningful —
+goes through the op log (`outl-core`), not here. iCloud / Syncthing
+sync the sidecar file as one blob with last-write-wins semantics, so
+two devices flipping different fields in the same window lose data.
+The op log gives each actor its own jsonl, lets the FS sync per-file
+without conflict, and reconverges through the CRDT. See the root
+`CLAUDE.md` invariant 7.
 - Sidecar lives next to the `.md` as `pages/<slug>.outl` (no leading
   dot). Replicated between devices alongside the `.md`. Don't
   gitignore by default. The dotfile form (`.foo.outl`) was abandoned

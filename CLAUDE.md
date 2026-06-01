@@ -42,6 +42,19 @@ These are the non-negotiables. Violating any one breaks user trust irreversibly.
 6. **Delete is `Move(node, TRASH_ROOT)`, not physical removal.** Simplifies the
    algorithm and preserves history.
 
+7. **Any state that must converge between devices goes through the op log.**
+   If two users (or one user on two devices) can disagree about a value
+   and you want them to reconcile, the state belongs in an `Op` — *never*
+   in a shared file with last-write-wins semantics. The op log gives each
+   actor its own `ops-<actor>.jsonl`, lets iCloud / Syncthing / shared FS
+   sync per-file (no merge conflicts), and replays through the CRDT with
+   HLC ordering for deterministic convergence. Writing the state into the
+   sidecar (or any single shared file) bypasses all of that and loses
+   concurrent writes silently. **Default position: model it as an Op.**
+   `Op::SetCollapsed` for the fold flag is the canonical example. The
+   sidecar carries only **structural matching metadata** (ids, position,
+   content hash, ref handle) — it is not a sync surface.
+
 ## Repo layout
 
 ```

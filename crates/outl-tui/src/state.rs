@@ -13,15 +13,17 @@ use crate::edit_buffer::EditBuffer;
 use crate::theme::Theme;
 use chrono::NaiveDate;
 use outl_core::hlc::HlcGenerator;
+use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
 use outl_exec::RuntimeRegistry;
 use outl_md::index::WorkspaceIndex;
 use outl_md::parse::{OutlineNode, ParsedPage};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
 pub(crate) const HELP_HINT_NORMAL: &str =
-    "i edit  o new  h/l cursor  Enter open ref  K/J move  C-T TODO  u undo  ? help  q";
+    "i edit  o new  c fold  Enter open ref  K/J move  C-T TODO  u undo  ? help  q";
 pub(crate) const HELP_HINT_INSERT: &str =
     "Esc commit  Enter new block  Ctrl+T TODO  Tab indent  Shift-Tab outdent";
 pub(crate) const HELP_HINT_VISUAL: &str =
@@ -462,6 +464,40 @@ pub(crate) struct App {
     /// from `status`, which still drives the single-line footer
     /// message (e.g. chord prompts).
     pub(crate) toasts: Vec<Toast>,
+
+    /// Block ids currently rendered collapsed (children hidden) in
+    /// the outline. Mirrors the sidecar's `collapsed` flag for every
+    /// block on the active page; populated on every `load_current`.
+    ///
+    /// Source of truth lives in the sidecar — this is just the
+    /// fast-path the renderer consults to skip subtrees. Toggling
+    /// goes through `outl_actions::toggle_block_collapsed`, which
+    /// writes the sidecar; the local HashSet is patched optimistically.
+    pub(crate) collapsed: HashSet<NodeId>,
+
+    /// Flat DFS-preorder map from the outline's flat index (the
+    /// `cursor` the render walk maintains, also `App.selected`) to
+    /// the block's `NodeId`. Populated on every `load_current` from
+    /// the freshly-read sidecar's `blocks` list (which is itself in
+    /// DFS preorder by construction).
+    ///
+    /// The render walk needs an id-by-position lookup to consult
+    /// `collapsed`; `outl-md::parse::OutlineNode` does not carry the
+    /// id, and going through the workspace index every step would be
+    /// O(N) per render. This vector is cheap to (re)build and stays
+    /// in sync with `page.blocks` because both are reconstructed
+    /// together in `load_current_no_autorun`.
+    pub(crate) id_by_flat: Vec<NodeId>,
+
+    /// `hidden_by_collapse[i]` is `true` when the i-th flat block
+    /// has at least one ancestor whose id is in [`Self::collapsed`].
+    /// Used by `step_forward`/`step_backward` to skip past folded
+    /// subtrees so `j`/`k` never leave the user pointing at an
+    /// invisible block.
+    ///
+    /// Recomputed whenever `collapsed` changes
+    /// (`recompute_hidden_by_collapse`).
+    pub(crate) hidden_by_collapse: Vec<bool>,
 
     /// Where the cursor lives — outline (default) or inside the inline
     /// backlinks section. Reset to `Focus::Outline` whenever the view

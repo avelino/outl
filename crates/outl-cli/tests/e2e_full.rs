@@ -69,6 +69,10 @@ fn full_workspace_lifecycle() {
             handle.to_lowercase(),
             "handle must be lowercase: {handle}"
         );
+        assert!(
+            b.get("collapsed").is_none(),
+            "default-false `collapsed` must be omitted on write: {b:?}"
+        );
     }
 
     // 5. assertions on the .md — must stay CLEAN (no id::, no UUIDs)

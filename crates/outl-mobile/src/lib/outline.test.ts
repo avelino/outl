@@ -9,7 +9,7 @@ import {
 } from "./outline";
 
 function block(id: string, text = "", children: BlockNode[] = []): BlockNode {
-  return { id, text, todo: null, children };
+  return { id, text, todo: null, collapsed: false, children };
 }
 
 describe("findBlock", () => {
@@ -76,12 +76,24 @@ describe("rawTextWithTodo", () => {
   });
 
   it("reattaches TODO prefix", () => {
-    const b: BlockNode = { id: "x", text: "ship it", todo: "TODO", children: [] };
+    const b: BlockNode = {
+      id: "x",
+      text: "ship it",
+      todo: "TODO",
+      collapsed: false,
+      children: [],
+    };
     expect(rawTextWithTodo(b)).toBe("TODO ship it");
   });
 
   it("reattaches DONE prefix", () => {
-    const b: BlockNode = { id: "x", text: "ship it", todo: "DONE", children: [] };
+    const b: BlockNode = {
+      id: "x",
+      text: "ship it",
+      todo: "DONE",
+      collapsed: false,
+      children: [],
+    };
     expect(rawTextWithTodo(b)).toBe("DONE ship it");
   });
 });

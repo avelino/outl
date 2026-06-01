@@ -92,6 +92,12 @@ enum Op {
         parent: NodeId,
         position: Fractional,
     },
+    SetCollapsed {
+        node: NodeId,
+        value: bool,
+        // Populated by do_op; needed for undo.
+        old_value: bool,
+    },
 }
 
 struct LogOp {
@@ -108,6 +114,17 @@ exactly to the pre-op state.
 **`Delete` is intentionally not an op.** Deleting node `N` is `Move(N, TRASH_ROOT)`.
 This simplifies the algorithm — concurrent edit + delete becomes concurrent
 edit + move — and preserves the deleted subtree for history/undo.
+
+**`SetCollapsed` carries UI fold state through the op log.** The flag controls
+whether a block renders with its children hidden in the outline view —
+presentation state, but globally meaningful across devices. Routing it
+through an `Op` (rather than a sidecar field) is what gives concurrent
+flips a real merge semantics: each device appends to its own
+`ops-<actor>.jsonl`, HLC + actor tiebreak resolves any timing collision
+deterministically, and idempotent re-apply of the same `LogOp` is a no-op.
+This is the canonical pattern for any future per-block UI state that
+must converge — pin status, custom colour, whatever. The sidecar carries
+only structural matching metadata; sync state belongs on the op log.
 
 ---
 

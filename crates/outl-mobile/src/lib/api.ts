@@ -7,6 +7,13 @@ export interface BlockNode {
   id: string;
   text: string;
   todo: TodoState | null;
+  /**
+   * UI fold state echoed from the sidecar. `true` means the children
+   * are hidden in the outline. Mutated via `setBlockCollapsed` —
+   * persists in `.outl` so the state survives across sessions and
+   * (since the sidecar syncs through iCloud) across devices.
+   */
+  collapsed: boolean;
   children: BlockNode[];
 }
 
@@ -139,4 +146,18 @@ export function moveBlockDown(pageId: string, id: string): Promise<PageView> {
 
 export function reloadWorkspace(): Promise<void> {
   return invoke<void>("reload_workspace");
+}
+
+/**
+ * Persist the collapsed flag on a single block. The backend writes
+ * straight to the sidecar (no `Op` is generated — collapsed is UI
+ * state). Returns the refreshed page view so the caller can re-render
+ * in one round trip.
+ */
+export function setBlockCollapsed(
+  pageId: string,
+  id: string,
+  collapsed: boolean,
+): Promise<PageView> {
+  return invoke<PageView>("set_block_collapsed", { pageId, id, collapsed });
 }

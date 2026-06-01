@@ -26,6 +26,7 @@ import {
   reloadWorkspace,
   resolveRef,
   searchPages,
+  setBlockCollapsed,
   todaySlug,
   toggleTodo,
   workspaceStats,
@@ -506,6 +507,19 @@ export function Journal() {
     if (next) applyView(next);
   }
 
+  /**
+   * Flip the collapsed flag on a block. UI state — does not enter
+   * the op log; the backend writes the sidecar directly and returns
+   * a fresh page view so the renderer picks up the new flag in the
+   * same frame the user tapped the triangle.
+   */
+  async function handleToggleCollapse(id: string, next: boolean) {
+    const pid = pageId();
+    if (!pid) return;
+    const updated = await withError(() => setBlockCollapsed(pid, id, next));
+    if (updated) applyView(updated);
+  }
+
   async function handleIndent(id: string) {
     const pid = pageId();
     if (!pid) return;
@@ -903,6 +917,7 @@ export function Journal() {
                   onIndent={handleIndent}
                   onOutdent={handleOutdent}
                   onCreateAfter={handleCreateAfter}
+                  onToggleCollapse={handleToggleCollapse}
                   onRefClick={handleRefClick}
                   onTagClick={handleTagClick}
                   onTextareaMount={(el) => {

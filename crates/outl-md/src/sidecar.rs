@@ -17,6 +17,13 @@ use std::path::{Path, PathBuf};
 /// - **2** — added `ref_handle` on every block to power `((blk-XXXXXX))`
 ///   inline references. Backward-compatible read: v1 sidecars load fine
 ///   and their handles are derived on the fly from the block id.
+///
+/// Note: the sidecar is intentionally **only structural metadata**
+/// (ids, position, content hashes, ref handles). Any state that needs
+/// to *converge between devices* — collapsed/folded blocks, future
+/// per-block flags — goes through the `Op` log in `outl-core`, not
+/// here. The sidecar is a projection cache for matching `.md` ↔ tree;
+/// it is not a sync surface. See the root `CLAUDE.md` invariants.
 pub const SIDECAR_VERSION: u32 = 2;
 
 /// Lowest sidecar version this crate is willing to read.
