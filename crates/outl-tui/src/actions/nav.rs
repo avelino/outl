@@ -119,8 +119,17 @@ impl App {
     fn step_forward(&mut self) -> bool {
         match self.focus.clone() {
             Focus::Outline => {
-                if self.selected + 1 < self.flat_len {
-                    self.selected += 1;
+                // Walk forward until we hit a visible block (not
+                // hidden under a collapsed ancestor) or fall off the
+                // end of the outline.
+                let mut next = self.selected + 1;
+                while next < self.flat_len
+                    && self.hidden_by_collapse.get(next).copied().unwrap_or(false)
+                {
+                    next += 1;
+                }
+                if next < self.flat_len {
+                    self.selected = next;
                     self.cursor_col = 0;
                     return true;
                 }
@@ -173,12 +182,23 @@ impl App {
     fn step_backward(&mut self) -> bool {
         match self.focus.clone() {
             Focus::Outline => {
-                if self.selected > 0 {
-                    self.selected -= 1;
-                    self.cursor_col = 0;
-                    return true;
+                // Walk backward over hidden subtree entries the same
+                // way `step_forward` skips them going down.
+                if self.selected == 0 {
+                    return false;
                 }
-                false
+                let mut prev = self.selected - 1;
+                while prev > 0 && self.hidden_by_collapse.get(prev).copied().unwrap_or(false) {
+                    prev -= 1;
+                }
+                if self.hidden_by_collapse.get(prev).copied().unwrap_or(false) {
+                    // Reached the top still inside a collapsed
+                    // subtree — no visible previous block.
+                    return false;
+                }
+                self.selected = prev;
+                self.cursor_col = 0;
+                true
             }
             Focus::Backlink { idx, sub_path } => {
                 let slug = self.current_slug();

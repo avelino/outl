@@ -72,6 +72,31 @@ pub enum Op {
         /// Initial position among siblings.
         position: Fractional,
     },
+
+    /// Set the **collapsed** (folded) flag of a node.
+    ///
+    /// Controls whether the block's children are hidden in the outline
+    /// view. UI presentation, but globally meaningful — folding a
+    /// block on one device shows up folded on every other device.
+    ///
+    /// **Going through `Op` is the canonical path for any per-block
+    /// state that must converge between devices.** Writing such state
+    /// straight to a sidecar would lose under iCloud / Syncthing's
+    /// last-write-wins-per-file semantics; the op log gives each
+    /// device its own `ops-<actor>.jsonl` and lets the CRDT merge
+    /// concurrent flips by HLC ordering. Idempotent re-apply of the
+    /// same `LogOp` is a no-op (the HLC dedup at the top of
+    /// [`crate::tree::Tree::apply_op`] guarantees this).
+    ///
+    /// `old_value` is populated by `do_op` for `undo_op`.
+    SetCollapsed {
+        /// The node being folded / unfolded.
+        node: NodeId,
+        /// Desired flag.
+        value: bool,
+        /// Filled by `do_op` for `undo_op`.
+        old_value: bool,
+    },
 }
 
 /// An op wrapped with its HLC and actor.

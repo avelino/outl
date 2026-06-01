@@ -37,8 +37,8 @@ use outl_actions::{
     delete, edit_text, find_by_slug, indent, journal_slug, journal_title, list_pages,
     migrate_legacy_into_today, move_down, move_up, next_journal_date, open_journal,
     open_or_create_page, open_today, outdent, page_meta as page_meta_action, previous_journal_date,
-    read_page_view, today, toggle_todo as action_toggle_todo, ActionError, Backlink, OutlineNode,
-    PageKind, PageMeta,
+    read_page_view_with_workspace, set_block_collapsed as action_set_block_collapsed, today,
+    toggle_todo as action_toggle_todo, ActionError, Backlink, OutlineNode, PageKind, PageMeta,
 };
 use outl_core::hlc::HlcGenerator;
 use outl_core::id::{ActorId, NodeId};
@@ -164,7 +164,13 @@ fn build_page_view(
     // is still available for tools that need to materialise from the
     // op log, but the UI must not use it — it would silently disagree
     // with what the user sees in Files.app or any other editor.
-    let outline = read_page_view(storage_root, &meta).unwrap_or_else(|_| Vec::new());
+    //
+    // The workspace-aware variant overlays `Op::SetCollapsed` so the
+    // returned `OutlineNode.collapsed` reflects the op log (the only
+    // place that state legitimately lives — sidecars LWW under iCloud
+    // and would lose flips).
+    let outline = read_page_view_with_workspace(storage_root, &meta, workspace)
+        .unwrap_or_else(|_| Vec::new());
     let backlinks = backlinks_for_page(workspace, &meta);
     Ok(PageView {
         page: meta,
@@ -440,6 +446,28 @@ fn move_block_down(
     finish_in_page(&state, page, |ws| move_down(ws, &state.hlc, node))
 }
 
+/// Set or flip the `collapsed` flag on a block.
+///
+/// Routes through `outl_actions::set_block_collapsed` which generates
+/// an `Op::SetCollapsed` and applies it via `Workspace::apply`. The
+/// op enters the device's `ops-<actor>.jsonl`, iCloud propagates the
+/// file to peers, and the CRDT merges concurrent flips by HLC order.
+/// Returns a freshly built page view so the frontend re-renders in a
+/// single round trip.
+#[tauri::command]
+fn set_block_collapsed(
+    page_id: String,
+    id: String,
+    collapsed: bool,
+    state: State<'_, AppState>,
+) -> Result<PageView, String> {
+    let page = parse_node_id(&page_id)?;
+    let node = parse_node_id(&id)?;
+    finish_in_page(&state, page, |ws| {
+        action_set_block_collapsed(ws, &state.hlc, node, collapsed).map(|_| ())
+    })
+}
+
 #[tauri::command]
 fn reload_workspace(state: State<'_, AppState>) -> Result<(), String> {
     let engine = outl_actions::SyncEngine::new(state.storage_root.clone(), state.hlc.actor());
@@ -490,7 +518,7 @@ fn list_outline(state: State<'_, AppState>) -> Result<Vec<OutlineNode>, String> 
         let meta = page_meta_action(ws, today_id)
             .ok_or_else(|| ActionError::NotInTree(today_id.to_string()))
             .map_err(|e| e.to_string())?;
-        read_page_view(&state.storage_root, &meta).map_err(|e| e.to_string())
+        read_page_view_with_workspace(&state.storage_root, &meta, ws).map_err(|e| e.to_string())
     })
 }
 
@@ -672,6 +700,7 @@ pub fn run() {
             outdent_block,
             move_block_up,
             move_block_down,
+            set_block_collapsed,
             reload_workspace,
             // Legacy
             list_outline,

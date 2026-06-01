@@ -24,6 +24,7 @@ outl-cli / outl-tui / outl-mobile / future clients
 | Module      | What it owns                                                                 |
 |-------------|-------------------------------------------------------------------------------|
 | `block`     | `append_block`, `create_after`, `create_under`, `edit_text`, `toggle_todo`, `delete`, `indent`, `outdent`, `move_up`, `move_down` |
+| `collapsed` | `set_block_collapsed`, `toggle_block_collapsed`. Both generate `Op::SetCollapsed` and route it through `Workspace::apply`, so the fold flag converges between devices on top of the existing per-actor jsonl + HLC infrastructure. **Never** write fold state to the sidecar — that's last-write-wins per file under iCloud and loses concurrent flips. See the root `CLAUDE.md` invariants. |
 | `tree`      | Read-only helper: `children_of`. Sibling / fractional-position helpers (`previous_sibling`, `next_sibling`, `position_after`, `position_for_new_last_child`) are `pub(crate)` — promote them to `pub` when a real caller asks for them. |
 | `todo`      | `TodoState`, `split_todo`, `cycle_todo` — TODO/DONE encoded as text prefix     |
 | `outline`   | `OutlineNode` DTO + `project_outline` — UI-friendly tree projection            |

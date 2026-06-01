@@ -412,6 +412,11 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         }
         KeyCode::Char('d') => app.pending_chord = Some('d'),
         KeyCode::Char('y') => app.pending_chord = Some('y'),
+        // Fold / unfold the selected block. The renderer's triangle
+        // marker (▶/▼) is the visual confirmation. No-op when the
+        // block has no sidecar entry yet (see
+        // `App::toggle_collapse_selected`).
+        KeyCode::Char('c') => app.toggle_collapse_selected(),
         // Paste from the yank register. Plain `p`/`P` (no Ctrl, no
         // Alt) — Ctrl+P is the quick switcher and must beat this.
         KeyCode::Char('p') if key.modifiers.is_empty() => app.paste_after(),

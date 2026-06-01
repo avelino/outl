@@ -24,7 +24,7 @@ use crate::id::NodeId;
 use crate::log::OpLog;
 use crate::op::{LogOp, Op};
 use crate::property::PropValue;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Materialized outline tree.
 ///
@@ -37,6 +37,16 @@ use std::collections::HashMap;
 pub struct Tree {
     nodes: HashMap<NodeId, (NodeId, Fractional)>,
     properties: HashMap<(NodeId, String), PropValue>,
+    /// Nodes whose [`Op::SetCollapsed`] last resolved to `true`.
+    /// Absence means expanded (the default for every node, including
+    /// ones the op log has never set explicitly).
+    ///
+    /// Stored as a set rather than a `HashMap<_, bool>` so the "no
+    /// entry" / "false" cases share representation and serialised
+    /// projections (the sidecar, the wire JSON Mobile receives) don't
+    /// distinguish "we know it's expanded" from "we never heard about
+    /// this node".
+    collapsed: HashSet<NodeId>,
 }
 
 impl Tree {
@@ -66,6 +76,20 @@ impl Tree {
     /// Current value of a property, or `None` if unset.
     pub fn property(&self, node: NodeId, key: &str) -> Option<&PropValue> {
         self.properties.get(&(node, key.to_string()))
+    }
+
+    /// Whether `node` is currently rendered collapsed (children
+    /// hidden in the outline view). Defaults to `false` for any node
+    /// the op log has never explicitly set.
+    pub fn is_collapsed(&self, node: NodeId) -> bool {
+        self.collapsed.contains(&node)
+    }
+
+    /// Iterator over every node currently flagged collapsed. Used by
+    /// projection layers (sidecar render, mobile wire format) to
+    /// snapshot the fold state in one pass.
+    pub fn collapsed_ids(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.collapsed.iter().copied()
     }
 
     /// Iterate every (node, parent, position) triple. Useful for tests.
@@ -198,6 +222,21 @@ impl Tree {
                     .entry(*node)
                     .or_insert_with(|| (*parent, position.clone()));
             }
+            Op::SetCollapsed {
+                node,
+                value,
+                old_value,
+            } => {
+                // Capture previous state for `undo_op`. Membership in
+                // `self.collapsed` is the source of truth (presence =
+                // collapsed, absence = expanded).
+                *old_value = self.collapsed.contains(node);
+                if *value {
+                    self.collapsed.insert(*node);
+                } else {
+                    self.collapsed.remove(node);
+                }
+            }
         }
     }
 
@@ -247,6 +286,20 @@ impl Tree {
             }
             Op::Create { node, .. } => {
                 self.nodes.remove(node);
+            }
+            Op::SetCollapsed {
+                node, old_value, ..
+            } => {
+                // Restore the previous membership captured by `do_op`.
+                // `undo_op` on a never-applied `LogOp` (one whose
+                // `old_value` is still the default `false`) reduces to
+                // "make sure the node is not collapsed", which is a
+                // no-op when the materialised state matches.
+                if *old_value {
+                    self.collapsed.insert(*node);
+                } else {
+                    self.collapsed.remove(node);
+                }
             }
         }
     }
@@ -524,5 +577,170 @@ mod tests {
             tree.property(n, "priority"),
             Some(&PropValue::Text("high".into()))
         );
+    }
+
+    #[test]
+    fn set_collapsed_round_trip() {
+        // Plain forward apply: SetCollapsed(true) flips the flag and
+        // SetCollapsed(false) clears it. `is_collapsed` is the
+        // canonical accessor.
+        let actor = ActorId::new();
+        let g = HlcGenerator::new(actor);
+        let mut tree = Tree::new();
+        let mut log = OpLog::new();
+        let n = NodeId::new();
+
+        assert!(!tree.is_collapsed(n), "default is expanded");
+        tree.apply_op(
+            &mut log,
+            make_op(
+                &g,
+                Op::SetCollapsed {
+                    node: n,
+                    value: true,
+                    old_value: false,
+                },
+            ),
+        );
+        assert!(tree.is_collapsed(n));
+        tree.apply_op(
+            &mut log,
+            make_op(
+                &g,
+                Op::SetCollapsed {
+                    node: n,
+                    value: false,
+                    old_value: false,
+                },
+            ),
+        );
+        assert!(!tree.is_collapsed(n));
+        assert_eq!(log.len(), 2, "every op stays in the log");
+    }
+
+    #[test]
+    fn set_collapsed_late_op_replays_correctly() {
+        // Concurrent flip on the same node: a late op with smaller ts
+        // forces undo+replay. Final state must match the op with the
+        // larger HLC (the "winner" of the total order).
+        let actor = ActorId::new();
+        let g = HlcGenerator::new(actor);
+        let mut tree = Tree::new();
+        let mut log = OpLog::new();
+        let n = NodeId::new();
+
+        // Larger ts first: collapse to `true`.
+        tree.apply_op(
+            &mut log,
+            make_op(
+                &g,
+                Op::SetCollapsed {
+                    node: n,
+                    value: true,
+                    old_value: false,
+                },
+            ),
+        );
+        // Late-arriving op with ts==0 trying to set `false`. Reorder
+        // pops the later op, applies the early one, then replays the
+        // later — so `true` still wins.
+        let late = LogOp {
+            ts: Hlc::new(0, 0, actor),
+            actor,
+            op: Op::SetCollapsed {
+                node: n,
+                value: false,
+                old_value: false,
+            },
+        };
+        tree.apply_op(&mut log, late);
+        assert!(tree.is_collapsed(n), "the larger-ts op wins after reorder");
+        assert_eq!(log.len(), 2);
+    }
+
+    #[test]
+    fn set_collapsed_idempotent_replay() {
+        // Re-applying the same `LogOp` (same ts) is a no-op — the HLC
+        // dedup at the top of `apply_op` guards against double-applying
+        // a peer's op we already saw.
+        let actor = ActorId::new();
+        let g = HlcGenerator::new(actor);
+        let mut tree = Tree::new();
+        let mut log = OpLog::new();
+        let n = NodeId::new();
+
+        let op = make_op(
+            &g,
+            Op::SetCollapsed {
+                node: n,
+                value: true,
+                old_value: false,
+            },
+        );
+        tree.apply_op(&mut log, op.clone());
+        let len_before = log.len();
+        tree.apply_op(&mut log, op);
+        assert_eq!(log.len(), len_before, "duplicate ts must not append");
+        assert!(tree.is_collapsed(n));
+    }
+
+    #[test]
+    fn set_collapsed_undo_restores_previous_state() {
+        // Direct exercise of `undo_op`: after applying SetCollapsed
+        // with `value=true` (captured `old_value=false`), undoing the
+        // op must restore the expanded state.
+        let actor = ActorId::new();
+        let g = HlcGenerator::new(actor);
+        let mut tree = Tree::new();
+        let mut log = OpLog::new();
+        let n = NodeId::new();
+
+        let mut applied = make_op(
+            &g,
+            Op::SetCollapsed {
+                node: n,
+                value: true,
+                old_value: false,
+            },
+        );
+        tree.do_op(&mut applied);
+        log.append(applied.clone());
+        assert!(tree.is_collapsed(n));
+        tree.undo_op(&applied);
+        assert!(
+            !tree.is_collapsed(n),
+            "undo must restore the pre-apply flag"
+        );
+    }
+
+    #[test]
+    fn collapsed_ids_snapshots_current_set() {
+        // Projection layers iterate `collapsed_ids()` to ship the fold
+        // state to UIs / sidecars. Two nodes flipped collapsed must
+        // both appear; a third (untouched) must not.
+        let actor = ActorId::new();
+        let g = HlcGenerator::new(actor);
+        let mut tree = Tree::new();
+        let mut log = OpLog::new();
+        let a = NodeId::new();
+        let b = NodeId::new();
+        let c = NodeId::new();
+        for node in [a, b] {
+            tree.apply_op(
+                &mut log,
+                make_op(
+                    &g,
+                    Op::SetCollapsed {
+                        node,
+                        value: true,
+                        old_value: false,
+                    },
+                ),
+            );
+        }
+        let snapshot: std::collections::HashSet<NodeId> = tree.collapsed_ids().collect();
+        assert!(snapshot.contains(&a));
+        assert!(snapshot.contains(&b));
+        assert!(!snapshot.contains(&c));
     }
 }

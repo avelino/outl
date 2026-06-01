@@ -74,6 +74,9 @@ impl App {
             theme,
             exec_registry: RuntimeRegistry::with_builtins(),
             command_registry: CommandRegistry::with_builtins(),
+            collapsed: std::collections::HashSet::new(),
+            id_by_flat: Vec::new(),
+            hidden_by_collapse: Vec::new(),
         };
         s.refresh_page_list();
         s.ensure_view_file_exists()?;
@@ -457,6 +460,30 @@ impl App {
         // stale `Focus::Backlink { idx, … }` across pages would point
         // at the wrong backlink list (the new page has its own).
         self.focus = Focus::Outline;
+        // Hydrate the per-page collapsed mirror from the sidecar.
+        // Sidecar blocks are already DFS-preorder, so they line up
+        // with the render walk's `cursor`. A missing or unreadable
+        // sidecar yields an empty mirror (everything renders expanded
+        // until the next reconcile populates `.outl`).
+        // Rebuild the flat-index → NodeId mapping from the sidecar so
+        // the render walk + collapse helpers can reach each block by
+        // id. The collapsed flag itself comes from
+        // `workspace.tree().is_collapsed(id)` — the op log is the
+        // single source of truth across devices (see
+        // `outl_core::op::Op::SetCollapsed`).
+        self.id_by_flat.clear();
+        self.collapsed.clear();
+        let sidecar_path = outl_md::resolve_sidecar_path(&path);
+        if let Ok(sc) = outl_md::sidecar::read(&sidecar_path) {
+            self.id_by_flat.reserve(sc.blocks.len());
+            for b in &sc.blocks {
+                self.id_by_flat.push(b.id);
+                if self.workspace.tree().is_collapsed(b.id) {
+                    self.collapsed.insert(b.id);
+                }
+            }
+        }
+        self.recompute_hidden_by_collapse();
         // Snapshot the file's mtime so the polling loop can tell when
         // an *external* edit lands (vs. our own save).
         self.last_mtime = file_mtime(&path);

@@ -41,6 +41,28 @@ proven in Kleppmann et al. 2022.
 5. **No silent loss.** Every op stays in the log, even ones turned into no-ops
    by cycle detection.
 
+## Op log is the only sync surface
+
+Any per-block (or per-page) state that must converge between devices —
+fold flags, pinned status, whatever ships next — lands as an `Op`
+variant on this enum. Never as a field of `SidecarBlock`, a key in a
+shared JSON file, or anything else that depends on iCloud / Syncthing
+to merge file contents. Those transports are last-write-wins per file
+and lose concurrent writes silently.
+
+`Op::SetCollapsed` is the canonical example. Anatomy of a new
+"per-block UI state that needs to sync" Op:
+
+- A variant with `node`, the desired value, and an `old_*` field.
+- `do_op` captures the old value and applies the new one to a side
+  table (`HashMap` / `HashSet`) inside `Tree`.
+- `undo_op` restores the captured `old_*`.
+- A read accessor on `Tree` (e.g. `is_collapsed(node) -> bool`).
+- Storage `op_touches_node` covers the new variant.
+
+Anything cheaper than this in the design discussion is wrong —
+correctness across devices is not optional.
+
 The test battery in `tests/` is the operational expression of these. If you
 change `tree.rs`, every one of those tests must still pass.
 

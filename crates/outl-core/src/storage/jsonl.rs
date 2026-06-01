@@ -164,7 +164,8 @@ fn op_touches_node(op: &Op, id: NodeId) -> bool {
         Op::Move { node, .. }
         | Op::Edit { node, .. }
         | Op::SetProp { node, .. }
-        | Op::Create { node, .. } => *node == id,
+        | Op::Create { node, .. }
+        | Op::SetCollapsed { node, .. } => *node == id,
     }
 }
 
