@@ -337,6 +337,20 @@ pub fn outdent(
     if parent == NodeId::root() {
         return Err(ActionError::AlreadyAtRoot(node.to_string()));
     }
+    // A top-level block lives directly under its page node. Outdenting
+    // it would re-parent it to the page's parent (the root), pulling the
+    // block out of the page entirely — it vanishes from the page view and
+    // the user perceives it as a deletion. A top-level block has nowhere
+    // left to be promoted to, so refuse. (The TUI never hits this because
+    // it outdents on an in-flight AST where `outdent_at_path` no-ops at
+    // depth 0; the mobile client goes straight through this action.)
+    if workspace
+        .tree()
+        .property(parent, crate::page::SLUG_KEY)
+        .is_some()
+    {
+        return Err(ActionError::AlreadyAtRoot(node.to_string()));
+    }
     let grand = workspace
         .tree()
         .parent(parent)
@@ -524,6 +538,38 @@ mod tests {
             outdent(&mut ws, &hlc, a),
             Err(ActionError::AlreadyAtRoot(_))
         ));
+    }
+
+    #[test]
+    fn outdent_top_level_page_block_is_rejected_not_deleted() {
+        use crate::page::{open_or_create, PageKind};
+        let (mut ws, hlc) = new_workspace();
+        let page = open_or_create(&mut ws, &hlc, "notes", "Notes", PageKind::Page).unwrap();
+        let block = append_block(&mut ws, &hlc, Some(page), Some("a top-level block")).unwrap();
+
+        // The block lives directly under the page node. Outdenting it
+        // must NOT move it out of the page (which would re-parent it to
+        // root, dropping it from the page view — the "delete" bug).
+        assert!(matches!(
+            outdent(&mut ws, &hlc, block),
+            Err(ActionError::AlreadyAtRoot(_))
+        ));
+        // The block stays put under its page.
+        assert_eq!(ws.tree().parent(block), Some(page));
+    }
+
+    #[test]
+    fn outdent_nested_page_block_promotes_within_page() {
+        use crate::page::{open_or_create, PageKind};
+        let (mut ws, hlc) = new_workspace();
+        let page = open_or_create(&mut ws, &hlc, "notes", "Notes", PageKind::Page).unwrap();
+        let parent = append_block(&mut ws, &hlc, Some(page), Some("parent")).unwrap();
+        let child = append_block(&mut ws, &hlc, Some(parent), Some("child")).unwrap();
+
+        // A genuinely nested block promotes to a sibling of its parent,
+        // staying inside the page.
+        outdent(&mut ws, &hlc, child).unwrap();
+        assert_eq!(ws.tree().parent(child), Some(page));
     }
 
     #[test]
