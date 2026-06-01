@@ -16,7 +16,6 @@ use serde_json::{json, Value};
 use crate::cmd::daily as daily_cmd;
 use crate::cmd::workspace_info as wi_cmd;
 use crate::output::ApiError;
-use crate::ws;
 
 use super::protocol::JsonRpcError;
 use super::ServerCtx;
@@ -69,17 +68,26 @@ pub fn read(params: Value, ctx: &Arc<ServerCtx>) -> Result<Value, JsonRpcError> 
     }
 }
 
+/// Resolve a resource URI to `(mime, body)`.
+///
+/// Every branch goes through [`ServerCtx::with_workspace`] so the
+/// cached `WsCtx` (and its workspace lock) is reused. Opening a fresh
+/// `WsCtx` with `ws::open` from inside the same MCP session would
+/// race against the lock it already owns and fail with
+/// `LockError::AlreadyHeld`.
 fn resolve(uri: &str, ctx: &Arc<ServerCtx>) -> Result<(String, String), ApiError> {
     if uri == "outl://workspace/info" {
-        let wc = ws::open(&ctx.workspace_path)?;
-        let value = wi_cmd::info(&wc);
+        let value = ctx.with_workspace(|wc| Ok(wi_cmd::info(wc)))?;
         let text = serde_json::to_string_pretty(&value).map_err(ApiError::internal)?;
         return Ok(("application/json".to_string(), text));
     }
 
     if uri == "outl://daily/today" {
-        let mut wc = ws::open(&ctx.workspace_path)?;
-        let value = daily_cmd::today_handler(&mut wc)?;
+        // `today_handler` lazily materialises today's journal on the
+        // first read of the day. Treat the resource read as a mutation
+        // so subsequent index-backed tools see the new page.
+        let value = ctx.with_workspace(daily_cmd::today_handler)?;
+        ctx.invalidate_index();
         let text = value
             .get("md")
             .and_then(Value::as_str)
@@ -89,8 +97,8 @@ fn resolve(uri: &str, ctx: &Arc<ServerCtx>) -> Result<(String, String), ApiError
     }
 
     if let Some(slug) = uri.strip_prefix("outl://page/") {
-        let wc = ws::open(&ctx.workspace_path)?;
-        let value = crate::cmd::page::render(&wc, slug)?;
+        let slug = slug.to_string();
+        let value = ctx.with_workspace(|wc| crate::cmd::page::render(wc, &slug))?;
         let text = value
             .get("md")
             .and_then(Value::as_str)

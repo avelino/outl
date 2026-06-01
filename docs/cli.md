@@ -90,8 +90,13 @@ when relevant. Exit codes follow:
 | 2    | Internal error (bug, broken invariant, panic) |
 
 Add `--json` to any command to force JSON. Without the flag, output
-is human-readable (tables, colored). MCP tools always return the
-JSON envelope's `data` field directly.
+is human-readable (tables, colored). MCP tools wrap the same
+envelope in the MCP tool-result shape: `structuredContent` carries
+the full `{ ok, data, error }` envelope and `content[].text` carries
+either a pretty-printed payload or, for markdown-first tools
+(`outl_export_md`, `outl_page_render`, `outl_daily_today`,
+`outl_daily_get`), the raw `.md` string. Clients should read
+`structuredContent.data` for typed access.
 
 ## Commands by domain
 
@@ -112,8 +117,10 @@ column is the name Claude Desktop (or any MCP host) sees.
 
 `page get` returns page meta plus the outline tree. `page render`
 returns the projected `.md` string (clean, no sidecar fields).
-`page rename` rewrites every `[[ref]]` to the page across the
-workspace and updates the sidecar.
+`page rename` updates the `page-slug` property and renames the
+on-disk `.md`/`.outl` — it does **not** rewrite `[[old_slug]]`
+references in other pages. Affected blocks come back in
+`affected_refs` so the caller can decide whether to bulk-rewrite.
 
 ### Block
 
@@ -145,7 +152,9 @@ detection still applies: a move that would create a cycle returns
 
 `<date>` accepts ISO (`2026-05-31`) and natural (`"April 22nd,
 2026"`, `"yesterday"`, `"tomorrow"`). Range is inclusive on both
-sides; missing days are omitted, not padded.
+sides and emits one entry per day in the interval — days that
+have no materialised journal come back as `{ exists: false }`
+placeholders so the caller can spot gaps.
 
 ### Search / Query
 
@@ -153,20 +162,20 @@ sides; missing days are omitted, not padded.
 |------------------------------------------------------------------|-------------------|
 | `outl search "<query>" [--in=blocks\|pages] [--json]`            | `outl_search`     |
 | `outl query --tag=foo [--priority=p1] [--since=7d] [--json]`     | `outl_query`      |
-| `outl query --raw='{tag: foo, since: 7d}' [--json]`              | `outl_query_raw`  |
 
 `search` is full-text and lives today as the TUI's workspace
-search. `query` is structured filter — phase 3 — and grows the
-filter set incrementally (tag, property, date range first; richer
-DSL via `--raw` later).
+search. `query` is the structured filter (tag, property, date
+range, kind). The `--raw='…'` flag is reserved for the phase 3
+DSL and currently rejects with `INVALID_ARG` — when the DSL lands
+it folds into the same `outl_query` tool, not a new one.
 
 ### Backlinks / Refs
 
 | CLI                                | MCP tool              |
 |------------------------------------|-----------------------|
-| `outl backlinks <page> [--json]`   | `outl_backlinks`      |
-| `outl block refs <blk> [--json]`   | `outl_block_refs`     |
-| `outl block embed <blk> [--json]`  | `outl_block_embed`    |
+| `outl backlinks page <slug> [--json]`             | `outl_backlinks`   |
+| `outl backlinks block <blk-XXX> [--json]`         | `outl_block_refs`  |
+| `outl backlinks embed <blk-XXX\|handle> [--json]` | `outl_block_embed` |
 
 `block embed` resolves `!((blk-XXX))` recursively, returning the
 source block plus children — the same expansion the TUI does
@@ -286,7 +295,7 @@ Shipping today:
 - `outl query [--tag] [--priority] [--since=Nd] [--kind] [--prop k=v]`
 - `outl backlinks page|block|embed`
 - `outl tag list|pages`
-- `outl prop set|get|list`
+- `outl page prop set|get|list`
 - `outl export hugo|md|json`
 - `outl workspace info`
 - `outl mcp serve` — full MCP protocol surface (tools, resources,

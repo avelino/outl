@@ -6,7 +6,7 @@
 //! UX:
 //!
 //! - `outl` with no subcommand opens the TUI in the current directory.
-//! - `outl --path <dir>` opens the TUI in `<dir>` (global flag, works
+//! - `outl --workspace <dir>` opens the TUI in `<dir>` (global flag, works
 //!   with any subcommand that needs a workspace path).
 //! - Subcommands cover workspace lifecycle, machine-shaped operations
 //!   (page/block/daily/search/query/export), and the `mcp serve` shim
@@ -57,14 +57,14 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Open the TUI on the workspace (default: `--path` or current dir).
+    /// Open the TUI on the workspace (default: `--workspace` or current dir).
     Tui {
         /// Workspace path. Overrides the global `--workspace`.
         path: Option<PathBuf>,
     },
     /// Initialize a new workspace at the given path.
     Init {
-        /// Workspace path. Created if it does not exist. Overrides `--path`.
+        /// Workspace path. Created if it does not exist. Overrides `--workspace`.
         path: Option<PathBuf>,
     },
     /// Run the file watcher; keep the workspace in sync.
@@ -291,7 +291,7 @@ fn main() -> Result<()> {
 
 /// Resolve which workspace path to operate on.
 ///
-/// Precedence: subcommand-positional > global `--path` > current dir.
+/// Precedence: subcommand-positional > global `--workspace` > current dir.
 fn resolve_path(global: Option<&PathBuf>, local: Option<&PathBuf>) -> Result<PathBuf> {
     if let Some(p) = local {
         return Ok(p.clone());
@@ -348,7 +348,7 @@ fn resolve_init_path(global: Option<&PathBuf>, local: Option<&PathBuf>) -> Resul
     match local.or(global) {
         Some(p) => Ok(p.clone()),
         None => Err(anyhow::anyhow!(
-            "`outl init` needs an explicit path: pass a positional argument or `--path <DIR>`"
+            "`outl init` needs an explicit path: pass a positional argument or `--workspace <DIR>`"
         )),
     }
 }

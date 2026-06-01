@@ -285,7 +285,7 @@ fn run_tool(name: &str, args: &Value, ctx: &Arc<ServerCtx>) -> Result<Value, Api
 
         // --- workspace ---
         "outl_workspace_info" => ctx.with_workspace(|wc| Ok(wi_cmd::info(wc))),
-        "outl_workspace_doctor" => doctor_cmd::collect_json(&ctx.workspace_path),
+        "outl_workspace_doctor" => doctor_cmd::collect_in_session_json(&ctx.workspace_path),
 
         other => Err(ApiError::new(
             crate::output::codes::INVALID_ARG,

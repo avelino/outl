@@ -153,6 +153,51 @@ fn doctor_via_mcp_does_not_lie_about_lock() {
 }
 
 #[test]
+fn resources_read_after_tool_call_does_not_deadlock_on_lock() {
+    // Regression: resources/read used to call `ws::open` directly,
+    // which re-acquires the workspace lock. After any tool call had
+    // already cached the workspace through `ServerCtx`, the lock was
+    // held for the session and the resource read would fail with
+    // `LockError::AlreadyHeld`. The fix routes everything through
+    // `ctx.with_workspace`, reusing the cached `WsCtx`.
+    let ws = init_workspace();
+    let mut client = McpClient::spawn(ws.path());
+
+    let _ = client.call(serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {} }
+    }));
+
+    // Warm the cached workspace via a tool call.
+    let _ = client.call(serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "outl_workspace_info", "arguments": {} }
+    }));
+
+    // Now read a resource — used to deadlock against the cached lock.
+    let read = client.call(serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "resources/read",
+        "params": { "uri": "outl://workspace/info" }
+    }));
+    assert!(
+        read.get("error").is_none(),
+        "resources/read after tool call must not fail: {read}"
+    );
+    assert_eq!(read["id"], 3);
+    let contents = read["result"]["contents"]
+        .as_array()
+        .expect("resources/read returns a contents array");
+    assert!(!contents.is_empty());
+    assert_eq!(contents[0]["uri"], "outl://workspace/info");
+}
+
+#[test]
 fn page_create_then_get_via_mcp() {
     let ws = init_workspace();
     let mut client = McpClient::spawn(ws.path());

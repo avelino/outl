@@ -77,14 +77,16 @@ Destructive tools (`outl_page_delete`, `outl_block_delete`) require
 
 ### Resources
 
-Read-only URIs the host can attach as context without an explicit
-tool call:
+URIs the host can attach as context without an explicit tool call.
+Almost all of these are read-only; the one exception
+(`outl://daily/today`) lazily materialises today's journal on first
+access, the same way `outl daily today` does in the CLI.
 
-| URI                       | Type             | Body                                    |
-|---------------------------|------------------|-----------------------------------------|
-| `outl://workspace/info`   | `application/json` | path, actor id, counts, ops          |
-| `outl://daily/today`      | `text/markdown`  | today's journal projection              |
-| `outl://page/{slug}`      | `text/markdown`  | page projection (template URI)          |
+| URI                       | Type               | Body                                          |
+|---------------------------|--------------------|-----------------------------------------------|
+| `outl://workspace/info`   | `application/json` | path, actor id, counts, ops                   |
+| `outl://daily/today`      | `text/markdown`    | today's journal projection (creates on first read) |
+| `outl://page/{slug}`      | `text/markdown`    | page projection (template URI)                |
 
 Useful pattern: tell Claude Desktop "you are the assistant for my
 second brain" and attach `outl://daily/today` so it sees the day's

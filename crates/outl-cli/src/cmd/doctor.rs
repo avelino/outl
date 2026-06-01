@@ -256,10 +256,19 @@ fn collect_internal(path: &Path, probe_lock: bool) -> Result<DoctorReport, ApiEr
     Ok(b.into_report())
 }
 
-/// MCP entry point — returns the report as JSON `data`. Skips the
-/// workspace-lock probe because the MCP shim already owns the lock
-/// for the whole session (see [`collect_in_session`]).
+/// CLI `--json` entry point — returns the report as JSON `data` with
+/// the full lock probe enabled, matching the human `outl doctor`
+/// behaviour. The MCP tool uses [`collect_in_session_json`] instead.
 pub fn collect_json(path: &Path) -> Result<Value, ApiError> {
+    let report = collect(path)?;
+    serde_json::to_value(&report).map_err(ApiError::internal)
+}
+
+/// MCP entry point — returns the report as JSON `data` without the
+/// workspace-lock probe. The MCP shim already owns the lock for the
+/// session, so a fresh `acquire` would always report contention
+/// against itself.
+pub fn collect_in_session_json(path: &Path) -> Result<Value, ApiError> {
     let report = collect_in_session(path)?;
     serde_json::to_value(&report).map_err(ApiError::internal)
 }

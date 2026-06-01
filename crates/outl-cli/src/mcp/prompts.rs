@@ -8,7 +8,6 @@ use serde_json::{json, Value};
 
 use crate::cmd::daily as daily_cmd;
 use crate::output::ApiError;
-use crate::ws;
 
 use super::protocol::JsonRpcError;
 use super::ServerCtx;
@@ -54,12 +53,18 @@ pub fn get(params: Value, ctx: &Arc<ServerCtx>) -> Result<Value, JsonRpcError> {
 }
 
 fn summarize_day(args: &Value, ctx: &Arc<ServerCtx>) -> Result<Value, ApiError> {
-    let date = args.get("date").and_then(Value::as_str);
-    let mut wc = ws::open(&ctx.workspace_path)?;
-    let journal = match date {
-        Some(d) => daily_cmd::get(&mut wc, d)?,
-        None => daily_cmd::today_handler(&mut wc)?,
-    };
+    let date = args.get("date").and_then(Value::as_str).map(str::to_string);
+    // Use the cached workspace from the MCP session — a fresh
+    // `ws::open` would race the lock that's already held for the
+    // session.
+    let journal = ctx.with_workspace(|wc| match &date {
+        Some(d) => daily_cmd::get(wc, d),
+        None => daily_cmd::today_handler(wc),
+    })?;
+    // `today_handler` / `get` lazily materialise the journal on first
+    // touch; drop the cached index so the next read-only tool sees
+    // the new page.
+    ctx.invalidate_index();
     let date_slug = journal
         .get("date")
         .and_then(Value::as_str)
@@ -87,9 +92,9 @@ fn blog_from_block(args: &Value, ctx: &Arc<ServerCtx>) -> Result<Value, ApiError
                 crate::output::codes::INVALID_ARG,
                 "missing `block_id` argument".to_string(),
             )
-        })?;
-    let wc = ws::open(&ctx.workspace_path)?;
-    let block = crate::cmd::block::tree(&wc, id)?;
+        })?
+        .to_string();
+    let block = ctx.with_workspace(|wc| crate::cmd::block::tree(wc, &id))?;
     let body = format!(
         "Expand the following outline into a blog post draft in the user's voice (direct, pt-BR informal, English code).\n\n---\n\n{}",
         serde_json::to_string_pretty(&block).unwrap_or_default(),
