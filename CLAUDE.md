@@ -8,7 +8,8 @@ Context for Claude Code sessions working on this repo. Read this before making a
 
 - **Markdown as source of truth** — `.md` files are 100% clean, no visible IDs.
 - **Conflict-free sync** via a tree CRDT (Kleppmann et al. 2022).
-- **Trait-based storage** — sqlite default, ChronDB on the roadmap.
+- **Trait-based storage** — JSONL (one file per actor) is the only
+  persistent backend; ChronDB on the roadmap.
 - **TUI as a first-class citizen**, not an afterthought.
 - **Journal-first** — daily notes are the primary entry point.
 
@@ -32,8 +33,11 @@ These are the non-negotiables. Violating any one breaks user trust irreversibly.
 4. **Move that creates a cycle is a no-op on the materialized tree, but the op
    still goes into the log.** Removing it breaks correctness of future reordering.
 
-5. **Storage is a trait, not a struct.** Never call into `rusqlite` from
-   `outl-core` outside of `storage/sqlite.rs`. Everything else uses `dyn Storage`.
+5. **Storage is a trait, not a struct.** `JsonlStorage` is the only
+   persistent impl; tests use `MemoryStorage`. Anything that wants
+   to persist ops goes through `dyn Storage`. No second persistent
+   backend lands without an issue + RFC first — divergence between
+   storages is exactly what we paid to remove in 0.5.0.
 
 6. **Delete is `Move(node, TRASH_ROOT)`, not physical removal.** Simplifies the
    algorithm and preserves history.
@@ -239,7 +243,8 @@ evolve.
 - ❌ Comparing HLCs without actor tiebreak
 - ❌ Treating `Delete` as physical removal
 - ❌ Skipping tests because "the algorithm is the same as the paper"
-- ❌ Touching `outl-core` storage directly with `rusqlite` calls
+- ❌ Reintroducing SQLite / rusqlite / any binary log format —
+  cross-device sync depends on per-actor append-only files
 - ❌ Using `id::` Logseq-style metadata anywhere
 - ❌ Marking work "done" without `/check` passing
 

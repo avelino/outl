@@ -278,7 +278,7 @@ we use it?
   new_parent, position)` and `SetProp(node, key, value)`. Automerge
   is generic — every operation goes through a JSON-patch-like API.
   Specialization makes error messages and tests dramatically clearer.
-- **Storage control.** We own the SQLite schema, the bincode
+- **Storage control.** We own the JSONL line format, the JSON
   serialization of ops, and the bytes that go on the wire. With
   Automerge we'd be locked into their binary format forever.
 

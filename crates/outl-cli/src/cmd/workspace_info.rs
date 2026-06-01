@@ -38,7 +38,8 @@ pub fn info(ctx: &WsCtx) -> Value {
     json!({
         "root": ctx.root.display().to_string(),
         "actor": ctx.actor.to_string(),
-        "log_db": ctx.paths.db.display().to_string(),
+        "ephemeral_actor": ctx.ephemeral_actor,
+        "ops_dir": ctx.paths.ops.display().to_string(),
         "pages_dir": ctx.paths.pages.display().to_string(),
         "journals_dir": ctx.paths.journals.display().to_string(),
         "pages": regular,
@@ -54,8 +55,16 @@ fn print_info(v: &Value) {
     let pages = v.get("pages").and_then(Value::as_u64).unwrap_or(0);
     let journals = v.get("journals").and_then(Value::as_u64).unwrap_or(0);
     let ops = v.get("ops").and_then(Value::as_u64).unwrap_or(0);
+    let ephemeral = v
+        .get("ephemeral_actor")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     println!("root:     {root}");
-    println!("actor:    {actor}");
+    if ephemeral {
+        println!("actor:    {actor} (ephemeral — another outl owns the config actor)");
+    } else {
+        println!("actor:    {actor}");
+    }
     println!("pages:    {pages}");
     println!("journals: {journals}");
     println!("ops:      {ops}");

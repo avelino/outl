@@ -5,9 +5,12 @@
 //! a populated `pages/` and `journals/` directory in an outl
 //! workspace, plus an initial reconcile so sidecars are stamped.
 
-use crate::workspace_layout::Paths;
+use crate::workspace_layout::{ensure_ops_dir, read_config, Paths};
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
+use outl_core::hlc::HlcGenerator;
+use outl_core::storage::JsonlStorage;
+use outl_core::workspace::Workspace;
 use outl_md::slug::slugify;
 use std::collections::HashMap;
 use std::fs;
@@ -181,6 +184,58 @@ pub(super) struct ResolvedUid {
     /// Populated by importers but unread for now.
     #[allow(dead_code)]
     pub snippet: String,
+}
+
+/// Run `reconcile_md` on every imported file so the sidecar JSON is
+/// stamped with stable IDs. Without this, the user has to open the
+/// TUI once to seed sidecars — which works but is surprising.
+///
+/// Acquires the same locks every other workspace opener takes
+/// (shared `WorkspaceLock` + per-actor `ActorWriteLock` via
+/// `resolve_write_actor`), so a concurrent TUI / MCP server / serve
+/// against the destination is safe. The importer normally lands in
+/// a fresh workspace, but supporting "import while attached" is a
+/// no-cost consequence of routing through the standard flow.
+pub(super) fn seed_sidecars(paths: &Paths) -> Result<()> {
+    let cfg = read_config(paths)?;
+    let config_actor = cfg.actor()?;
+
+    let _lock = outl_core::WorkspaceLock::acquire(&paths.root).with_context(|| {
+        format!(
+            "could not acquire workspace lock at {}",
+            paths.root.display()
+        )
+    })?;
+    ensure_ops_dir(paths)?;
+    let (_actor_lock, actor) = outl_core::resolve_write_actor(&paths.ops, config_actor)
+        .with_context(|| format!("acquiring per-actor write lock at {}", paths.ops.display()))?;
+
+    let storage = JsonlStorage::open(paths.ops.clone(), actor)?;
+    let mut ws = Workspace::open_with_storage(actor, Box::new(storage), Some(paths.root.clone()))?;
+    let hlc = HlcGenerator::new(actor);
+
+    for dir in [&paths.pages, &paths.journals] {
+        for entry in walkdir::WalkDir::new(dir).max_depth(1) {
+            let Ok(entry) = entry else {
+                continue;
+            };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let p = entry.path();
+            if p.extension().and_then(|x| x.to_str()) != Some("md") {
+                continue;
+            }
+            if p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with('.'))
+            {
+                continue;
+            }
+            let _ = outl_md::reconcile::reconcile_md(&mut ws, &hlc, p, Some(&paths.orphans));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

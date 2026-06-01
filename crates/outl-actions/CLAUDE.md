@@ -106,7 +106,7 @@ the editor.
   because it's not workspace-grounded — it's a stage *before* ops
   exist. It lives in `outl-md` because the mobile client also needs
   it, but no `Workspace` is touched, so it stays out of `outl-actions`.
-- **Storage backends.** `SqliteStorage`, `ICloudStorage`, future
+- **Storage backends.** `JsonlStorage`, future
   `ChronDbStorage` implement `outl_core::Storage` and live in the
   binary that needs them.
 

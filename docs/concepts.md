@@ -7,18 +7,20 @@ A workspace is a directory. Everything else is a convention on top.
 ```
 ~/notes/                            # workspace root
 ├── .outl/
-│   ├── log.db                      # SQLite op log
 │   ├── config.toml                 # workspace identity + settings
 │   ├── peers.toml                  # P2P peers (phase 2+)
 │   └── orphans.log                 # blocks that lost their ID during external edits
+├── ops/
+│   ├── ops-<this-actor>.jsonl      # this device's append-only op log
+│   └── ops-<peer-actor>.jsonl      # mirror of another device, synced via iCloud / Syncthing
 ├── pages/
 │   ├── avelino.md                  # clean markdown
-│   ├── .avelino.outl               # JSON sidecar with stable IDs
+│   ├── avelino.outl                # JSON sidecar with stable IDs
 │   ├── meu-projeto.md
-│   └── .meu-projeto.outl
+│   └── meu-projeto.outl
 ├── journals/
 │   ├── 2026-05-25.md
-│   └── .2026-05-25.outl
+│   └── 2026-05-25.outl
 └── templates/
     └── journal.md                  # applied to new journals
 ```
@@ -118,8 +120,9 @@ references (`((blk-XXXXXX))`) and embeds (`!((blk-XXXXXX))`). See
 ### Op log
 
 The sequence of mutations that produced the current state. Lives in
-`.outl/log.db` (SQLite). Every block creation, every move, every
-text edit is one row. The tree is a projection over this log.
+`ops/ops-<actor>.jsonl` — one append-only JSONL file per device.
+Every block creation, every move, every text edit is one line. The
+tree is a projection over the merged log of every actor's file.
 
 This is the **source of truth** — if your markdown gets corrupted,
 `outl doctor` regenerates the pages from the log.

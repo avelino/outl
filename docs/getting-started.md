@@ -69,10 +69,10 @@ You'll get:
 ```
 ~/notes/
 ├── .outl/
-│   ├── log.db          # the op log (SQLite)
 │   ├── config.toml     # workspace identity + settings
 │   ├── peers.toml      # P2P peers (phase 2+)
 │   └── orphans.log     # log of unmatched blocks during external edits
+├── ops/                # the op log, one ops-<actor>.jsonl per device
 ├── pages/              # your named pages live here
 ├── journals/
 │   └── 2026-05-25.md   # today's journal, seeded

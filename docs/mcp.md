@@ -133,10 +133,20 @@ exact "add a new tool" walkthrough.
 (`outl mcp serve --workspace … 2> /tmp/outl-mcp.log` and tail it).
 Almost always it's a permission error reading the workspace path.
 
-**`workspace at … is locked by another outl process`.** Either an
-`outl serve` is running or another MCP host already opened the
-workspace. Quit one of them. The workspace lock is exclusive on
-purpose — two writers would race against `log.db`.
+**`workspace at … is locked by another outl process`.** As of
+0.5.1 the workspace lock (`.outl/.lock`) is shared, so this error
+is no longer raised on simple co-tenancy: TUI + MCP server + a
+subprocess CLI all coexist. The remaining contention point is the
+per-actor write lock at `ops/.lock-<actor>`. The opener tries the
+config actor first and, if taken, mints an `ActorId::new()`
+ephemeral and locks that one instead — so the second `outl mcp serve`
+of the day usually just writes to a fresh `ops-<ephemeral>.jsonl`
+without telling you. You only see a hard error when both the
+config actor AND the ephemeral path can't be acquired (e.g. a
+stale `.lock-<actor>` left by a killed process, or a filesystem
+that doesn't support `flock`). Recovery: delete the dangling
+`ops/.lock-*` files for processes that are no longer running, or
+move the workspace off the unsupported filesystem.
 
 **Tool calls return `INTERNAL` errors.** Run the same command on
 the CLI (`outl <command> --json`) — same code path, same error,

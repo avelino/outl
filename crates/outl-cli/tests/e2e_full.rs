@@ -31,7 +31,7 @@ fn full_workspace_lifecycle() {
 
     // 1. init
     must_ok(&cargo_run(&["init", root_str]), "init");
-    assert!(root.join(".outl/log.db").exists());
+    assert!(root.join("ops").is_dir());
     assert!(root.join(".outl/config.toml").exists());
 
     // 2. write a markdown page in pages/

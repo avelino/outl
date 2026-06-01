@@ -11,10 +11,10 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 pub mod jsonl;
-pub mod sqlite;
+pub mod memory;
 
 pub use jsonl::JsonlStorage;
-pub use sqlite::SqliteStorage;
+pub use memory::MemoryStorage;
 
 /// Errors a `Storage` implementation may produce.
 #[derive(Debug, Error)]
@@ -47,8 +47,9 @@ pub struct Snapshot {
 
 /// Storage backend trait.
 ///
-/// Implementations: `SqliteStorage` (phase 1), `ChronDbStorage` (issue #1),
-/// in-memory test double (test-only).
+/// Implementations: [`JsonlStorage`] (one file per actor, the only
+/// persistent backend), [`MemoryStorage`] (test double, no disk),
+/// future `ChronDbStorage` (issue #1).
 pub trait Storage: Send + Sync {
     /// Append a new op. Must be durable before returning `Ok`.
     fn append_op(&mut self, op: &LogOp) -> Result<(), StorageError>;

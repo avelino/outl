@@ -38,7 +38,7 @@ fn outl_init_then_doctor_reports_ok() {
 
     let out = cargo_run(&["init", root.to_str().unwrap()]);
     assert_ok(&out, "outl init");
-    assert!(exists(&root.join(".outl/log.db")));
+    assert!(exists(&root.join("ops")));
     assert!(exists(&root.join(".outl/config.toml")));
     assert!(exists(&root.join("pages")));
     assert!(exists(&root.join("journals")));

@@ -37,9 +37,9 @@ a time:
 - **The op log is the source of truth.** Not the file. Not the
   database. A sequence of [`Move` / `Edit` / `Create` / `SetProp`][crdt]
   ops with HLC timestamps. The tree you see is a projection.
-- **Storage is a trait, not a struct.** sqlite ships today;
-  [ChronDB][chrondb] is tracked publicly for when you want git-style
-  history with branches and time travel.
+- **Storage is a trait, not a struct.** JSONL (one append-only file
+  per device) ships today; [ChronDB][chrondb] is tracked publicly
+  for when you want git-style history with branches and time travel.
 - **Every UI surface shares one core.** The TUI is just the first
   client. The Tauri desktop (phase 5) and the iOS/Android apps (phase
   6) reuse [`outl-core`][outl-core] and [`outl-md`][outl-md] —

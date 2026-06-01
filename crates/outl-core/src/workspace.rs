@@ -84,7 +84,7 @@ pub struct Workspace {
 impl Workspace {
     /// Open an in-memory workspace. Useful for tests.
     pub fn open_in_memory(actor: ActorId) -> Result<Self, WorkspaceError> {
-        let storage = crate::storage::SqliteStorage::open_in_memory()?;
+        let storage = crate::storage::MemoryStorage::new();
         Self::open_with_storage(actor, Box::new(storage), None)
     }
 
@@ -210,11 +210,11 @@ mod tests {
         let actor = ActorId::new();
         let g = HlcGenerator::new(actor);
 
-        // Use a shared file: open, write, close, reopen.
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let path = tmp.path().to_path_buf();
+        // Use a shared directory: open, write, close, reopen.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().to_path_buf();
 
-        let storage1 = Box::new(crate::storage::SqliteStorage::open(&path).unwrap());
+        let storage1 = Box::new(crate::storage::JsonlStorage::open(dir.clone(), actor).unwrap());
         let mut ws = Workspace::open_with_storage(actor, storage1, None).unwrap();
         let n = NodeId::new();
         ws.apply(make_op(
@@ -228,7 +228,7 @@ mod tests {
         .unwrap();
         drop(ws);
 
-        let storage2 = Box::new(crate::storage::SqliteStorage::open(&path).unwrap());
+        let storage2 = Box::new(crate::storage::JsonlStorage::open(dir, actor).unwrap());
         let ws2 = Workspace::open_with_storage(actor, storage2, None).unwrap();
         assert_eq!(ws2.tree().node_count(), 1);
         assert_eq!(ws2.tree().parent(n), Some(NodeId::root()));

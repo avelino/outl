@@ -14,7 +14,8 @@ change as production-bound.
 - Fractional indexing
 - The CRDT itself: `do_op`, `undo_op`, `apply_op`, `creates_cycle`
 - Append-only `OpLog`
-- `Storage` trait + `SqliteStorage` implementation
+- `Storage` trait + `JsonlStorage` (one file per actor, syncable via
+  iCloud / Syncthing / shared FS) + `MemoryStorage` (test double)
 - Domain models: `Workspace`, `Page`, `Journal`, `Block`, `Property`, `Tag`
 
 ## What this crate does NOT own
@@ -111,7 +112,8 @@ src/
 ├── log.rs              # OpLog (append-only, ordered by HLC)
 ├── storage/
 │   ├── mod.rs          # trait Storage
-│   └── sqlite.rs       # SqliteStorage (default backend)
+│   ├── jsonl.rs        # JsonlStorage (only persistent backend)
+│   └── memory.rs       # MemoryStorage (test double, no disk)
 ├── workspace.rs        # Workspace entry point
 ├── page.rs             # Page model (projection over op log)
 ├── journal.rs          # Journal (page with date-key)
@@ -143,7 +145,9 @@ Use `/coverage outl-core` to check.
 ## Things to never do here
 
 - ❌ Take a dependency on `outl-md`, `outl-cli`, `outl-tui`, or `iroh`
-- ❌ Use `rusqlite` outside of `src/storage/sqlite.rs`
+- ❌ Bring back SQLite, rusqlite, or any binary store. `JsonlStorage`
+  is the only persistent backend; cross-device sync depends on
+  per-actor files that iCloud / Syncthing can merge.
 - ❌ Add an `Op` variant without `old_*` fields (undo will be impossible)
 - ❌ Skip the cycle check in `do_op` for `Move`
 - ❌ Remove an op from the log because it was a no-op (silent loss)
