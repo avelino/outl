@@ -20,6 +20,8 @@ your notes survive being on more than one device.
 | Know *exactly* how sync works | [Sync, done right](sync.md) |
 | Use the TUI fluently | [TUI manual](tui.md) |
 | Change colors / write a theme | [Theming](theming.md) |
+| Script outl or plug it into Claude Code | [CLI](cli.md) |
+| Connect outl to Claude Desktop, Cursor, etc. | [MCP](mcp.md) |
 | See where the project is going | [Roadmap](roadmap.md) |
 
 ## What's locked in

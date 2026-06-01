@@ -101,7 +101,7 @@ git clone https://github.com/avelino/outl.git && cd outl
 cargo build --release
 
 ./target/release/outl init ~/notes
-./target/release/outl --path ~/notes
+./target/release/outl --workspace ~/notes
 ```
 
 `outl` (no subcommand) opens the TUI on the workspace and lands on

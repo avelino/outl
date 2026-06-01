@@ -43,7 +43,11 @@ pub fn next_sibling(workspace: &Workspace, node: NodeId) -> Option<NodeId> {
 
 /// A fractional position strictly between `node` and the sibling that
 /// follows it. Returns `None` when `node` is not in the tree.
-pub(crate) fn position_after(workspace: &Workspace, node: NodeId) -> Option<Fractional> {
+///
+/// Promoted to `pub` for the CLI's `outl block move --after=…` flow;
+/// other clients can use it whenever they need a position immediately
+/// after a known node.
+pub fn position_after(workspace: &Workspace, node: NodeId) -> Option<Fractional> {
     let parent = workspace.tree().parent(node)?;
     let siblings = children_of(workspace, parent);
     let mut iter = siblings.into_iter().peekable();
@@ -58,7 +62,9 @@ pub(crate) fn position_after(workspace: &Workspace, node: NodeId) -> Option<Frac
 }
 
 /// Fractional position for a new last child appended under `parent`.
-pub(crate) fn position_for_new_last_child(workspace: &Workspace, parent: NodeId) -> Fractional {
+///
+/// Promoted to `pub` for the CLI's `outl block move --parent=…` flow.
+pub fn position_for_new_last_child(workspace: &Workspace, parent: NodeId) -> Fractional {
     let last = children_of(workspace, parent)
         .into_iter()
         .last()
@@ -66,5 +72,52 @@ pub(crate) fn position_for_new_last_child(workspace: &Workspace, parent: NodeId)
     match last {
         Some(p) => Fractional::between(Some(&p), None),
         None => Fractional::first(),
+    }
+}
+
+/// Walk `parent`'s subtree in DFS pre-order and invoke `f` on every
+/// descendant `NodeId`. Stops early when `f` returns `false`.
+///
+/// Centralises the "walk all descendants" pattern that the CLI's
+/// `search`/`tag`/`query` paths used to reimplement individually.
+/// Callers that need access to text/properties call into
+/// [`Workspace::block_text`] / [`outl_core::Workspace::tree`] inside
+/// the closure.
+pub fn walk_subtree<F>(workspace: &Workspace, parent: NodeId, mut f: F)
+where
+    F: FnMut(NodeId) -> bool,
+{
+    walk_inner(workspace, parent, &mut f);
+}
+
+fn walk_inner<F>(workspace: &Workspace, parent: NodeId, f: &mut F) -> bool
+where
+    F: FnMut(NodeId) -> bool,
+{
+    for (id, _) in children_of(workspace, parent) {
+        if !f(id) {
+            return false;
+        }
+        if !walk_inner(workspace, id, f) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Walk up from `node` until we find the page node hosting it — that's
+/// the highest ancestor sitting directly under [`NodeId::root`].
+///
+/// Returns `None` if `node` itself is the root (or detached). Lives in
+/// `tree` because every client (CLI, future TUI handler, mobile) needs
+/// it to re-render the page after a mutation on a deep block.
+pub fn enclosing_page_id(workspace: &Workspace, node: NodeId) -> Option<NodeId> {
+    let mut current = node;
+    loop {
+        let parent = workspace.tree().parent(current)?;
+        if parent == NodeId::root() {
+            return Some(current);
+        }
+        current = parent;
     }
 }

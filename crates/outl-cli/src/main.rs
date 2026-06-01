@@ -1,24 +1,28 @@
 //! `outl` — the CLI binary.
 //!
-//! Thin shell over `outl-core`, `outl-md`, and `outl-tui`. See
-//! `crates/outl-cli/CLAUDE.md`.
+//! Thin shell over `outl-core`, `outl-md`, `outl-actions`, and
+//! `outl-tui`. See `crates/outl-cli/CLAUDE.md` and `docs/cli.md`.
 //!
 //! UX:
 //!
 //! - `outl` with no subcommand opens the TUI in the current directory.
 //! - `outl --path <dir>` opens the TUI in `<dir>` (global flag, works
 //!   with any subcommand that needs a workspace path).
-//! - Subcommands cover workspace lifecycle and one-shot operations; the
-//!   global `--path` is used when the subcommand omits its positional
-//!   `<path>` argument.
+//! - Subcommands cover workspace lifecycle, machine-shaped operations
+//!   (page/block/daily/search/query/export), and the `mcp serve` shim
+//!   that lets Claude Desktop reach the same handlers over stdio.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 mod cmd;
+mod human;
+mod mcp;
+mod output;
 mod sync_engine;
 mod workspace_layout;
+mod ws;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -27,15 +31,15 @@ mod workspace_layout;
     long_about = "Local-first outliner with markdown as source of truth.\n\
                   \n\
                   Running `outl` with no subcommand opens the TUI in the workspace at \
-                  `--path` (default: current directory).",
+                  `--workspace` (default: current directory).",
     version
 )]
 struct Cli {
-    /// Workspace path. Used by every subcommand that needs one; defaults
-    /// to the current directory. Subcommand-level positional path, when
-    /// provided, takes precedence.
-    #[arg(short = 'p', long, global = true)]
-    path: Option<PathBuf>,
+    /// Workspace path. Used by every subcommand that needs one;
+    /// defaults to the current directory. Subcommand-level positional
+    /// path, when provided, takes precedence.
+    #[arg(short = 'w', long, global = true, value_name = "DIR")]
+    workspace: Option<PathBuf>,
 
     /// TUI theme preset (default-dark, light, dracula, solarized-dark,
     /// nord, monokai). Overrides `[theme] preset` in workspace
@@ -55,7 +59,7 @@ struct Cli {
 enum Command {
     /// Open the TUI on the workspace (default: `--path` or current dir).
     Tui {
-        /// Workspace path. Overrides the global `--path`.
+        /// Workspace path. Overrides the global `--workspace`.
         path: Option<PathBuf>,
     },
     /// Initialize a new workspace at the given path.
@@ -65,26 +69,23 @@ enum Command {
     },
     /// Run the file watcher; keep the workspace in sync.
     Serve {
-        /// Workspace path. Overrides the global `--path`.
+        /// Workspace path. Overrides the global `--workspace`.
         path: Option<PathBuf>,
         /// Reconcile every `.md` once and exit (no file watcher).
         #[arg(long)]
         once: bool,
     },
-    /// Export the workspace to another format (phase 4 placeholder).
-    Export {
-        /// Format to export to.
-        #[arg(long, default_value = "hugo")]
-        to: String,
-    },
     /// Check workspace integrity.
     Doctor {
-        /// Workspace path. Overrides the global `--path`.
+        /// Workspace path. Overrides the global `--workspace`.
         path: Option<PathBuf>,
+        /// Emit the report as the JSON envelope instead of a human view.
+        #[arg(long)]
+        json: bool,
     },
     /// Resolve orphan matches via the TUI.
     Reconcile {
-        /// Workspace path. Overrides the global `--path`.
+        /// Workspace path. Overrides the global `--workspace`.
         path: Option<PathBuf>,
     },
     /// Inspect or list theme presets.
@@ -97,7 +98,7 @@ enum Command {
     /// Syncthing / shared folder. Run this once after moving an
     /// existing TUI-only workspace into a synced directory.
     MigrateToShared {
-        /// Workspace path. Overrides the global `--path`.
+        /// Workspace path. Overrides the global `--workspace`.
         path: Option<PathBuf>,
     },
     /// Import a graph from another outliner.
@@ -108,6 +109,56 @@ enum Command {
         src: PathBuf,
         /// Destination workspace. Created if it doesn't exist yet.
         dst: PathBuf,
+    },
+    /// Page-level operations.
+    Page {
+        #[command(subcommand)]
+        sub: cmd::page::PageCommand,
+    },
+    /// Block-level operations.
+    Block {
+        #[command(subcommand)]
+        sub: cmd::block::BlockCommand,
+    },
+    /// Daily journal operations.
+    Daily {
+        #[command(subcommand)]
+        sub: cmd::daily::DailyCommand,
+    },
+    /// Full-text search.
+    Search(cmd::search::SearchArgs),
+    /// Structured query over pages.
+    Query(cmd::query::QueryArgs),
+    /// Backlinks and reference lookups.
+    Backlinks {
+        #[command(subcommand)]
+        sub: cmd::backlinks::BacklinksCommand,
+    },
+    /// Tag listing and lookups.
+    Tag {
+        #[command(subcommand)]
+        sub: cmd::tag::TagCommand,
+    },
+    /// Render a page in a target format (hugo / md / json).
+    Export {
+        #[command(subcommand)]
+        sub: Option<cmd::export_v2::ExportCommand>,
+        /// Legacy placeholder for `--to <fmt>` shape; only `hugo` was
+        /// ever accepted. Kept so prior scripts don't break.
+        #[arg(long)]
+        to: Option<String>,
+    },
+    /// Workspace summary (path, actor, counts).
+    Workspace {
+        #[command(subcommand)]
+        sub: WorkspaceSubcommand,
+    },
+    /// Run the MCP (Model Context Protocol) server over stdio. Wire
+    /// this into `claude_desktop_config.json` to expose every CLI
+    /// subcommand as an MCP tool.
+    Mcp {
+        #[command(subcommand)]
+        sub: McpSubcommand,
     },
 }
 
@@ -120,6 +171,19 @@ pub enum ThemeSubcommand {
         /// Preset name (case- and separator-insensitive).
         name: String,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WorkspaceSubcommand {
+    /// Workspace info — path, actor, counts.
+    Info(cmd::workspace_info::WorkspaceInfoArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum McpSubcommand {
+    /// Start the MCP stdio server. Targets the workspace at the global
+    /// `--workspace` (or current directory if unset).
+    Serve {},
 }
 
 fn main() -> Result<()> {
@@ -139,38 +203,89 @@ fn main() -> Result<()> {
 
     match cli.command {
         None => {
-            let p = resolve_path(cli.path.as_ref(), None)?;
+            let p = resolve_path(cli.workspace.as_ref(), None)?;
             ensure_workspace_or_prompt(&p)?;
             outl_tui::run_with_theme_override(&p, cli.theme.as_deref())
         }
         Some(Command::Tui { path }) => {
-            let p = resolve_path(cli.path.as_ref(), path.as_ref())?;
+            let p = resolve_path(cli.workspace.as_ref(), path.as_ref())?;
             ensure_workspace_or_prompt(&p)?;
             outl_tui::run_with_theme_override(&p, cli.theme.as_deref())
         }
         Some(Command::Init { path }) => {
-            let p = resolve_init_path(cli.path.as_ref(), path.as_ref())?;
+            let p = resolve_init_path(cli.workspace.as_ref(), path.as_ref())?;
             cmd::init::run(&p)
         }
         Some(Command::Serve { path, once }) => {
-            let p = resolve_path(cli.path.as_ref(), path.as_ref())?;
+            let p = resolve_path(cli.workspace.as_ref(), path.as_ref())?;
             cmd::serve::run(&p, once)
         }
-        Some(Command::Export { to }) => cmd::export::run(&to),
-        Some(Command::Doctor { path }) => {
-            let p = resolve_path(cli.path.as_ref(), path.as_ref())?;
+        Some(Command::Doctor { path, json }) => {
+            let p = resolve_path(cli.workspace.as_ref(), path.as_ref())?;
+            if json {
+                std::process::exit(cmd::doctor::run_json(&p));
+            }
             cmd::doctor::run(&p)
         }
         Some(Command::Reconcile { path }) => {
-            let p = resolve_path(cli.path.as_ref(), path.as_ref())?;
+            let p = resolve_path(cli.workspace.as_ref(), path.as_ref())?;
             cmd::reconcile::run(&p)
         }
         Some(Command::Theme { sub }) => cmd::theme::run(sub.as_ref()),
         Some(Command::Import { format, src, dst }) => cmd::import::run(&format, &src, &dst),
         Some(Command::MigrateToShared { path }) => {
-            let p = resolve_path(cli.path.as_ref(), path.as_ref())?;
+            let p = resolve_path(cli.workspace.as_ref(), path.as_ref())?;
             cmd::migrate_to_shared::run(&p)
         }
+        Some(Command::Page { sub }) => {
+            let p = resolve_path(cli.workspace.as_ref(), None)?;
+            std::process::exit(cmd::page::run(&sub, &p));
+        }
+        Some(Command::Block { sub }) => {
+            let p = resolve_path(cli.workspace.as_ref(), None)?;
+            std::process::exit(cmd::block::run(&sub, &p));
+        }
+        Some(Command::Daily { sub }) => {
+            let p = resolve_path(cli.workspace.as_ref(), None)?;
+            std::process::exit(cmd::daily::run(&sub, &p));
+        }
+        Some(Command::Search(args)) => {
+            let p = resolve_path(cli.workspace.as_ref(), None)?;
+            std::process::exit(cmd::search::run(&args, &p));
+        }
+        Some(Command::Query(args)) => {
+            let p = resolve_path(cli.workspace.as_ref(), None)?;
+            std::process::exit(cmd::query::run(&args, &p));
+        }
+        Some(Command::Backlinks { sub }) => {
+            let p = resolve_path(cli.workspace.as_ref(), None)?;
+            std::process::exit(cmd::backlinks::run(&sub, &p));
+        }
+        Some(Command::Tag { sub }) => {
+            let p = resolve_path(cli.workspace.as_ref(), None)?;
+            std::process::exit(cmd::tag::run(&sub, &p));
+        }
+        Some(Command::Export { sub, to }) => {
+            let p = resolve_path(cli.workspace.as_ref(), None)?;
+            match sub {
+                Some(ec) => std::process::exit(cmd::export_v2::run(&ec, &p)),
+                None => cmd::export::run(to.as_deref().unwrap_or("hugo")),
+            }
+        }
+        Some(Command::Workspace { sub }) => {
+            let p = resolve_path(cli.workspace.as_ref(), None)?;
+            match sub {
+                WorkspaceSubcommand::Info(args) => {
+                    std::process::exit(cmd::workspace_info::run(&args, &p));
+                }
+            }
+        }
+        Some(Command::Mcp { sub }) => match sub {
+            McpSubcommand::Serve {} => {
+                let p = resolve_path(cli.workspace.as_ref(), None)?;
+                mcp::serve(p)
+            }
+        },
     }
 }
 

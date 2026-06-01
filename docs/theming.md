@@ -11,7 +11,7 @@ Three ways to pick, in precedence order:
 
 1. **CLI flag** (this run only):
    ```bash
-   outl --path ~/notes --theme dracula
+   outl --workspace ~/notes --theme dracula
    ```
 2. **Workspace config** — persists for the workspace:
    ```toml

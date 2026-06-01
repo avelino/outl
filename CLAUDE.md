@@ -102,6 +102,8 @@ User-facing docs in `docs/`:
 - `docs/theming.md` — palette, presets, how to add a new theme.
 - `docs/roadmap.md` — phase plan.
 - `docs/clients.md` — shared workspace operations and how each client (TUI, mobile) plugs into them.
+- `docs/cli.md` — `outl` binary surface (subcommands, JSON envelope).
+- `docs/mcp.md` — Claude Desktop / Cursor wiring + MCP resources/prompts.
 
 ## How we work in this repo
 

@@ -2,62 +2,148 @@
 //!
 //! Reports problems without fixing them — `outl reconcile` and editor
 //! workflows are the canonical fix paths. Doctor is read-only.
+//!
+//! The check pipeline is exposed as [`collect`], returning a
+//! serializable [`DoctorReport`]. The CLI surface ([`run`] for human
+//! output, [`run_json`] for `--json`) wraps it, and the MCP shim
+//! routes `outl_workspace_doctor` straight into [`collect_json`].
 
+use crate::output::{emit, ApiError};
 use crate::workspace_layout::{read_config, Paths};
 use anyhow::{Context, Result};
 use outl_core::storage::{SqliteStorage, Storage};
 use outl_md::index::WorkspaceIndex;
 use outl_md::inline::{tokenize, InlineTok};
 use outl_md::sidecar::{self, sidecar_path_for};
+use serde::Serialize;
+use serde_json::Value;
 use std::collections::HashSet;
 use std::path::Path;
 
-#[derive(Default)]
-struct Findings {
-    warnings: usize,
+/// Severity of a single finding.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Severity {
+    /// Healthy state — no action needed.
+    Ok,
+    /// Informational, not a problem.
+    Info,
+    /// Possible problem, user should look.
+    Warn,
+    /// Definite problem, blocks "integrity OK".
+    Error,
+}
+
+/// One workspace check result.
+#[derive(Debug, Clone, Serialize)]
+pub struct Finding {
+    /// Severity bucket.
+    pub severity: Severity,
+    /// Human-readable description.
+    pub message: String,
+}
+
+/// Aggregate of every finding from a doctor run.
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorReport {
+    /// Workspace root path (display form).
+    pub workspace: String,
+    /// Actor id from `config.toml`.
+    pub actor: String,
+    /// Number of ops in the persisted log.
+    pub op_count: usize,
+    /// Every check emitted, in execution order.
+    pub findings: Vec<Finding>,
+    /// Convenience counts so callers don't have to count.
+    pub error_count: usize,
+    /// Number of warning findings.
+    pub warn_count: usize,
+}
+
+struct Builder {
+    workspace: String,
+    actor: String,
+    op_count: usize,
+    findings: Vec<Finding>,
     errors: usize,
+    warnings: usize,
 }
 
-impl Findings {
-    fn warn(&mut self, msg: impl AsRef<str>) {
-        self.warnings += 1;
-        println!("warn: {}", msg.as_ref());
+impl Builder {
+    fn new(workspace: String, actor: String) -> Self {
+        Self {
+            workspace,
+            actor,
+            op_count: 0,
+            findings: Vec::new(),
+            errors: 0,
+            warnings: 0,
+        }
     }
-    fn err(&mut self, msg: impl AsRef<str>) {
-        self.errors += 1;
-        println!("err:  {}", msg.as_ref());
+    fn push(&mut self, severity: Severity, message: impl Into<String>) {
+        if matches!(severity, Severity::Error) {
+            self.errors += 1;
+        }
+        if matches!(severity, Severity::Warn) {
+            self.warnings += 1;
+        }
+        self.findings.push(Finding {
+            severity,
+            message: message.into(),
+        });
     }
-    fn ok(&self, msg: impl AsRef<str>) {
-        println!("ok:   {}", msg.as_ref());
+    fn ok(&mut self, msg: impl Into<String>) {
+        self.push(Severity::Ok, msg);
+    }
+    fn info(&mut self, msg: impl Into<String>) {
+        self.push(Severity::Info, msg);
+    }
+    fn warn(&mut self, msg: impl Into<String>) {
+        self.push(Severity::Warn, msg);
+    }
+    fn err(&mut self, msg: impl Into<String>) {
+        self.push(Severity::Error, msg);
+    }
+    fn into_report(self) -> DoctorReport {
+        DoctorReport {
+            workspace: self.workspace,
+            actor: self.actor,
+            op_count: self.op_count,
+            findings: self.findings,
+            error_count: self.errors,
+            warn_count: self.warnings,
+        }
     }
 }
 
-/// Run the `doctor` subcommand.
-pub fn run(path: &Path) -> Result<()> {
+/// Run every doctor check and return a structured report. Used by the
+/// CLI human path, the `--json` flag, and the MCP tool.
+pub fn collect(path: &Path) -> Result<DoctorReport, ApiError> {
     let paths = Paths::at(path.to_path_buf());
-    let cfg =
-        read_config(&paths).with_context(|| "workspace config missing — run `outl init` first")?;
-
-    println!("workspace: {}", paths.root.display());
-    println!("actor:     {}", cfg.workspace.actor_id);
-    println!();
-
-    let mut f = Findings::default();
+    let cfg = read_config(&paths).map_err(|e| {
+        ApiError::new(
+            crate::output::codes::NO_WORKSPACE,
+            format!("workspace config missing — run `outl init` first ({e})"),
+        )
+    })?;
+    let mut b = Builder::new(paths.root.display().to_string(), cfg.workspace.actor_id);
 
     // 1. SQLite integrity.
     match SqliteStorage::open(&paths.db).and_then(|s| s.integrity_check()) {
         Ok(s) if s.eq_ignore_ascii_case("ok") => {
-            f.ok("log.db PRAGMA integrity_check passed");
+            b.ok("log.db PRAGMA integrity_check passed");
         }
-        Ok(other) => f.err(format!("log.db integrity_check reported: {other}")),
-        Err(e) => f.err(format!("log.db integrity check failed: {e}")),
+        Ok(other) => b.err(format!("log.db integrity_check reported: {other}")),
+        Err(e) => b.err(format!("log.db integrity check failed: {e}")),
     }
 
-    // 2. Op log basic stats.
+    // 2. Op log basic stats — also collects known node ids for the
+    //    sidecar cross-check below.
     let known_node_ids: HashSet<outl_core::id::NodeId> = match SqliteStorage::open(&paths.db) {
         Ok(storage) => match storage.all_ops() {
             Ok(ops) => {
-                println!("ok:   op log has {} ops", ops.len());
+                b.op_count = ops.len();
+                b.ok(format!("op log has {} ops", ops.len()));
                 let mut ids = HashSet::new();
                 for op in &ops {
                     let node = match &op.op {
@@ -71,12 +157,12 @@ pub fn run(path: &Path) -> Result<()> {
                 ids
             }
             Err(e) => {
-                f.err(format!("could not read op log: {e}"));
+                b.err(format!("could not read op log: {e}"));
                 HashSet::new()
             }
         },
         Err(e) => {
-            f.err(format!("could not open log.db: {e}"));
+            b.err(format!("could not open log.db: {e}"));
             HashSet::new()
         }
     };
@@ -89,9 +175,7 @@ pub fn run(path: &Path) -> Result<()> {
         let mut md_files = Vec::new();
         let mut sidecar_files = Vec::new();
         for entry in walkdir::WalkDir::new(dir).max_depth(1) {
-            let Ok(entry) = entry else {
-                continue;
-            };
+            let Ok(entry) = entry else { continue };
             let p = entry.path();
             if !entry.file_type().is_file() {
                 continue;
@@ -101,7 +185,6 @@ pub fn run(path: &Path) -> Result<()> {
                 None => continue,
             };
             if name.starts_with('.') {
-                // Sidecar dotfile.
                 if name.ends_with(".outl") {
                     sidecar_files.push(p.to_path_buf());
                 }
@@ -111,21 +194,14 @@ pub fn run(path: &Path) -> Result<()> {
                 md_files.push(p.to_path_buf());
             }
         }
-
-        check_md_files(&mut f, &md_files, &known_node_ids);
-        check_orphan_sidecars(&mut f, &sidecar_files, &md_files);
+        check_md_files(&mut b, &md_files, &known_node_ids);
+        check_orphan_sidecars(&mut b, &sidecar_files, &md_files);
     }
 
-    // 4. Block ref integrity — every `((blk-XXXXXX))` mentioned in a
-    //    block's text must resolve to an indexed block. Orphans show
-    //    up here so the user can clean them up before they ship a
-    //    broken link to another device.
-    //
-    // Build the workspace index ONCE and pass it down — the previous
-    // implementation built it locally inside the check, paying the
-    // full scan twice on every doctor run.
+    // 4. Block ref integrity — every `((blk-XXXXXX))` mentioned must
+    //    resolve to an indexed block. Build the index once.
     let workspace_index = WorkspaceIndex::build(&paths.root);
-    check_orphan_block_refs(&mut f, &workspace_index);
+    check_orphan_block_refs(&mut b, &workspace_index);
 
     // 5. Orphan log presence (informational).
     if paths.orphans.exists() {
@@ -133,43 +209,88 @@ pub fn run(path: &Path) -> Result<()> {
             .map(|m| m.len())
             .unwrap_or(0);
         if bytes == 0 {
-            f.ok("orphans.log is empty");
+            b.ok("orphans.log is empty");
         } else {
-            println!("info: orphans.log has {bytes} bytes — run `outl reconcile` to triage");
+            b.info(format!(
+                "orphans.log has {bytes} bytes — run `outl reconcile` to triage"
+            ));
         }
     }
 
-    // 6. Lock file warning if held by something else (we can't acquire it).
+    // 6. Lock file: warn if held by another process.
     match outl_core::WorkspaceLock::acquire(&paths.root) {
-        Ok(_lock) => f.ok("workspace lock is free (no other outl process attached)"),
+        Ok(_lock) => b.ok("workspace lock is free (no other outl process attached)"),
         Err(outl_core::LockError::AlreadyHeld(_)) => {
-            f.warn("another outl process is holding the workspace lock");
+            b.warn("another outl process is holding the workspace lock");
         }
-        Err(e) => f.warn(format!("could not test workspace lock: {e}")),
+        Err(e) => b.warn(format!("could not test workspace lock: {e}")),
     }
 
+    Ok(b.into_report())
+}
+
+/// MCP entry point — returns the report as JSON `data`.
+pub fn collect_json(path: &Path) -> Result<Value, ApiError> {
+    let report = collect(path)?;
+    serde_json::to_value(&report).map_err(ApiError::internal)
+}
+
+/// CLI entry point with human output. Exits with status 1 when the
+/// report has errors so scripts can detect failure.
+pub fn run(path: &Path) -> Result<()> {
+    let report = collect(path).with_context(|| format!("running doctor on {}", path.display()))?;
+    println!("workspace: {}", report.workspace);
+    println!("actor:     {}", report.actor);
     println!();
-    match (f.errors, f.warnings) {
+    for finding in &report.findings {
+        let tag = match finding.severity {
+            Severity::Ok => "ok:  ",
+            Severity::Info => "info:",
+            Severity::Warn => "warn:",
+            Severity::Error => "err: ",
+        };
+        println!("{tag} {}", finding.message);
+    }
+    println!();
+    match (report.error_count, report.warn_count) {
         (0, 0) => println!("integrity OK"),
         (0, w) => println!("integrity OK with {w} warning(s)"),
         (e, w) => {
             println!("{e} error(s), {w} warning(s) — see lines above");
-            // Non-zero exit so scripts can detect failure.
             std::process::exit(1);
         }
     }
     Ok(())
 }
 
+/// `outl doctor --json` shape — emits the envelope and exits 1 when
+/// the report has errors.
+pub fn run_json(path: &Path) -> i32 {
+    let result = collect_json(path);
+    let exit = emit(true, result.clone(), |_| {});
+    // `emit` already used the JSON branch; force an error exit when
+    // the report itself carried errors even though the call succeeded.
+    if exit == 0
+        && result
+            .ok()
+            .and_then(|v| v.get("error_count").and_then(|n| n.as_u64()))
+            .unwrap_or(0)
+            > 0
+    {
+        return 1;
+    }
+    exit
+}
+
 fn check_md_files(
-    f: &mut Findings,
+    b: &mut Builder,
     md_files: &[std::path::PathBuf],
     known_node_ids: &HashSet<outl_core::id::NodeId>,
 ) {
     for md in md_files {
         let scp = sidecar_path_for(md);
         if !scp.exists() {
-            f.warn(format!(
+            b.warn(format!(
                 "{}: no sidecar (next `outl serve` or TUI commit will create one)",
                 md.display()
             ));
@@ -177,22 +298,21 @@ fn check_md_files(
         }
         match sidecar::read(&scp) {
             Ok(sc) if sc.version == sidecar::SIDECAR_VERSION => {
-                // Cross-check each block ID against the op log.
                 let mut unknown = 0;
-                for b in &sc.blocks {
-                    if !known_node_ids.is_empty() && !known_node_ids.contains(&b.id) {
+                for sb in &sc.blocks {
+                    if !known_node_ids.is_empty() && !known_node_ids.contains(&sb.id) {
                         unknown += 1;
                     }
                 }
                 if unknown == 0 {
-                    f.ok(format!(
+                    b.ok(format!(
                         "{} (sidecar v{}, {} blocks, all IDs known)",
                         md.display(),
                         sc.version,
                         sc.blocks.len()
                     ));
                 } else {
-                    f.warn(format!(
+                    b.warn(format!(
                         "{}: {} block id(s) in sidecar not present in op log (workspace partially de-synced)",
                         md.display(),
                         unknown
@@ -200,35 +320,26 @@ fn check_md_files(
                 }
             }
             Ok(sc) => {
-                f.warn(format!(
+                b.warn(format!(
                     "{}: sidecar version {} unsupported by this build",
                     md.display(),
                     sc.version
                 ));
             }
             Err(e) => {
-                f.err(format!("{}: sidecar unreadable: {e}", md.display()));
+                b.err(format!("{}: sidecar unreadable: {e}", md.display()));
             }
         }
     }
 }
 
 /// Walk every indexed block, tokenize its text, and warn for every
-/// `((blk-XXXXXX))` or `!((blk-XXXXXX))` whose handle doesn't resolve
+/// `((blk-XXXXXX))` or `!((blk-XXXXXX))` whose handle does not resolve
 /// to an indexed block.
-///
-/// Surfaces the citing page so the user can navigate straight to the
-/// broken reference. Lookup is O(1) per handle via
-/// [`WorkspaceIndex::resolve_block_ref`], so total cost is linear in
-/// the number of inline block refs across the workspace. Takes the
-/// pre-built index from the caller so doctor doesn't pay for a
-/// duplicate workspace scan.
-fn check_orphan_block_refs(f: &mut Findings, idx: &WorkspaceIndex) {
+fn check_orphan_block_refs(b: &mut Builder, idx: &WorkspaceIndex) {
     let mut orphans = 0usize;
     for block in idx.iter_blocks() {
         for tok in tokenize(&block.text) {
-            // Keep the literal form (`((handle))` vs `!((handle))`) so
-            // the user can grep for it in the source page exactly.
             let (handle, literal) = match tok {
                 InlineTok::BlockRef { handle } => (handle, format!("(({handle}))")),
                 InlineTok::Embed { handle } => (handle, format!("!(({handle}))")),
@@ -236,7 +347,7 @@ fn check_orphan_block_refs(f: &mut Findings, idx: &WorkspaceIndex) {
             };
             if idx.resolve_block_ref(handle).is_none() {
                 orphans += 1;
-                f.warn(format!(
+                b.warn(format!(
                     "{}: orphan block ref {} — source block missing or not indexed",
                     block.source_path.display(),
                     literal,
@@ -245,12 +356,12 @@ fn check_orphan_block_refs(f: &mut Findings, idx: &WorkspaceIndex) {
         }
     }
     if orphans == 0 {
-        f.ok("no orphan ((blk-XXXXXX)) / !((blk-XXXXXX)) references");
+        b.ok("no orphan ((blk-XXXXXX)) / !((blk-XXXXXX)) references");
     }
 }
 
 fn check_orphan_sidecars(
-    f: &mut Findings,
+    b: &mut Builder,
     sidecar_files: &[std::path::PathBuf],
     md_files: &[std::path::PathBuf],
 ) {
@@ -262,12 +373,11 @@ fn check_orphan_sidecars(
         let Some(name) = scp.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        // Sidecar naming is `.<md_name>.outl`. Strip prefix + suffix.
         let Some(stripped) = name.strip_prefix('.').and_then(|s| s.strip_suffix(".outl")) else {
             continue;
         };
         if !md_names.contains(stripped) {
-            f.warn(format!(
+            b.warn(format!(
                 "{}: orphaned sidecar (no matching {} on disk)",
                 scp.display(),
                 stripped
