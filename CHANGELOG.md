@@ -4,6 +4,106 @@ All notable changes to outl are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project
 uses [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-06-01
+
+outl becomes scriptable. A full machine-shaped CLI (page, block,
+daily, search, query, tag, prop, backlinks, export, workspace) lands
+with a stable JSON envelope and exit codes, and the same handlers are
+exposed over MCP via `outl mcp serve` (JSON-RPC over stdio) so Claude
+Desktop, Cursor, and any other agentic client can drive a workspace
+without parsing TUI output. Business logic stays in `outl-actions`;
+the CLI and MCP are thin shims over the same code.
+
+No storage or op-log format changes — drop-in upgrade from 0.3.x for
+data on disk. **One breaking flag rename** for shell/cron users:
+`--path` is now `--workspace` everywhere.
+
+### CLI (`outl-cli`) — new machine surface
+
+- **Subcommands cover the full workspace API.** `outl page
+  {list,get,create,rename,delete,prop}`, `outl block
+  {get,edit,create,delete,move,toggle}`, `outl daily
+  {today,get,range}`, `outl search`, `outl query`, `outl tag
+  {list,page}`, `outl prop {list,page}`, `outl backlinks
+  {page,block,embed}`, `outl export hugo`, `outl workspace
+  {info,doctor}`. Every command writes a stable JSON envelope
+  (`{ok, data, error, meta}`) to stdout and a typed exit code, so
+  scripts and CI never have to scrape human output. `--human` keeps
+  the friendly table format for interactive use.
+- **One Workspace per process, index cached.** Each invocation opens
+  the workspace once, reuses the in-memory index, and drops the
+  per-call SQLite replay that older `outl serve`-style flows paid.
+- **`--workspace` replaces `--path`.** The TUI, server, doctor, and
+  every new subcommand now take `--workspace <dir>`. Existing
+  scripts that pass `--path` must rename the flag (env var stays
+  `OUTL_WORKSPACE`). The TUI's positional path argument is
+  unchanged for direct double-clicks.
+- **CLI integration suite** (`cli_machine.rs`) exercises page,
+  block, search, and workspace commands against a real workspace so
+  envelope shape and exit codes can't drift.
+
+### MCP server (new: `outl mcp serve`)
+
+- **JSON-RPC over stdio.** `outl mcp serve --workspace <dir>` speaks
+  the MCP protocol with `initialize`, `tools/list`, `tools/call`,
+  `resources/list`, `resources/read`, `prompts/list`, and
+  `prompts/get`. Drop the binary into Claude Desktop's
+  `claude_desktop_config.json` or Cursor's `mcp.json` and the agent
+  can read journals, search, follow backlinks, edit blocks, and
+  toggle TODOs against the same workspace your TUI/mobile is using.
+- **Tools** mirror the CLI 1:1 (`outl_page_*`, `outl_block_*`,
+  `outl_daily_*`, `outl_search`, `outl_query`, `outl_tag_*`,
+  `outl_prop_*`, `outl_backlinks_*`, `outl_workspace_*`) so the LLM
+  sees the same surface a human would script.
+- **Resources** expose read-only views over `outl://daily/today`,
+  `outl://page/<slug>`, `outl://search?q=…`, etc., for clients that
+  prefer URI-addressed reads to tool calls.
+- **Prompts** ship `summarize_day` and friends so the agent can
+  pull a daily-note summary in one round-trip.
+- **Per-session workspace + cached index.** The MCP server holds
+  one `WsCtx` for the life of the session and routes every read
+  through `ServerCtx::with_workspace`, which reuses that handle and
+  invalidates the index after lazy journal materialisation in
+  `outl://daily/today` and `summarize_day`. Earlier prototypes
+  opened a fresh `WsCtx` per call and self-deadlocked on the
+  workspace lock the session already owned —
+  `resources/read` and `prompts/get` are now part of the same
+  cached path as `tools/call`.
+- **MCP smoke suite** (`mcp_smoke.rs`) walks `initialize` →
+  `tools/list` → `tools/call` → `resources/read` in one session so
+  the lock-reuse contract can't regress.
+
+### Security / hardening
+
+- **Slug validation at the boundary.** `outl-actions::is_valid_slug`
+  rejects empties, `.`/`..` traversal, path separators, and control
+  chars before any filesystem write, surfaced as a typed
+  `ActionError::InvalidSlug` (`INVALID_ARG` in the CLI/MCP
+  envelope). Hugo export adds a second `target_within` check
+  against canonicalised paths so a legacy bad slug imported from
+  disk still cannot escape `--out`.
+- **Doctor split.** `workspace doctor` runs `collect_json` (full
+  lock probe, used by `outl doctor` from the shell) and
+  `collect_in_session_json` (probe off, used by the MCP tool which
+  already owns the lock). Before this split, `outl_workspace_doctor`
+  always warned about the workspace lock on perfectly healthy
+  workspaces.
+- **Quieter failures stop being silent.** Page delete/rename
+  replace `let _ = remove_file(...)` with a `remove_or_warn` helper
+  so a broken filesystem surfaces in logs instead of disappearing.
+  Regression tests cover malicious slugs, doctor-clean inside an
+  MCP session, and delete being idempotent when the `.md` is
+  already gone.
+
+### Docs
+
+- New `docs/cli.md` and `docs/mcp.md` cover the machine surface and
+  the MCP wiring for Claude Desktop / Cursor end to end (envelope
+  shape, every subcommand, every tool, every resource).
+- Getting-started, tutorial, sync, theming, TUI, and clients docs
+  refreshed for the `--workspace` rename and the new subcommand
+  names.
+
 ## [0.3.1] — 2026-05-31
 
 Mobile UX polish + autocomplete fixes. No protocol or storage
