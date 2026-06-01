@@ -115,6 +115,44 @@ fn initialize_then_call_workspace_info() {
 }
 
 #[test]
+fn doctor_via_mcp_does_not_lie_about_lock() {
+    // Regression: doctor used to call `WorkspaceLock::acquire`, which
+    // would always fail inside the MCP session (the server already
+    // owns the lock) and report a non-existent contention. The fix
+    // skips the lock probe and emits an info-level "probe skipped"
+    // finding instead.
+    let ws = init_workspace();
+    let mut client = McpClient::spawn(ws.path());
+
+    let _ = client.call(serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": { "protocolVersion": "2024-11-05", "capabilities": {} }
+    }));
+
+    let resp = client.call(serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "outl_workspace_doctor", "arguments": {} }
+    }));
+    let structured = &resp["result"]["structuredContent"];
+    assert_eq!(structured["ok"], true, "doctor must succeed inside MCP");
+    let findings = structured["data"]["findings"].as_array().unwrap();
+    let has_lock_warning = findings.iter().any(|f| {
+        f["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("another outl process is holding the workspace lock")
+    });
+    assert!(
+        !has_lock_warning,
+        "doctor must not warn about its own lock when running in MCP session"
+    );
+}
+
+#[test]
 fn page_create_then_get_via_mcp() {
     let ws = init_workspace();
     let mut client = McpClient::spawn(ws.path());

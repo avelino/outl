@@ -216,8 +216,7 @@ pub fn create(
         slug,
         display_title,
         PageKind::Page,
-    )
-    .map_err(ApiError::internal)?;
+    )?;
 
     if let Some(value) = icon {
         if !value.is_empty() {
@@ -272,10 +271,13 @@ pub fn delete(ctx: &mut WsCtx, slug: &str) -> Result<Value, ApiError> {
     outl_actions::block::delete(&mut ctx.workspace, &ctx.hlc, id).map_err(ApiError::internal)?;
 
     // Remove the on-disk projection so peers don't see a stale page.
+    // We log failures so a broken FS doesn't silently leave orphans —
+    // `outl doctor` would flag them, but the operator deserves to know
+    // immediately.
     let md_path = outl_actions::page_md_path(&ctx.root, &meta);
-    let _ = std::fs::remove_file(&md_path);
+    remove_or_warn(&md_path, "page md");
     let sidecar_path = outl_md::resolve_sidecar_path(&md_path);
-    let _ = std::fs::remove_file(&sidecar_path);
+    remove_or_warn(&sidecar_path, "page sidecar");
 
     Ok(json!({
         "slug": meta.slug,
@@ -331,11 +333,12 @@ pub fn rename(ctx: &mut WsCtx, old_slug: &str, new_slug: &str) -> Result<Value, 
     write_page_property(ctx, id, SLUG_KEY, Some(new_slug))?;
     write_projection(ctx, id)?;
 
-    // Remove the old md/sidecar so the workspace doesn't keep a stale copy.
+    // Remove the old md/sidecar so the workspace doesn't keep a stale
+    // copy. Logged on failure for the same reason as in `delete`.
     let old_md = outl_actions::page_md_path(&ctx.root, &old_meta);
-    let _ = std::fs::remove_file(&old_md);
+    remove_or_warn(&old_md, "old page md");
     let old_sidecar = outl_md::resolve_sidecar_path(&old_md);
-    let _ = std::fs::remove_file(&old_sidecar);
+    remove_or_warn(&old_sidecar, "old page sidecar");
 
     // Affected backlinks: keep the old textual form so the caller can
     // grep / rewrite.
@@ -399,6 +402,22 @@ fn write_page_property(
 fn write_projection(ctx: &mut WsCtx, id: NodeId) -> Result<(), ApiError> {
     apply_page_md_with_sidecar(&ctx.workspace, &ctx.root, id).map_err(ApiError::internal)?;
     Ok(())
+}
+
+/// Try to delete `path`. If it doesn't exist, nothing to do. Any
+/// other failure is logged through `tracing::warn!` so the operator
+/// sees it even though the calling op (delete / rename) succeeds at
+/// the op-log level.
+fn remove_or_warn(path: &std::path::Path, label: &str) {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => tracing::warn!(
+            target: "outl::cmd::page",
+            "could not remove {label} at {}: {e}",
+            path.display()
+        ),
+    }
 }
 
 fn page_has_tag(workspace: &outl_core::workspace::Workspace, page: NodeId, tag: &str) -> bool {

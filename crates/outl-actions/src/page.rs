@@ -137,6 +137,39 @@ pub fn page_id_from_slug(slug: &str) -> NodeId {
     NodeId(ulid::Ulid::from_bytes(bytes))
 }
 
+/// Whether `slug` is safe to use as a single path component for the
+/// `.md` / `.outl` projection.
+///
+/// The slug is joined into `pages/<slug>.md` (or `journals/...`) and
+/// shows up in `[[refs]]`, in `block-ref` handles, and in the export
+/// pipelines. Anything that would escape its directory (`..`, `/`,
+/// `\`) or smuggle control characters (`\0`, newline) is rejected
+/// here so a single check covers every downstream surface. Leading /
+/// trailing whitespace is also rejected because it silently breaks
+/// filename equality across iCloud / git / external editors.
+pub fn is_valid_slug(slug: &str) -> bool {
+    if slug.is_empty() || slug.len() > 255 {
+        return false;
+    }
+    if slug != slug.trim() {
+        return false;
+    }
+    if slug == "." || slug == ".." {
+        return false;
+    }
+    for ch in slug.chars() {
+        match ch {
+            '/' | '\\' | '\0' | '\n' | '\r' | '\t' => return false,
+            c if c.is_control() => return false,
+            _ => {}
+        }
+    }
+    // No `..` segment hidden in something like `foo/../bar` even though
+    // we already reject `/`. Belt and suspenders for any caller that
+    // routes the slug through a path join.
+    !slug.split(['/', '\\']).any(|c| c == "..")
+}
+
 /// Open the page for `slug`, creating it if it doesn't exist yet.
 ///
 /// The page's [`NodeId`] is derived deterministically from the slug
@@ -144,6 +177,11 @@ pub fn page_id_from_slug(slug: &str) -> NodeId {
 /// same slug ends up writing to the same node. iCloud sync then
 /// merges the two creators' edits into one page instead of leaving
 /// two competing copies.
+///
+/// Rejects slugs that fail [`is_valid_slug`] — the slug ends up
+/// joined into a filesystem path, so anything that could escape its
+/// directory (`..`, `/`, `\`, control chars) stays out of the
+/// workspace entirely.
 pub fn open_or_create(
     workspace: &mut Workspace,
     hlc: &HlcGenerator,
@@ -151,6 +189,9 @@ pub fn open_or_create(
     title: &str,
     kind: PageKind,
 ) -> Result<NodeId, ActionError> {
+    if !is_valid_slug(slug) {
+        return Err(ActionError::InvalidSlug(slug.to_string()));
+    }
     if let Some(id) = find_by_slug(workspace, slug) {
         return Ok(id);
     }

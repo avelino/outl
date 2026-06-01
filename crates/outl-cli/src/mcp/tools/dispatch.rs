@@ -29,6 +29,14 @@ use super::{opt_str, require_str};
 /// Tool names that mutate the workspace. After a successful call we
 /// invalidate the cached `WorkspaceIndex` so subsequent read-only
 /// tools see the freshly written blocks / pages.
+///
+/// `outl_daily_today` and `outl_daily_get` look read-only by name but
+/// belong here: both go through `open_journal`, which creates the
+/// journal page when it doesn't exist yet (lazy materialisation
+/// keeps the user's daily-note shortcut frictionless). The first
+/// call of the day mutates, every call after that is effectively a
+/// read — keeping them in this list errs on the safe side and pays
+/// only one extra index rebuild.
 const MUTATING: &[&str] = &[
     "outl_page_create",
     "outl_page_update",

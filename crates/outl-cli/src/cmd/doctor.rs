@@ -117,8 +117,28 @@ impl Builder {
 }
 
 /// Run every doctor check and return a structured report. Used by the
-/// CLI human path, the `--json` flag, and the MCP tool.
+/// CLI human path and the `--json` flag — those acquire the workspace
+/// lock fresh, so the lock probe at the end can tell apart "free" /
+/// "held by another outl process". The MCP shim uses [`collect_in_session`]
+/// because it is already holding the lock through its cached `WsCtx`,
+/// so the probe would always return `AlreadyHeld` and lie.
 pub fn collect(path: &Path) -> Result<DoctorReport, ApiError> {
+    collect_internal(path, true)
+}
+
+/// Same as [`collect`] but skips the workspace-lock probe.
+///
+/// The MCP server holds the lock for its whole session through the
+/// cached `WsCtx`, so a second `WorkspaceLock::acquire` from inside
+/// the same process would always return `AlreadyHeld` and the probe
+/// would always report a non-existent contention. Skipping the probe
+/// keeps the doctor signal honest when invoked from within a long-
+/// running process.
+pub fn collect_in_session(path: &Path) -> Result<DoctorReport, ApiError> {
+    collect_internal(path, false)
+}
+
+fn collect_internal(path: &Path, probe_lock: bool) -> Result<DoctorReport, ApiError> {
     let paths = Paths::at(path.to_path_buf());
     let cfg = read_config(&paths).map_err(|e| {
         ApiError::new(
@@ -218,20 +238,29 @@ pub fn collect(path: &Path) -> Result<DoctorReport, ApiError> {
     }
 
     // 6. Lock file: warn if held by another process.
-    match outl_core::WorkspaceLock::acquire(&paths.root) {
-        Ok(_lock) => b.ok("workspace lock is free (no other outl process attached)"),
-        Err(outl_core::LockError::AlreadyHeld(_)) => {
-            b.warn("another outl process is holding the workspace lock");
+    //    Skipped when running inside an outl process that already
+    //    holds the lock (e.g. MCP server) — `AlreadyHeld` would just
+    //    report itself.
+    if probe_lock {
+        match outl_core::WorkspaceLock::acquire(&paths.root) {
+            Ok(_lock) => b.ok("workspace lock is free (no other outl process attached)"),
+            Err(outl_core::LockError::AlreadyHeld(_)) => {
+                b.warn("another outl process is holding the workspace lock");
+            }
+            Err(e) => b.warn(format!("could not test workspace lock: {e}")),
         }
-        Err(e) => b.warn(format!("could not test workspace lock: {e}")),
+    } else {
+        b.info("workspace lock probe skipped (running inside an outl session)");
     }
 
     Ok(b.into_report())
 }
 
-/// MCP entry point — returns the report as JSON `data`.
+/// MCP entry point — returns the report as JSON `data`. Skips the
+/// workspace-lock probe because the MCP shim already owns the lock
+/// for the whole session (see [`collect_in_session`]).
 pub fn collect_json(path: &Path) -> Result<Value, ApiError> {
-    let report = collect(path)?;
+    let report = collect_in_session(path)?;
     serde_json::to_value(&report).map_err(ApiError::internal)
 }
 
