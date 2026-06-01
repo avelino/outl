@@ -743,4 +743,97 @@ mod tests {
         assert!(snapshot.contains(&b));
         assert!(!snapshot.contains(&c));
     }
+
+    #[test]
+    fn set_collapsed_converges_across_three_replicas() {
+        // Strong Eventual Consistency for `Op::SetCollapsed`.
+        //
+        // Three replicas observe the same five flips on the same two
+        // nodes but in three different delivery orders. After every
+        // op has been applied to every replica, the final
+        // `collapsed_ids` set must be identical on all three.
+        //
+        // The fixture deliberately mixes:
+        //   - flips on different nodes (independent — order shouldn't
+        //     matter for the final state of either)
+        //   - flips on the *same* node (HLC + actor tiebreak decides
+        //     the winner; every replica must agree on the same winner)
+        let actor_a = ActorId::new();
+        let actor_b = ActorId::new();
+        let g_a = HlcGenerator::new(actor_a);
+        let g_b = HlcGenerator::new(actor_b);
+        let n1 = NodeId::new();
+        let n2 = NodeId::new();
+
+        // Author the canonical sequence on actor A's generator (so
+        // every LogOp has a monotonic ts from A), with two contender
+        // ops minted by B against n1 to force a same-node race.
+        let ops = [
+            make_op(
+                &g_a,
+                Op::SetCollapsed {
+                    node: n1,
+                    value: true,
+                    old_value: false,
+                },
+            ),
+            make_op(
+                &g_b,
+                Op::SetCollapsed {
+                    node: n1,
+                    value: false,
+                    old_value: false,
+                },
+            ),
+            make_op(
+                &g_a,
+                Op::SetCollapsed {
+                    node: n2,
+                    value: true,
+                    old_value: false,
+                },
+            ),
+            make_op(
+                &g_a,
+                Op::SetCollapsed {
+                    node: n1,
+                    value: true,
+                    old_value: false,
+                },
+            ),
+            make_op(
+                &g_b,
+                Op::SetCollapsed {
+                    node: n2,
+                    value: false,
+                    old_value: false,
+                },
+            ),
+        ];
+
+        // Three permutations: forward, reverse, and "interleaved"
+        // (B's ops first, A's ops second).
+        let perm_forward: Vec<usize> = (0..ops.len()).collect();
+        let perm_reverse: Vec<usize> = (0..ops.len()).rev().collect();
+        let perm_interleaved = vec![1, 4, 0, 2, 3];
+
+        fn run(ops: &[LogOp], order: &[usize]) -> Tree {
+            let mut tree = Tree::new();
+            let mut log = OpLog::new();
+            for &i in order {
+                tree.apply_op(&mut log, ops[i].clone());
+            }
+            tree
+        }
+
+        let r1 = run(&ops, &perm_forward);
+        let r2 = run(&ops, &perm_reverse);
+        let r3 = run(&ops, &perm_interleaved);
+
+        let set1: std::collections::HashSet<NodeId> = r1.collapsed_ids().collect();
+        let set2: std::collections::HashSet<NodeId> = r2.collapsed_ids().collect();
+        let set3: std::collections::HashSet<NodeId> = r3.collapsed_ids().collect();
+        assert_eq!(set1, set2, "forward vs reverse delivery must converge");
+        assert_eq!(set1, set3, "forward vs interleaved delivery must converge");
+    }
 }

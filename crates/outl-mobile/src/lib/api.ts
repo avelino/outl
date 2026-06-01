@@ -8,10 +8,13 @@ export interface BlockNode {
   text: string;
   todo: TodoState | null;
   /**
-   * UI fold state echoed from the sidecar. `true` means the children
-   * are hidden in the outline. Mutated via `setBlockCollapsed` —
-   * persists in `.outl` so the state survives across sessions and
-   * (since the sidecar syncs through iCloud) across devices.
+   * UI fold state overlaid from the backend's op log. `true` means
+   * the children are hidden in the outline. Mutated via
+   * `setBlockCollapsed`, which generates `Op::SetCollapsed` and
+   * appends it to the device's `ops-<actor>.jsonl`; iCloud /
+   * Syncthing propagate the per-actor file and every peer's CRDT
+   * replays the op in HLC order. The sidecar is never written for
+   * this flag.
    */
   collapsed: boolean;
   children: BlockNode[];

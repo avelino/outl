@@ -454,6 +454,16 @@ fn move_block_down(
 /// file to peers, and the CRDT merges concurrent flips by HLC order.
 /// Returns a freshly built page view so the frontend re-renders in a
 /// single round trip.
+///
+/// **Deliberately bypasses `finish_in_page`.** Every other mutation
+/// reprojects `.md` + sidecar at the end because it changed the
+/// outline structure or text. `Op::SetCollapsed` changes neither —
+/// the `.md` body stays byte-identical, the sidecar's structural
+/// fields (id, position, hash, ref_handle) are untouched, and only
+/// the workspace-internal `Tree.collapsed` set moves. Reprojecting
+/// would write two files to disk and bump iCloud upload metadata
+/// for every fold gesture; we skip both and just rebuild the page
+/// view from the freshly-mutated workspace.
 #[tauri::command]
 fn set_block_collapsed(
     page_id: String,
@@ -463,8 +473,9 @@ fn set_block_collapsed(
 ) -> Result<PageView, String> {
     let page = parse_node_id(&page_id)?;
     let node = parse_node_id(&id)?;
-    finish_in_page(&state, page, |ws| {
-        action_set_block_collapsed(ws, &state.hlc, node, collapsed).map(|_| ())
+    with_ws_mut(&state, |ws| {
+        action_set_block_collapsed(ws, &state.hlc, node, collapsed).map_err(|e| e.to_string())?;
+        build_page_view(ws, &state.storage_root, page).map_err(|e| e.to_string())
     })
 }
 
