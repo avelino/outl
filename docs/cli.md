@@ -338,7 +338,7 @@ output, that's it.
 Shipping today:
 
 - `outl init`, `outl serve`, `outl doctor`, `outl reconcile`,
-  `outl migrate-to-shared`, `outl import logseq|roam`, `outl theme`.
+  `outl import logseq|roam`, `outl theme`.
 - `outl` (no subcommand) opens the TUI.
 - `outl page get|create|update|delete|list|rename|render`
   (`create` accepts `--content` to seed the outline in one call)

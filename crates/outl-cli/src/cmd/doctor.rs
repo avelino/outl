@@ -11,7 +11,7 @@
 use crate::output::{emit, ApiError};
 use crate::workspace_layout::{read_config, Paths};
 use anyhow::{Context, Result};
-use outl_core::storage::{SqliteStorage, Storage};
+use outl_core::storage::{JsonlStorage, Storage};
 use outl_md::index::WorkspaceIndex;
 use outl_md::inline::{tokenize, InlineTok};
 use outl_md::sidecar::{self, sidecar_path_for};
@@ -146,46 +146,48 @@ fn collect_internal(path: &Path, probe_lock: bool) -> Result<DoctorReport, ApiEr
             format!("workspace config missing — run `outl init` first ({e})"),
         )
     })?;
+    let actor = cfg.actor().map_err(|e| {
+        ApiError::new(
+            crate::output::codes::INTERNAL,
+            format!("invalid actor in config: {e}"),
+        )
+    })?;
     let mut b = Builder::new(paths.root.display().to_string(), cfg.workspace.actor_id);
 
-    // 1. SQLite integrity.
-    match SqliteStorage::open(&paths.db).and_then(|s| s.integrity_check()) {
-        Ok(s) if s.eq_ignore_ascii_case("ok") => {
-            b.ok("log.db PRAGMA integrity_check passed");
-        }
-        Ok(other) => b.err(format!("log.db integrity_check reported: {other}")),
-        Err(e) => b.err(format!("log.db integrity check failed: {e}")),
-    }
-
-    // 2. Op log basic stats — also collects known node ids for the
-    //    sidecar cross-check below.
-    let known_node_ids: HashSet<outl_core::id::NodeId> = match SqliteStorage::open(&paths.db) {
-        Ok(storage) => match storage.all_ops() {
-            Ok(ops) => {
-                b.op_count = ops.len();
-                b.ok(format!("op log has {} ops", ops.len()));
-                let mut ids = HashSet::new();
-                for op in &ops {
-                    let node = match &op.op {
-                        outl_core::op::Op::Move { node, .. }
-                        | outl_core::op::Op::Edit { node, .. }
-                        | outl_core::op::Op::SetProp { node, .. }
-                        | outl_core::op::Op::Create { node, .. } => *node,
-                    };
-                    ids.insert(node);
+    // 1. Op log readability — `JsonlStorage::open` parses every
+    //    `ops-*.jsonl` and logs any unreadable lines via `tracing`.
+    //    Surface failure here as an Error finding.
+    let known_node_ids: HashSet<outl_core::id::NodeId> =
+        match JsonlStorage::open(paths.ops.clone(), actor) {
+            Ok(storage) => match storage.all_ops() {
+                Ok(ops) => {
+                    b.op_count = ops.len();
+                    b.ok(format!("op log has {} ops", ops.len()));
+                    let mut ids = HashSet::new();
+                    for op in &ops {
+                        let node = match &op.op {
+                            outl_core::op::Op::Move { node, .. }
+                            | outl_core::op::Op::Edit { node, .. }
+                            | outl_core::op::Op::SetProp { node, .. }
+                            | outl_core::op::Op::Create { node, .. } => *node,
+                        };
+                        ids.insert(node);
+                    }
+                    ids
                 }
-                ids
-            }
+                Err(e) => {
+                    b.err(format!("could not read op log: {e}"));
+                    HashSet::new()
+                }
+            },
             Err(e) => {
-                b.err(format!("could not read op log: {e}"));
+                b.err(format!(
+                    "could not open ops dir at {}: {e}",
+                    paths.ops.display()
+                ));
                 HashSet::new()
             }
-        },
-        Err(e) => {
-            b.err(format!("could not open log.db: {e}"));
-            HashSet::new()
-        }
-    };
+        };
 
     // 3. Pages and journals: `.md` ↔ sidecar pairing.
     for dir in [&paths.pages, &paths.journals] {

@@ -136,7 +136,7 @@ Almost always it's a permission error reading the workspace path.
 **`workspace at … is locked by another outl process`.** Either an
 `outl serve` is running or another MCP host already opened the
 workspace. Quit one of them. The workspace lock is exclusive on
-purpose — two writers would race against `log.db`.
+purpose — two writers would race against `ops-<actor>.jsonl`.
 
 **Tool calls return `INTERNAL` errors.** Run the same command on
 the CLI (`outl <command> --json`) — same code path, same error,

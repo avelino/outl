@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use notify::RecursiveMode;
 use notify_debouncer_full::new_debouncer;
 use outl_core::hlc::HlcGenerator;
-use outl_core::storage::SqliteStorage;
+use outl_core::storage::JsonlStorage;
 use outl_core::workspace::Workspace;
 use std::path::Path;
 use std::sync::mpsc::channel;
@@ -27,7 +27,9 @@ pub fn run(path: &Path, once: bool) -> Result<()> {
     // scope end releases automatically.
     let _lock = outl_core::WorkspaceLock::acquire(&paths.root)
         .with_context(|| "another outl process is attached to this workspace")?;
-    let storage = SqliteStorage::open(&paths.db)?;
+    std::fs::create_dir_all(&paths.ops)
+        .with_context(|| format!("creating ops dir at {}", paths.ops.display()))?;
+    let storage = JsonlStorage::open(paths.ops.clone(), actor)?;
     let mut ws = Workspace::open_with_storage(actor, Box::new(storage), Some(paths.root.clone()))?;
     let hlc = HlcGenerator::new(actor);
 

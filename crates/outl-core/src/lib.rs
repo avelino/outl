@@ -32,7 +32,7 @@ pub use fractional::Fractional;
 pub use hlc::Hlc;
 pub use id::{ActorId, NodeId};
 pub use journal::Journal;
-pub use lock::{LockError, WorkspaceLock};
+pub use lock::{resolve_write_actor, ActorWriteLock, LockError, WorkspaceLock};
 pub use log::OpLog;
 pub use op::{LogOp, Op};
 pub use page::Page;

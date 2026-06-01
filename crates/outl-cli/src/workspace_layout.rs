@@ -1,8 +1,10 @@
 //! Filesystem layout of an outl workspace.
 //!
-//! A workspace is a directory containing four subtrees:
+//! A workspace is a directory containing five subtrees:
 //!
-//! - `.outl/`     — SQLite log, config, peers, orphan log.
+//! - `.outl/`     — config, peers, orphan log, lock.
+//! - `ops/`       — per-actor JSONL op log (`ops-<actor>.jsonl`),
+//!   the unit of cross-device sync.
 //! - `pages/`     — user-named `.md` files (clean markdown).
 //! - `journals/`  — daily-note `.md` files keyed by date.
 //! - `templates/` — optional `.md` templates (e.g. `journal.md`).
@@ -65,8 +67,8 @@ pub struct Paths {
     pub journals: PathBuf,
     /// `templates/` directory.
     pub templates: PathBuf,
-    /// `.outl/log.db`.
-    pub db: PathBuf,
+    /// `ops/` directory holding per-actor JSONL op logs.
+    pub ops: PathBuf,
     /// `.outl/config.toml`.
     pub config: PathBuf,
     /// `.outl/orphans.log`.
@@ -83,7 +85,7 @@ impl Paths {
         let root = root.into();
         let dot_outl = root.join(".outl");
         Self {
-            db: dot_outl.join("log.db"),
+            ops: root.join("ops"),
             config: dot_outl.join("config.toml"),
             orphans: dot_outl.join("orphans.log"),
             peers: dot_outl.join("peers.toml"),
@@ -120,6 +122,7 @@ pub fn init(paths: &Paths) -> Result<()> {
     for dir in [
         &paths.root,
         &paths.dot_outl,
+        &paths.ops,
         &paths.pages,
         &paths.journals,
         &paths.templates,

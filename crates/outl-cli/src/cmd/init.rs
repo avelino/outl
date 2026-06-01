@@ -1,8 +1,8 @@
 //! `outl init <path>` — scaffold a workspace.
 
-use crate::workspace_layout::{init, today, Paths};
+use crate::workspace_layout::{init, read_config, today, Paths};
 use anyhow::{Context, Result};
-use outl_core::storage::SqliteStorage;
+use outl_core::storage::JsonlStorage;
 use std::fs;
 use std::path::Path;
 
@@ -13,9 +13,12 @@ pub fn run(path: &Path) -> Result<()> {
     // Create all directories and seed config/templates.
     init(&paths)?;
 
-    // Open the SQLite log to materialize the .db file.
-    let _storage = SqliteStorage::open(&paths.db)
-        .with_context(|| format!("opening SQLite log at {}", paths.db.display()))?;
+    // Touch the per-actor JSONL so the workspace has a writable
+    // storage from the first op onwards.
+    let cfg = read_config(&paths)?;
+    let actor = cfg.actor()?;
+    let _storage = JsonlStorage::open(paths.ops.clone(), actor)
+        .with_context(|| format!("opening JSONL log at {}", paths.ops.display()))?;
     drop(_storage);
 
     // Seed today's journal if missing.
@@ -29,7 +32,7 @@ pub fn run(path: &Path) -> Result<()> {
     }
 
     println!("Initialized outl workspace at {}", paths.root.display());
-    println!("  log:      {}", paths.db.display());
+    println!("  ops:      {}", paths.ops.display());
     println!("  config:   {}", paths.config.display());
     println!("  journal:  {}", journal_path.display());
     Ok(())
@@ -48,7 +51,7 @@ mod tests {
 
         let paths = Paths::at(&root);
         assert!(paths.dot_outl.is_dir(), ".outl/ should exist");
-        assert!(paths.db.is_file(), "log.db should exist");
+        assert!(paths.ops.is_dir(), "ops/ should exist");
         assert!(paths.config.is_file(), "config.toml should exist");
         assert!(paths.pages.is_dir(), "pages/ should exist");
         assert!(paths.journals.is_dir(), "journals/ should exist");
@@ -69,6 +72,6 @@ mod tests {
         // Second run must not error or wipe state.
         run(&root).unwrap();
         let paths = Paths::at(&root);
-        assert!(paths.db.is_file());
+        assert!(paths.ops.is_dir());
     }
 }

@@ -21,7 +21,7 @@ use crossterm::terminal::{
     LeaveAlternateScreen,
 };
 use outl_core::id::ActorId;
-use outl_core::storage::{JsonlStorage, SqliteStorage, Storage};
+use outl_core::storage::{JsonlStorage, Storage};
 use outl_core::workspace::Workspace;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
@@ -71,9 +71,12 @@ pub fn run_with_theme_override(path: &Path, theme_override: Option<&str>) -> Res
     install_silent_log_subscriber(path);
 
     let workspace_root = path.to_path_buf();
-    // `_lock` lives through the entire TUI run; dropping it releases
-    // the exclusive flock on `<root>/.outl/.lock`.
-    let (workspace, actor, cfg, _lock) = open_workspace(&workspace_root)?;
+    // `_lock` and `_actor_lock` live through the entire TUI run:
+    // - `_lock` is the shared workspace flock on `<root>/.outl/.lock`.
+    // - `_actor_lock` is the exclusive per-actor write flock on
+    //   `<root>/ops/.lock-<actor>` and keeps another `outl` from
+    //   stealing this process's actor mid-session.
+    let (workspace, actor, cfg, _lock, _actor_lock) = open_workspace(&workspace_root)?;
 
     // No boot-time `apply_all_pages_md` here. The op log remains the
     // source of truth; `.md` is its projection. We deliberately skip
@@ -192,10 +195,17 @@ fn resolve_theme(cli_override: Option<&str>, cfg: &toml::Value) -> Theme {
 
 fn open_workspace(
     root: &Path,
-) -> Result<(Workspace, ActorId, toml::Value, outl_core::WorkspaceLock)> {
-    // Acquire the workspace lock FIRST, before opening the SQLite log.
-    // If another `outl` is already attached, we want a clean error
-    // instead of two processes writing in lockstep.
+) -> Result<(
+    Workspace,
+    ActorId,
+    toml::Value,
+    outl_core::WorkspaceLock,
+    outl_core::ActorWriteLock,
+)> {
+    // Shared workspace lock — every well-behaved `outl` opener piles
+    // on. Concurrent TUI + MCP server + sink-outl plugin is the
+    // supported case; per-actor write isolation comes from the
+    // ActorWriteLock below.
     let lock = outl_core::WorkspaceLock::acquire(root)
         .with_context(|| format!("could not acquire workspace lock at {}", root.display()))?;
 
@@ -213,54 +223,49 @@ fn open_workspace(
         .and_then(|a| a.as_str())
         .context("workspace.actor_id missing from config.toml")?;
     let actor_ulid = ulid::Ulid::from_string(actor_str).context("actor_id is not a valid ULID")?;
-    let actor = ActorId(actor_ulid);
+    let config_actor = ActorId(actor_ulid);
+
+    let ops_dir = root.join("ops");
+    fs::create_dir_all(&ops_dir)
+        .with_context(|| format!("creating ops dir at {}", ops_dir.display()))?;
+
+    // Exclusive per-actor write lock. Falls back to an ephemeral
+    // actor when another `outl` already owns the config-default one
+    // — that's how a TUI + MCP server share the same workspace
+    // without racing on `ops-<config_actor>.jsonl`.
+    let (actor_lock, actor) = outl_core::resolve_write_actor(&ops_dir, config_actor)
+        .with_context(|| format!("acquiring per-actor write lock at {}", ops_dir.display()))?;
+    if actor != config_actor {
+        tracing::info!(
+            "another outl process owns the config actor {config_actor}; this TUI writes under ephemeral actor {actor}"
+        );
+    }
+
     let storage = open_storage(root, actor, &cfg)?;
     let ws = Workspace::open_with_storage(actor, storage, Some(root.to_path_buf()))?;
-    Ok((ws, actor, cfg, lock))
+    Ok((ws, actor, cfg, lock, actor_lock))
 }
 
-/// Pick the right storage backend for `root`.
+/// Open the workspace's op log.
 ///
-/// Decision is config-driven: `[workspace].storage` in
-/// `<root>/.outl/config.toml` selects either:
+/// Storage is always [`JsonlStorage`] rooted at `<root>/ops/`, one
+/// `ops-<actor>.jsonl` file per device. Cross-device sync is the
+/// responsibility of whatever filesystem-level transport the user
+/// chose (iCloud Drive, Syncthing, shared NFS) — the directory is
+/// created on open if missing because syncing platforms sometimes
+/// garbage-collect empty dirs. Not named `.ops/` because iCloud
+/// skips dotted paths.
 ///
-/// - `"jsonl"` — shared mode. Op log under `<root>/ops/`, one JSONL
-///   file per actor. Peers merge it through whatever filesystem-level
-///   sync the user has (iCloud Drive, Syncthing, shared NFS). The
-///   directory is created on open if missing — syncing platforms
-///   sometimes garbage-collect empty dirs, so we never rely on its
-///   prior existence. Not named `.ops/` because iCloud skips dotted
-///   paths.
-/// - `"sqlite"` (default) — local-only. Op log at `<root>/.outl/log.db`.
-///
-/// Missing key falls back to `"sqlite"` so workspaces created before
-/// the flag existed keep working.
-fn open_storage(root: &Path, actor: ActorId, cfg: &toml::Value) -> Result<Box<dyn Storage>> {
-    let backend = cfg
-        .get("workspace")
-        .and_then(|w| w.get("storage"))
-        .and_then(|s| s.as_str())
-        .unwrap_or("sqlite");
-
-    match backend {
-        "jsonl" => {
-            let ops_dir = root.join("ops");
-            fs::create_dir_all(&ops_dir)
-                .with_context(|| format!("creating ops dir at {}", ops_dir.display()))?;
-            let storage = JsonlStorage::open(ops_dir, actor)
-                .with_context(|| format!("opening jsonl storage at {}", root.display()))?;
-            Ok(Box::new(storage))
-        }
-        other => {
-            if other != "sqlite" {
-                tracing::warn!("unknown storage backend {other:?}, falling back to sqlite");
-            }
-            let db = root.join(".outl").join("log.db");
-            let storage = SqliteStorage::open(&db)
-                .with_context(|| format!("opening sqlite storage at {}", db.display()))?;
-            Ok(Box::new(storage))
-        }
-    }
+/// `cfg` used to drive a `[workspace].storage` switch; the field is
+/// now a no-op kept for backward-compat with older configs that
+/// declared `storage = "jsonl"` or `"sqlite"`. Both paths land here.
+fn open_storage(root: &Path, actor: ActorId, _cfg: &toml::Value) -> Result<Box<dyn Storage>> {
+    let ops_dir = root.join("ops");
+    fs::create_dir_all(&ops_dir)
+        .with_context(|| format!("creating ops dir at {}", ops_dir.display()))?;
+    let storage = JsonlStorage::open(ops_dir, actor)
+        .with_context(|| format!("opening jsonl storage at {}", root.display()))?;
+    Ok(Box::new(storage))
 }
 
 fn event_loop(

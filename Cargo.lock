@@ -2011,18 +2011,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "de853764b47027c2e862a995c34978ffa63c1501f2e15f987ba11bd4f9bba193"
 
 [[package]]
-name = "fallible-iterator"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
-
-[[package]]
-name = "fallible-streaming-iterator"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
-
-[[package]]
 name = "fancy-regex"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2770,15 +2758,6 @@ dependencies = [
  "foldhash 0.2.0",
  "serde",
  "serde_core",
-]
-
-[[package]]
-name = "hashlink"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea0b22561a9c04a7cb1a302c013e0259cd3b4bb619f145b32f72b8b4bcbed230"
-dependencies = [
- "hashbrown 0.16.1",
 ]
 
 [[package]]
@@ -3622,17 +3601,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libsqlite3-sys"
-version = "0.37.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1f111c8c41e7c61a49cd34e44c7619462967221a6443b0ec299e0ac30cfb9b1"
-dependencies = [
- "cc",
- "pkg-config",
- "vcpkg",
-]
-
-[[package]]
 name = "line-clipping"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4473,7 +4441,7 @@ dependencies = [
 
 [[package]]
 name = "outl-actions"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "chrono",
  "outl-core",
@@ -4489,7 +4457,7 @@ dependencies = [
 
 [[package]]
 name = "outl-cli"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4513,7 +4481,7 @@ dependencies = [
 
 [[package]]
 name = "outl-core"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "bincode 2.0.1",
  "chrono",
@@ -4521,7 +4489,6 @@ dependencies = [
  "hex",
  "parking_lot",
  "proptest",
- "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -4534,7 +4501,7 @@ dependencies = [
 
 [[package]]
 name = "outl-exec"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "boa_engine",
@@ -4555,7 +4522,7 @@ dependencies = [
 
 [[package]]
 name = "outl-md"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "chrono",
  "comrak",
@@ -4574,7 +4541,7 @@ dependencies = [
 
 [[package]]
 name = "outl-mobile"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "chrono",
  "objc2",
@@ -4595,7 +4562,7 @@ dependencies = [
 
 [[package]]
 name = "outl-tui"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -5586,31 +5553,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rsqlite-vfs"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c"
-dependencies = [
- "hashbrown 0.16.1",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "rusqlite"
-version = "0.39.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0d2b0146dd9661bf67bb107c0bb2a55064d556eeb3fc314151b957f313bcd4e"
-dependencies = [
- "bitflags 2.11.1",
- "fallible-iterator",
- "fallible-streaming-iterator",
- "hashlink",
- "libsqlite3-sys",
- "smallvec",
- "sqlite-wasm-rs",
-]
-
-[[package]]
 name = "rustc-demangle"
 version = "0.1.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6486,18 +6428,6 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
-]
-
-[[package]]
-name = "sqlite-wasm-rs"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc3efc0da82635d7e1ced0053bbbfa8c7ab9645d0bf36ceb4f7127bb85315d75"
-dependencies = [
- "cc",
- "js-sys",
- "rsqlite-vfs",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -7858,12 +7788,6 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
-
-[[package]]
-name = "vcpkg"
-version = "0.2.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "version-compare"
@@ -9445,7 +9369,7 @@ checksum = "0637d3a5566a82fa5214bae89087bc8c9fb94cd8e8a3c07feb691bb8d9c632db"
 
 [[package]]
 name = "xtask"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "clap",
  "serde_json",

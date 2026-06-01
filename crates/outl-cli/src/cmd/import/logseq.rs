@@ -251,12 +251,13 @@ fn logseq_page_name(path: &Path, is_journal: bool) -> String {
 /// TUI once to seed sidecars — which works but is surprising.
 fn seed_sidecars(paths: &Paths) -> Result<()> {
     use outl_core::hlc::HlcGenerator;
-    use outl_core::storage::SqliteStorage;
+    use outl_core::storage::JsonlStorage;
     use outl_core::workspace::Workspace;
 
     let cfg = crate::workspace_layout::read_config(paths)?;
     let actor = cfg.actor()?;
-    let storage = SqliteStorage::open(&paths.db)?;
+    std::fs::create_dir_all(&paths.ops)?;
+    let storage = JsonlStorage::open(paths.ops.clone(), actor)?;
     let mut ws = Workspace::open_with_storage(actor, Box::new(storage), Some(paths.root.clone()))?;
     let hlc = HlcGenerator::new(actor);
 

@@ -29,7 +29,7 @@ device. Edit in VS Code or in the TUI, doesn't matter. Journal works.
 - `Op` enum with all 4 variants and `old_*` fields.
 - `OpLog` (append-only, HLC-ordered).
 - `tree.rs`: `do_op` / `undo_op` / `apply_op` / `creates_cycle`.
-- `Storage` trait + `SqliteStorage` implementation.
+- `Storage` trait + `JsonlStorage` (persistent) + `MemoryStorage` (test double).
 - Domain models: `Workspace`, `Page`, `Journal`, `Block`, `Property`, `Tag`.
 - **100% coverage on the four CRDT functions.**
 - **Test battery passing**:

@@ -21,7 +21,8 @@ fragmented the community.
 outl picks the parts that worked — the outliner UX, the bi-directional
 graph, the daily journal — and rebuilds the parts that didn't:
 a [proper sync algorithm](sync.md), markdown that stays clean, and
-storage that's an interface instead of a hardcoded SQLite blob.
+storage that's an interface — one append-only file per device,
+syncable by any filesystem-level transport.
 
 ## Feature-by-feature
 

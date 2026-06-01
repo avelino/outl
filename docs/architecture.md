@@ -44,21 +44,23 @@ current state from `.md` + sidecar.
 overhead of writing `.md` after every op. The alternative (DB-only) is what
 Logseq moved to and what broke their community.
 
-### 2. Op log on disk: JSONL per actor (default), SQLite available
+### 2. Op log on disk: JSONL per actor
 
 Each device appends to a single `ops/ops-<actor>.jsonl` file inside
 the workspace. iCloud Drive (and any other file-level sync transport)
 syncs each actor's jsonl independently, so two devices never collide
 at the filesystem layer — the CRDT merges the per-actor streams after
-reading them. `SqliteStorage` is still available for single-device
-workspaces that prefer ACID, but JSONL is the default everywhere
-multi-device sync is in play.
+reading them. This is the **only** persistent backend; 0.5.0 removed
+the older SQLite backend after it kept producing divergent op logs
+between clients on the same workspace.
 
-**Trade-off:** JSONL is easy to inspect, easy to ship across the
-network, and trivial to reason about. SQLite is great until you want
-git-style history-as-feature. That's why `Storage` is a trait —
-`ChronDbStorage` (issue #1) can replace either backend later without
-touching `outl-core` logic.
+**Trade-off:** JSONL is easy to inspect, easy to ship across any
+file-level transport, and trivial to reason about. We give up SQL
+queries (we don't need them — replay + in-memory index is fast
+enough) and PRAGMA-level integrity guarantees (replaced by
+partial-write tolerance: a half-written tail line is just skipped).
+`Storage` is still a trait — `ChronDbStorage` (issue #1) can land
+later without touching `outl-core` logic.
 
 ### 3. `Storage` is a trait, not a concrete struct
 
@@ -70,13 +72,13 @@ trait Storage: Send + Sync {
 }
 ```
 
-`outl-core` consumes `dyn Storage`. The sqlite implementation lives in
-`storage/sqlite.rs` and is the only place in the crate that touches
-`rusqlite`.
+`outl-core` consumes `dyn Storage`. `JsonlStorage` (in
+`storage/jsonl.rs`) is the only persistent impl; `MemoryStorage` (in
+`storage/memory.rs`) is the test double.
 
 **Why:** swapping backends is a single-file change. Test doubles are
-trivial. Phase 2's sync code can mock storage. Future ChronDB integration
-is a PR adding `storage/chrondb.rs`.
+trivial. Phase 2's sync code can mock storage. Future ChronDB
+integration is a PR adding `storage/chrondb.rs`.
 
 ### 4. Sidecar JSON instead of inline IDs
 
@@ -193,7 +195,7 @@ flowchart TB
     input[TUI input handler]
     action["Workspace::apply_user_action() → Op"]
     applyop[outl-core::apply_op]
-    storage["Storage::append_op<br/>(sqlite)"]
+    storage["Storage::append_op<br/>(jsonl)"]
     tree[Update materialized tree]
     notify["Workspace notifies<br/>'page X changed'"]
     render["outl-md::render(page_ast)<br/>→ new .md text<br/>outl-md::sidecar_write"]

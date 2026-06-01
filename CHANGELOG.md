@@ -4,6 +4,143 @@ All notable changes to outl are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project
 uses [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] — 2026-06-01
+
+**Fix: multi-process writes against the same workspace.**
+
+0.5.0 inherited an exclusive `flock` on `<root>/.outl/.lock` from
+the SQLite era. The lock made sense when two writers on a single
+`log.db` would race, but JSONL stores one file per actor — the
+exclusive scope just blocked every legitimate co-tenant: TUI + MCP
+server, MCP server + `sink-outl` plugin, two CLI calls in flight.
+Symptom: `INVALID_ARG: workspace ... is locked by another outl
+process` from the second opener, while the first ran fine and held
+the lock for its whole session.
+
+0.5.1 splits coordination into two locks. **Concurrent TUI + MCP
+server + CLI subprocess is the supported case** from here on.
+
+### Added
+
+- **`outl_core::WorkspaceLock` is now shared** (`LOCK_SH`). Every
+  well-behaved `outl` process piles on. The lock still surfaces a
+  hard filesystem error when `flock` itself fails, but never
+  rejects a legitimate second opener.
+- **`outl_core::ActorWriteLock`** — exclusive `flock` on
+  `<root>/ops/.lock-<actor>`. Held by exactly one process per
+  actor id at a time. This is the new write-coordination boundary.
+- **`outl_core::resolve_write_actor(ops_dir, config_actor)`** —
+  helper used by every workspace opener. Tries `config_actor`
+  first; on `AlreadyHeld`, generates `ActorId::new()` and locks the
+  ephemeral one instead. Returns the lock + actor id pair.
+- **`WsCtx.ephemeral_actor: bool`** flag on the CLI/MCP context so
+  `outl doctor` / `outl workspace info` can show when a process is
+  writing under an ephemeral actor.
+
+### Changed
+
+- **`outl-cli::ws::open`** acquires the shared workspace lock plus
+  a per-actor write lock through `resolve_write_actor`. On `outl`
+  invocations that land while a server/TUI already holds the
+  config actor, this process spins a fresh `ops-<ephemeral>.jsonl`
+  and writes there. Readers merge every `ops-*.jsonl` in `ops/`,
+  so peers see the full op log.
+- **`outl-tui::open_workspace`** follows the same flow. The TUI
+  used to refuse to launch when an MCP server was running against
+  the same workspace; it now coexists.
+
+### Why the ephemeral-actor fallback is safe
+
+Every actor is independent at the CRDT layer (it's literally the
+mechanism multi-device sync relies on). Two processes on the same
+device using two different actors merge the same way two devices
+would: the readers replay every `ops-<actor>.jsonl` in HLC order,
+the tree converges. The only cost is `ops/` accumulating one
+jsonl per ephemeral lifetime — typically tiny files (a session's
+writes), and a future `outl gc` can consolidate them per device.
+
+### Migration
+
+None. 0.5.0 workspaces work as-is. The next time you open a
+workspace with a second `outl` process, it will silently mint an
+ephemeral actor; the first process keeps writing under
+`config.toml[workspace].actor_id` as before.
+
+## [0.5.0] — 2026-06-01
+
+**Breaking: SQLite is gone. JSONL is the only persistent storage.**
+
+0.4.x kept two storage backends side by side — `SqliteStorage` for
+local-only workspaces and `JsonlStorage` for shared/synced ones. The
+result was a class of "writes go through but disappear when you open
+the other client" bugs: any code path that opened a workspace via
+`outl-cli` got SQLite, while `outl-tui` and mobile (Tauri) followed
+`config.toml[workspace].storage` and got JSONL. Same workspace,
+divergent op logs, silent loss.
+
+0.5.0 collapses the surface: every client opens the workspace as
+`JsonlStorage` rooted at `<root>/ops/`. There is no flag to choose,
+no `[workspace].storage` knob with two valid values, no SQLite
+fallback. The `Storage` trait stays in place for future backends
+(ChronDB on the roadmap); the only impl that ships is JSONL plus
+the in-memory test double.
+
+### Migration from 0.4.x
+
+If your workspace was created with 0.4.x and you have data in
+`<root>/.outl/log.db`:
+
+- **Local-only workspace (no `ops/` yet):** nothing in 0.5.0 can
+  read `log.db`. Use 0.4.1 once with `outl migrate-to-shared <root>`
+  to copy ops into `ops/ops-<actor>.jsonl`, then upgrade to 0.5.0.
+- **Mixed workspace (both `log.db` and `ops/`):** the JSONL files
+  are the truth from 0.5.0 onwards. Any ops left only in `log.db`
+  need the same `outl migrate-to-shared` step before upgrading.
+- After validating the JSONL side: delete `<root>/.outl/log.db*`
+  yourself. 0.5.0 ignores it.
+
+### Removed
+
+- **`SqliteStorage`** in `outl-core::storage`. Callers use
+  `JsonlStorage` (persistent, per-actor JSONL) or `MemoryStorage`
+  (the new in-memory test double, replaces `SqliteStorage::open_in_memory`).
+- **`rusqlite` dependency.** Workspace `Cargo.toml` no longer pulls
+  the SQLite C bundle. Faster builds, smaller binaries.
+- **`outl migrate-to-shared`** subcommand. It only made sense while
+  both backends coexisted; with only one backend the migration is
+  a one-shot done on 0.4.1 before upgrading.
+- **`config.toml[workspace].storage`** field is silently ignored
+  now (kept readable so old configs don't error). Cleaning it up
+  is fine but not required.
+
+### Changed
+
+- **`Paths` struct (`outl-cli/src/workspace_layout.rs`)** drops the
+  `db: PathBuf` field, gains `ops: PathBuf` pointing at
+  `<root>/ops/`. Every caller that touched `.outl/log.db` now
+  targets the JSONL directory.
+- **`outl init`** scaffolds `<root>/ops/` and opens `JsonlStorage`
+  to materialize the per-actor `ops-<actor>.jsonl` file. The human
+  output now reports `ops:` instead of `log:`.
+- **`outl doctor`** drops the SQLite `PRAGMA integrity_check`
+  finding and replaces it with a JSONL parse-and-load check
+  (`JsonlStorage::open` surfaces every unreadable line via
+  `tracing::warn!`, then the report carries the op count and the
+  set of known node ids the sidecar cross-check needs).
+- **`outl workspace info --json`** renames the `log_db` field to
+  `ops_dir`. Stable-envelope shape otherwise unchanged.
+- **`outl-tui::open_storage`** is now a one-liner. The config-driven
+  match disappears; storage is always JSONL.
+- **`Workspace::open_in_memory`** is unchanged in signature but uses
+  the new `MemoryStorage` under the hood. No filesystem touch.
+
+### Internal
+
+- New `MemoryStorage` in `outl-core::storage::memory`. Pure
+  `Vec<LogOp>` + snapshot slot, no I/O. Used by every test that
+  previously called `SqliteStorage::open_in_memory()` and by
+  `Workspace::open_in_memory`.
+
 ## [0.4.1] — 2026-06-01
 
 Batch authoring for agents and scripts. The 0.4.0 CLI / MCP surface

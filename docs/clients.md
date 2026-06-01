@@ -65,8 +65,8 @@ No if:
   `outl-tui/src/outline_ops.rs` because the mobile client needs them
   too — they're workspace-free pure AST manipulation, so they sit in
   `outl-md` rather than `outl-actions`).
-- It's storage-backend-specific (iCloud, sqlite, ChronDB) — those
-  implement `outl_core::Storage` in the binary that needs them.
+- It's storage-backend-specific (iCloud watcher, future ChronDB) —
+  those implement `outl_core::Storage` in the binary that needs them.
 
 ## TODO/DONE convention
 
@@ -155,7 +155,8 @@ run before any read of a peer `ops-*.jsonl`.
 The pattern is small:
 
 1. Take a dependency on `outl-core`, `outl-md`, `outl-actions`.
-2. Bring your own `Storage` impl, or reuse `SqliteStorage`.
+2. Open a `JsonlStorage` rooted at `<workspace>/ops/`, or bring
+   your own `Storage` impl.
 3. Open a `Workspace` with that storage; hold one `HlcGenerator` per
    device.
 4. Call into `outl-actions` for every user-visible mutation.

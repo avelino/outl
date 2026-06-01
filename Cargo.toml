@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.4.1"
+version = "0.5.1"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT"
@@ -23,11 +23,11 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Internal crates
-outl-core = { path = "crates/outl-core", version = "0.4.1" }
-outl-md = { path = "crates/outl-md", version = "0.4.1" }
-outl-actions = { path = "crates/outl-actions", version = "0.4.1" }
-outl-exec = { path = "crates/outl-exec", version = "0.4.1" }
-outl-tui = { path = "crates/outl-tui", version = "0.4.1" }
+outl-core = { path = "crates/outl-core", version = "0.5.1" }
+outl-md = { path = "crates/outl-md", version = "0.5.1" }
+outl-actions = { path = "crates/outl-actions", version = "0.5.1" }
+outl-exec = { path = "crates/outl-exec", version = "0.5.1" }
+outl-tui = { path = "crates/outl-tui", version = "0.5.1" }
 
 # IDs and time
 ulid = { version = "1", features = ["serde"] }
@@ -48,9 +48,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # CRDT
 yrs = "0.26"
-
-# Storage
-rusqlite = { version = "0.39", features = ["bundled"] }
 
 # Markdown
 comrak = { version = "0.52", default-features = false }

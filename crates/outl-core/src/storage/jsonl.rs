@@ -26,7 +26,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
 use parking_lot::RwLock;
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 use crate::hlc::Hlc;
 use crate::id::{ActorId, NodeId};
@@ -118,7 +118,7 @@ impl JsonlStorage {
                     Err(e) => warn!("parse {}:{}: {e}", path.display(), lineno + 1),
                 }
             }
-            info!(
+            debug!(
                 "jsonl file {} size={} lines={} ops_parsed={}",
                 name, file_size, lines_read, ops_parsed
             );
@@ -130,7 +130,7 @@ impl JsonlStorage {
         for op in &all {
             *per_actor.entry(op.actor).or_insert(0) += 1;
         }
-        info!(
+        debug!(
             "jsonl storage loaded {} ops from {} ({} files); per_actor={:?}",
             all.len(),
             self.ops_dir.display(),
