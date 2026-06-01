@@ -1,10 +1,37 @@
 name: CI
 
+# Trigger filter: `paths-ignore` skips CI when every changed file is
+# in the list. Docs-only PRs, asset bumps, and edits to sibling
+# workflow files don't need fmt + clippy + test + doc to run.
+# `Cargo.toml` / `Cargo.lock` stay out of the ignore list on purpose
+# so dependency changes always trigger the full check.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'assets/**'
+      - 'LICENSE'
+      - '.editorconfig'
+      - '.gitignore'
+      - '.github/workflows/mobile.yml'
+      - '.github/workflows/bench.yml'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/testflight.yml'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'assets/**'
+      - 'LICENSE'
+      - '.editorconfig'
+      - '.gitignore'
+      - '.github/workflows/mobile.yml'
+      - '.github/workflows/bench.yml'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/testflight.yml'
 
 env:
   CARGO_TERM_COLOR: always

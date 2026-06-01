@@ -1,71 +1,64 @@
 name: TestFlight
 
-# Builds the iOS app and ships it to TestFlight whenever the
-# `Release` workflow finishes successfully. Triggering off the
-# release run (not off push/tag directly) means we only burn a
-# build slot when the cross-platform release pipeline is green —
-# if the macOS/Linux/Windows binaries failed, TestFlight stays
-# untouched.
+# Uploads the signed iOS build to TestFlight. The heavy lifting
+# (Rust + Tauri archive + xcodebuild export) lives in
+# `mobile.yml`'s `ios-release` job, which publishes the signed
+# `.ipa` as the `outl-ios-release` artifact. This workflow only
+# downloads that artifact and runs `xcrun altool --upload-app`,
+# so a TestFlight ship takes ~3 min instead of ~20.
 #
-# Manual override: `workflow_dispatch` (Run workflow button) lets
-# you ship from any ref without waiting for the release.
+# Triggers:
+#   - `workflow_run` on the `Mobile` workflow completing successfully.
+#     Mobile already filters by path, so a docs-only push to main
+#     never touches TestFlight.
+#   - `workflow_dispatch` lets a human ship from any past `Mobile`
+#     run by passing its `mobile_run_id` (defaults to the latest
+#     successful run for the current ref).
 #
 # ------------------------------------------------------------------
-# Secrets the workflow expects (set under repo → Settings →
-# Environments → `release` → Environment secrets):
+# Secrets the workflow expects (Settings → Environments → `release`):
 #
-#   BUILD_CERTIFICATE_BASE64         base64 of Apple Distribution .p12
-#   P12_PASSWORD                     password used to export the .p12
-#   MAC_KEYCHAIN_PASSWORD            ad-hoc password for the CI keychain
-#   PROVISIONING_PROFILE_BASE64      base64 of the App Store
-#                                    .mobileprovision matching
-#                                    `app.outl.mobile-app`
 #   APP_STORE_CONNECT_KEY_ID         e.g. `ABCD1234EF`
 #   APP_STORE_CONNECT_ISSUER_ID      e.g. `69a6de7c-...`
 #   APP_STORE_CONNECT_API_KEY_BASE64 base64 of the `.p8` AuthKey
 #
-# Generate them once:
-#   base64 -i Apple_Distribution.p12 | pbcopy
-#   base64 -i outl_AppStore.mobileprovision | pbcopy
-#   base64 -i AuthKey_ABCD1234EF.p8 | pbcopy
+# Signing material (cert + provisioning profile) is consumed in
+# `mobile.yml`'s `ios-release` job; it never lands here.
 # ------------------------------------------------------------------
 
 on:
   workflow_run:
-    workflows: ["Release"]
+    workflows: ["Mobile"]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      mobile_run_id:
+        description: "Mobile workflow run ID with the IPA artifact (empty = latest successful)"
+        required: false
+        type: string
 
 permissions:
   contents: read
+  actions: read   # download-artifact reaches into another workflow run
 
 concurrency:
-  # Serialize uploads per source release. We don't cancel: a half-
+  # Serialize uploads per source commit. We don't cancel: a half-
   # uploaded IPA is fine, but two concurrent altool uploads with the
   # same CFBundleVersion is not.
   group: testflight-${{ github.event.workflow_run.head_sha || github.sha }}
   cancel-in-progress: false
 
 jobs:
-  testflight:
-    name: Build & upload to TestFlight
+  upload:
+    name: Upload IPA to TestFlight
     runs-on: macos-latest
-    # Only run when the upstream Release succeeded, or when a human
-    # explicitly clicked "Run workflow". `workflow_run` fires on
-    # every conclusion (success/failure/cancelled), so the guard is
-    # mandatory.
+    # workflow_run fires on every conclusion; only proceed on
+    # success. workflow_dispatch is gated by the human pressing
+    # the button.
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
 
-    # The `release` environment holds the Apple signing material and
-    # App Store Connect API key. Binding the job to it means:
-    #   1. Secrets resolve from environment scope (not repo scope).
-    #   2. Any protection rules configured on the environment
-    #      (required reviewer, deployment branch policy, wait timer)
-    #      apply to every TestFlight run — including the auto ones
-    #      fired by `workflow_run`.
-    # Configure under: repo → Settings → Environments → release.
     environment:
       name: release
       url: https://appstoreconnect.apple.com/apps
@@ -73,150 +66,92 @@ jobs:
     env:
       APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
       APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-      KEYCHAIN_PWD: ${{ secrets.MAC_KEYCHAIN_PASSWORD }}
 
     steps:
-      - name: Checkout (commit that triggered the release)
-        uses: actions/checkout@v4
-        with:
-          # For workflow_run, `github.sha` points at the default
-          # branch tip — not at what Release actually built. We
-          # want the exact SHA the upstream pipeline signed off on.
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-          fetch-depth: 0
+      - name: Resolve Mobile run ID
+        id: src
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISPATCH_RUN_ID: ${{ github.event.inputs.mobile_run_id }}
+        run: |
+          # Three sources of truth, in priority order:
+          #   1. `workflow_dispatch` input (manual override).
+          #   2. `workflow_run.id` (the Mobile run that triggered us).
+          #   3. latest successful Mobile run on the default branch
+          #      (only used when neither of the above is set — keeps
+          #      `gh workflow run testflight.yml` from any ref usable).
+          if [[ -n "${DISPATCH_RUN_ID:-}" ]]; then
+            RUN_ID="$DISPATCH_RUN_ID"
+            echo "::notice::Using mobile_run_id from dispatch input: $RUN_ID"
+          elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            RUN_ID="${{ github.event.workflow_run.id }}"
+            echo "::notice::Using triggering Mobile run: $RUN_ID"
+          else
+            RUN_ID=$(gh run list \
+              --workflow=Mobile \
+              --branch=main \
+              --status=success \
+              --limit=1 \
+              --json databaseId \
+              --jq '.[0].databaseId')
+            if [[ -z "$RUN_ID" || "$RUN_ID" == "null" ]]; then
+              echo "::error::no successful Mobile run on main to ship from"
+              exit 1
+            fi
+            echo "::notice::Falling back to latest successful Mobile run on main: $RUN_ID"
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
 
-      - name: Compute build metadata
+      - name: Download IPA artifact from Mobile run
+        uses: actions/download-artifact@v4
+        with:
+          name: outl-ios-release
+          path: ipa-bundle
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ steps.src.outputs.run_id }}
+
+      - name: Read build metadata
         id: meta
         shell: bash
         run: |
-          # Short version: marketing string (must be x[.y[.z]] per
-          # Apple). Reuse the workspace version verbatim — Apple
-          # rejects pre-release suffixes here, so we strip
-          # `-beta.N` etc.
-          BASE=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
-          SHORT_VERSION="${BASE%%-*}"
-
-          # CFBundleVersion: monotonically increasing integer.
-          # Use the Release workflow's run_number when we were
-          # triggered by it (so multiple TestFlight retries of the
-          # same release share a build number), otherwise our own
-          # run_number for workflow_dispatch.
-          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-            BUILD_NUMBER="${{ github.event.workflow_run.run_number }}"
-          else
-            BUILD_NUMBER="${{ github.run_number }}"
+          META="ipa-bundle/metadata.env"
+          if [[ ! -f "$META" ]]; then
+            echo "::error::metadata.env not found in artifact"
+            ls -la ipa-bundle/
+            exit 1
           fi
+          # shellcheck disable=SC1090
+          . "$META"
+          echo "short_version=${short_version}" >> "$GITHUB_OUTPUT"
+          echo "build_number=${build_number}" >> "$GITHUB_OUTPUT"
+          echo "::notice::TestFlight ${short_version} (build ${build_number}) from sha ${head_sha:0:7}"
 
-          echo "short_version=${SHORT_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "build_number=${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
-          echo "::notice::TestFlight ${SHORT_VERSION} (build ${BUILD_NUMBER})"
+      - name: Locate IPA
+        id: ipa
+        shell: bash
+        run: |
+          IPA="ipa-bundle/outl.ipa"
+          if [[ ! -f "$IPA" ]]; then
+            FOUND=$(find ipa-bundle -maxdepth 2 -name '*.ipa' | head -1)
+            if [[ -n "$FOUND" ]]; then
+              IPA="$FOUND"
+            else
+              echo "::error::no .ipa in artifact"
+              find ipa-bundle -maxdepth 3 -type f
+              exit 1
+            fi
+          fi
+          echo "path=$IPA" >> "$GITHUB_OUTPUT"
+          ls -lh "$IPA"
 
-      # `macos-latest` (and earlier macos-* labels) default to Xcode
-      # 16.4, which ships the iOS 18.5 SDK. App Store Connect
-      # requires the iOS 26 SDK (Xcode 26+) for all uploads as of
-      # 2026-04. Pin to the latest stable Xcode installed on the
-      # runner image — that's Xcode 26.x on macos-15 today.
-      - name: Select latest-stable Xcode
+      # `altool --upload-app` is the documented App Store Connect
+      # ingestion path. It ships inside Xcode so we need an Xcode
+      # install on the runner (any version works for upload; this
+      # step doesn't compile anything).
+      - name: Select Xcode (for altool)
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
-
-      - name: Show toolchain versions
-        run: |
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
-          rustup show
-
-      - name: Install Rust iOS device target
-        run: rustup target add aarch64-apple-ios
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-testflight-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-testflight-
-            ${{ runner.os }}-cargo-ios-
-            ${{ runner.os }}-cargo-
-
-      - name: Install tauri-cli
-        run: |
-          if ! command -v cargo-tauri >/dev/null; then
-            cargo install tauri-cli --version "^2.0" --locked
-          fi
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: bun install
-        working-directory: crates/outl-mobile
-        run: bun install --frozen-lockfile
-
-      # --------------------------------------------------------------
-      # Signing material setup. Everything goes in $RUNNER_TEMP or
-      # the user library so the `cleanup` step (always: true) can
-      # nuke it whether the build succeeds or not — no signing key
-      # outlives the job.
-      # --------------------------------------------------------------
-      - name: Import Apple Distribution certificate
-        env:
-          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
-          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
-        run: |
-          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
-          CERT_PATH="$RUNNER_TEMP/cert.p12"
-
-          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$CERT_PATH"
-
-          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
-          security import "$CERT_PATH" \
-            -P "$P12_PASSWORD" \
-            -A -t cert -f pkcs12 \
-            -k "$KEYCHAIN_PATH"
-          # codesign needs partition-list ACLs configured or it
-          # prompts for the keychain password interactively — fatal
-          # in CI.
-          security set-key-partition-list \
-            -S apple-tool:,apple: \
-            -k "$KEYCHAIN_PWD" \
-            "$KEYCHAIN_PATH" >/dev/null
-          # Make the new keychain searchable alongside whatever is
-          # already in the user search list.
-          security list-keychain -d user -s "$KEYCHAIN_PATH" \
-            $(security list-keychain -d user | sed -e 's/^ *//' -e 's/"//g')
-
-          rm -f "$CERT_PATH"
-
-      - name: Install provisioning profile
-        id: profile
-        env:
-          PROVISIONING_PROFILE_BASE64: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
-        run: |
-          PROFILE_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
-          mkdir -p "$PROFILE_DIR"
-          PROFILE_PATH="$PROFILE_DIR/outl-appstore.mobileprovision"
-          echo -n "$PROVISIONING_PROFILE_BASE64" | base64 --decode -o "$PROFILE_PATH"
-
-          # Extract the profile's name + UUID so we can wire them
-          # into the pbxproj for Manual signing. `security cms -D`
-          # unwraps the CMS-signed plist; plutil reads the fields.
-          PROFILE_PLIST="$RUNNER_TEMP/profile.plist"
-          security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
-          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" "$PROFILE_PLIST")
-          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" "$PROFILE_PLIST")
-          rm -f "$PROFILE_PLIST"
-
-          echo "name=$PROFILE_NAME" >> "$GITHUB_OUTPUT"
-          echo "uuid=$PROFILE_UUID" >> "$GITHUB_OUTPUT"
-          echo "::notice::Provisioning profile '$PROFILE_NAME' ($PROFILE_UUID) installed"
 
       - name: Install App Store Connect API key
         env:
@@ -227,278 +162,6 @@ jobs:
           echo -n "$APP_STORE_CONNECT_API_KEY_BASE64" | base64 --decode \
             -o "$KEY_DIR/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
 
-      # --------------------------------------------------------------
-      # Version patching. Apple wants both keys present on the
-      # uploaded IPA; agvtool/xcodebuild override semantics differ
-      # by Xcode version, so plutil on the Info.plist is the only
-      # reliable knob.
-      # --------------------------------------------------------------
-      - name: Patch Info.plist (CFBundleVersion + CFBundleShortVersionString)
-        shell: bash
-        run: |
-          PLIST="crates/outl-mobile/src-tauri/gen/apple/outl-mobile_iOS/Info.plist"
-          plutil -replace CFBundleShortVersionString \
-            -string "${{ steps.meta.outputs.short_version }}" "$PLIST"
-          plutil -replace CFBundleVersion \
-            -string "${{ steps.meta.outputs.build_number }}" "$PLIST"
-          echo "::group::Patched Info.plist"
-          plutil -p "$PLIST" | grep -E 'CFBundle(Version|ShortVersionString|Identifier)'
-          echo "::endgroup::"
-
-      # --------------------------------------------------------------
-      # Patch the xcodeproj for Manual signing in CI.
-      #
-      # The committed pbxproj uses `CODE_SIGN_IDENTITY = "iPhone
-      # Developer"` with implicit Automatic signing — that works on
-      # a developer's Mac (Xcode reads the logged-in Apple ID), but
-      # CI runners have no Apple ID. We override in-place on the
-      # runner only (the modified file is never committed):
-      #
-      #   CODE_SIGN_STYLE = Manual
-      #   CODE_SIGN_IDENTITY = "Apple Distribution"
-      #   PROVISIONING_PROFILE_SPECIFIER = "<profile name>"
-      #   PROVISIONING_PROFILE = "<profile uuid>"
-      #
-      # `iPhone Developer` is also why the previous run failed with
-      # "No profiles for ... iOS App Development were found": with
-      # that identity, xcodebuild looks for a Development profile
-      # even when archiving for the App Store. Flipping to
-      # "Apple Distribution" makes it look up the App Store profile.
-      # --------------------------------------------------------------
-      - name: Patch xcodeproj for Manual signing
-        env:
-          PROFILE_NAME: ${{ steps.profile.outputs.name }}
-          PROFILE_UUID: ${{ steps.profile.outputs.uuid }}
-        run: |
-          PBX="crates/outl-mobile/src-tauri/gen/apple/outl-mobile.xcodeproj/project.pbxproj"
-          # Replace every `CODE_SIGN_IDENTITY = "iPhone Developer";`
-          # with the Distribution identity + style + profile pair.
-          # Touching both debug and release configs is fine — CI
-          # only ever archives Release.
-          REPLACEMENT="CODE_SIGN_IDENTITY = \"Apple Distribution\"; CODE_SIGN_STYLE = Manual; PROVISIONING_PROFILE_SPECIFIER = \"${PROFILE_NAME}\"; PROVISIONING_PROFILE = \"${PROFILE_UUID}\";"
-          python3 - "$PBX" "$REPLACEMENT" <<'PY'
-          import sys, pathlib
-          path = pathlib.Path(sys.argv[1])
-          replacement = sys.argv[2]
-          text = path.read_text()
-          needle = 'CODE_SIGN_IDENTITY = "iPhone Developer";'
-          if needle not in text:
-              print(f"::error::needle not found in {path}", file=sys.stderr)
-              sys.exit(1)
-          patched = text.replace(needle, replacement)
-          path.write_text(patched)
-          print(f"::notice::Patched {text.count(needle)} signing block(s) in pbxproj")
-          PY
-          echo "::group::Signing settings after patch"
-          grep -nE "CODE_SIGN_(STYLE|IDENTITY)|PROVISIONING_PROFILE" "$PBX" | head -20
-          echo "::endgroup::"
-
-      # --------------------------------------------------------------
-      # Drop the static `libapp.a` from the Resources build phase.
-      #
-      # `cargo tauri ios init` adds the Rust output (`libapp.a`) to
-      # BOTH the Frameworks phase (correct — it must be linked) AND
-      # the Resources phase (wrong — Resources copies files into the
-      # bundle, and the file ref is hardcoded to
-      # `Externals/arm64/debug/libapp.a`, not `${CONFIGURATION}`).
-      #
-      # In a Debug build the path happens to line up. A Release/
-      # archive build writes to `arm64/release/libapp.a`, so the
-      # Resources copy step fails with `lstat ... debug/libapp.a:
-      # No such file or directory` — exactly the failure we hit on
-      # the previous TestFlight attempt.
-      #
-      # Removing the Resources entry is safe: the lib still links
-      # via the Frameworks phase, and a `.a` has no business being
-      # copied as a runtime resource anyway.
-      # --------------------------------------------------------------
-      - name: Patch xcodeproj — strip libapp.a from Resources
-        run: |
-          PBX="crates/outl-mobile/src-tauri/gen/apple/outl-mobile.xcodeproj/project.pbxproj"
-          python3 - "$PBX" <<'PY'
-          import re, sys, pathlib
-          path = pathlib.Path(sys.argv[1])
-          text = path.read_text()
-          m = re.search(
-              r'(\w+) /\* libapp\.a in Resources \*/ = '
-              r'\{isa = PBXBuildFile; fileRef = \w+ /\* libapp\.a \*/; \};',
-              text,
-          )
-          if not m:
-              print("::warning::libapp.a Resources entry not found; nothing to strip")
-              sys.exit(0)
-          bid = m.group(1)
-          # Remove the PBXBuildFile declaration line.
-          pat_def = re.compile(
-              rf'\s*{bid} /\* libapp\.a in Resources \*/ = '
-              rf'\{{isa = PBXBuildFile; fileRef = \w+ /\* libapp\.a \*/; \}};\n'
-          )
-          text, n1 = pat_def.subn('', text)
-          # Remove the entry from the Resources phase `files = (...)` list.
-          pat_ref = re.compile(rf'\s*{bid} /\* libapp\.a in Resources \*/,\n')
-          text, n2 = pat_ref.subn('', text)
-          path.write_text(text)
-          print(f"::notice::Stripped libapp.a from Resources (def={n1}, ref={n2})")
-          PY
-          echo "::group::libapp.a phase membership after strip"
-          grep -nE "libapp\.a in (Resources|Frameworks)" "$PBX" || true
-          echo "::endgroup::"
-
-      # --------------------------------------------------------------
-      # Strip alpha from the marketing icon (1024x1024).
-      #
-      # App Store Connect rejects uploads whose marketing icon has
-      # any transparency: "The large app icon in the asset catalog
-      # in 'outl.app' can't be transparent or contain an alpha
-      # channel." (validation error 409, ID 2c272586-...)
-      #
-      # Solution: composite the existing RGBA PNG over a solid
-      # black background and strip the alpha channel. ImageMagick
-      # is preinstalled on macos-* runners. We only touch
-      # `AppIcon-512@2x.png` (the 1024x1024 marketing icon) —
-      # smaller icons may keep alpha without breaking validation.
-      # --------------------------------------------------------------
-      - name: Strip alpha from marketing icon
-        run: |
-          ICON="crates/outl-mobile/src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png"
-          if [[ ! -f "$ICON" ]]; then
-            echo "::error::Marketing icon not found at $ICON"
-            exit 1
-          fi
-
-          # ImageMagick isn't preinstalled on macos-latest runners
-          # (only available via Homebrew). `sips --setProperty
-          # hasAlpha NO` exists but silently produces a corrupt PNG
-          # in some image profiles — verified locally on this asset.
-          # `brew install --quiet` runs in ~20s, cached by the
-          # runner's brew cache between steps.
-          if ! command -v magick >/dev/null; then
-            echo "Installing ImageMagick via brew..."
-            brew install --quiet imagemagick
-          fi
-
-          echo "Before:"
-          sips -g hasAlpha -g pixelWidth -g pixelHeight "$ICON" | tail -3
-          magick "$ICON" -background black -alpha remove -alpha off "$ICON"
-          echo "After:"
-          sips -g hasAlpha -g pixelWidth -g pixelHeight "$ICON" | tail -3
-
-      # --------------------------------------------------------------
-      # Build. `cargo tauri ios build` runs xcodegen, compiles the
-      # Rust libs for aarch64-apple-ios, archives via xcodebuild and
-      # tries to export the IPA. The archive step always succeeds
-      # with our patched pbxproj (Manual signing wired up); the
-      # export step FAILS because tauri-cli 2.11 regenerates an
-      # ExportOptions.plist with `signingStyle = automatic` and no
-      # `provisioningProfiles` dict — xcodebuild then refuses with
-      # `exportArchive No Accounts` / `No profiles for ... found`.
-      #
-      # We tolerate that export failure (`|| EXPORT_RC=$?`), check
-      # that the .xcarchive exists, and redo the export ourselves in
-      # the next step with a hand-rolled ExportOptions.plist that
-      # pins manual signing + the App Store profile.
-      # --------------------------------------------------------------
-      - name: cargo tauri ios build (archive — export will be redone)
-        working-directory: crates/outl-mobile
-        env:
-          CI: "true"
-        run: |
-          EXPORT_RC=0
-          cargo tauri ios build --export-method app-store-connect || EXPORT_RC=$?
-          ARCHIVE="src-tauri/gen/apple/build/outl-mobile_iOS.xcarchive"
-          if [[ ! -d "$ARCHIVE" ]]; then
-            echo "::error::Archive missing at $ARCHIVE — tauri build failed before archiving (rc=$EXPORT_RC)"
-            exit 1
-          fi
-          if [[ $EXPORT_RC -ne 0 ]]; then
-            echo "::notice::tauri export step exited with $EXPORT_RC — expected; redoing manually next."
-          fi
-          ls -la "$ARCHIVE"
-
-      # --------------------------------------------------------------
-      # Hand-roll the ExportOptions.plist that xcodebuild needs for
-      # App Store distribution with manual signing. The keys that
-      # matter:
-      #   - method = app-store-connect (Xcode 15.4+, replaces `app-store`)
-      #   - signingStyle = manual (no Apple ID in keychain)
-      #   - provisioningProfiles: dict mapping Bundle ID → profile name
-      #   - teamID, stripSwiftSymbols, uploadSymbols (standard)
-      # --------------------------------------------------------------
-      - name: Write App Store ExportOptions.plist
-        id: export_opts
-        env:
-          PROFILE_NAME: ${{ steps.profile.outputs.name }}
-        run: |
-          PLIST="$RUNNER_TEMP/ExportOptions-appstore.plist"
-          cat >"$PLIST" <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>method</key>
-              <string>app-store-connect</string>
-              <key>destination</key>
-              <string>export</string>
-              <key>teamID</key>
-              <string>CPEEKT3E77</string>
-              <key>signingStyle</key>
-              <string>manual</string>
-              <key>provisioningProfiles</key>
-              <dict>
-                  <key>app.outl.mobile-app</key>
-                  <string>${PROFILE_NAME}</string>
-              </dict>
-              <key>stripSwiftSymbols</key>
-              <true/>
-              <key>uploadSymbols</key>
-              <true/>
-          </dict>
-          </plist>
-          EOF
-          plutil -lint "$PLIST"
-          echo "::group::ExportOptions.plist"
-          cat "$PLIST"
-          echo "::endgroup::"
-          echo "path=$PLIST" >> "$GITHUB_OUTPUT"
-
-      - name: Export IPA from archive (manual signing)
-        run: |
-          ARCHIVE="crates/outl-mobile/src-tauri/gen/apple/build/outl-mobile_iOS.xcarchive"
-          EXPORT_DIR="crates/outl-mobile/src-tauri/gen/apple/build"
-          xcodebuild -exportArchive \
-            -archivePath "$ARCHIVE" \
-            -exportPath "$EXPORT_DIR" \
-            -exportOptionsPlist "${{ steps.export_opts.outputs.path }}"
-
-      - name: Locate built IPA
-        id: ipa
-        shell: bash
-        run: |
-          # xcodebuild -exportArchive names the IPA after the
-          # productName from the xcarchive's Info.plist — which is
-          # "outl" (see project.yml > PRODUCT_NAME). Fall back to a
-          # glob if the name ever shifts.
-          IPA="crates/outl-mobile/src-tauri/gen/apple/build/outl.ipa"
-          if [[ ! -f "$IPA" ]]; then
-            FOUND=$(find crates/outl-mobile/src-tauri/gen/apple/build -maxdepth 2 -name '*.ipa' | head -1)
-            if [[ -n "$FOUND" ]]; then
-              IPA="$FOUND"
-            else
-              echo "::error::No .ipa produced under gen/apple/build"
-              find crates/outl-mobile/src-tauri/gen/apple/build -maxdepth 3 -type f | head -40
-              exit 1
-            fi
-          fi
-          echo "path=$IPA" >> "$GITHUB_OUTPUT"
-          ls -lh "$IPA"
-
-      # --------------------------------------------------------------
-      # Upload. altool's `--upload-app` is the documented path for
-      # TestFlight ingestion via the App Store Connect API key (the
-      # newer `notarytool` is macOS-only, not iOS). Apple still ships
-      # it inside Xcode in 2026, but if it ever goes away the
-      # fallback is `xcrun iTMSTransporter -m upload`.
-      # --------------------------------------------------------------
       - name: Upload IPA to TestFlight
         run: |
           xcrun altool --upload-app \
@@ -507,25 +170,18 @@ jobs:
             --apiKey "$APP_STORE_CONNECT_KEY_ID" \
             --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID"
 
-      - name: Upload IPA as workflow artifact (backup)
+      - name: Re-upload IPA as workflow artifact (audit trail)
         if: always() && steps.ipa.outputs.path != ''
         uses: actions/upload-artifact@v4
         with:
-          name: outl-ios-${{ steps.meta.outputs.short_version }}-${{ steps.meta.outputs.build_number }}
+          name: outl-ios-testflight-${{ steps.meta.outputs.short_version }}-${{ steps.meta.outputs.build_number }}
           path: ${{ steps.ipa.outputs.path }}
           if-no-files-found: warn
           retention-days: 30
 
-      # --------------------------------------------------------------
-      # Cleanup runs no matter what. The runner is ephemeral, but
-      # defensive deletion avoids leaking secrets via cache or
-      # artifact misconfiguration.
-      # --------------------------------------------------------------
-      - name: Cleanup signing material
+      - name: Cleanup API key
         if: always()
         run: |
-          security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" 2>/dev/null || true
-          rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/outl-appstore.mobileprovision"
           if [[ -n "$APP_STORE_CONNECT_KEY_ID" ]]; then
             rm -f "$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
           fi
