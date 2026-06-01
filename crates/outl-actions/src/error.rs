@@ -33,6 +33,13 @@ pub enum ActionError {
     #[error("cannot outdent {0}: parent has no grandparent")]
     NoGrandparent(String),
 
+    /// The page slug failed validation (empty, too long, contains a
+    /// path separator, `..`, or a control character). The slug ends
+    /// up joined into a filesystem path, so we reject anything that
+    /// could escape its directory before it reaches storage.
+    #[error("invalid page slug `{0}`")]
+    InvalidSlug(String),
+
     /// Underlying workspace failure (storage, etc).
     #[error(transparent)]
     Workspace(#[from] WorkspaceError),

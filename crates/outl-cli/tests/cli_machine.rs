@@ -165,6 +165,70 @@ fn page_delete_requires_confirm() {
 }
 
 #[test]
+fn malicious_slug_is_rejected() {
+    let ws = init_workspace();
+    // Path traversal attempt — slug must not be accepted because it
+    // would end up joined into a filesystem path on export.
+    for bad in ["../escape", "with/slash", "with\\backslash", "..", "."] {
+        let out = outl()
+            .args(["--workspace"])
+            .arg(ws.path())
+            .args(["page", "create", bad, "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            !out.status.success(),
+            "slug `{bad}` should be rejected, got success"
+        );
+        let env: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(
+            env["error"]["code"], "INVALID_ARG",
+            "slug `{bad}` should map to INVALID_ARG"
+        );
+    }
+}
+
+#[test]
+fn doctor_json_runs_cleanly() {
+    let ws = init_workspace();
+    let out = outl()
+        .args(["--workspace"])
+        .arg(ws.path())
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+    let env: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(env["ok"], true, "doctor --json must succeed on a fresh ws");
+    assert!(env["data"]["findings"].is_array());
+    // Fresh workspace has no errors (warnings are allowed: missing
+    // sidecar for the seed journal is expected on first init).
+    let errors = env["data"]["error_count"].as_u64().unwrap_or(0);
+    assert_eq!(errors, 0, "fresh workspace should have zero errors");
+}
+
+#[test]
+fn delete_is_idempotent_when_md_is_missing() {
+    let ws = init_workspace();
+    let _ = ok(outl()
+        .args(["--workspace"])
+        .arg(ws.path())
+        .args(["page", "create", "throwaway", "--json"])
+        .output()
+        .unwrap());
+    // Drop the on-disk .md before deleting. The op log must still
+    // succeed and the missing file must not crash anything.
+    let md = ws.path().join("pages").join("throwaway.md");
+    std::fs::remove_file(&md).ok();
+    let v = ok(outl()
+        .args(["--workspace"])
+        .arg(ws.path())
+        .args(["page", "delete", "throwaway", "--confirm", "--json"])
+        .output()
+        .unwrap());
+    assert_eq!(v["data"]["slug"], "throwaway");
+}
+
+#[test]
 fn workspace_info_returns_summary() {
     let ws = init_workspace();
     let info = ok(outl()

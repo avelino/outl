@@ -89,6 +89,33 @@ impl std::fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
+impl From<outl_actions::ActionError> for ApiError {
+    fn from(e: outl_actions::ActionError) -> Self {
+        use outl_actions::ActionError::*;
+        match e {
+            NotInTree(s) => ApiError::new(codes::BLOCK_NOT_FOUND, format!("block {s} not in tree")),
+            MissingPosition(s) => ApiError::new(
+                codes::INTERNAL,
+                format!("block {s} has no position in the tree"),
+            ),
+            NoPreviousSibling(s) => ApiError::new(
+                codes::INVALID_ARG,
+                format!("cannot indent {s}: no previous sibling"),
+            ),
+            AlreadyAtRoot(s) => ApiError::new(
+                codes::INVALID_ARG,
+                format!("cannot outdent {s}: already at root"),
+            ),
+            NoGrandparent(s) => ApiError::new(
+                codes::INVALID_ARG,
+                format!("cannot outdent {s}: parent has no grandparent"),
+            ),
+            InvalidSlug(s) => ApiError::new(codes::INVALID_ARG, format!("invalid page slug `{s}`")),
+            other => ApiError::internal(other),
+        }
+    }
+}
+
 /// JSON envelope wrapping a command's payload or error.
 #[derive(Debug, Clone, Serialize)]
 pub struct Envelope<T: Serialize> {

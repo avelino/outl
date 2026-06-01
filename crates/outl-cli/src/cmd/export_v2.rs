@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use clap::Subcommand;
 use serde_json::{json, Value};
 
-use outl_actions::{find_by_slug, page_meta, read_text_prop, render_page_md};
+use outl_actions::{find_by_slug, is_valid_slug, page_meta, read_text_prop, render_page_md};
 use outl_md::parse::parse;
 use outl_md::sidecar::{self, sidecar_path_for};
 
@@ -140,8 +140,34 @@ pub fn hugo(ctx: &WsCtx, slug: &str, out_dir: &Path) -> Result<Value, ApiError> 
     out.push_str(&frontmatter);
     out.push_str(&body_no_props);
 
+    // Belt-and-suspenders even though `open_or_create_page` already
+    // rejects bad slugs: anything that escapes a single path component
+    // here would write outside the user-supplied `out_dir`. We re-check
+    // because the slug could have entered the workspace through a
+    // legacy `.md` file the user imported.
+    if !is_valid_slug(&meta.slug) {
+        return Err(ApiError::new(
+            codes::INVALID_ARG,
+            format!(
+                "page slug `{}` is not safe for filesystem export",
+                meta.slug
+            ),
+        ));
+    }
     fs::create_dir_all(out_dir).map_err(ApiError::internal)?;
     let target = out_dir.join(format!("{}.md", meta.slug));
+    // Final check: after the join, the target must still sit inside
+    // `out_dir`. Catches anything `is_valid_slug` missed.
+    if !target_within(out_dir, &target) {
+        return Err(ApiError::new(
+            codes::INVALID_ARG,
+            format!(
+                "refusing to write outside out_dir: target {} escapes {}",
+                target.display(),
+                out_dir.display()
+            ),
+        ));
+    }
     fs::write(&target, &out).map_err(ApiError::internal)?;
 
     Ok(json!({
@@ -200,6 +226,20 @@ fn toml_string(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+/// True iff `target` sits inside `root`, after canonicalisation
+/// when possible. We canonicalise to defeat symlink tricks; if
+/// canonicalisation fails (the path doesn't exist yet) we fall back
+/// to a literal component prefix check, which is safe because
+/// `is_valid_slug` already rejected `..`.
+fn target_within(root: &std::path::Path, target: &std::path::Path) -> bool {
+    let root_canonical = root.canonicalize();
+    let target_canonical = target.canonicalize();
+    match (root_canonical, target_canonical) {
+        (Ok(r), Ok(t)) => t.starts_with(&r),
+        _ => target.starts_with(root),
+    }
 }
 
 fn strip_property_lines(md: &str) -> String {

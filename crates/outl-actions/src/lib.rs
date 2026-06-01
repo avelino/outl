@@ -71,8 +71,8 @@ pub use journal::{
 };
 pub use outline::{project_outline, read_page_view, OutlineNode};
 pub use page::{
-    date_from_slug, find_by_slug, journal_slug, journal_title, list_all as list_pages,
-    migrate_legacy_into_today, next_journal_date, open_journal,
+    date_from_slug, find_by_slug, is_valid_slug, journal_slug, journal_title,
+    list_all as list_pages, migrate_legacy_into_today, next_journal_date, open_journal,
     open_or_create as open_or_create_page, open_today, page_meta, previous_journal_date,
     read_text_prop, set_property, today, PageKind, PageMeta,
 };
