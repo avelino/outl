@@ -508,10 +508,12 @@ export function Journal() {
   }
 
   /**
-   * Flip the collapsed flag on a block. UI state — does not enter
-   * the op log; the backend writes the sidecar directly and returns
-   * a fresh page view so the renderer picks up the new flag in the
-   * same frame the user tapped the triangle.
+   * Flip the collapsed flag on a block. The backend generates
+   * `Op::SetCollapsed`, applies it through the op log (same path as
+   * every other mutation), and returns a fresh page view so the
+   * renderer picks up the new flag in the same frame the user tapped
+   * the triangle. The sidecar is not touched — fold state syncs
+   * device-to-device via the per-actor jsonl, not the `.outl` file.
    */
   async function handleToggleCollapse(id: string, next: boolean) {
     const pid = pageId();

@@ -36,13 +36,20 @@ pub struct OutlineNode {
     #[serde(serialize_with = "serialize_todo_state")]
     pub todo: Option<TodoState>,
     /// Whether the block is rendered collapsed (children hidden) in
-    /// the outline. UI-state echoed from the sidecar; clients SHOULD
-    /// still send `children` so the renderer can show a "(N hidden)"
-    /// hint without a second round trip.
+    /// the outline. Overlaid from the workspace via
+    /// [`Op::SetCollapsed`][outl_core::op::Op::SetCollapsed]; the op
+    /// log is the source of truth. Clients SHOULD still send
+    /// `children` so the renderer can show a "(N hidden)" hint
+    /// without a second round trip.
     ///
-    /// Mutated via `outl_actions::block::toggle_block_collapsed` /
-    /// `set_block_collapsed`, which write directly to the sidecar
-    /// (no `Op` — UI state never enters the op log).
+    /// **Use `read_page_view_with_workspace` to populate this.** The
+    /// bare [`read_page_view`] has no workspace in scope and leaves
+    /// every entry at `false`.
+    ///
+    /// Mutated via [`crate::collapsed::set_block_collapsed`] /
+    /// [`crate::collapsed::toggle_block_collapsed`], which generate
+    /// `Op::SetCollapsed` and apply it through `Workspace::apply` —
+    /// never via the sidecar.
     pub collapsed: bool,
     /// Children, in their fractional-index order.
     pub children: Vec<OutlineNode>,
@@ -125,9 +132,12 @@ pub fn read_page_view_with_workspace(
 
 /// Walk `nodes` in place, setting `collapsed` from
 /// `workspace.tree().is_collapsed(id)` for every node whose id parses
-/// as a valid `NodeId`. Transient ids (the ones minted by
-/// `outline_from_parsed` when the sidecar is missing / short) skip
-/// the overlay — they're not in the op log yet.
+/// as a valid ULID. Transient ids (the ones minted by
+/// `outline_from_parsed` when the sidecar is missing or shorter than
+/// the AST) parse fine but the workspace has never seen them, so
+/// `is_collapsed` returns the default `false` — same result as
+/// leaving the field untouched, which keeps the contract "every
+/// node with no op log presence renders expanded".
 fn overlay_collapsed(nodes: &mut [OutlineNode], workspace: &Workspace) {
     for node in nodes {
         if let Ok(ulid) = ulid::Ulid::from_str(&node.id) {

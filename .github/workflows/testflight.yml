@@ -52,12 +52,22 @@ jobs:
   upload:
     name: Upload IPA to TestFlight
     runs-on: macos-latest
-    # workflow_run fires on every conclusion; only proceed on
-    # success. workflow_dispatch is gated by the human pressing
-    # the button.
+    # workflow_run fires on every conclusion; only proceed when:
+    #   1. a human triggered us manually (workflow_dispatch), or
+    #   2. the Mobile workflow finished `success` AND was triggered
+    #      by an event that actually runs the `ios-release` job —
+    #      `push` or `workflow_dispatch`. On `pull_request` the
+    #      Mobile workflow's `ios-release` step is skipped (PRs
+    #      never sign IPAs), the workflow still reports `success`,
+    #      and we'd come down here to download an artifact that was
+    #      never uploaded. Mirror the `ios-release` gate from
+    #      `mobile.yml` so we only fire when there's actually a
+    #      signed IPA waiting for us.
     if: >
       github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
+      (github.event.workflow_run.conclusion == 'success' &&
+       (github.event.workflow_run.event == 'push' ||
+        github.event.workflow_run.event == 'workflow_dispatch'))
 
     environment:
       name: release

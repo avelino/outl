@@ -460,17 +460,15 @@ impl App {
         // stale `Focus::Backlink { idx, … }` across pages would point
         // at the wrong backlink list (the new page has its own).
         self.focus = Focus::Outline;
-        // Hydrate the per-page collapsed mirror from the sidecar.
-        // Sidecar blocks are already DFS-preorder, so they line up
-        // with the render walk's `cursor`. A missing or unreadable
-        // sidecar yields an empty mirror (everything renders expanded
-        // until the next reconcile populates `.outl`).
-        // Rebuild the flat-index → NodeId mapping from the sidecar so
-        // the render walk + collapse helpers can reach each block by
-        // id. The collapsed flag itself comes from
-        // `workspace.tree().is_collapsed(id)` — the op log is the
-        // single source of truth across devices (see
-        // `outl_core::op::Op::SetCollapsed`).
+        // Rebuild the flat-index → NodeId mapping from the sidecar
+        // (sidecar blocks are already DFS-preorder, so they line up
+        // with the render walk's `cursor`) and hydrate the collapsed
+        // mirror from `workspace.tree().is_collapsed(_)`. The op log
+        // is the single source of truth across devices — see
+        // `outl_core::op::Op::SetCollapsed`. The sidecar contributes
+        // only the id mapping; a missing or unreadable sidecar
+        // leaves both structures empty until the next reconcile
+        // populates `.outl`.
         self.id_by_flat.clear();
         self.collapsed.clear();
         let sidecar_path = outl_md::resolve_sidecar_path(&path);

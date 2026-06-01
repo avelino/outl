@@ -39,9 +39,9 @@ impl App {
     /// on the backlinks pane.
     ///
     /// The local mirror (`App.collapsed`) is patched optimistically
-    /// before the sidecar write so the next frame already reflects
-    /// the new state. On disk-write failure we roll back the mirror
-    /// and surface a toast.
+    /// before the op log apply so the next frame already reflects
+    /// the new state. On apply failure we roll the mirror back to
+    /// what the workspace believes and surface a toast.
     pub(crate) fn toggle_collapse_selected(&mut self) {
         // Only the outline owns this chord. Backlinks render their
         // own view of source blocks, not the local fold state.
@@ -100,7 +100,6 @@ impl App {
                 self.toast(ToastKind::Error, format!("collapse failed: {e}"));
             }
         }
-        let _ = was_collapsed; // documented for the read above
         self.recompute_hidden_by_collapse();
     }
 }

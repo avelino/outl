@@ -466,13 +466,17 @@ pub(crate) struct App {
     pub(crate) toasts: Vec<Toast>,
 
     /// Block ids currently rendered collapsed (children hidden) in
-    /// the outline. Mirrors the sidecar's `collapsed` flag for every
-    /// block on the active page; populated on every `load_current`.
+    /// the outline. Hydrated from `workspace.tree().is_collapsed(_)`
+    /// on every `load_current`, so the local mirror always tracks
+    /// the op log's authoritative view.
     ///
-    /// Source of truth lives in the sidecar — this is just the
-    /// fast-path the renderer consults to skip subtrees. Toggling
-    /// goes through `outl_actions::toggle_block_collapsed`, which
-    /// writes the sidecar; the local HashSet is patched optimistically.
+    /// Source of truth is the op log (`Op::SetCollapsed`); this
+    /// `HashSet` is the fast-path the renderer + nav helpers consult
+    /// to skip hidden subtrees. Toggling goes through
+    /// `outl_actions::toggle_block_collapsed`, which generates an
+    /// `Op::SetCollapsed` and applies it via `Workspace::apply`. We
+    /// patch this `HashSet` optimistically and re-sync from the
+    /// workspace after the apply returns.
     pub(crate) collapsed: HashSet<NodeId>,
 
     /// Flat DFS-preorder map from the outline's flat index (the
