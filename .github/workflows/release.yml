@@ -287,3 +287,46 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --draft=false
           echo "::notice::Published ${TAG}"
+
+  update_tap:
+    name: Bump outl@beta formula
+    needs: [prepare, publish_release]
+    # Only beta releases for now. GA bumps `Formula/outl.rb` by hand
+    # the first time; after that we can add a similar job for GA.
+    if: needs.publish_release.result == 'success' && needs.prepare.outputs.prerelease == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Bump Formula/outl@beta.rb
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.sha256' --dir shas
+
+          F=Formula/outl@beta.rb
+          sed -i "s|^  version .*|  version \"$VERSION\"|" "$F"
+          for arch in macos-arm64 macos-x64 linux-x64; do
+            sha=$(awk '{print $1}' "shas/outl-${arch}.tar.gz.sha256")
+            sed -i "s|sha256 \"[a-f0-9]*\" # anchor: ${arch}|sha256 \"${sha}\" # anchor: ${arch}|" "$F"
+          done
+
+          if git diff --quiet "$F"; then
+            echo "::notice::No formula changes for $TAG"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$F"
+          # `[skip ci]` keeps this commit from re-triggering the release
+          # workflow (which is `on: push: branches: [main]`).
+          git commit -m "homebrew: outl ${VERSION} [skip ci]"
+          git push origin HEAD:main

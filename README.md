@@ -97,12 +97,20 @@ touching the algorithm.
 ## Quick start
 
 ```bash
-git clone https://github.com/avelino/outl.git && cd outl
-cargo build --release
+# macOS / Linux via Homebrew (beta channel — every push to main)
+brew tap avelino/outl https://github.com/avelino/outl
+brew install outl@beta
 
-./target/release/outl init ~/notes
-./target/release/outl --workspace ~/notes
+# or from source
+git clone https://github.com/avelino/outl.git && cd outl
+cargo build --release && cp target/release/outl ~/.local/bin/
+
+outl init ~/notes
+outl --workspace ~/notes
 ```
+
+See [docs/homebrew.md](docs/homebrew.md) for the channel rules (GA
+vs. beta, switching, conflict).
 
 `outl` (no subcommand) opens the TUI on the workspace and lands on
 today's journal. Press `?` for keymap, `:` for the command palette,

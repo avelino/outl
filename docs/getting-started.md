@@ -4,8 +4,18 @@ A minute from clone to first journal entry.
 
 ## Install
 
-Right now outl is built from source. Released binaries land with
-phase 4.
+### Homebrew (macOS / Linux)
+
+```bash
+brew tap avelino/outl https://github.com/avelino/outl
+brew install outl@beta   # latest beta — every push to main
+# brew install outl      # latest GA (when the first one ships)
+```
+
+See [Homebrew tap](homebrew.md) for the channel rules and how
+switching between GA and beta works.
+
+### From source
 
 ```bash
 git clone https://github.com/avelino/outl.git

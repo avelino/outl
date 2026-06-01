@@ -16,6 +16,7 @@ your notes survive being on more than one device.
 | You want to... | Read |
 |----------------|------|
 | Install and try outl in a minute | [Getting started](getting-started.md) |
+| Install via Homebrew (GA or beta) | [Homebrew tap](homebrew.md) |
 | Understand the pitch vs. Roam/Logseq | [Why outl](why-outl.md) |
 | Know *exactly* how sync works | [Sync, done right](sync.md) |
 | Use the TUI fluently | [TUI manual](tui.md) |
