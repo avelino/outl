@@ -411,7 +411,10 @@ fn indent_block(
 ) -> Result<PageView, String> {
     let page = parse_node_id(&page_id)?;
     let node = parse_node_id(&id)?;
-    finish_in_page(&state, page, |ws| indent(ws, &state.hlc, node))
+    finish_in_page(&state, page, |ws| match indent(ws, &state.hlc, node) {
+        Err(ActionError::NoPreviousSibling(_)) => Ok(()),
+        other => other,
+    })
 }
 
 #[tauri::command]
