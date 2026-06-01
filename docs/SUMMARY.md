@@ -15,6 +15,11 @@
 * [TUI manual](tui.md)
 * [Theming](theming.md)
 
+## Integrations
+
+* [CLI](cli.md)
+* [MCP](mcp.md)
+
 ## Format
 
 * [Markdown dialect](markdown-format.md)

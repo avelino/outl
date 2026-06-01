@@ -8,8 +8,8 @@ outliner (Roam, Logseq, Obsidian).
 ## Running
 
 ```bash
-outl --path ~/notes          # opens the TUI on ~/notes
-outl --path ~/notes --theme dracula
+outl --workspace ~/notes          # opens the TUI on ~/notes
+outl --workspace ~/notes --theme dracula
 outl tui ~/notes             # explicit subcommand form
 cd ~/notes && outl           # no args: opens TUI in cwd
 ```

@@ -297,7 +297,7 @@ four critical functions (`do_op`, `undo_op`, `apply_op`,
 The algorithm runs on every device; the transport is whatever ships
 each actor's `ops-*.jsonl` to every other device. Today that is
 iCloud Drive, used by the iOS mobile client and reachable from the
-macOS TUI by pointing `--path` at the same iCloud ubiquity container
+macOS TUI by pointing `--workspace` at the same iCloud ubiquity container
 (`~/Library/Mobile Documents/iCloud~app~outl~mobile-app/Documents`).
 
 The layout is:
@@ -578,7 +578,7 @@ Workspaces from Part 1 have a monolithic `ops/ops-<actor>.jsonl`.
 The migration to per-page shards is one-shot and idempotent:
 
 ```
-outl migrate-to-per-page-ops --path <root>
+outl migrate-to-per-page-ops --workspace <root>
   for each op in ops-<actor>.jsonl:
       identify page-slug (parent walk + earlier Create ops)
       dispatch to ops/<slug>/ops-<actor>.jsonl

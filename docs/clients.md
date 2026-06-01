@@ -92,10 +92,10 @@ share the workspace.
 
 The mobile client persists the op log to the iCloud Ubiquity
 Container. The TUI reaches the same workspace by pointing
-`--path` at the container's `Documents/` directory:
+`--workspace` at the container's `Documents/` directory:
 
 ```
-<container>/Documents/                ← TUI: outl --path "<container>/Documents"
+<container>/Documents/                ← TUI: outl --workspace "<container>/Documents"
 ├── journals/
 │   └── YYYY-MM-DD.md                 ← daily journal projection
 ├── pages/

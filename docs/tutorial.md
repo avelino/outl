@@ -23,7 +23,7 @@ Pick a directory for your notes. Doesn't matter where:
 
 ```bash
 outl init ~/notes
-outl --path ~/notes
+outl --workspace ~/notes
 ```
 
 Today's journal opens. The screen looks like this:
@@ -101,7 +101,7 @@ Move the cursor onto the link (the cyan `Avelino`). Press `Enter`.
 
 Boom: outl created `pages/avelino.md` with `title:: Avelino` at the
 top, and put you on the new page. Type the meeting notes here. When
-you're done, press `q` then `outl --path ~/notes` again — or just
+you're done, press `q` then `outl --workspace ~/notes` again — or just
 press `[` to go back to today's journal.
 
 The link in your journal still points at the page. Open today again:

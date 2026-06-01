@@ -35,11 +35,11 @@ Install TestFlight from the App Store, open the join link on the
 iPhone, accept the beta, and the **outl** app lands on the home
 screen. It writes its op log to its own iCloud Drive container
 (`iCloud.app.outl.mobile-app`). To share a workspace with the TUI,
-point `outl --path` at the same `Documents/` directory inside the
+point `outl --workspace` at the same `Documents/` directory inside the
 container:
 
 ```bash
-outl --path ~/Library/Mobile\ Documents/iCloud~app~outl~mobile-app/Documents
+outl --workspace ~/Library/Mobile\ Documents/iCloud~app~outl~mobile-app/Documents
 ```
 
 Each device writes only to its own `ops-<actor>.jsonl`, so iCloud
@@ -73,7 +73,7 @@ You'll get:
 ## Open the TUI
 
 ```bash
-outl --path ~/notes
+outl --workspace ~/notes
 ```
 
 It lands you on today's journal. Press `?` to see every keymap.
@@ -104,12 +104,12 @@ press `Enter` on the link — outl creates `pages/<slug>.md` with
 Six built-in palettes:
 
 ```bash
-outl --path ~/notes --theme dracula
-outl --path ~/notes --theme nord
-outl --path ~/notes --theme monokai
-outl --path ~/notes --theme solarized-dark
-outl --path ~/notes --theme light
-outl --path ~/notes --theme default-dark
+outl --workspace ~/notes --theme dracula
+outl --workspace ~/notes --theme nord
+outl --workspace ~/notes --theme monokai
+outl --workspace ~/notes --theme solarized-dark
+outl --workspace ~/notes --theme light
+outl --workspace ~/notes --theme default-dark
 ```
 
 To pin a theme per workspace, edit `~/notes/.outl/config.toml`:

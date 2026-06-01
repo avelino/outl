@@ -1,0 +1,303 @@
+# CLI
+
+outl ships one binary — `outl` — that does everything a workspace
+needs from outside the TUI: scripts, cron jobs, CI, editor
+integrations, and LLM agents. This document is the surface contract.
+
+Looking for how to plug outl into Claude Desktop / Cursor / other
+MCP hosts? → [docs/mcp.md](mcp.md). The two share the same handlers
+under the hood, so this page stays the source of truth for what each
+command does.
+
+## The bet — one binary, one surface
+
+Knowledge bases get integrated everywhere: editors, shell scripts,
+LLM agents, automation. The wrong move is to grow a separate API
+per host (REST for one, MCP for another, library for a third).
+Each new client doubles the surface and drifts.
+
+outl's bet: **everything reachable from outside the TUI is reachable
+through the `outl` binary**, with a stable JSON envelope. Other
+protocols (MCP today, anything that comes next) are thin shims that
+shell out to the same commands. There is one place where logic
+lives, and that place is `outl-actions`.
+
+## The stack
+
+```text
+┌────────────────────────────────────────────────────────────┐
+│ Hosts                                                       │
+│   shell · cron · CI · editors · Claude Code · Claude Desktop│
+└────────────────────────────────────────────────────────────┘
+                  │                            │
+                  │ subprocess                 │ MCP / stdio
+                  ▼                            ▼
+┌──────────────────────────────┐  ┌──────────────────────────┐
+│ outl <subcommand>            │  │ outl mcp serve           │
+│  page · block · daily ·      │  │ (thin shim, declares     │
+│  search · query · export …   │  │  tools, calls into the   │
+│                              │  │  same handlers below)    │
+└──────────────────────────────┘  └──────────────────────────┘
+                  │                            │
+                  └──────────────┬─────────────┘
+                                 ▼
+┌────────────────────────────────────────────────────────────┐
+│ outl-actions                                                │
+│   block · tree · todo · journal · page · backlinks · sync   │
+└────────────────────────────────────────────────────────────┘
+```
+
+The MCP server is a subcommand of the same binary. There is no
+`outl-mcp` crate, no separate distribution, no parallel logic. A
+new feature lands once: as a function in `outl-actions`, exposed by
+one subcommand and one tool, sharing the same handler.
+
+## JSON envelope
+
+Every command that produces machine output emits the same shape so
+downstream consumers (jq, LLMs, scripts) cache one parser.
+
+Success:
+
+```json
+{
+  "ok": true,
+  "data": { "...": "command-specific payload" },
+  "error": null
+}
+```
+
+Failure:
+
+```json
+{
+  "ok": false,
+  "data": null,
+  "error": {
+    "code": "PAGE_NOT_FOUND",
+    "message": "page 'foo' does not exist"
+  }
+}
+```
+
+Error codes are stable strings, listed alongside each command below
+when relevant. Exit codes follow:
+
+| Code | Meaning                                       |
+|------|-----------------------------------------------|
+| 0    | Success                                       |
+| 1    | User error (bad input, not found, conflict)   |
+| 2    | Internal error (bug, broken invariant, panic) |
+
+Add `--json` to any command to force JSON. Without the flag, output
+is human-readable (tables, colored). MCP tools always return the
+JSON envelope's `data` field directly.
+
+## Commands by domain
+
+The CLI column is what you type at the terminal. The MCP tool
+column is the name Claude Desktop (or any MCP host) sees.
+
+### Page
+
+| CLI                                                            | MCP tool             |
+|----------------------------------------------------------------|----------------------|
+| `outl page get <slug> [--json]`                                | `outl_page_get`      |
+| `outl page create <slug> --title=… [--icon=…] [--tags=a,b]`    | `outl_page_create`   |
+| `outl page update <slug> [--title=…] [--icon=…]`               | `outl_page_update`   |
+| `outl page delete <slug> [--confirm]`                          | `outl_page_delete`   |
+| `outl page list [--filter=tag:foo] [--json]`                   | `outl_page_list`     |
+| `outl page rename <old-slug> <new-slug>`                       | `outl_page_rename`   |
+| `outl page render <slug>`                                      | `outl_page_render`   |
+
+`page get` returns page meta plus the outline tree. `page render`
+returns the projected `.md` string (clean, no sidecar fields).
+`page rename` rewrites every `[[ref]]` to the page across the
+workspace and updates the sidecar.
+
+### Block
+
+| CLI                                                            | MCP tool                |
+|----------------------------------------------------------------|-------------------------|
+| `outl block get <blk-XXX> [--json]`                            | `outl_block_get`        |
+| `outl block append <page> --text=… [--parent=blk-YYY]`         | `outl_block_append`     |
+| `outl block insert --after=<blk-XXX> --text=…`                 | `outl_block_insert`     |
+| `outl block update <blk> --text=…`                             | `outl_block_update`     |
+| `outl block move <blk> --parent=<blk-YYY> [--after=<blk-ZZZ>]` | `outl_block_move`       |
+| `outl block delete <blk> [--confirm]`                          | `outl_block_delete`     |
+| `outl block toggle-todo <blk>`                                 | `outl_block_toggle_todo`|
+| `outl block tree <blk> [--json]`                               | `outl_block_tree`       |
+
+`block move` is the one user-visible name for `Op::Move`. Cycle
+detection still applies: a move that would create a cycle returns
+`{ "code": "CYCLE_REJECTED" }` and the op still goes into the log
+(see [docs/crdt.md](crdt.md)). `block toggle-todo` walks
+`None → TODO → DONE → None`, same as `outl_actions::cycle_todo`.
+
+### Daily / Journal
+
+| CLI                                                | MCP tool             |
+|----------------------------------------------------|----------------------|
+| `outl daily today [--json]`                        | `outl_daily_today`   |
+| `outl daily get <date> [--json]`                   | `outl_daily_get`     |
+| `outl daily append --text=… [--date=…]`            | `outl_daily_append`  |
+| `outl daily range --from=… --to=… [--json]`        | `outl_daily_range`   |
+
+`<date>` accepts ISO (`2026-05-31`) and natural (`"April 22nd,
+2026"`, `"yesterday"`, `"tomorrow"`). Range is inclusive on both
+sides; missing days are omitted, not padded.
+
+### Search / Query
+
+| CLI                                                              | MCP tool          |
+|------------------------------------------------------------------|-------------------|
+| `outl search "<query>" [--in=blocks\|pages] [--json]`            | `outl_search`     |
+| `outl query --tag=foo [--priority=p1] [--since=7d] [--json]`     | `outl_query`      |
+| `outl query --raw='{tag: foo, since: 7d}' [--json]`              | `outl_query_raw`  |
+
+`search` is full-text and lives today as the TUI's workspace
+search. `query` is structured filter — phase 3 — and grows the
+filter set incrementally (tag, property, date range first; richer
+DSL via `--raw` later).
+
+### Backlinks / Refs
+
+| CLI                                | MCP tool              |
+|------------------------------------|-----------------------|
+| `outl backlinks <page> [--json]`   | `outl_backlinks`      |
+| `outl block refs <blk> [--json]`   | `outl_block_refs`     |
+| `outl block embed <blk> [--json]`  | `outl_block_embed`    |
+
+`block embed` resolves `!((blk-XXX))` recursively, returning the
+source block plus children — the same expansion the TUI does
+inline.
+
+### Tags / Properties
+
+| CLI                                              | MCP tool             |
+|--------------------------------------------------|----------------------|
+| `outl tag list [--json]`                         | `outl_tag_list`      |
+| `outl tag pages <tag> [--json]`                  | `outl_tag_pages`     |
+| `outl page prop set <page> <key>=<value>`        | `outl_page_prop_set` |
+| `outl page prop get <page> <key>`                | `outl_page_prop_get` |
+| `outl page prop list <page> [--json]`            | `outl_page_prop_list`|
+
+Properties stay in the `key:: value` lines at the top of the page;
+the CLI never invents a new place to put metadata
+(see [docs/markdown-format.md](markdown-format.md)).
+
+### Export
+
+| CLI                                                  | MCP tool          |
+|------------------------------------------------------|-------------------|
+| `outl export hugo <page> --out=./content/posts/`     | `outl_export_hugo`|
+| `outl export md <page>`                              | `outl_export_md`  |
+| `outl export json <page>`                            | `outl_export_json`|
+
+`export hugo` is the pipeline that drives avelino.run: frontmatter
+from page properties, block refs flattened, code blocks preserved.
+`export md` is the same string `page render` returns. `export json`
+is the full AST plus sidecar — the format an external tool would
+ingest.
+
+### Workspace / Admin
+
+| CLI                                          | MCP tool                |
+|----------------------------------------------|-------------------------|
+| `outl init <path>`                           | —                       |
+| `outl serve [--workspace=…]`                 | —                       |
+| `outl doctor [--json]`                       | `outl_workspace_doctor` |
+| `outl reconcile`                             | —                       |
+| `outl mcp serve [--workspace=…]`             | —                       |
+| `outl workspace info [--json]`               | `outl_workspace_info`   |
+| `outl import logseq <src> <dst>`             | —                       |
+| `outl import roam <backup.json> <dst>`       | —                       |
+
+`init`, `serve`, `reconcile`, `import`, and `mcp serve` are CLI-only
+on purpose — they're either interactive, long-running, or bootstrap
+commands that don't fit a tool-call shape.
+
+## MCP
+
+Every machine-shaped command above is also exposed as an MCP tool
+through `outl mcp serve` — same binary, same handler, same JSON
+shape. Claude Desktop, Cursor, and any other MCP host plug straight
+into it.
+
+→ [docs/mcp.md](mcp.md) covers the wiring, resources, prompts, and
+troubleshooting. This document stays focused on the surface; how to
+attach it to a host lives over there.
+
+## What does not map 1:1 (and that's fine)
+
+- **Interactive commands** (`init`, `reconcile`, `mcp serve`) stay
+  CLI-only. A wizard inside a tool call is the wrong shape.
+- **Long-running watchers** (`serve`) stay CLI-only. MCP tools are
+  request/response; the file watcher is a process, not a tool.
+- **Destructive commands** (`page delete`, `block delete`) accept
+  `--confirm` on the CLI and require `confirm: true` in the MCP
+  input. Without it, the tool returns
+  `{ "code": "CONFIRM_REQUIRED" }` and the operation is a no-op.
+- **Importers** (`outl import …`) stay CLI-only — they're one-time
+  migrations, not workspace ops.
+
+## Layout
+
+The CLI and shim are siblings inside `outl-cli`. Everything below
+delegates to `outl-actions`.
+
+```text
+outl-cli/
+└── src/
+    ├── main.rs              # clap entry, dispatches to commands/
+    ├── output.rs            # JSON envelope, --json flag, exit codes
+    ├── commands/
+    │   ├── page.rs
+    │   ├── block.rs
+    │   ├── daily.rs
+    │   ├── search.rs
+    │   ├── query.rs
+    │   ├── tag.rs
+    │   ├── export.rs
+    │   ├── workspace.rs
+    │   └── mcp.rs           # `outl mcp serve` shim
+    └── mcp/
+        ├── server.rs        # stdio transport
+        ├── tools.rs         # tool registry → handlers
+        ├── resources.rs     # outl:// URIs
+        └── prompts.rs       # /outl-* prompts
+```
+
+`commands/*.rs` and `mcp/tools.rs` both reach into `outl-actions`.
+No business logic lives in either layer — they format input and
+output, that's it.
+
+## Status
+
+Shipping today:
+
+- `outl init`, `outl serve`, `outl doctor`, `outl reconcile`,
+  `outl migrate-to-shared`, `outl import logseq|roam`, `outl theme`.
+- `outl` (no subcommand) opens the TUI.
+- `outl page get|create|update|delete|list|rename|render`
+- `outl block get|append|insert|update|move|delete|toggle-todo|tree`
+- `outl daily today|get|append|range`
+- `outl search "<query>" [--in=blocks|pages|all]`
+- `outl query [--tag] [--priority] [--since=Nd] [--kind] [--prop k=v]`
+- `outl backlinks page|block|embed`
+- `outl tag list|pages`
+- `outl prop set|get|list`
+- `outl export hugo|md|json`
+- `outl workspace info`
+- `outl mcp serve` — full MCP protocol surface (tools, resources,
+  prompts) over stdio.
+
+Still ahead (phase 3+):
+
+- Richer `outl query --raw='…'` DSL (today returns `INVALID_ARG`).
+- Per-page block-level property surface beyond the well-known keys
+  the `prop list` probe enumerates.
+
+The order of landing matched the order of unlocking real workflows
+(scripts → LLM agents in Claude Code → Claude Desktop → blog
+publishing pipeline).

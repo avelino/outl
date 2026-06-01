@@ -188,6 +188,22 @@ fn set_prop(
     key: &str,
     value: PropValue,
 ) -> Result<(), ActionError> {
+    set_property(workspace, hlc, node, key, Some(value))
+}
+
+/// Set (or clear, with `value = None`) a property on `node`.
+///
+/// One-liner over `Op::SetProp` exposed so every client can write
+/// properties without reaching into `outl-core::Op` directly. The
+/// `set_prop` private alias above keeps backward-compat with the
+/// internal call sites in this module.
+pub fn set_property(
+    workspace: &mut Workspace,
+    hlc: &HlcGenerator,
+    node: NodeId,
+    key: &str,
+    value: Option<PropValue>,
+) -> Result<(), ActionError> {
     let ts = hlc.next();
     workspace.apply(LogOp {
         ts,
@@ -195,11 +211,41 @@ fn set_prop(
         op: Op::SetProp {
             node,
             key: key.to_string(),
-            value: Some(value),
+            value,
             old_value: None,
         },
     })?;
     Ok(())
+}
+
+/// Read a property as a plain `String`. Returns `None` when the
+/// property is unset or is a structured value the caller would have
+/// to unwrap (`List`); in those cases, read `workspace.tree().property`
+/// directly.
+///
+/// Convenience for the export / display surfaces that just want the
+/// raw text of `icon::`, `title::`, single-tag `tags::`, etc.
+pub fn read_text_prop(workspace: &Workspace, node: NodeId, key: &str) -> Option<String> {
+    match workspace.tree().property(node, key)? {
+        PropValue::Text(s) | PropValue::PageRef(s) | PropValue::Tag(s) => Some(s.clone()),
+        PropValue::List(items) => {
+            let joined = items
+                .iter()
+                .filter_map(|v| match v {
+                    PropValue::Text(s) | PropValue::PageRef(s) | PropValue::Tag(s) => {
+                        Some(s.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            if joined.is_empty() {
+                None
+            } else {
+                Some(joined)
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
