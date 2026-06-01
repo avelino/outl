@@ -14,6 +14,23 @@ and see their notes, not a help screen.
 The TUI library is reused via `use outl_tui;` (the crate exposes both
 a library and a binary). Don't fork the TUI logic into the CLI.
 
+## Workspace resolution
+
+Every command resolves its workspace path through `resolve_path` in
+`main.rs`, in precedence order: subcommand positional > `--workspace`
+flag > `OUTL_WORKSPACE` env var > current dir. The env var is wired
+through clap's `env` feature on the global `workspace` arg, so the
+flag transparently wins over the env.
+
+`outl init` uses `resolve_init_path` instead: it accepts a positional
+or an explicit `--workspace`, but **ignores `OUTL_WORKSPACE`** so a
+stray env var never scaffolds a workspace by accident. That distinction
+needs the value's origin, which `main` reads via
+`ArgMatches::value_source` (a `CommandLine` source means the flag was
+passed; `EnvVariable` means it came from the env) — hence `main` parses
+through `Cli::command().get_matches()` + `from_arg_matches` rather than
+plain `Cli::parse()`.
+
 ## Commands
 
 ### Lifecycle / one-shot

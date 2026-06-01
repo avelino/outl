@@ -98,6 +98,27 @@ either a pretty-printed payload or, for markdown-first tools
 `outl_daily_get`), the raw `.md` string. Clients should read
 `structuredContent.data` for typed access.
 
+## Selecting the workspace
+
+Every command that touches a workspace resolves its path the same way.
+In precedence order (first match wins):
+
+1. The subcommand's positional `path` argument, when it has one
+   (`outl tui ~/notes`, `outl serve ~/notes`).
+2. The global `--workspace`/`-w <DIR>` flag.
+3. The `OUTL_WORKSPACE` environment variable.
+4. The current working directory.
+
+So `OUTL_WORKSPACE=~/notes outl page list` and
+`outl --workspace ~/notes page list` are equivalent, and an explicit
+flag always overrides the env var.
+
+**Exception — `outl init`.** Scaffolding a workspace requires an
+explicit target: a positional path or `--workspace`. `init`
+deliberately ignores `OUTL_WORKSPACE` (and the cwd) so an env var
+left in your shell can never cause it to create a workspace where you
+didn't mean to.
+
 ## Commands by domain
 
 The CLI column is what you type at the terminal. The MCP tool

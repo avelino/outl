@@ -13,7 +13,8 @@
 //!   that lets Claude Desktop reach the same handlers over stdio.
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::parser::ValueSource;
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 mod cmd;
@@ -37,8 +38,15 @@ mod ws;
 struct Cli {
     /// Workspace path. Used by every subcommand that needs one;
     /// defaults to the current directory. Subcommand-level positional
-    /// path, when provided, takes precedence.
-    #[arg(short = 'w', long, global = true, value_name = "DIR")]
+    /// path, when provided, takes precedence. Reads `OUTL_WORKSPACE`
+    /// when the flag is absent (the flag still wins over the env var).
+    #[arg(
+        short = 'w',
+        long,
+        global = true,
+        env = "OUTL_WORKSPACE",
+        value_name = "DIR"
+    )]
     workspace: Option<PathBuf>,
 
     /// TUI theme preset (default-dark, light, dracula, solarized-dark,
@@ -182,7 +190,13 @@ pub enum McpSubcommand {
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    // Parse via `ArgMatches` so we can ask where `--workspace` came from.
+    // `outl init` accepts the flag/positional but must ignore the
+    // `OUTL_WORKSPACE` env var, and the only way to tell a flag value
+    // apart from an env value is `ArgMatches::value_source`.
+    let matches = Cli::command().get_matches();
+    let workspace_from_cli = matches.value_source("workspace") == Some(ValueSource::CommandLine);
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
 
     // The TUI installs its own silent subscriber that captures
     // dependency logs (Steel, wasmtime, ...) into
@@ -208,7 +222,7 @@ fn main() -> Result<()> {
             outl_tui::run_with_theme_override(&p, cli.theme.as_deref())
         }
         Some(Command::Init { path }) => {
-            let p = resolve_init_path(cli.workspace.as_ref(), path.as_ref())?;
+            let p = resolve_init_path(cli.workspace.as_ref(), path.as_ref(), workspace_from_cli)?;
             cmd::init::run(&p)
         }
         Some(Command::Serve { path, once }) => {
@@ -337,15 +351,29 @@ fn ensure_workspace_or_prompt(path: &Path) -> Result<()> {
     }
 }
 
-/// Same as [`resolve_path`] but errors out when neither flag nor positional
-/// was given (init refuses to create a workspace at the cwd by accident).
-fn resolve_init_path(global: Option<&PathBuf>, local: Option<&PathBuf>) -> Result<PathBuf> {
-    match local.or(global) {
-        Some(p) => Ok(p.clone()),
-        None => Err(anyhow::anyhow!(
-            "`outl init` needs an explicit path: pass a positional argument or `--workspace <DIR>`"
-        )),
+/// Same as [`resolve_path`] but errors out when neither the positional
+/// nor an explicit `--workspace` flag was given (init refuses to create a
+/// workspace at the cwd by accident). The `OUTL_WORKSPACE` env var is
+/// deliberately ignored here — `global_from_cli` is false when `global`
+/// was filled from the environment — so `init` never creates a workspace
+/// at a directory inherited from the shell.
+fn resolve_init_path(
+    global: Option<&PathBuf>,
+    local: Option<&PathBuf>,
+    global_from_cli: bool,
+) -> Result<PathBuf> {
+    if let Some(p) = local {
+        return Ok(p.clone());
     }
+    if global_from_cli {
+        if let Some(p) = global {
+            return Ok(p.clone());
+        }
+    }
+    Err(anyhow::anyhow!(
+        "`outl init` needs an explicit path: pass a positional argument or `--workspace <DIR>` \
+         (OUTL_WORKSPACE is ignored for init)"
+    ))
 }
 
 fn init_tracing(verbosity: u8) {

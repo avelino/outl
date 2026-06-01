@@ -241,3 +241,122 @@ fn workspace_info_returns_summary() {
     assert!(info["data"]["actor"].is_string());
     assert!(info["data"]["ops"].is_number());
 }
+
+// --- OUTL_WORKSPACE env var resolution -------------------------------
+//
+// Precedence: positional > `--workspace` flag > `OUTL_WORKSPACE` env >
+// cwd. `init` is the one exception — it ignores the env var so it never
+// scaffolds a workspace at a directory inherited from the shell.
+
+/// With no flag and no positional, the env var alone targets the
+/// workspace.
+#[test]
+fn workspace_from_env() {
+    let ws = init_workspace();
+    let env = ok(outl()
+        .env("OUTL_WORKSPACE", ws.path())
+        .args(["page", "create", "from-env", "--title", "FromEnv", "--json"])
+        .output()
+        .unwrap());
+    assert_eq!(env["ok"], true);
+    assert_eq!(env["data"]["meta"]["slug"], "from-env");
+
+    // And the page is readable from the same env-resolved workspace.
+    let got = ok(outl()
+        .env("OUTL_WORKSPACE", ws.path())
+        .args(["page", "get", "from-env", "--json"])
+        .output()
+        .unwrap());
+    assert_eq!(got["data"]["meta"]["title"], "FromEnv");
+}
+
+/// The `--workspace` flag wins over `OUTL_WORKSPACE`: the page lands in
+/// the flag's workspace, and the env's workspace stays empty.
+#[test]
+fn flag_beats_env() {
+    let flag_ws = init_workspace();
+    let env_ws = init_workspace();
+
+    let created = ok(outl()
+        .env("OUTL_WORKSPACE", env_ws.path())
+        .args(["--workspace"])
+        .arg(flag_ws.path())
+        .args([
+            "page", "create", "flagwins", "--title", "FlagWins", "--json",
+        ])
+        .output()
+        .unwrap());
+    assert_eq!(created["ok"], true);
+
+    // Present in the flag workspace...
+    let in_flag = ok(outl()
+        .args(["--workspace"])
+        .arg(flag_ws.path())
+        .args(["page", "get", "flagwins", "--json"])
+        .output()
+        .unwrap());
+    assert_eq!(in_flag["data"]["meta"]["slug"], "flagwins");
+
+    // ...and absent from the env workspace.
+    let in_env = outl()
+        .args(["--workspace"])
+        .arg(env_ws.path())
+        .args(["page", "get", "flagwins", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        !in_env.status.success(),
+        "page must not exist in env workspace"
+    );
+}
+
+/// `init` deliberately ignores `OUTL_WORKSPACE`: with the env set but no
+/// positional/flag, it must refuse rather than scaffold at the env path.
+#[test]
+fn init_ignores_env() {
+    let dir = TempDir::new().unwrap();
+    let out = outl()
+        .env("OUTL_WORKSPACE", dir.path())
+        .arg("init")
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "init must fail when only the env var is set"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("needs an explicit path"),
+        "unexpected stderr: {stderr}"
+    );
+    // No workspace layout was created at the env path.
+    assert!(!dir.path().join("pages").exists());
+}
+
+/// `init --workspace <dir>` works even with the env set and the flag
+/// placed *after* the subcommand — covers `value_source` correctly
+/// reporting `CommandLine` for the global arg.
+#[test]
+fn init_with_flag_after_subcommand_beats_env() {
+    let env_dir = TempDir::new().unwrap();
+    let target = TempDir::new().unwrap();
+    let status = outl()
+        .env("OUTL_WORKSPACE", env_dir.path())
+        .arg("init")
+        .args(["--workspace"])
+        .arg(target.path())
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "init with explicit --workspace must succeed"
+    );
+    assert!(
+        target.path().join("pages").exists(),
+        "init must scaffold the flag path"
+    );
+    assert!(
+        !env_dir.path().join("pages").exists(),
+        "env path must stay untouched"
+    );
+}
