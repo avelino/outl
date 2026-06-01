@@ -29,6 +29,14 @@ impl MemoryStorage {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Snapshot the op log sorted by HLC. Used by every read path so
+    /// `append_op` can stay O(1) — see the rationale on `append_op`.
+    fn sorted_ops(&self) -> Vec<LogOp> {
+        let mut out = self.ops.clone();
+        out.sort_by_key(|o| o.ts);
+        out
+    }
 }
 
 fn op_touches_node(op: &Op, id: NodeId) -> bool {
@@ -42,31 +50,42 @@ fn op_touches_node(op: &Op, id: NodeId) -> bool {
 
 impl Storage for MemoryStorage {
     fn append_op(&mut self, op: &LogOp) -> Result<(), StorageError> {
+        // Append-only — keep `append_op` O(1). Total HLC order is
+        // restored lazily by `sorted_ops()` in the read paths so a
+        // tight loop of `append_op`s doesn't pay an O(n log n) sort
+        // per call (the historical variant did, and any larger test
+        // log instantly hit O(n² log n)).
         self.ops.push(op.clone());
-        // Keep total order so `all_ops` / `ops_since` don't depend on
-        // insertion order. Cost is tolerable: tests use small logs.
-        self.ops.sort_by_key(|o| o.ts);
         Ok(())
     }
 
     fn ops_since(&self, ts: Hlc) -> Result<Vec<LogOp>, StorageError> {
-        Ok(self.ops.iter().filter(|o| o.ts > ts).cloned().collect())
+        Ok(self
+            .sorted_ops()
+            .into_iter()
+            .filter(|o| o.ts > ts)
+            .collect())
     }
 
     fn ops_for_node(&self, id: NodeId) -> Result<Vec<LogOp>, StorageError> {
         Ok(self
-            .ops
-            .iter()
+            .sorted_ops()
+            .into_iter()
             .filter(|o| op_touches_node(&o.op, id))
-            .cloned()
             .collect())
     }
 
     fn ops_for_actor(&self, id: ActorId) -> Result<Vec<LogOp>, StorageError> {
-        Ok(self.ops.iter().filter(|o| o.actor == id).cloned().collect())
+        Ok(self
+            .sorted_ops()
+            .into_iter()
+            .filter(|o| o.actor == id)
+            .collect())
     }
 
     fn last_ts_per_actor(&self) -> Result<HashMap<ActorId, Hlc>, StorageError> {
+        // No need to sort here — `last_ts_per_actor` only reads max
+        // per actor, which is order-independent.
         let mut out: HashMap<ActorId, Hlc> = HashMap::new();
         for op in &self.ops {
             out.entry(op.actor)
@@ -81,7 +100,7 @@ impl Storage for MemoryStorage {
     }
 
     fn all_ops(&self) -> Result<Vec<LogOp>, StorageError> {
-        Ok(self.ops.clone())
+        Ok(self.sorted_ops())
     }
 
     fn save_snapshot(&mut self, snapshot: &Snapshot) -> Result<(), StorageError> {

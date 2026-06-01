@@ -88,16 +88,28 @@ the in-memory test double.
 ### Migration from 0.4.x
 
 If your workspace was created with 0.4.x and you have data in
-`<root>/.outl/log.db`:
+`<root>/.outl/log.db`, the migration is a strict three-step
+sequence. 0.5.x cannot read SQLite and 0.4.1 is the last release
+that shipped `outl migrate-to-shared` (which this PR removed):
 
-- **Local-only workspace (no `ops/` yet):** nothing in 0.5.0 can
-  read `log.db`. Use 0.4.1 once with `outl migrate-to-shared <root>`
-  to copy ops into `ops/ops-<actor>.jsonl`, then upgrade to 0.5.0.
-- **Mixed workspace (both `log.db` and `ops/`):** the JSONL files
-  are the truth from 0.5.0 onwards. Any ops left only in `log.db`
-  need the same `outl migrate-to-shared` step before upgrading.
-- After validating the JSONL side: delete `<root>/.outl/log.db*`
-  yourself. 0.5.0 ignores it.
+```bash
+# 1. Pin 0.4.1 (last release with migrate-to-shared)
+cargo install outl-cli --version 0.4.1 --locked
+
+# 2. Run the one-shot migration (idempotent, leaves log.db intact)
+outl migrate-to-shared <workspace>
+
+# 3. Confirm ops/ops-<actor>.jsonl grew, then upgrade
+cargo install outl-cli --version 0.5.1 --locked
+
+# 4. Once you've verified peers see your data, delete log.db yourself
+rm <workspace>/.outl/log.db <workspace>/.outl/log.db-shm <workspace>/.outl/log.db-wal
+```
+
+If you already had a mixed `log.db + ops/` workspace under 0.4.x,
+step 2 is still required — `migrate-to-shared` is idempotent (HLC
+dedup) and any ops that only ever made it into SQLite move over
+on this run. After step 3, 0.5.x ignores `log.db` entirely.
 
 ### Removed
 

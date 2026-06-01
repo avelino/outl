@@ -76,6 +76,13 @@ pub fn run_with_theme_override(path: &Path, theme_override: Option<&str>) -> Res
     // - `_actor_lock` is the exclusive per-actor write flock on
     //   `<root>/ops/.lock-<actor>` and keeps another `outl` from
     //   stealing this process's actor mid-session.
+    //
+    // The underscore prefix only silences the unused-binding lint —
+    // both are RAII guards, dropped at the end of this function. If
+    // a future refactor moves `event_loop` (or anything else that
+    // mutates the workspace) into a different function, the locks
+    // have to move with it. `open_workspace`'s doc spells out the
+    // ownership contract.
     let (workspace, actor, cfg, _lock, _actor_lock) = open_workspace(&workspace_root)?;
 
     // No boot-time `apply_all_pages_md` here. The op log remains the
@@ -193,6 +200,20 @@ fn resolve_theme(cli_override: Option<&str>, cfg: &toml::Value) -> Theme {
     theme::default_theme()
 }
 
+/// Open the workspace at `root` and return everything the TUI needs
+/// to run for the rest of its lifetime.
+///
+/// **Lock ownership is on the caller.** The returned tuple's last
+/// two fields are RAII guards (`WorkspaceLock` is shared,
+/// `ActorWriteLock` is exclusive per actor). They must outlive every
+/// write against the workspace — that is, the entire TUI session.
+/// In practice that means binding them in
+/// [`run_with_theme_override`]'s top scope so they drop after the
+/// event loop returns. **Don't** pass the workspace into another
+/// function without forwarding the locks, and **don't** rebind the
+/// guards in a tighter scope.
+///
+/// Returns `(workspace, actor, cfg, workspace_lock, actor_write_lock)`.
 fn open_workspace(
     root: &Path,
 ) -> Result<(
@@ -241,31 +262,16 @@ fn open_workspace(
         );
     }
 
-    let storage = open_storage(root, actor, &cfg)?;
+    // JsonlStorage is the only persistent backend (see CHANGELOG
+    // 0.5.0). The directory is created above because sync transports
+    // sometimes garbage-collect empty dirs between runs. Not named
+    // `.ops/` because iCloud skips dotted paths.
+    let storage: Box<dyn Storage> = Box::new(
+        JsonlStorage::open(ops_dir.clone(), actor)
+            .with_context(|| format!("opening jsonl storage at {}", ops_dir.display()))?,
+    );
     let ws = Workspace::open_with_storage(actor, storage, Some(root.to_path_buf()))?;
     Ok((ws, actor, cfg, lock, actor_lock))
-}
-
-/// Open the workspace's op log.
-///
-/// Storage is always [`JsonlStorage`] rooted at `<root>/ops/`, one
-/// `ops-<actor>.jsonl` file per device. Cross-device sync is the
-/// responsibility of whatever filesystem-level transport the user
-/// chose (iCloud Drive, Syncthing, shared NFS) — the directory is
-/// created on open if missing because syncing platforms sometimes
-/// garbage-collect empty dirs. Not named `.ops/` because iCloud
-/// skips dotted paths.
-///
-/// `cfg` used to drive a `[workspace].storage` switch; the field is
-/// now a no-op kept for backward-compat with older configs that
-/// declared `storage = "jsonl"` or `"sqlite"`. Both paths land here.
-fn open_storage(root: &Path, actor: ActorId, _cfg: &toml::Value) -> Result<Box<dyn Storage>> {
-    let ops_dir = root.join("ops");
-    fs::create_dir_all(&ops_dir)
-        .with_context(|| format!("creating ops dir at {}", ops_dir.display()))?;
-    let storage = JsonlStorage::open(ops_dir, actor)
-        .with_context(|| format!("opening jsonl storage at {}", root.display()))?;
-    Ok(Box::new(storage))
 }
 
 fn event_loop(

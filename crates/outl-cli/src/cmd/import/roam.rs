@@ -39,7 +39,6 @@
 use super::{parse_journal_date, write_page_md, ImportReport, ResolvedUid, UidIndex};
 use crate::workspace_layout::Paths;
 use anyhow::{Context, Result};
-use outl_md::reconcile::reconcile_md;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
@@ -86,7 +85,7 @@ pub fn import(src: &Path, paths: &Paths) -> Result<ImportReport> {
         emit_page(page, &uid_index, paths, &mut report)?;
     }
 
-    seed_sidecars(paths)?;
+    super::seed_sidecars(paths)?;
     Ok(report)
 }
 
@@ -238,43 +237,6 @@ fn rewrite_inline(
         out.push(c);
     }
     out
-}
-
-/// Seed sidecars by running reconcile on every imported file.
-fn seed_sidecars(paths: &Paths) -> Result<()> {
-    use outl_core::hlc::HlcGenerator;
-    use outl_core::storage::JsonlStorage;
-    use outl_core::workspace::Workspace;
-
-    let cfg = crate::workspace_layout::read_config(paths)?;
-    let actor = cfg.actor()?;
-    std::fs::create_dir_all(&paths.ops)?;
-    let storage = JsonlStorage::open(paths.ops.clone(), actor)?;
-    let mut ws = Workspace::open_with_storage(actor, Box::new(storage), Some(paths.root.clone()))?;
-    let hlc = HlcGenerator::new(actor);
-
-    for dir in [&paths.pages, &paths.journals] {
-        for entry in walkdir::WalkDir::new(dir).max_depth(1) {
-            let Ok(entry) = entry else {
-                continue;
-            };
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let p = entry.path();
-            if p.extension().and_then(|x| x.to_str()) != Some("md") {
-                continue;
-            }
-            if p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with('.'))
-            {
-                continue;
-            }
-            let _ = reconcile_md(&mut ws, &hlc, p, Some(&paths.orphans));
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 //! `outl serve` — watch the workspace and reconcile external edits.
 
 use crate::sync_engine::{reconcile_dir, reconcile_md, ReconcileReport};
-use crate::workspace_layout::{is_workspace_md, read_config, Paths};
+use crate::workspace_layout::{ensure_ops_dir, is_workspace_md, read_config, Paths};
 use anyhow::{Context, Result};
 use notify::RecursiveMode;
 use notify_debouncer_full::new_debouncer;
@@ -18,17 +18,36 @@ use tracing::{error, info};
 /// When `once` is true, reconciles every `.md` once and returns —
 /// useful for smoke tests and scripting. Otherwise installs a 200 ms
 /// debounced file watcher and blocks until interrupted.
+///
+/// Lock policy mirrors `ws::open` and `outl-tui::open_workspace`:
+/// shared workspace lock plus a per-actor write lock resolved through
+/// [`outl_core::resolve_write_actor`]. A `serve` running alongside a
+/// TUI/MCP server gets an ephemeral actor and writes to its own
+/// `ops-<ephemeral>.jsonl`. Without this, both processes would race
+/// on `ops-<config>.jsonl` — the very bug 0.5.1 was meant to close.
 pub fn run(path: &Path, once: bool) -> Result<()> {
     let paths = Paths::at(path.to_path_buf());
     let cfg =
         read_config(&paths).with_context(|| "workspace config missing — run `outl init` first")?;
-    let actor = cfg.actor()?;
-    // Hold the workspace lock for the whole watcher session. Drop at
-    // scope end releases automatically.
-    let _lock = outl_core::WorkspaceLock::acquire(&paths.root)
-        .with_context(|| "another outl process is attached to this workspace")?;
-    std::fs::create_dir_all(&paths.ops)
-        .with_context(|| format!("creating ops dir at {}", paths.ops.display()))?;
+    let config_actor = cfg.actor()?;
+    // Shared workspace lock — coexists with every other well-behaved
+    // `outl` process.
+    let _lock = outl_core::WorkspaceLock::acquire(&paths.root).with_context(|| {
+        format!(
+            "could not acquire workspace lock at {}",
+            paths.root.display()
+        )
+    })?;
+    ensure_ops_dir(&paths)?;
+    // Exclusive per-actor write lock. Falls back to ephemeral when
+    // another process already owns the config actor.
+    let (_actor_lock, actor) = outl_core::resolve_write_actor(&paths.ops, config_actor)
+        .with_context(|| format!("acquiring per-actor write lock at {}", paths.ops.display()))?;
+    if actor != config_actor {
+        info!(
+            "another outl process owns the config actor {config_actor}; serve writes under ephemeral actor {actor}"
+        );
+    }
     let storage = JsonlStorage::open(paths.ops.clone(), actor)?;
     let mut ws = Workspace::open_with_storage(actor, Box::new(storage), Some(paths.root.clone()))?;
     let hlc = HlcGenerator::new(actor);

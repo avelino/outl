@@ -22,7 +22,6 @@
 use super::{parse_journal_date, write_page_md, ImportReport, ResolvedUid, UidIndex};
 use crate::workspace_layout::Paths;
 use anyhow::{Context, Result};
-use outl_md::reconcile::reconcile_md;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -81,7 +80,7 @@ pub fn import(src: &Path, paths: &Paths) -> Result<ImportReport> {
     }
 
     // Reconcile each imported file so sidecars get fresh IDs.
-    seed_sidecars(paths)?;
+    super::seed_sidecars(paths)?;
 
     Ok(report)
 }
@@ -244,45 +243,6 @@ fn logseq_page_name(path: &Path, is_journal: bool) -> String {
         return stem;
     }
     stem.replace("%2F", "/").replace("___", " ")
-}
-
-/// Run `reconcile_md` on every imported file so the sidecar JSON is
-/// stamped with stable IDs. Without this, the user has to open the
-/// TUI once to seed sidecars — which works but is surprising.
-fn seed_sidecars(paths: &Paths) -> Result<()> {
-    use outl_core::hlc::HlcGenerator;
-    use outl_core::storage::JsonlStorage;
-    use outl_core::workspace::Workspace;
-
-    let cfg = crate::workspace_layout::read_config(paths)?;
-    let actor = cfg.actor()?;
-    std::fs::create_dir_all(&paths.ops)?;
-    let storage = JsonlStorage::open(paths.ops.clone(), actor)?;
-    let mut ws = Workspace::open_with_storage(actor, Box::new(storage), Some(paths.root.clone()))?;
-    let hlc = HlcGenerator::new(actor);
-
-    for dir in [&paths.pages, &paths.journals] {
-        for entry in walkdir::WalkDir::new(dir).max_depth(1) {
-            let Ok(entry) = entry else {
-                continue;
-            };
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let p = entry.path();
-            if p.extension().and_then(|x| x.to_str()) != Some("md") {
-                continue;
-            }
-            if p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with('.'))
-            {
-                continue;
-            }
-            let _ = reconcile_md(&mut ws, &hlc, p, Some(&paths.orphans));
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

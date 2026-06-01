@@ -14,12 +14,12 @@ pub fn run(path: &Path) -> Result<()> {
     init(&paths)?;
 
     // Touch the per-actor JSONL so the workspace has a writable
-    // storage from the first op onwards.
+    // storage from the first op onwards. We just want the file on
+    // disk; the handle is closed immediately.
     let cfg = read_config(&paths)?;
     let actor = cfg.actor()?;
-    let _storage = JsonlStorage::open(paths.ops.clone(), actor)
+    let _ = JsonlStorage::open(paths.ops.clone(), actor)
         .with_context(|| format!("opening JSONL log at {}", paths.ops.display()))?;
-    drop(_storage);
 
     // Seed today's journal if missing.
     let date = today();

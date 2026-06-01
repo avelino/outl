@@ -155,6 +155,20 @@ pub fn init(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
+/// Ensure `<root>/ops/` exists.
+///
+/// Both `workspace_layout::init` and every workspace opener (CLI
+/// `ws::open`, TUI `open_workspace`, `outl serve`, importers) need
+/// this directory present before touching `JsonlStorage`. Sync
+/// transports (iCloud Drive, Syncthing) sometimes garbage-collect
+/// empty directories, so the openers can't assume it survived since
+/// `outl init`. Centralising the `create_dir_all` here keeps the
+/// error message uniform across surfaces.
+pub fn ensure_ops_dir(paths: &Paths) -> Result<()> {
+    fs::create_dir_all(&paths.ops)
+        .with_context(|| format!("creating ops dir at {}", paths.ops.display()))
+}
+
 /// Read the workspace config.
 pub fn read_config(paths: &Paths) -> Result<Config> {
     let s = fs::read_to_string(&paths.config)
