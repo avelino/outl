@@ -522,6 +522,32 @@ export function Journal() {
     if (updated) applyView(updated);
   }
 
+  /**
+   * Desktop Backspace-on-empty-block: delete the block and drop the
+   * caret at the end of the previous block (depth-first order), the
+   * way a plain-text editor merges an empty line upward. When there's
+   * no previous block (the empty one is first in the outline) we just
+   * delete and leave edit mode — there's nothing above to land on.
+   */
+  async function handleDeleteEmpty(id: string) {
+    const cur = view();
+    const pid = pageId();
+    if (!cur || !pid) return;
+    const flat = flatten(cur.outline);
+    const idx = flat.findIndex((b) => b.id === id);
+    const prev = idx > 0 ? flat[idx - 1] : null;
+    setEditingId(null);
+    const next = await withError(() => deleteBlock(pid, id));
+    if (!next) return;
+    applyView(next);
+    if (prev) {
+      const pb = findBlock(next.outline, prev.id);
+      // EditableTextarea.onMount parks the caret at end-of-text, so
+      // simply entering edit mode lands the cursor where we want it.
+      if (pb) startEdit(pb.id, rawTextWithTodo(pb));
+    }
+  }
+
   async function handleIndent(id: string) {
     const pid = pageId();
     if (!pid) return;
@@ -916,6 +942,7 @@ export function Journal() {
                   onCommitEdit={commitEdit}
                   onToggleTodo={handleToggleTodo}
                   onDelete={handleDelete}
+                  onDeleteEmpty={handleDeleteEmpty}
                   onIndent={handleIndent}
                   onOutdent={handleOutdent}
                   onCreateAfter={handleCreateAfter}

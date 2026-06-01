@@ -5,6 +5,7 @@ import { autoClosePair, autoDeletePair } from "../lib/autocomplete";
 import { haptic } from "../lib/haptics";
 import { rawTextWithTodo } from "../lib/outline";
 import { parkCaret } from "../lib/textarea";
+import { isDesktop } from "../lib/platform";
 import { SwipeRow } from "./SwipeRow";
 
 interface BlockRowProps {
@@ -24,6 +25,12 @@ interface BlockRowProps {
   onCommitEdit: () => void;
   onToggleTodo: (id: string) => void;
   onDelete: (id: string) => void;
+  /**
+   * Desktop-only: delete an empty block via Backspace and move focus
+   * to the end of the previous block. Distinct from `onDelete` (the
+   * swipe gesture), which deletes without re-focusing a neighbour.
+   */
+  onDeleteEmpty: (id: string) => void;
   onIndent: (id: string) => void;
   onOutdent: (id: string) => void;
   onCreateAfter: (id: string) => void;
@@ -87,6 +94,10 @@ export function BlockRow(props: BlockRowProps): JSX.Element {
             haptic(props.block.todo === null ? "success" : "medium");
             props.onToggleTodo(props.block.id);
           }}
+          onCreateAfter={() => props.onCreateAfter(props.block.id)}
+          onIndent={() => props.onIndent(props.block.id)}
+          onOutdent={() => props.onOutdent(props.block.id)}
+          onDeleteEmpty={() => props.onDeleteEmpty(props.block.id)}
           onRefClick={props.onRefClick}
           onTagClick={props.onTagClick}
           onTextareaMount={props.onTextareaMount}
@@ -113,6 +124,7 @@ export function BlockRow(props: BlockRowProps): JSX.Element {
                 onCommitEdit={props.onCommitEdit}
                 onToggleTodo={props.onToggleTodo}
                 onDelete={props.onDelete}
+                onDeleteEmpty={props.onDeleteEmpty}
                 onIndent={props.onIndent}
                 onOutdent={props.onOutdent}
                 onCreateAfter={props.onCreateAfter}
@@ -147,6 +159,10 @@ function BlockBody(props: {
   onCommitEdit: () => void;
   onToggleTodo: () => void;
   onLongPress: () => void;
+  onCreateAfter: () => void;
+  onIndent: () => void;
+  onOutdent: () => void;
+  onDeleteEmpty: () => void;
   onRefClick?: (target: string) => void;
   onTagClick?: (tag: string) => void;
   onTextareaMount?: (el: HTMLTextAreaElement) => void;
@@ -279,6 +295,10 @@ function BlockBody(props: {
             onInput={props.onDraftChange}
             onBlur={props.onCommitEdit}
             onMount={props.onTextareaMount}
+            onShiftEnter={props.onCreateAfter}
+            onIndent={props.onIndent}
+            onOutdent={props.onOutdent}
+            onBackspaceEmpty={props.onDeleteEmpty}
           />
         </Show>
       </div>
@@ -389,6 +409,13 @@ function EditableTextarea(props: {
   onInput: (v: string) => void;
   onBlur: () => void;
   onMount?: (el: HTMLTextAreaElement) => void;
+  /** Desktop-only keyboard shortcuts. No-ops on touch devices, where
+   *  these chords don't exist (block creation/indent live in the
+   *  native toolbar). See `lib/platform.ts`. */
+  onShiftEnter: () => void;
+  onIndent: () => void;
+  onOutdent: () => void;
+  onBackspaceEmpty: () => void;
 }) {
   let ref!: HTMLTextAreaElement;
   let resizeRaf = 0;
@@ -440,6 +467,42 @@ function EditableTextarea(props: {
       autocomplete="off"
       spellcheck={false}
       onKeyDown={(e) => {
+        // Desktop-only physical-keyboard shortcuts. On touch devices
+        // these chords either don't exist or are handled by the native
+        // toolbar, so we leave the textarea's default behaviour intact.
+        if (isDesktop()) {
+          const ta = e.currentTarget;
+          // Tab / Shift+Tab → indent / outdent. Always intercept so
+          // the browser never inserts a literal tab or moves focus.
+          if (e.key === "Tab") {
+            e.preventDefault();
+            if (e.shiftKey) props.onOutdent();
+            else props.onIndent();
+            return;
+          }
+          // Shift+Enter → commit current draft and create a sibling
+          // block below. Plain Enter falls through to the textarea's
+          // native newline (soft line break inside the block).
+          if (e.key === "Enter" && e.shiftKey) {
+            e.preventDefault();
+            props.onShiftEnter();
+            return;
+          }
+          // Backspace on an empty block → delete it and move the caret
+          // to the end of the previous block. Only when the block is
+          // truly empty and there's no selection; a non-empty block
+          // falls through to the pair-delete logic / native delete.
+          if (
+            e.key === "Backspace" &&
+            ta.value.length === 0 &&
+            ta.selectionStart === ta.selectionEnd
+          ) {
+            e.preventDefault();
+            props.onBackspaceEmpty();
+            return;
+          }
+        }
+
         // Backspace inside an empty `[[]]` or `(())` deletes the
         // whole pair so the user doesn't have to mash four times.
         // We do this in keydown (not input) so we can `preventDefault`
