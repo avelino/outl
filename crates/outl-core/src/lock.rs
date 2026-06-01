@@ -1,21 +1,23 @@
 //! Workspace-level coordination locks.
 //!
-//! Two distinct locks live in `<workspace>/.outl/`:
+//! Two distinct locks live under `<workspace>/`, in different
+//! subdirectories that map to their scopes:
 //!
 //! - [`WorkspaceLock`] — a **shared** advisory flock on
-//!   `.outl/.lock`. Every legit `outl` process (TUI, MCP server,
-//!   subprocess CLI, sink-outl plugin, future Tauri shell) holds
-//!   this one for the duration of its open. It only fails when the
-//!   filesystem itself can't be locked (e.g. some network mounts);
-//!   the historical "another outl process is already open" rejection
-//!   was a mistake inherited from the SQLite era. JSONL storage is
-//!   one-file-per-actor, so concurrent processes are safe as long as
-//!   each one writes to its own file — which is what
-//!   [`ActorWriteLock`] enforces.
+//!   `<workspace>/.outl/.lock`. Every legit `outl` process (TUI,
+//!   MCP server, subprocess CLI, sink-outl plugin, future Tauri
+//!   shell) holds this one for the duration of its open. It only
+//!   fails when the filesystem itself can't be locked (e.g. some
+//!   network mounts). The historical "another outl process is
+//!   already open" rejection was a mistake inherited from the
+//!   SQLite era. JSONL storage is one-file-per-actor, so concurrent
+//!   processes are safe as long as each one writes to its own file
+//!   — which is what [`ActorWriteLock`] enforces.
 //!
 //! - [`ActorWriteLock`] — an **exclusive** advisory flock on
-//!   `ops/.lock-<actor>`. Held by exactly one process at a time per
-//!   actor id. The flow:
+//!   `<workspace>/ops/.lock-<actor>`. Lives next to the JSONL files
+//!   it's gating, not under `.outl/`. Held by exactly one process
+//!   at a time per actor id. The flow:
 //!
 //!   1. Read `actor_id` from `config.toml`.
 //!   2. Try `ActorWriteLock::try_acquire(ops, config_actor)`.
@@ -106,10 +108,15 @@ impl WorkspaceLock {
         // (two writers on a single log.db would race); JSONL stores
         // writes per actor, so two `outl` processes are safe as long
         // as each one owns its own `ActorWriteLock`.
-        if file.try_lock_shared().is_err() {
+        //
+        // Preserve the underlying `io::Error` instead of wrapping the
+        // failure in a generic message. Permission denied, unsupported
+        // locking on the mount, ENOLCK from a full kernel table — the
+        // root cause matters for `outl doctor` and bug reports.
+        if let Err(e) = file.try_lock_shared() {
             return Err(LockError::Io {
                 path: lock_path.clone(),
-                source: std::io::Error::other("could not acquire shared flock on .outl/.lock"),
+                source: e.into(),
             });
         }
         Ok(Self {
@@ -184,8 +191,23 @@ impl ActorWriteLock {
                 path: lock_path.clone(),
                 source: e,
             })?;
-        if file.try_lock_exclusive().is_err() {
-            return Err(LockError::AlreadyHeld(lock_path));
+        // `try_lock_exclusive` failing on `WouldBlock` means another
+        // process owns this actor — the expected, recoverable case
+        // that `resolve_write_actor` reacts to. Any other error
+        // (permission denied, ENOLCK, unsupported locking on the
+        // mount, ...) must NOT pretend to be "already held": the
+        // ephemeral fallback would then loop trying to acquire a
+        // lock the filesystem can't grant. Surface those as
+        // [`LockError::Io`] with the original source.
+        if let Err(e) = file.try_lock_exclusive() {
+            return Err(if e.kind() == std::io::ErrorKind::WouldBlock {
+                LockError::AlreadyHeld(lock_path)
+            } else {
+                LockError::Io {
+                    path: lock_path,
+                    source: e,
+                }
+            });
         }
         Ok(Self {
             file,

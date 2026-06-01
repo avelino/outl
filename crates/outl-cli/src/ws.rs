@@ -14,7 +14,7 @@ use outl_core::workspace::Workspace;
 use outl_core::{resolve_write_actor, ActorWriteLock, WorkspaceLock};
 
 use crate::output::{codes, ApiError};
-use crate::workspace_layout::{read_config, Paths};
+use crate::workspace_layout::{ensure_ops_dir, read_config, Paths};
 
 /// Per-command runtime context. The shared workspace lock plus an
 /// exclusive per-actor write lock are held for the whole command —
@@ -85,12 +85,7 @@ pub fn open(path: &Path) -> Result<WsCtx, ApiError> {
     // Shared workspace lock first — every well-behaved opener takes one.
     let lock = WorkspaceLock::acquire(&paths.root).map_err(ApiError::internal)?;
 
-    std::fs::create_dir_all(&paths.ops).map_err(|e| {
-        ApiError::new(
-            codes::INTERNAL,
-            format!("creating ops dir at {}: {e}", paths.ops.display()),
-        )
-    })?;
+    ensure_ops_dir(&paths).map_err(ApiError::internal)?;
 
     // Exclusive per-actor write lock: config actor if available,
     // ephemeral otherwise. This is the contract that lets multiple

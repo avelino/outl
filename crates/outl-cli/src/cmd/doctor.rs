@@ -154,9 +154,16 @@ fn collect_internal(path: &Path, probe_lock: bool) -> Result<DoctorReport, ApiEr
     })?;
     let mut b = Builder::new(paths.root.display().to_string(), cfg.workspace.actor_id);
 
-    // 1. Op log readability — `JsonlStorage::open` parses every
-    //    `ops-*.jsonl` and logs any unreadable lines via `tracing`.
-    //    Surface failure here as an Error finding.
+    // 1. Op log readability. `JsonlStorage::open` already skips
+    //    malformed lines and emits them through `tracing::warn!`
+    //    (intentional, so a single bad tail line in `ops-*.jsonl`
+    //    can't lock the user out of the workspace). We only surface
+    //    here the harder failures the open itself returns: missing
+    //    `ops/` directory, permission denied, unreadable header,
+    //    storage backend errors. Parse warnings live in the
+    //    `tracing` sink the caller chose. Future enhancement: have
+    //    `JsonlStorage::open` expose a `parse_warnings()` accessor
+    //    so doctor can attach them to the report.
     let known_node_ids: HashSet<outl_core::id::NodeId> =
         match JsonlStorage::open(paths.ops.clone(), actor) {
             Ok(storage) => match storage.all_ops() {
