@@ -416,10 +416,6 @@ fn outdent_block(
     let page = parse_node_id(&page_id)?;
     let node = parse_node_id(&id)?;
     finish_in_page(&state, page, |ws| match outdent(ws, &state.hlc, node) {
-        // A top-level block sits directly under its page node and has
-        // nowhere left to outdent to. Treat it as a silent no-op — the
-        // same behaviour the TUI gets from `outdent_at_path` returning
-        // `None` — instead of surfacing an error toast on a common gesture.
         Err(ActionError::AlreadyAtRoot(_)) => Ok(()),
         other => other,
     })
