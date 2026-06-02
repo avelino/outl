@@ -34,3 +34,4 @@
 ## Project
 
 * [Roadmap](roadmap.md)
+* [Contributing & code review](contributing.md)
