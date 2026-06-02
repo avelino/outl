@@ -4,7 +4,7 @@ import { MarkdownInline } from "../lib/markdown";
 import { autoClosePair, autoDeletePair } from "../lib/autocomplete";
 import { haptic } from "../lib/haptics";
 import { rawTextWithTodo } from "../lib/outline";
-import { looksLikeOutline } from "../lib/paste";
+import { looksLikeOutline, utf16OffsetToCharOffset } from "../lib/paste";
 import { parkCaret } from "../lib/textarea";
 import { SwipeRow } from "./SwipeRow";
 
@@ -516,7 +516,12 @@ function EditableTextarea(props: {
         const text = e.clipboardData?.getData("text/plain") ?? "";
         if (!looksLikeOutline(text)) return;
         e.preventDefault();
-        const caret = e.currentTarget.selectionStart ?? 0;
+        // `selectionStart` is a UTF-16 code unit offset; the Rust
+        // backend wants a codepoint count. Conversion is a no-op
+        // for BMP text but matters when the host block contains
+        // emoji or other supplementary-plane characters.
+        const ta = e.currentTarget;
+        const caret = utf16OffsetToCharOffset(ta.value, ta.selectionStart ?? 0);
         props.onPaste(caret, text);
       }}
       onBlur={props.onBlur}

@@ -37,6 +37,44 @@
 //! are re-applied to the freshly minted node as `Op::SetProp` via
 //! [`crate::page::set_property`]. They converge across devices the
 //! same way every other op does.
+//!
+//! ## Adding a new external source
+//!
+//! When the user shows up wanting to paste from a tool we don't
+//! cover yet (Obsidian, RemNote, Bear, Apple Notes, etc.), extend
+//! [`normalize::normalize_external_syntax`]. The pipeline runs in a
+//! fixed order and the order matters — follow these rules:
+//!
+//! 1. **Specific conversions first.** Map every concrete external
+//!    token to its outl equivalent BEFORE the generic-strip step.
+//!    Otherwise the catch-all stripper deletes the token before the
+//!    converter has a chance to see it (this is why `{{[[TODO]]}}`
+//!    has its own `replace` call ahead of the `{{…}}` strip).
+//! 2. **Line-level transforms own indent.** When a converter touches
+//!    a bullet line (`- [ ]` → `- TODO`), do it after the indent
+//!    normaliser so the regex doesn't have to chase 2/4-space drift.
+//! 3. **Strip is last.** Anything still wrapped in `{{…}}` /
+//!    `^^…^^` after the conversions is unknown to outl and gets
+//!    deleted. Use the allowlist callback in `strip_pair` (see how
+//!    `{{query: …}}` is preserved) when the wrapper happens to be
+//!    outl-native — don't add a new strip helper.
+//! 4. **No new dependencies for parsing.** The pipeline is plain
+//!    `str` manipulation on purpose: `regex` would pull a 40+kb dep
+//!    into a crate that runs on the mobile binary. Manual scans
+//!    (see `rewrite_roam_embed`) are the pattern.
+//! 5. **Test the conversion AND the order-of-operations.** Every new
+//!    entry in the table above gets a unit test in
+//!    `normalize.rs::tests`, plus one assertion that the conversion
+//!    runs before the generic strip (mirror the
+//!    `known_token_wins_over_generic_strip` test).
+//! 6. **Update the docs.** Add a row to the table above and to
+//!    `docs/markdown-format.md` so users know what we silently
+//!    rewrite on paste.
+//! 7. **Mirror the heuristic in JS** when the change affects
+//!    bullet detection. `looks_like_outline` lives both in this
+//!    crate and in `crates/outl-mobile/src/lib/paste.ts`; the JS
+//!    copy gates the Tauri round-trip on the client. They must
+//!    stay in lockstep.
 
 mod anchors;
 mod normalize;
@@ -135,6 +173,15 @@ pub fn paste_markdown(
 }
 
 /// True when at least one non-blank line starts with `- ` or is just `-`.
+///
+/// This is the canonical detector that gates the tree-conversion
+/// pipeline. Mobile mirrors it in TypeScript
+/// (`crates/outl-mobile/src/lib/paste.ts::looksLikeOutline`) so the
+/// client can avoid a Tauri round-trip when the user pastes plain
+/// text. The two implementations **must stay in lockstep** — if you
+/// extend this to recognise `*` bullets, ordered lists, or anything
+/// else, update the JS mirror in the same PR and add the case to
+/// `paste.test.ts`.
 fn looks_like_outline(s: &str) -> bool {
     s.lines().any(|line| {
         let trimmed = line.trim_start();

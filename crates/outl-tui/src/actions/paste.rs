@@ -23,7 +23,7 @@ use outl_actions::{children_of, find_by_slug, paste_markdown, PasteAnchor};
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
 
-use crate::state::{App, Mode};
+use crate::state::{App, EditTarget, Mode};
 
 impl App {
     /// Apply a bracketed-paste payload to the workspace.
@@ -47,6 +47,22 @@ impl App {
         if text.is_empty() {
             return;
         }
+        // `commit_insert` writes the in-flight buffer back into the
+        // AST and — when the buffer changed against the current page
+        // — already calls `save()` (render → write → reconcile)
+        // internally. Calling `save()` again afterwards would pay the
+        // I/O + reconcile a second time for nothing. Track whether
+        // the upcoming `commit_insert` will save the current page so
+        // we skip the redundant call below.
+        let commit_will_save_current = match &self.mode {
+            Mode::Insert {
+                target,
+                buffer,
+                original_text,
+                ..
+            } => matches!(target, EditTarget::CurrentPage) && buffer.as_string() != *original_text,
+            _ => false,
+        };
         if matches!(self.mode, Mode::Insert { .. }) {
             self.commit_insert();
         }
@@ -56,7 +72,9 @@ impl App {
         // imported externally that the orphan scanner hasn't picked
         // up yet) leaves the tree with fewer children than the AST
         // shows, and the path walk dead-ends.
-        self.save();
+        if !commit_will_save_current {
+            self.save();
+        }
 
         let slug = self.current_slug();
         let Some(path) = outl_md::outline_ops::path_for_index(&self.page.blocks, self.selected)

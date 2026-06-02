@@ -299,12 +299,28 @@ fn extract_block_ref(s: &str) -> Option<&str> {
 
 /// True for lines that look like `id:: 01HXY8KJZQ9T8M7VN3P2R6S4A1`
 /// (Crockford-base32 ULID, 26 chars).
+///
+/// We validate the alphabet strictly so 26 random alphanumeric
+/// characters don't get dropped by accident. Crockford base32 uses
+/// `0-9` plus `A-Z` minus `I`, `L`, `O`, `U` (also accepts lowercase
+/// in modern ULID libs, so we case-fold here).
 fn is_logseq_id_line(line: &str) -> bool {
     let trimmed = line.trim();
     let Some(after) = trimmed.strip_prefix("id:: ") else {
         return false;
     };
-    after.len() == 26 && after.chars().all(|c| c.is_ascii_alphanumeric())
+    after.len() == 26 && after.chars().all(is_crockford_base32_char)
+}
+
+fn is_crockford_base32_char(c: char) -> bool {
+    let c = c.to_ascii_uppercase();
+    if c.is_ascii_digit() {
+        return true;
+    }
+    if !c.is_ascii_uppercase() {
+        return false;
+    }
+    !matches!(c, 'I' | 'L' | 'O' | 'U')
 }
 
 /// Remove every remaining `{{…}}` and `^^…^^` token. Runs after the
@@ -431,6 +447,26 @@ mod tests {
         let input = "- header\n  id:: 01HXY8KJZQ9T8M7VN3P2R6S4A1\n  - child";
         let out = normalize_external_syntax(input);
         assert_eq!(out, "- header\n  - child");
+    }
+
+    #[test]
+    fn id_line_with_non_crockford_chars_survives() {
+        // Looks 26-char and alphanumeric but uses banned letters
+        // (`I`, `L`) — not a real ULID, must NOT be dropped.
+        let input = "- header\n  id:: IIIILLLLOOOO0000000000000A\n  - child";
+        let out = normalize_external_syntax(input);
+        assert!(out.contains("IIIILLLLOOOO"), "non-ULID id:: stays: {out}");
+    }
+
+    #[test]
+    fn id_line_with_wrong_length_survives() {
+        // 27 chars — wrong length, not a ULID.
+        let input = "- header\n  id:: 01HXY8KJZQ9T8M7VN3P2R6S4A1X\n  - child";
+        let out = normalize_external_syntax(input);
+        assert!(
+            out.contains("01HXY8KJZQ9T8M7VN3P2R6S4A1X"),
+            "long id:: stays: {out}"
+        );
     }
 
     #[test]

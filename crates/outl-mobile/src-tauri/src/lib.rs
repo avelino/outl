@@ -482,13 +482,13 @@ fn set_block_collapsed(
 
 /// Paste external clipboard markdown as a tree of blocks.
 ///
-/// `caret` is a `char` offset (not bytes) into the host block's text,
-/// matching the convention `outl_actions::PasteAnchor::AtCaret` uses.
-/// The frontend's textarea reports `selectionStart` as a UTF-16 code
-/// unit offset; for ASCII content that's identical to a char count,
-/// which is what the user prompt sends today. We can tighten this when
-/// we ship multi-byte text in the textarea (issue tracked in the
-/// frontend `BlockRow.tsx` paste handler).
+/// `caret` is a Unicode codepoint offset into the host block's text,
+/// matching the convention `outl_actions::PasteAnchor::AtCaret` uses
+/// (Rust `str::chars()` iterates codepoints, not UTF-16 code units).
+/// The frontend converts `textarea.selectionStart` (UTF-16) into a
+/// codepoint count via `utf16OffsetToCharOffset` before invoking
+/// this command, so we get the right offset for text containing
+/// emoji and other supplementary-plane characters too.
 #[tauri::command]
 fn paste_markdown_at(
     page_id: String,
