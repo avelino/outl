@@ -473,9 +473,11 @@ base32 strings count. A random 26-character alphanumeric label
 (e.g. `id:: IIIILLLLOOOO0000000000000A`) is not a ULID and stays
 on the page.
 
-Heuristic: when no line begins with `- ` (after leading whitespace),
-the paste is treated as plain text — the clipboard payload is
-spliced into the current block at the caret, no tree conversion.
+Heuristic: when no line is either a bare `-` or starts with `- `
+(after leading whitespace), the paste is treated as plain text. The
+clipboard payload is spliced into the current block at the caret,
+no tree conversion. The bare `-` form matches the parser, which
+treats a lone `-` on a line as an empty bullet.
 
 Caret offsets in the mobile client are converted from UTF-16 code
 units (what `textarea.selectionStart` reports) into Unicode

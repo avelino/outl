@@ -148,7 +148,11 @@ pub(super) fn paste_plain_text(
             Ok(PasteOutcome {
                 new_blocks: vec![id],
                 host_text: None,
-                root_count: 1,
+                // Plain-text path: see `PasteOutcome::root_count`. The
+                // block exists because of the anchor, not because the
+                // user pasted outline syntax — counter stays at 0 so
+                // the status reads "pasted text".
+                root_count: 0,
             })
         }
         PasteAnchor::AsLastChildOf(parent) => {
@@ -159,7 +163,7 @@ pub(super) fn paste_plain_text(
             Ok(PasteOutcome {
                 new_blocks: vec![id],
                 host_text: None,
-                root_count: 1,
+                root_count: 0,
             })
         }
     }

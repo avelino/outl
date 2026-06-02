@@ -121,9 +121,17 @@ pub struct PasteOutcome {
     /// New text of the host block when `AtCaret` was used and the
     /// host's text changed. `None` for the other anchors.
     pub host_text: Option<String>,
-    /// Number of root-level blocks the caller should report to the
-    /// user (e.g. status line `"pasted N blocks"`). Zero when the
-    /// paste was treated as plain text.
+    /// Number of *outline* root-level bullets the user pasted, after
+    /// normalisation and parsing. UI clients show this to confirm
+    /// "pasted N blocks" — it counts what the heuristic actually
+    /// detected, not blocks created.
+    ///
+    /// **Always zero on the plain-text fallback path**, even when
+    /// the anchor (AfterBlock / AsLastChildOf) caused one literal
+    /// block to be created: that block exists only because the
+    /// caller asked us where to drop the raw text, not because the
+    /// payload had bullet structure. Plain-text via AtCaret returns
+    /// zero with no new block at all.
     pub root_count: usize,
 }
 
@@ -145,18 +153,26 @@ pub fn paste_markdown(
     anchor: PasteAnchor,
     raw: &str,
 ) -> Result<PasteOutcome, ActionError> {
+    // Detect outline shape on the **raw** payload. Running
+    // `normalize_external_syntax` first would strip unknown tokens
+    // (`{{video: …}}`, `^^…^^`) and collapse whitespace runs before
+    // we ever decide to fall back to plain text — that means a user
+    // pasting "look at {{video: https://x}}!" into a block would
+    // land a mangled string, not what they copied. Normalisation is
+    // only legitimate when we're actually going to parse bullets.
+    if !looks_like_outline(raw) {
+        return anchors::paste_plain_text(workspace, hlc, anchor, raw);
+    }
+
     let normalized = normalize_external_syntax(raw);
     let trimmed = normalized.trim_end_matches('\n');
-
-    if !looks_like_outline(trimmed) {
-        return anchors::paste_plain_text(workspace, hlc, anchor, trimmed);
-    }
 
     let parsed = outl_md::parse::parse(trimmed);
     if parsed.blocks.is_empty() {
         // Heuristic said outline but parser disagreed (mangled input).
-        // Fall back to plain-text behaviour so we never lose user input.
-        return anchors::paste_plain_text(workspace, hlc, anchor, trimmed);
+        // Fall back to plain-text behaviour with the **raw** payload
+        // so we never edit the user's text behind their back.
+        return anchors::paste_plain_text(workspace, hlc, anchor, raw);
     }
 
     match anchor {
@@ -182,7 +198,12 @@ pub fn paste_markdown(
 /// extend this to recognise `*` bullets, ordered lists, or anything
 /// else, update the JS mirror in the same PR and add the case to
 /// `paste.test.ts`.
-fn looks_like_outline(s: &str) -> bool {
+///
+/// Exposed `pub` so UI clients can branch *before* invoking
+/// [`paste_markdown`]: a TUI in Insert mode, for example, wants to
+/// splice plain text into the live edit buffer instead of going
+/// through the full paste pipeline.
+pub fn looks_like_outline(s: &str) -> bool {
     s.lines().any(|line| {
         let trimmed = line.trim_start();
         trimmed == "-" || trimmed.starts_with("- ")
@@ -297,6 +318,35 @@ mod tests {
         // 2 new sibling blocks created ("dois", "mundo"). "um" was
         // merged into the host so it isn't in new_blocks.
         assert_eq!(out.new_blocks.len(), 2);
+    }
+
+    #[test]
+    fn paste_plain_text_preserves_unknown_tokens() {
+        // Pasting "{{video: ...}}" into a block as plain text must
+        // NOT strip the token — only outline-shaped pastes go through
+        // the normaliser. The user copied that string for a reason
+        // and rewriting it silently is data loss.
+        let (mut workspace, hlc) = ws();
+        // `append_block` trims the seed text, so the host lands as
+        // "watch" (5 chars). Paste at the very end with a leading
+        // space inside the clipboard payload to verify the literal
+        // splice path keeps every byte of the user's text.
+        let host = append_block(&mut workspace, &hlc, None, Some("watch")).unwrap();
+        let out = paste_markdown(
+            &mut workspace,
+            &hlc,
+            PasteAnchor::AtCaret {
+                block: host,
+                caret: 5,
+            },
+            " {{video: https://x.test}} now",
+        )
+        .unwrap();
+        assert_eq!(
+            workspace.block_text(host).as_deref(),
+            Some("watch {{video: https://x.test}} now"),
+        );
+        assert!(out.new_blocks.is_empty());
     }
 
     #[test]

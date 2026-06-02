@@ -19,7 +19,7 @@
 //! first, then paste, then reload the workspace from disk so the new
 //! tree shows up.
 
-use outl_actions::{children_of, find_by_slug, paste_markdown, PasteAnchor};
+use outl_actions::{children_of, find_by_slug, looks_like_outline, paste_markdown, PasteAnchor};
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
 
@@ -46,6 +46,19 @@ impl App {
     pub(crate) fn paste_external(&mut self, text: String) {
         if text.is_empty() {
             return;
+        }
+        // Plain-text paste inside Insert mode is the common "drop a
+        // URL / snippet into what I'm writing" workflow. Splicing the
+        // raw text into the live buffer keeps the keyboard up and
+        // the cursor where the user expects. Outline-shaped pastes
+        // still go through the full pipeline below so they create
+        // siblings as documented.
+        if !looks_like_outline(&text) {
+            if let Mode::Insert { buffer, .. } = &mut self.mode {
+                buffer.insert_str(&text);
+                self.status = "pasted text".into();
+                return;
+            }
         }
         // `commit_insert` writes the in-flight buffer back into the
         // AST and — when the buffer changed against the current page
