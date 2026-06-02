@@ -57,10 +57,15 @@ impl ImportReport {
 /// Dispatch on the source format chosen by the user.
 pub fn run(source: &str, src: &Path, dst: &Path) -> Result<()> {
     let dst = dst.to_path_buf();
-    if !dst.exists() {
+    let paths = Paths::at(dst.clone());
+    // Initialize when the workspace isn't set up yet — keyed on the
+    // config file, not on the directory existing. The destination dir
+    // routinely exists already (an iCloud Ubiquity container, a synced
+    // folder, `mkdir`'d ahead of time); checking `dst.exists()` would
+    // skip init there and the later seed step fails reading config.
+    if !paths.config.is_file() {
         crate::cmd::init::run(&dst)?;
     }
-    let paths = Paths::at(dst.clone());
 
     let report = match source {
         "logseq" => logseq::import(src, &paths)
@@ -302,6 +307,39 @@ mod tests {
     fn non_dates_return_none() {
         assert!(parse_journal_date("Avelino").is_none());
         assert!(parse_journal_date("Project X").is_none());
+    }
+
+    #[test]
+    fn import_into_preexisting_dir_initializes_workspace() {
+        // Regression: the destination directory already exists (an
+        // iCloud Ubiquity container, a synced folder). Init must still
+        // run — keyed on the config file, not on the directory — or the
+        // seed step fails reading a config that was never created and
+        // the op log comes out empty.
+        let graph = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(graph.path().join("pages")).unwrap();
+        std::fs::write(
+            graph.path().join("pages").join("Note.md"),
+            "- hi [[Acme]]\n",
+        )
+        .unwrap();
+
+        let dst = tempfile::TempDir::new().unwrap(); // exists, but no workspace
+        assert!(!dst.path().join(".outl/config.toml").exists());
+
+        run("logseq", graph.path(), dst.path()).unwrap();
+
+        assert!(
+            dst.path().join(".outl/config.toml").is_file(),
+            "init must run for a pre-existing dir without a config"
+        );
+        let ops_written = std::fs::read_dir(dst.path().join("ops"))
+            .map(|rd| {
+                rd.filter_map(Result::ok)
+                    .any(|e| e.path().extension().is_some())
+            })
+            .unwrap_or(false);
+        assert!(ops_written, "op log should be populated, not empty");
     }
 
     #[test]
