@@ -36,9 +36,10 @@ use outl_actions::{
     append_block, apply_page_md_with_sidecar, backlinks_for_page, create_after, date_from_slug,
     delete, edit_text, find_by_slug, indent, journal_slug, journal_title, list_pages,
     migrate_legacy_into_today, move_down, move_up, next_journal_date, open_journal,
-    open_or_create_page, open_today, outdent, page_meta as page_meta_action, previous_journal_date,
-    read_page_view_with_workspace, set_block_collapsed as action_set_block_collapsed, today,
-    toggle_todo as action_toggle_todo, ActionError, Backlink, OutlineNode, PageKind, PageMeta,
+    open_or_create_page, open_today, outdent, page_meta as page_meta_action,
+    paste_markdown as action_paste_markdown, previous_journal_date, read_page_view_with_workspace,
+    set_block_collapsed as action_set_block_collapsed, today, toggle_todo as action_toggle_todo,
+    ActionError, Backlink, OutlineNode, PageKind, PageMeta, PasteAnchor,
 };
 use outl_core::hlc::HlcGenerator;
 use outl_core::id::{ActorId, NodeId};
@@ -479,6 +480,39 @@ fn set_block_collapsed(
     })
 }
 
+/// Paste external clipboard markdown as a tree of blocks.
+///
+/// `caret` is a `char` offset (not bytes) into the host block's text,
+/// matching the convention `outl_actions::PasteAnchor::AtCaret` uses.
+/// The frontend's textarea reports `selectionStart` as a UTF-16 code
+/// unit offset; for ASCII content that's identical to a char count,
+/// which is what the user prompt sends today. We can tighten this when
+/// we ship multi-byte text in the textarea (issue tracked in the
+/// frontend `BlockRow.tsx` paste handler).
+#[tauri::command]
+fn paste_markdown_at(
+    page_id: String,
+    block_id: String,
+    caret: u32,
+    text: String,
+    state: State<'_, AppState>,
+) -> Result<PageView, String> {
+    let page = parse_node_id(&page_id)?;
+    let block = parse_node_id(&block_id)?;
+    finish_in_page(&state, page, |ws| {
+        action_paste_markdown(
+            ws,
+            &state.hlc,
+            PasteAnchor::AtCaret {
+                block,
+                caret: caret as usize,
+            },
+            &text,
+        )
+        .map(|_| ())
+    })
+}
+
 #[tauri::command]
 fn reload_workspace(state: State<'_, AppState>) -> Result<(), String> {
     let engine = outl_actions::SyncEngine::new(state.storage_root.clone(), state.hlc.actor());
@@ -712,6 +746,7 @@ pub fn run() {
             move_block_up,
             move_block_down,
             set_block_collapsed,
+            paste_markdown_at,
             reload_workspace,
             // Legacy
             list_outline,

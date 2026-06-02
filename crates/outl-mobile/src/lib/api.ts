@@ -152,6 +152,33 @@ export function reloadWorkspace(): Promise<void> {
 }
 
 /**
+ * Hand off an external-clipboard paste to the backend for conversion
+ * into a tree of blocks. The Rust side normalises external syntax
+ * (Roam `{{[[TODO]]}}`, GitHub checkboxes, etc.), parses the bullet
+ * structure, and grafts it under `blockId` at the caret position.
+ *
+ * Returns the refreshed `PageView` so the caller can re-render.
+ * `caret` is a `char` offset into the host block's text — for ASCII
+ * content the textarea's `selectionStart` (UTF-16 code units) is
+ * equivalent. The frontend should `preventDefault` on the original
+ * paste event before calling this so the default browser splice
+ * doesn't run alongside the backend conversion.
+ */
+export function pasteMarkdown(
+  pageId: string,
+  blockId: string,
+  caret: number,
+  text: string,
+): Promise<PageView> {
+  return invoke<PageView>("paste_markdown_at", {
+    pageId,
+    blockId,
+    caret,
+    text,
+  });
+}
+
+/**
  * Persist the collapsed flag on a single block. The backend writes
  * straight to the sidecar (no `Op` is generated — collapsed is UI
  * state). Returns the refreshed page view so the caller can re-render
