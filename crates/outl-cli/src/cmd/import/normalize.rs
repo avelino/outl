@@ -211,15 +211,22 @@ fn consume_fence(lines: &[String], i: &mut usize, _opener_line: &str, text: &mut
 /// Collect a fenced code body up to its closing fence, dedent it by the
 /// smallest indentation among its non-blank lines (drops the base
 /// alignment, keeps the code's relative structure), and append the
-/// dedented body plus a bare closing fence to `text`. Re-indentation to
-/// the block's canonical level happens at emit time.
+/// dedented body to `text`. Re-indentation to the block's canonical
+/// level happens at emit time.
+///
+/// The closing fence is re-emitted only when the source actually had
+/// one. An unterminated fence (EOF before a closer) is left without a
+/// synthesized closer, so malformed-but-existing input isn't silently
+/// rewritten into something with different meaning.
 fn consume_fence_body(lines: &[String], i: &mut usize, text: &mut String) {
     let mut body: Vec<String> = Vec::new();
+    let mut closed = false;
     while *i < lines.len() {
         let raw = &lines[*i];
         let stripped = raw.trim();
         *i += 1;
         if stripped.starts_with("```") {
+            closed = true;
             break;
         }
         body.push(raw.clone());
@@ -236,8 +243,10 @@ fn consume_fence_body(lines: &[String], i: &mut usize, text: &mut String) {
             text.push_str(&strip_cols(line, min_col));
         }
     }
-    text.push('\n');
-    text.push_str("```");
+    if closed {
+        text.push('\n');
+        text.push_str("```");
+    }
 }
 
 /// Re-emit page properties and blocks with canonical two-space
@@ -340,6 +349,14 @@ mod tests {
         // Body keeps relative indent of `1)`; base indent dropped then
         // re-applied at the block's canonical level (0 here → 2 spaces).
         assert_eq!(norm(input), "- ```clojure\n  (def x\n    1)\n  ```");
+    }
+
+    #[test]
+    fn unterminated_fence_keeps_no_synthetic_closer() {
+        // EOF before a closing fence: don't invent a ``` that wasn't
+        // there — that would rewrite malformed-but-existing content.
+        let input = "- ```rust\n  fn main() {}";
+        assert_eq!(norm(input), "- ```rust\n  fn main() {}");
     }
 
     #[test]
