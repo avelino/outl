@@ -452,7 +452,8 @@ runs in the TUI (bracketed-paste handler) and the mobile client
 | `{{[[query]]: foo}}` | `{{query: foo}}` | Roam |
 | `^^highlight^^` | (stripped) | Roam |
 | `{{video: url}}` and other unknown `{{…}}` | (stripped) | various |
-| `id:: 01HXY…` (alone on a line) | (line dropped) | Logseq |
+| `id:: <26-char Crockford ULID>` (alone on a line) | (line dropped) | Logseq |
+| `[[June 2nd, 2026]]`, `[[Apr 22nd, 2026]]`, `[[2026/04/22]]` | `[[2026-06-02]]` etc. | Roam / mixed |
 | 4-space indent | 2-space indent | Roam / Notion export |
 
 Unknown tokens (`{{…}}` and `^^…^^` that aren't outl-native) are
@@ -461,8 +462,25 @@ the source (`key:: value` indented under a bullet) become
 `Op::SetProp` on the newly-created node so they converge across
 devices like every other op.
 
+Date refs `[[…]]` whose inner text parses as a date land as the ISO
+slug outl uses for journals. Supported forms: long month (`June 2nd,
+2026`), short month (`Apr 22nd, 2026`), slashed ISO (`2026/04/22`).
+Plain page refs (`[[Avelino]]`) and ambiguous dates (`[[June 2nd]]`
+without a year) pass through untouched.
+
+The `id::` line strip is strict. Only 26-character Crockford
+base32 strings count. A random 26-character alphanumeric label
+(e.g. `id:: IIIILLLLOOOO0000000000000A`) is not a ULID and stays
+on the page.
+
 Heuristic: when no line begins with `- ` (after leading whitespace),
 the paste is treated as plain text — the clipboard payload is
 spliced into the current block at the caret, no tree conversion.
+
+Caret offsets in the mobile client are converted from UTF-16 code
+units (what `textarea.selectionStart` reports) into Unicode
+codepoints before the Tauri round-trip, so pasting after an emoji
+or other supplementary-plane character lands the splice at the
+right spot.
 
 The orphan log is cleared as items are resolved.
