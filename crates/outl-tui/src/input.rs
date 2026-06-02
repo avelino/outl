@@ -24,9 +24,30 @@
 //! [`crate::runtime`].
 
 use crate::actions::cycle_todo_inline;
-use crate::state::{App, Mode, Overlay};
+use crate::state::{App, EditTarget, Focus, Mode, Overlay};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+/// Cross-block Up/Down nav only kicks in when:
+///
+/// - We're in Insert on the current page (not a source-page backlink
+///   edit — that has its own commit semantics).
+/// - Focus is on the outline (the inline backlinks panel is its own
+///   navigable surface).
+///
+/// Backlink editing keeps the older Esc → j/k → i workflow until the
+/// cross-page write story gets a dedicated pass — committing a
+/// source-page edit per keystroke triggers a full reconcile, and the
+/// trade-offs aren't obvious enough to bake in here.
+fn cross_block_nav_eligible(app: &App) -> bool {
+    matches!(
+        &app.mode,
+        Mode::Insert {
+            target: EditTarget::CurrentPage,
+            ..
+        }
+    ) && matches!(app.focus, Focus::Outline)
+}
 
 /// Is `cursor` (char index) sitting inside an *open* fenced code block?
 ///
@@ -664,6 +685,56 @@ pub(crate) fn handle_insert_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 app.enter_insert(true); // cursor at start
             } else if let Mode::Insert { buffer, .. } = &mut app.mode {
                 buffer.move_right();
+            }
+        }
+        // Up / Down cross blocks the same way Left/Right do — the
+        // outline reads as one continuous document, so a user who
+        // hits `Down` at the bottom of a block lands inside the next
+        // one without ever leaving Insert. Multi-line buffers (fenced
+        // code) absorb the move internally first, falling back to
+        // cross-block nav only when the cursor is already on the
+        // buffer's first/last line.
+        //
+        // Scope today: outline blocks edited in `CurrentPage`. Cross-
+        // page backlink editing (`EditTarget::SourcePage`) keeps the
+        // older Esc → j/k → i flow — adding cross-page Up/Down would
+        // also need to commit the cross-page write per keystroke, and
+        // the trade-offs there deserve their own pass.
+        KeyCode::Up => {
+            let moved_in_buffer = if let Mode::Insert { buffer, .. } = &mut app.mode {
+                buffer.move_up()
+            } else {
+                false
+            };
+            if !moved_in_buffer && cross_block_nav_eligible(app) && app.selected > 0 {
+                let pref_col = if let Mode::Insert { buffer, .. } = &app.mode {
+                    buffer.visual_column()
+                } else {
+                    0
+                };
+                app.commit_insert();
+                app.move_selection(-1);
+                app.cursor_col = pref_col;
+                app.enter_insert(false);
+            }
+        }
+        KeyCode::Down => {
+            let moved_in_buffer = if let Mode::Insert { buffer, .. } = &mut app.mode {
+                buffer.move_down()
+            } else {
+                false
+            };
+            let last_idx = app.flat_len.saturating_sub(1);
+            if !moved_in_buffer && cross_block_nav_eligible(app) && app.selected < last_idx {
+                let pref_col = if let Mode::Insert { buffer, .. } = &app.mode {
+                    buffer.visual_column()
+                } else {
+                    0
+                };
+                app.commit_insert();
+                app.move_selection(1);
+                app.cursor_col = pref_col;
+                app.enter_insert(false);
             }
         }
         KeyCode::Home => {

@@ -6,10 +6,11 @@
 //! `self.selected`, and `self.cursor_col`. The lifecycle module is
 //! the one that touches disk.
 
-use crate::outline_ops::{flatten_backlink_subtree, node_at_path, path_for_index};
+use crate::outline_ops::{node_at_path, path_for_index};
 use crate::state::{App, Focus, Mode, View};
 use anyhow::Result;
 use chrono::{Duration, Local};
+use outl_actions::flatten_subtree_paths;
 use outl_md::inline::{ref_at_cursor, RefTarget};
 use outl_md::reconcile::reconcile_md;
 use std::fs;
@@ -65,6 +66,32 @@ impl App {
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string()
+    }
+
+    /// Compute the backlinks pointing at `slug` directly from the
+    /// workspace. **This is the single source for backlinks across
+    /// the TUI** — every call site (panel render, navigation,
+    /// keyboard handlers) routes through here.
+    ///
+    /// The earlier code path read from `WorkspaceIndex.backlinks`,
+    /// which has been removed: the `outl-md` index no longer
+    /// duplicates this data (`outl_actions::backlinks_for_page` is
+    /// the only producer now, shared with the mobile client). Cost
+    /// is `O(blocks in workspace)` per call — sub-millisecond on
+    /// workspaces below ~10k blocks and well within frame budget.
+    pub(crate) fn backlinks_for_slug(&self, slug: &str) -> Vec<outl_actions::Backlink> {
+        let Some(id) = outl_actions::find_by_slug(&self.workspace, slug) else {
+            return Vec::new();
+        };
+        let Some(meta) = outl_actions::page_meta(&self.workspace, id) else {
+            return Vec::new();
+        };
+        outl_actions::backlinks_for_page(&self.workspace, &self.workspace_root, &meta)
+    }
+
+    /// Convenience: backlinks for the currently-opened page/journal.
+    pub(crate) fn backlinks_for_current(&self) -> Vec<outl_actions::Backlink> {
+        self.backlinks_for_slug(&self.current_slug())
     }
 
     pub(crate) fn go_today(&mut self) -> Result<()> {
@@ -151,11 +178,11 @@ impl App {
                 // clone per keystroke).
                 let slug = self.current_slug();
                 let new_focus = {
-                    let backlinks = self.index.backlinks(&slug);
+                    let backlinks = self.backlinks_for_slug(&slug);
                     let Some(bl) = backlinks.get(idx) else {
                         return false;
                     };
-                    let paths = flatten_backlink_subtree(&bl.source_block);
+                    let paths = flatten_subtree_paths(&bl.source_block);
                     let cur_pos = paths.iter().position(|p| p == &sub_path).unwrap_or(0);
                     if cur_pos + 1 < paths.len() {
                         Focus::Backlink {
@@ -205,11 +232,11 @@ impl App {
                 // Resolve the new focus value while only borrowing the
                 // backlinks slice — no `to_vec` clone per keystroke.
                 let new_focus_opt = {
-                    let backlinks = self.index.backlinks(&slug);
+                    let backlinks = self.backlinks_for_slug(&slug);
                     let Some(bl) = backlinks.get(idx) else {
                         return false;
                     };
-                    let paths = flatten_backlink_subtree(&bl.source_block);
+                    let paths = flatten_subtree_paths(&bl.source_block);
                     let cur_pos = paths.iter().position(|p| p == &sub_path).unwrap_or(0);
                     if cur_pos > 0 {
                         Some(Focus::Backlink {
@@ -218,7 +245,7 @@ impl App {
                         })
                     } else if idx > 0 {
                         // Jump to the last block of the previous backlink.
-                        let prev_paths = flatten_backlink_subtree(&backlinks[idx - 1].source_block);
+                        let prev_paths = flatten_subtree_paths(&backlinks[idx - 1].source_block);
                         let last = prev_paths.last().cloned().unwrap_or_default();
                         Some(Focus::Backlink {
                             idx: idx - 1,
@@ -246,7 +273,7 @@ impl App {
     /// at least one block the cursor can land on. Drives the cross-zone
     /// transition in `step_forward`/`step_backward`.
     fn backlinks_navigable(&self) -> bool {
-        self.show_backlinks && !self.index.backlinks(&self.current_slug()).is_empty()
+        self.show_backlinks && !self.backlinks_for_current().is_empty()
     }
 
     /// Current selected block's text (or empty if no selection).
@@ -262,7 +289,7 @@ impl App {
                     .unwrap_or_default()
             }
             Focus::Backlink { idx, sub_path } => {
-                let backlinks = self.index.backlinks(&self.current_slug());
+                let backlinks = self.backlinks_for_current();
                 let Some(bl) = backlinks.get(*idx) else {
                     return String::new();
                 };

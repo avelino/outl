@@ -32,6 +32,19 @@ journal render), it delegates to `outl-actions`. If you find yourself
 writing a tree walk or an op-generating helper inside `lib.rs`, stop
 — move it to `outl-actions` instead. The TUI will need it too.
 
+The same rule extends to the **Solid frontend** (`src/`). Before
+adding a helper that walks blocks, normalises text, or maps a
+cursor across `\n`, check `outl-md`/`outl-actions` — the Rust
+side likely already exposes it through a Tauri command or could
+with a tiny addition. The two cross-runtime contracts already
+documented below (`looksLikeOutline` mirroring
+`outl_actions::paste::looks_like_outline`, and the UTF-16 caret
+conversion) are *examples of contracts we explicitly maintain*,
+not green-lights to keep cloning Rust logic into TS.
+
+Workspace-level policy:
+[`CLAUDE.md`](../../CLAUDE.md#reuse-first-no-parallel-implementations).
+
 What this crate **does** own:
 
 - iCloud Ubiquity Container resolution and the `Storage` impl on top.

@@ -78,6 +78,21 @@ impl Tree {
         self.properties.get(&(node, key.to_string()))
     }
 
+    /// Every property currently set on `node`, as `(key, value)` pairs
+    /// in unspecified order.
+    ///
+    /// Used by projection layers (mobile / TUI outline DTO) to
+    /// snapshot the block's properties in one pass without scanning
+    /// the whole property map. Callers that need a stable order
+    /// should sort the result themselves — the underlying `HashMap`
+    /// makes no ordering guarantees.
+    pub fn properties_of(&self, node: NodeId) -> impl Iterator<Item = (&str, &PropValue)> {
+        self.properties
+            .iter()
+            .filter(move |((n, _), _)| *n == node)
+            .map(|((_, k), v)| (k.as_str(), v))
+    }
+
     /// Whether `node` is currently rendered collapsed (children
     /// hidden in the outline view). Defaults to `false` for any node
     /// the op log has never explicitly set.

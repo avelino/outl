@@ -71,13 +71,16 @@ impl App {
             let Focus::Backlink { idx, sub_path } = &self.focus else {
                 return;
             };
-            let backlinks = self.index.backlinks(&self.current_slug());
+            let backlinks = self.backlinks_for_current();
             let Some(bl) = backlinks.get(*idx) else {
+                return;
+            };
+            let Some(path) = bl.source_path.clone() else {
                 return;
             };
             let mut full = bl.source_block_path.clone();
             full.extend_from_slice(sub_path);
-            (bl.source_path.clone(), full)
+            (path, full)
         };
 
         // Authoritative read: don't trust the cached `source_block`
@@ -153,12 +156,13 @@ impl App {
                         if let Some(node) = node_at_path_mut(&mut page.blocks, &block_path) {
                             node.text = new_text;
                         }
-                        // Optimistic: patch every backlink that points
-                        // at this source page so the UI reflects the
-                        // edit *this frame*, not after the next index
-                        // rebuild finishes (which scans the whole
-                        // workspace and is the dominant cost).
-                        self.index.refresh_backlinks_from_source(&path, &page);
+                        // Backlinks are computed on-demand from the
+                        // workspace (`backlinks_for_current` → the
+                        // op log via `outl_actions::backlinks_for_page`),
+                        // so once `reconcile_md` finishes inside
+                        // `save_page_with` the next render already sees
+                        // the new text — no optimistic in-memory cache
+                        // patch needed.
                         self.save_page_with(&path, &page, false);
                     }
                     // No restore needed — `page` was a working copy
@@ -222,9 +226,9 @@ impl App {
     {
         let (source_path, source_block_path) = match &self.focus {
             Focus::Backlink { idx, .. } => {
-                let backlinks = self.index.backlinks(&self.current_slug());
+                let backlinks = self.backlinks_for_current();
                 let bl = backlinks.get(*idx)?;
-                (bl.source_path.clone(), bl.source_block_path.clone())
+                (bl.source_path.clone()?, bl.source_block_path.clone())
             }
             _ => return None,
         };
@@ -275,8 +279,9 @@ impl App {
             *sub_path = new_sub_path;
         }
 
-        self.index
-            .refresh_backlinks_from_source(&source_path, &source_page);
+        // No backlink-cache to refresh — `backlinks_for_current`
+        // reads straight from the workspace, so the next render sees
+        // the post-op tree as soon as `save_page_with` reconciles.
         self.save_page_with(&source_path, &source_page, false);
 
         Some((source_path, source_page))
@@ -313,7 +318,7 @@ impl App {
                 let Focus::Backlink { idx, sub_path } = &self.focus else {
                     return;
                 };
-                let backlinks = self.index.backlinks(&self.current_slug());
+                let backlinks = self.backlinks_for_current();
                 let Some(bl) = backlinks.get(*idx) else {
                     return;
                 };
@@ -372,7 +377,7 @@ impl App {
                 let Focus::Backlink { idx, sub_path } = &self.focus else {
                     return;
                 };
-                let backlinks = self.index.backlinks(&self.current_slug());
+                let backlinks = self.backlinks_for_current();
                 let Some(bl) = backlinks.get(*idx) else {
                     return;
                 };
@@ -437,7 +442,7 @@ impl App {
                     let Focus::Backlink { idx, sub_path } = &self.focus else {
                         return moved;
                     };
-                    let backlinks = self.index.backlinks(&self.current_slug());
+                    let backlinks = self.backlinks_for_current();
                     let Some(bl) = backlinks.get(*idx) else {
                         return moved;
                     };
@@ -516,7 +521,7 @@ impl App {
                     let Focus::Backlink { idx, sub_path } = &self.focus else {
                         return moved;
                     };
-                    let backlinks = self.index.backlinks(&self.current_slug());
+                    let backlinks = self.backlinks_for_current();
                     let Some(bl) = backlinks.get(*idx) else {
                         return moved;
                     };
@@ -769,13 +774,16 @@ impl App {
     /// in a different file.
     fn toggle_todo_backlink(&mut self, idx: usize, sub_path: &[usize]) {
         let (source_path, abs_path) = {
-            let backlinks = self.index.backlinks(&self.current_slug());
+            let backlinks = self.backlinks_for_current();
             let Some(bl) = backlinks.get(idx) else {
+                return;
+            };
+            let Some(path) = bl.source_path.clone() else {
                 return;
             };
             let mut full = bl.source_block_path.clone();
             full.extend_from_slice(sub_path);
-            (bl.source_path.clone(), full)
+            (path, full)
         };
         let Ok(text) = std::fs::read_to_string(&source_path) else {
             self.status = format!("cannot read backlink source: {}", source_path.display());
@@ -787,12 +795,9 @@ impl App {
             return;
         };
         node.text = cycle_todo_state(&node.text);
-        // Optimistic: patch the in-memory index so the new TODO/DONE
-        // prefix shows up *this frame*. Persist the source page without
-        // triggering a full workspace rebuild (the dominant cost) —
-        // the next natural rebuild reconverges.
-        self.index
-            .refresh_backlinks_from_source(&source_path, &source_page);
+        // `backlinks_for_current` reads straight from the workspace,
+        // so the new TODO/DONE prefix shows up next frame as soon as
+        // `save_page_with` reconciles the source page into the op log.
         self.save_page_with(&source_path, &source_page, false);
     }
 }

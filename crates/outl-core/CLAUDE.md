@@ -177,6 +177,19 @@ Use `/coverage outl-core` to check.
 - ❌ Use `unwrap()` outside of tests
 - ❌ Use `unsafe` without a multi-line comment documenting invariants
 
+## Reuse-first
+
+This crate is the **foundation**: every other crate consumes its
+types. Before adding a new primitive (a `Tree` accessor, an `Op`
+variant, an `id` helper), grep for an existing one — even partial
+matches are worth wrapping rather than duplicating. `Tree`
+accessors in particular cluster around the same `HashMap` —
+prefer one more `properties_of`-style method over two callers
+each filtering the map by hand.
+
+Root [`CLAUDE.md`](../../CLAUDE.md#reuse-first-no-parallel-implementations)
+has the workspace-level policy.
+
 ## When you're adding a new Op variant
 
 Use the `/new-op <Name>` slash command. It walks through all 7 places that

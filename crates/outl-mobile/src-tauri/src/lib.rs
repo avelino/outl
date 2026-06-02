@@ -172,7 +172,7 @@ fn build_page_view(
     // and would lose flips).
     let outline = read_page_view_with_workspace(storage_root, &meta, workspace)
         .unwrap_or_else(|_| Vec::new());
-    let backlinks = backlinks_for_page(workspace, &meta);
+    let backlinks = backlinks_for_page(workspace, storage_root, &meta);
     Ok(PageView {
         page: meta,
         outline,
