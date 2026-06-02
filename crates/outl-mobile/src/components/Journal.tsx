@@ -117,6 +117,20 @@ export function Journal() {
   // Navigation back-stack so a swipe from a `[[ref]]`-opened page
   // returns to where we came from.
   const [history, setHistory] = createSignal<PageView[]>([]);
+  // Today's journal slug, resolved once on mount. Drives the
+  // "back to today" affordance: we only show it when the current
+  // view is somewhere *other* than today's journal, so there is
+  // always a meaningful place to return to.
+  const [todaySlugValue, setTodaySlugValue] = createSignal<string | null>(null);
+
+  /** True when the current view is not today's journal, so a
+   *  "back to today" jump would actually change something. */
+  function canJumpToday(): boolean {
+    const cur = view();
+    const t = todaySlugValue();
+    if (!cur || !t) return false;
+    return !(cur.page.kind === "journal" && cur.page.slug === t);
+  }
 
   function focusGhost() {
     // Must run synchronously inside the tap to keep iOS in
@@ -170,6 +184,12 @@ export function Journal() {
 
   onMount(async () => {
     listenForWorkspaceReady();
+    todaySlug()
+      .then(setTodaySlugValue)
+      .catch(() => {
+        // best effort; the button just stays hidden until we know
+        // today's slug, which is harmless.
+      });
     await loadTodayWithRetry();
   });
 
@@ -755,6 +775,29 @@ export function Journal() {
         style="padding-top: max(env(safe-area-inset-top), 12px);"
       >
           <div class="flex items-center justify-between gap-3">
+            <Show when={canJumpToday()}>
+              <button
+                type="button"
+                aria-label="Back to today"
+                onClick={handleJumpToday}
+                class="-ml-1 shrink-0 rounded-full p-2 active:opacity-50"
+              >
+                <svg
+                  width="22"
+                  height="22"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="var(--color-ios-accent)"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M9 14L4 9l5-5" />
+                  <path d="M4 9h11a5 5 0 0 1 5 5v6" />
+                </svg>
+              </button>
+            </Show>
             <Show
               when={view()?.page.kind === "journal"}
               fallback={
