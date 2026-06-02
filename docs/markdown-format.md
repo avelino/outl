@@ -432,4 +432,37 @@ A TUI opens showing one orphan at a time with candidates. Keys:
 | `s` | skip (revisit later) |
 | `q` | quit |
 
+---
+
+## External paste → outl syntax
+
+When the user pastes clipboard markdown from another outliner / note
+app into outl, `outl_actions::paste_markdown` (in `outl-actions`)
+normalises the input before parsing it as bullets. The same pipeline
+runs in the TUI (bracketed-paste handler) and the mobile client
+(textarea `onPaste`).
+
+| Input (external) | Output (outl) | Origin |
+|------------------|---------------|--------|
+| `{{[[TODO]]}} foo` | `TODO foo` | Roam |
+| `{{[[DONE]]}} foo` | `DONE foo` | Roam |
+| `- [ ] foo` | `- TODO foo` | GitHub / CommonMark task list |
+| `- [x] foo` / `- [X] foo` | `- DONE foo` | GitHub / CommonMark |
+| `{{embed: ((blk-XXXXXX))}}` | `!((blk-XXXXXX))` | Roam |
+| `{{[[query]]: foo}}` | `{{query: foo}}` | Roam |
+| `^^highlight^^` | (stripped) | Roam |
+| `{{video: url}}` and other unknown `{{…}}` | (stripped) | various |
+| `id:: 01HXY…` (alone on a line) | (line dropped) | Logseq |
+| 4-space indent | 2-space indent | Roam / Notion export |
+
+Unknown tokens (`{{…}}` and `^^…^^` that aren't outl-native) are
+stripped on purpose so blocks land clean. Block properties parsed off
+the source (`key:: value` indented under a bullet) become
+`Op::SetProp` on the newly-created node so they converge across
+devices like every other op.
+
+Heuristic: when no line begins with `- ` (after leading whitespace),
+the paste is treated as plain text — the clipboard payload is
+spliced into the current block at the caret, no tree conversion.
+
 The orphan log is cleared as items are resolved.

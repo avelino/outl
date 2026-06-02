@@ -32,6 +32,7 @@ outl-cli / outl-tui / outl-mobile / future clients
 | `backlinks` | `Backlink`, `backlinks_for_target`, `backlinks_for_page`, `extract_refs` (parse `[[ref]]` tokens) |
 | `journal`   | `render_page_md`, `apply_page_md`, `apply_page_md_with_sidecar`, `apply_all_pages_md`, `mutate_page_md`, `journals_dir`, `pages_dir`, `page_md_path`, `write_md_atomic` |
 | `sync`      | `SyncEngine`, `OpsFileSnapshot`. Reload workspace from disk, re-project a page's `.md` + sidecar, snapshot peer jsonls (skipping own), scan for orphan `.md` files (no sidecar / stale hash). Shared by TUI poller + mobile iCloud watcher. |
+| `paste`     | `paste_markdown`, `PasteAnchor`, `PasteOutcome`, `normalize_external_syntax`. Converts external clipboard markdown (Roam `{{[[TODO]]}}`, GitHub `[ ]/[x]`, Logseq `id::`, 4-space indent) into outl syntax and grafts the bullet structure as blocks. Drives `Event::Paste` in the TUI and the mobile `paste_markdown_at` Tauri command. |
 | `error`     | `ActionError`                                                                  |
 
 ## Contract

@@ -56,6 +56,7 @@ pub mod error;
 pub mod journal;
 pub mod outline;
 pub mod page;
+pub mod paste;
 pub mod sync;
 pub mod todo;
 pub mod tree;
@@ -78,6 +79,7 @@ pub use page::{
     open_or_create as open_or_create_page, open_today, page_meta, previous_journal_date,
     read_text_prop, set_property, today, PageKind, PageMeta,
 };
+pub use paste::{normalize_external_syntax, paste_markdown, PasteAnchor, PasteOutcome};
 pub use sync::{OpsFileSnapshot, SyncEngine};
 pub use todo::{cycle_todo, split_todo, TodoState, DONE_PREFIX, TODO_PREFIX};
 pub use tree::{

@@ -4,6 +4,7 @@ import { MarkdownInline } from "../lib/markdown";
 import { autoClosePair, autoDeletePair } from "../lib/autocomplete";
 import { haptic } from "../lib/haptics";
 import { rawTextWithTodo } from "../lib/outline";
+import { looksLikeOutline } from "../lib/paste";
 import { parkCaret } from "../lib/textarea";
 import { SwipeRow } from "./SwipeRow";
 
@@ -37,6 +38,15 @@ interface BlockRowProps {
   onRefClick?: (target: string) => void;
   onTagClick?: (tag: string) => void;
   onTextareaMount?: (el: HTMLTextAreaElement) => void;
+  /**
+   * Called when the user pastes outline-shaped markdown into this
+   * block's textarea. The frontend has already detected via
+   * `looksLikeOutline` that the clipboard payload deserves a
+   * full-on tree conversion; the parent wires this up to the Tauri
+   * `paste_markdown_at` command and refreshes the page on resolve.
+   * `caret` is a `char` offset into the host block's text.
+   */
+  onPasteMarkdown?: (blockId: string, caret: number, text: string) => void;
 }
 
 /**
@@ -90,6 +100,12 @@ export function BlockRow(props: BlockRowProps): JSX.Element {
           onRefClick={props.onRefClick}
           onTagClick={props.onTagClick}
           onTextareaMount={props.onTextareaMount}
+          onPasteMarkdown={
+            props.onPasteMarkdown
+              ? (caret, text) =>
+                  props.onPasteMarkdown!(props.block.id, caret, text)
+              : undefined
+          }
         />
       </SwipeRow>
 
@@ -150,6 +166,9 @@ function BlockBody(props: {
   onRefClick?: (target: string) => void;
   onTagClick?: (tag: string) => void;
   onTextareaMount?: (el: HTMLTextAreaElement) => void;
+  /** See `BlockRowProps.onPasteMarkdown`. The parent has already
+   *  injected `blockId`; this variant gets the caret + text. */
+  onPasteMarkdown?: (caret: number, text: string) => void;
 }) {
   let longPressTimer: number | undefined;
   let downX = 0;
@@ -279,6 +298,7 @@ function BlockBody(props: {
             onInput={props.onDraftChange}
             onBlur={props.onCommitEdit}
             onMount={props.onTextareaMount}
+            onPaste={props.onPasteMarkdown}
           />
         </Show>
       </div>
@@ -389,6 +409,13 @@ function EditableTextarea(props: {
   onInput: (v: string) => void;
   onBlur: () => void;
   onMount?: (el: HTMLTextAreaElement) => void;
+  /**
+   * Called when the user pastes outline-shaped markdown. Receives
+   * the caret position (in chars) and the verbatim clipboard text.
+   * The parent is responsible for `preventDefault` semantics on the
+   * paste event — we already do that here when this is set.
+   */
+  onPaste?: (caret: number, text: string) => void;
 }) {
   let ref!: HTMLTextAreaElement;
   let resizeRaf = 0;
@@ -478,6 +505,19 @@ function EditableTextarea(props: {
           props.onInput(ta.value);
         }
         autoResize();
+      }}
+      onPaste={(e) => {
+        // External-clipboard markdown → tree of blocks. We only
+        // intercept when the payload looks like an outline; plain
+        // text falls through to the browser's default splice so
+        // pasting a single URL or code snippet still works the way
+        // the user expects.
+        if (!props.onPaste) return;
+        const text = e.clipboardData?.getData("text/plain") ?? "";
+        if (!looksLikeOutline(text)) return;
+        e.preventDefault();
+        const caret = e.currentTarget.selectionStart ?? 0;
+        props.onPaste(caret, text);
       }}
       onBlur={props.onBlur}
     />
