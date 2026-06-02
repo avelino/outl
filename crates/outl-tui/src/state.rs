@@ -133,7 +133,8 @@ pub(crate) enum SidebarSection {
 /// with a different commit target.
 ///
 /// `Focus::Backlink { idx, sub_path }`:
-/// - `idx` indexes `app.index.backlinks(current_slug)`.
+/// - `idx` indexes `app.backlinks_for_current()` (the workspace-driven
+///   list produced by `outl_actions::backlinks_for_page`).
 /// - `sub_path` is a DFS path *inside* `Backlink.source_block` — empty
 ///   means the source block itself; `[0]` its first child; etc.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

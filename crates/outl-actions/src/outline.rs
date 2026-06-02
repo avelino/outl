@@ -11,7 +11,77 @@ use std::path::Path;
 use std::str::FromStr;
 
 use outl_core::id::NodeId;
+use outl_core::property::PropValue;
 use outl_core::workspace::Workspace;
+
+/// Render a property value as the user-facing string the markdown
+/// pipeline already stores. `Text` is the only variant emitted today
+/// by `outl-md::diff` (see `crates/outl-md/src/diff.rs`); the other
+/// variants are surfaced for forward-compat with the future query DSL
+/// but should never appear in v0 workspaces.
+pub(crate) fn prop_value_to_string(v: &PropValue) -> String {
+    match v {
+        PropValue::Text(s) | PropValue::PageRef(s) | PropValue::Tag(s) => s.clone(),
+        PropValue::List(items) => items
+            .iter()
+            .map(prop_value_to_string)
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
+}
+
+/// Enumerate every DFS path *inside* an [`OutlineNode`] (treated as
+/// a self-contained subtree). The first entry is always `vec![]`
+/// (the root itself); subsequent entries descend into children in
+/// order.
+///
+/// Used by the TUI's inline backlinks panel so `j`/`k` can step
+/// through a referencing block and its descendants without rebuilding
+/// the index. Lives here (rather than in `outl-md`) so any future
+/// client that consumes [`Backlink::source_block`][crate::Backlink::source_block]
+/// can navigate its subtree with the same helper.
+pub fn flatten_subtree_paths(root: &OutlineNode) -> Vec<Vec<usize>> {
+    let mut out = Vec::new();
+    let mut stack: Vec<usize> = Vec::new();
+    out.push(stack.clone());
+    walk_subtree(root, &mut stack, &mut out);
+    out
+}
+
+fn walk_subtree(node: &OutlineNode, stack: &mut Vec<usize>, out: &mut Vec<Vec<usize>>) {
+    for (i, child) in node.children.iter().enumerate() {
+        stack.push(i);
+        out.push(stack.clone());
+        walk_subtree(child, stack, out);
+        stack.pop();
+    }
+}
+
+/// Build a single [`OutlineNode`] for `node` straight from the
+/// workspace, including its subtree and properties.
+///
+/// Same shape as one element of [`project_outline`] — used by the
+/// backlinks builder so each backlink carries the *source block* with
+/// its children and properties, instead of forcing the caller to
+/// reach back into the workspace per backlink.
+pub fn project_outline_node(workspace: &Workspace, node: NodeId) -> OutlineNode {
+    let raw = workspace.block_text(node).unwrap_or_default();
+    let (todo, body) = split_todo(&raw);
+    let mut properties: Vec<(String, String)> = workspace
+        .tree()
+        .properties_of(node)
+        .map(|(k, v)| (k.to_string(), prop_value_to_string(v)))
+        .collect();
+    properties.sort_by(|a, b| a.0.cmp(&b.0));
+    OutlineNode {
+        id: node.to_string(),
+        text: body.to_string(),
+        todo,
+        collapsed: workspace.tree().is_collapsed(node),
+        properties,
+        children: project_outline(workspace, node),
+    }
+}
 use outl_md::parse::OutlineNode as ParsedOutlineNode;
 use outl_md::sidecar::SidecarBlock;
 use serde::Serialize;
@@ -51,6 +121,14 @@ pub struct OutlineNode {
     /// `Op::SetCollapsed` and apply it through `Workspace::apply` —
     /// never via the sidecar.
     pub collapsed: bool,
+    /// `(key, value)` properties attached to this block, in
+    /// alphabetical-by-key order. Mirrors
+    /// [`outl_md::parse::OutlineNode::properties`] so the disk-driven
+    /// path (`read_page_view`) and the workspace-driven path
+    /// (`project_outline`) agree on shape. Populated from
+    /// [`outl_core::tree::Tree::properties_of`] when the workspace is
+    /// in scope, and from the parsed `.md` otherwise.
+    pub properties: Vec<(String, String)>,
     /// Children, in their fractional-index order.
     pub children: Vec<OutlineNode>,
 }
@@ -73,11 +151,18 @@ pub fn project_outline(workspace: &Workspace, parent: NodeId) -> Vec<OutlineNode
         .map(|(id, _)| {
             let raw = workspace.block_text(id).unwrap_or_default();
             let (todo, body) = split_todo(&raw);
+            let mut properties: Vec<(String, String)> = workspace
+                .tree()
+                .properties_of(id)
+                .map(|(k, v)| (k.to_string(), prop_value_to_string(v)))
+                .collect();
+            properties.sort_by(|a, b| a.0.cmp(&b.0));
             OutlineNode {
                 id: id.to_string(),
                 text: body.to_string(),
                 todo,
                 collapsed: workspace.tree().is_collapsed(id),
+                properties,
                 children: project_outline(workspace, id),
             }
         })
@@ -183,6 +268,11 @@ fn outline_from_parsed(
         .iter()
         .map(|child| outline_from_parsed(child, iter))
         .collect();
+    // Mirror the parse-time order (the user authored them in this
+    // sequence in the `.md`). `project_outline` sorts alphabetically
+    // because the workspace path has no authoring order to preserve;
+    // here we keep what the file said.
+    let properties = block.properties.clone();
     // `collapsed` is overlaid by the caller using the workspace as the
     // source of truth (`Op::SetCollapsed` lives in the op log). The
     // bare `read_page_view` path leaves it `false`; the workspace-
@@ -192,6 +282,100 @@ fn outline_from_parsed(
         text: body.to_string(),
         todo,
         collapsed: false,
+        properties,
         children,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::todo::TodoState;
+
+    fn node(text: &str, children: Vec<OutlineNode>) -> OutlineNode {
+        OutlineNode {
+            id: format!("test-{text}"),
+            text: text.into(),
+            todo: None,
+            collapsed: false,
+            properties: Vec::new(),
+            children,
+        }
+    }
+
+    fn leaf(text: &str) -> OutlineNode {
+        node(text, Vec::new())
+    }
+
+    #[test]
+    fn flatten_subtree_paths_returns_dfs_preorder() {
+        // Mirrors the previous `outl_md::outline_ops::flatten_backlink_subtree`
+        // coverage so behaviour stays identical after the move.
+        let root = node(
+            "root",
+            vec![node("a", vec![leaf("a1"), leaf("a2")]), leaf("b")],
+        );
+        assert_eq!(
+            flatten_subtree_paths(&root),
+            vec![
+                Vec::<usize>::new(), // root
+                vec![0],             // a
+                vec![0, 0],          // a1
+                vec![0, 1],          // a2
+                vec![1],             // b
+            ]
+        );
+    }
+
+    #[test]
+    fn flatten_subtree_paths_leaf_returns_just_root() {
+        let only = leaf("only-me");
+        assert_eq!(flatten_subtree_paths(&only), vec![Vec::<usize>::new()]);
+    }
+
+    #[test]
+    fn prop_value_to_string_covers_every_variant() {
+        // `Text` is what `outl-md` actually emits today; the other
+        // variants are surfaced for forward-compat. The helper still
+        // has to behave sensibly on each so a future indexer doesn't
+        // crash on a non-Text page property.
+        assert_eq!(
+            prop_value_to_string(&PropValue::Text("high".into())),
+            "high"
+        );
+        assert_eq!(
+            prop_value_to_string(&PropValue::PageRef("Avelino".into())),
+            "Avelino"
+        );
+        assert_eq!(
+            prop_value_to_string(&PropValue::Tag("urgent".into())),
+            "urgent"
+        );
+        assert_eq!(
+            prop_value_to_string(&PropValue::List(vec![
+                PropValue::Tag("a".into()),
+                PropValue::Tag("b".into()),
+            ])),
+            "a b"
+        );
+    }
+
+    #[test]
+    fn outline_node_carries_todo_text_and_properties() {
+        // Smoke that the DTO surface a backlink hands the renderer
+        // exposes the fields the TUI uses. We don't go through the
+        // workspace here — that's covered by `backlinks` tests.
+        let n = OutlineNode {
+            id: "x".into(),
+            text: "ship it".into(),
+            todo: Some(TodoState::Done),
+            collapsed: false,
+            properties: vec![("priority".into(), "high".into())],
+            children: vec![leaf("child")],
+        };
+        assert_eq!(n.text, "ship it");
+        assert_eq!(n.todo, Some(TodoState::Done));
+        assert_eq!(n.properties[0], ("priority".into(), "high".into()));
+        assert_eq!(n.children.len(), 1);
     }
 }

@@ -83,6 +83,50 @@ pub fn char_to_line_col(s: &str, char_idx: usize) -> (usize, usize) {
     (line, col)
 }
 
+/// Inverse of [`char_to_line_col`]: locate the char index of
+/// `(line, col)` inside `s`. Lines are `\n`-separated; the column
+/// counts characters into the target line.
+///
+/// **Column clamping (vim-style):** when the requested column is
+/// past the end of its line, the cursor lands at the line's last
+/// char — useful for preserving a "preferred column" while moving
+/// up/down across lines of varying length.
+///
+/// **Line clamping:** asking for a line past the last one returns
+/// the end of the string. This mirrors what most editors do when the
+/// user presses `Down` on the last row.
+///
+/// Used by the TUI's `EditBuffer::move_up` / `move_down` so the
+/// cursor positions in the editor match the line/col mapping the
+/// renderer ([`block_to_rows`]) already builds — one owner for the
+/// mapping, no drift between cursor and rendering.
+pub fn line_col_to_char(s: &str, target_line: usize, target_col: usize) -> usize {
+    let mut line = 0usize;
+    let mut col = 0usize;
+
+    for (idx, ch) in s.chars().enumerate() {
+        if line == target_line && col == target_col {
+            return idx;
+        }
+        if ch == '\n' {
+            // About to enter the next line — if we were on the target
+            // line, the column requested was past EOL; clamp to the
+            // index of this newline (i.e. one past the last char).
+            if line == target_line {
+                return idx;
+            }
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    // Ran off the end of the string. Either the target line was the
+    // last line (and the column was past its end) or the target line
+    // is past the buffer entirely — both clamp to end of string.
+    s.chars().count()
+}
+
 /// Decompose a block's `text` into visual rows.
 ///
 /// `cursor_char`, when present, is a char index into `text` (counting
@@ -226,5 +270,36 @@ mod tests {
         let (l, c) = char_to_line_col("first\nsecond", 7);
         assert_eq!(l, 1);
         assert_eq!(c, 1);
+    }
+
+    #[test]
+    fn line_col_to_char_round_trips_with_char_to_line_col() {
+        let s = "first\nsecond";
+        let (l, c) = char_to_line_col(s, 7); // char `e` of "second" → (1, 1)
+        assert_eq!(line_col_to_char(s, l, c), 7);
+    }
+
+    #[test]
+    fn line_col_to_char_clamps_to_eol_on_overshoot() {
+        // "hi\nworld" — line 0 has 2 chars; asking for col 5 should
+        // land at the end of line 0 (idx 2 = the `\n`).
+        assert_eq!(line_col_to_char("hi\nworld", 0, 5), 2);
+    }
+
+    #[test]
+    fn line_col_to_char_clamps_to_end_when_target_line_is_last() {
+        // "hello\nhi" — line 1 has 2 chars; col 4 → end of string.
+        assert_eq!(line_col_to_char("hello\nhi", 1, 4), 8);
+    }
+
+    #[test]
+    fn line_col_to_char_clamps_when_target_line_is_past_end() {
+        // No line 5 in this string → end of string.
+        assert_eq!(line_col_to_char("only\nline", 5, 0), 9);
+    }
+
+    #[test]
+    fn line_col_to_char_lands_at_zero_on_origin() {
+        assert_eq!(line_col_to_char("anything", 0, 0), 0);
     }
 }

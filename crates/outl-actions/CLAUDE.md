@@ -112,6 +112,35 @@ the editor.
   `ChronDbStorage` implement `outl_core::Storage` and live in the
   binary that needs them.
 
+## Reuse-first
+
+This is the **shared layer**. Every client (TUI, mobile, future
+desktop) consumes it — and they all consume the same struct, the
+same constants, the same policy. Two parallel implementations of
+the same concept across clients is the bug we paid to delete (see
+the `outl_md::index::Backlink` → `outl_actions::Backlink`
+consolidation, where policy drifted on self-references and the
+user was the one who caught it).
+
+When adding a new operation here:
+
+1. **Search first.** `rg` for the symbol across `outl-core`,
+   `outl-md`, and this crate before writing it.
+2. **Promote, don't fork.** If a client crate already has a
+   helper for the same concept, lift it here (and delete the
+   client copy) — even if it's a small refactor. The
+   `flatten_backlink_subtree` → `flatten_subtree_paths` move
+   from `outl-md` is the canonical pattern: one owner, every
+   client wraps.
+3. **Generalize the parameter set** when migrating. The Backlink
+   rewrite added `source_block: OutlineNode` + `source_path` so
+   *both* the mobile linear renderer and the TUI subtree renderer
+   could share the same struct. Capping features at "what mobile
+   needs today" would force the TUI to keep its own copy.
+
+The root [`CLAUDE.md`](../../CLAUDE.md#reuse-first-no-parallel-implementations)
+"Reuse-first" section documents the policy at the workspace level.
+
 ## When you're done
 
 1. `cargo fmt`

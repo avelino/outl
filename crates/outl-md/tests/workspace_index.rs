@@ -4,6 +4,11 @@
 //! file-size-guard limit. Every test here exercises only the public
 //! API surface (build / patch_page / remove_page / lookups), which is
 //! the contract any UI surface — TUI, Tauri, mobile — talks to.
+//!
+//! **Backlink tests live in `outl-actions::backlinks`.** This index
+//! used to carry a parallel backlinks cache; it was removed because
+//! it duplicated `outl_actions::backlinks_for_page` and drifted in
+//! policy (self-references behaved differently on TUI vs mobile).
 
 use outl_core::id::NodeId;
 use outl_md::index::WorkspaceIndex;
@@ -27,33 +32,6 @@ fn write_workspace(files: &[(&str, &str)]) -> TempDir {
 }
 
 #[test]
-fn patch_page_replaces_backlinks_for_that_slug_only() {
-    let dir = write_workspace(&[
-        ("pages/avelino.md", "title:: Avelino\n\n- author\n"),
-        (
-            "pages/projeto.md",
-            "title:: Projeto\n\n- led by [[Avelino]]\n",
-        ),
-        ("journals/2026-05-24.md", "- meeting with [[Avelino]]\n"),
-    ]);
-    let mut idx = WorkspaceIndex::build(dir.path());
-    assert_eq!(idx.backlinks("avelino").len(), 2);
-
-    let new_md = "title:: Projeto\n\n- led by [[Other Page]]\n";
-    let new_page = parse(new_md);
-    let proj_path = dir.path().join("pages/projeto.md");
-    idx.patch_page(&proj_path, &new_page);
-
-    let avelino_bls = idx.backlinks("avelino");
-    assert_eq!(avelino_bls.len(), 1, "journal backlink should survive");
-    assert_eq!(avelino_bls[0].source_slug, "2026-05-24");
-
-    let other_bls = idx.backlinks("other-page");
-    assert_eq!(other_bls.len(), 1);
-    assert_eq!(other_bls[0].source_slug, "projeto");
-}
-
-#[test]
 fn patch_page_updates_title_and_icon() {
     let dir = write_workspace(&[("pages/x.md", "title:: Old Title\nicon:: 🦀\n\n- body\n")]);
     let mut idx = WorkspaceIndex::build(dir.path());
@@ -71,7 +49,7 @@ fn patch_page_updates_title_and_icon() {
 }
 
 #[test]
-fn remove_page_drops_entry_and_its_backlinks() {
+fn remove_page_drops_entry_and_title_alias() {
     let dir = write_workspace(&[
         ("pages/avelino.md", "title:: Avelino\n\n- author\n"),
         (
@@ -80,12 +58,14 @@ fn remove_page_drops_entry_and_its_backlinks() {
         ),
     ]);
     let mut idx = WorkspaceIndex::build(dir.path());
-    assert_eq!(idx.backlinks("avelino").len(), 1);
+    assert!(idx.by_slug("projeto").is_some());
+    assert_eq!(idx.by_title("Projeto").unwrap().slug, "projeto");
 
     idx.remove_page("projeto");
     assert!(idx.by_slug("projeto").is_none());
     assert!(idx.by_title("Projeto").is_none());
-    assert!(idx.backlinks("avelino").is_empty());
+    // `avelino` page entry is independent — it survives.
+    assert!(idx.by_slug("avelino").is_some());
 }
 
 #[test]
@@ -311,7 +291,7 @@ fn missing_title_falls_back_to_slug() {
 }
 
 #[test]
-fn icon_property_is_indexed_and_propagated_to_backlinks() {
+fn icon_property_lands_on_the_page_entry() {
     let dir = write_workspace(&[
         (
             "pages/avelino.md",
@@ -328,11 +308,6 @@ fn icon_property_is_indexed_and_propagated_to_backlinks() {
     assert_eq!(idx.by_slug("avelino").unwrap().icon.as_deref(), Some("🦀"));
     assert_eq!(idx.by_slug("projeto").unwrap().icon.as_deref(), Some("🚀"));
     assert_eq!(idx.by_slug("bare").unwrap().icon, None);
-
-    let bls = idx.backlinks("avelino");
-    assert_eq!(bls.len(), 1);
-    assert_eq!(bls[0].source_slug, "projeto");
-    assert_eq!(bls[0].source_icon.as_deref(), Some("🚀"));
 }
 
 #[test]
@@ -343,92 +318,11 @@ fn empty_icon_is_treated_as_none() {
 }
 
 #[test]
-fn backlinks_are_collected_across_pages() {
-    let dir = write_workspace(&[
-        ("pages/avelino.md", "title:: Avelino\n\n- I am the author\n"),
-        (
-            "pages/projeto.md",
-            "title:: Projeto\n\n- led by [[Avelino]]\n",
-        ),
-        (
-            "journals/2026-05-24.md",
-            "- meeting with [[Avelino]] and #urgent stuff\n",
-        ),
-    ]);
-    let idx = WorkspaceIndex::build(dir.path());
-    let bl = idx.backlinks("avelino");
-    assert_eq!(bl.len(), 2);
-    let slugs: Vec<_> = bl.iter().map(|b| b.source_slug.as_str()).collect();
-    assert!(slugs.contains(&"projeto"));
-    assert!(slugs.contains(&"2026-05-24"));
-
-    let urgent = idx.backlinks("urgent");
-    assert_eq!(urgent.len(), 1);
-}
-
-#[test]
-fn self_references_are_skipped() {
-    let dir = write_workspace(&[(
-        "pages/recursive.md",
-        "title:: Recursive\n\n- I link to [[Recursive]] myself\n",
-    )]);
-    let idx = WorkspaceIndex::build(dir.path());
-    assert!(idx.backlinks("recursive").is_empty());
-}
-
-#[test]
 fn journals_are_treated_as_pages_for_lookup() {
     let dir = write_workspace(&[("journals/2026-05-24.md", "- entry\n")]);
     let idx = WorkspaceIndex::build(dir.path());
     let entry = idx.by_slug("2026-05-24").unwrap();
     assert!(entry.is_journal);
-}
-
-#[test]
-fn source_block_carries_text_and_children() {
-    let dir = write_workspace(&[
-        ("pages/avelino.md", "title:: Avelino\n\n- author\n"),
-        (
-            "pages/projeto.md",
-            "title:: Projeto\n\n- led by [[Avelino]]\n  - milestone A\n  - milestone B\n",
-        ),
-    ]);
-    let idx = WorkspaceIndex::build(dir.path());
-    let bls = idx.backlinks("avelino");
-    assert_eq!(bls.len(), 1);
-    assert_eq!(bls[0].source_block.text, "led by [[Avelino]]");
-    assert_eq!(bls[0].source_block.children.len(), 2);
-    assert_eq!(bls[0].source_block.children[0].text, "milestone A");
-    assert_eq!(bls[0].source_block.children[1].text, "milestone B");
-}
-
-#[test]
-fn source_block_path_points_to_referencing_block() {
-    let dir = write_workspace(&[
-        ("pages/avelino.md", "title:: Avelino\n\n- author\n"),
-        (
-            "pages/projeto.md",
-            "title:: Projeto\n\n- root block\n  - nested ref to [[Avelino]]\n",
-        ),
-    ]);
-    let idx = WorkspaceIndex::build(dir.path());
-    let bls = idx.backlinks("avelino");
-    assert_eq!(bls.len(), 1);
-    assert_eq!(bls[0].source_block_path, vec![0, 0]);
-    assert_eq!(bls[0].source_block.text, "nested ref to [[Avelino]]");
-}
-
-#[test]
-fn block_with_repeated_reference_only_emits_one_backlink() {
-    let dir = write_workspace(&[
-        ("pages/avelino.md", "title:: Avelino\n\n- author\n"),
-        (
-            "pages/projeto.md",
-            "title:: Projeto\n\n- [[Avelino]] and again [[Avelino]] same block\n",
-        ),
-    ]);
-    let idx = WorkspaceIndex::build(dir.path());
-    assert_eq!(idx.backlinks("avelino").len(), 1);
 }
 
 #[test]
