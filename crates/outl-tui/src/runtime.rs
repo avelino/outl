@@ -15,6 +15,7 @@ use crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
+use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, EnterAlternateScreen,
@@ -108,6 +109,12 @@ pub fn run_with_theme_override(path: &Path, theme_override: Option<&str>) -> Res
     enable_raw_mode().context("enabling raw mode")?;
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen).context("entering alt screen")?;
+    // Ask the terminal to deliver pastes as a single `Event::Paste`
+    // instead of streaming the clipboard contents as keystrokes (which
+    // would interleave `\n` with the user's keymap and produce
+    // surprise commits + new blocks). Best-effort: terminals without
+    // bracketed-paste support silently ignore the CSI sequence.
+    let _ = execute!(stdout, EnableBracketedPaste);
 
     // Ask the terminal to report enhanced key events (kitty keyboard
     // protocol). When supported, this lets us distinguish `Shift+Enter`
@@ -141,6 +148,7 @@ pub fn run_with_theme_override(path: &Path, theme_override: Option<&str>) -> Res
     if enhanced_keys {
         let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
     }
+    let _ = execute!(terminal.backend_mut(), DisableBracketedPaste);
     let _ = disable_raw_mode();
     let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
     let _ = terminal.show_cursor();
@@ -320,8 +328,16 @@ fn event_loop(
             app.check_external_changes();
             continue;
         }
-        let Event::Key(key) = event::read()? else {
-            continue;
+        let key = match event::read()? {
+            Event::Key(k) => k,
+            Event::Paste(text) => {
+                // Bracketed-paste payload — convert markdown bullets
+                // to outl blocks via the shared paste pipeline.
+                app.check_external_changes();
+                app.paste_external(text);
+                continue;
+            }
+            _ => continue,
         };
         if key.kind != KeyEventKind::Press {
             continue;

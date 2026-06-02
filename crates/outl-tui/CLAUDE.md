@@ -161,7 +161,8 @@ src/
 │   ├── block.rs         # Insert mode, create/indent/outdent/delete blocks
 │   ├── history.rs       # undo / redo snapshots
 │   ├── visual.rs        # Visual mode + range ops
-│   ├── yank.rs          # yank register, paste
+│   ├── yank.rs          # yank register, in-app paste of yanked blocks
+│   ├── paste.rs         # external-clipboard paste (bracketed paste → outl_actions::paste_markdown)
 │   ├── exec.rs          # run code block via outl_exec
 │   └── overlay.rs       # quick switcher, search, palette, autocomplete
 ├── input.rs             # key → action routing

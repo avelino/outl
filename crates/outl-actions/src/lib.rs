@@ -57,6 +57,7 @@ pub mod ingest;
 pub mod journal;
 pub mod outline;
 pub mod page;
+pub mod paste;
 pub mod sync;
 pub mod todo;
 pub mod tree;
@@ -79,6 +80,9 @@ pub use page::{
     list_all as list_pages, migrate_legacy_into_today, next_journal_date, open_journal,
     open_or_create as open_or_create_page, open_today, page_meta, previous_journal_date,
     read_text_prop, set_property, today, PageKind, PageMeta,
+};
+pub use paste::{
+    looks_like_outline, normalize_external_syntax, paste_markdown, PasteAnchor, PasteOutcome,
 };
 pub use sync::{OpsFileSnapshot, SyncEngine};
 pub use todo::{cycle_todo, split_todo, TodoState, DONE_PREFIX, TODO_PREFIX};

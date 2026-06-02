@@ -39,6 +39,27 @@ What this crate **does** own:
 - Tauri command surface (argument parsing, error mapping).
 - Solid frontend that consumes the commands.
 
+## Paste from external apps
+
+The textarea in `BlockRow.tsx` intercepts paste events whose payload
+looks like a bullet list (`lib/paste.ts::looksLikeOutline`) and routes
+the text to `outl_actions::paste_markdown` via the `paste_markdown_at`
+Tauri command. Plain text falls through to the browser's default
+splice so a one-off URL or code snippet still pastes the way the user
+expects.
+
+Two cross-runtime contracts live here. Both must stay in sync:
+
+1. **`looksLikeOutline`** mirrors `outl_actions::paste::looks_like_outline`.
+   Extending the Rust detector (e.g. accept `*` bullets or ordered
+   lists) requires the same change in `lib/paste.ts` plus a Vitest case.
+2. **Caret offset.** `textarea.selectionStart` is a UTF-16 code unit
+   offset; the Rust backend expects a Unicode codepoint count.
+   `lib/paste.ts::utf16OffsetToCharOffset` does the conversion before
+   the Tauri call so pasting after an emoji lands the splice at the
+   right place. Skip this and supplementary-plane characters shift
+   the splice by one per char.
+
 ## iCloud layout
 
 The workspace root is `<ubiquity-container>/Documents/`. The container

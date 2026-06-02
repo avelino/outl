@@ -36,9 +36,10 @@ use outl_actions::{
     append_block, apply_page_md_with_sidecar, backlinks_for_page, create_after, date_from_slug,
     delete, edit_text, find_by_slug, indent, journal_slug, journal_title, list_pages,
     migrate_legacy_into_today, move_down, move_up, next_journal_date, open_journal,
-    open_or_create_page, open_today, outdent, page_meta as page_meta_action, previous_journal_date,
-    read_page_view_with_workspace, set_block_collapsed as action_set_block_collapsed, today,
-    toggle_todo as action_toggle_todo, ActionError, Backlink, OutlineNode, PageKind, PageMeta,
+    open_or_create_page, open_today, outdent, page_meta as page_meta_action,
+    paste_markdown as action_paste_markdown, previous_journal_date, read_page_view_with_workspace,
+    set_block_collapsed as action_set_block_collapsed, today, toggle_todo as action_toggle_todo,
+    ActionError, Backlink, OutlineNode, PageKind, PageMeta, PasteAnchor,
 };
 use outl_core::hlc::HlcGenerator;
 use outl_core::id::{ActorId, NodeId};
@@ -410,7 +411,10 @@ fn indent_block(
 ) -> Result<PageView, String> {
     let page = parse_node_id(&page_id)?;
     let node = parse_node_id(&id)?;
-    finish_in_page(&state, page, |ws| indent(ws, &state.hlc, node))
+    finish_in_page(&state, page, |ws| match indent(ws, &state.hlc, node) {
+        Err(ActionError::NoPreviousSibling(_)) => Ok(()),
+        other => other,
+    })
 }
 
 #[tauri::command]
@@ -421,7 +425,10 @@ fn outdent_block(
 ) -> Result<PageView, String> {
     let page = parse_node_id(&page_id)?;
     let node = parse_node_id(&id)?;
-    finish_in_page(&state, page, |ws| outdent(ws, &state.hlc, node))
+    finish_in_page(&state, page, |ws| match outdent(ws, &state.hlc, node) {
+        Err(ActionError::AlreadyAtRoot(_)) => Ok(()),
+        other => other,
+    })
 }
 
 #[tauri::command]
@@ -476,6 +483,39 @@ fn set_block_collapsed(
     with_ws_mut(&state, |ws| {
         action_set_block_collapsed(ws, &state.hlc, node, collapsed).map_err(|e| e.to_string())?;
         build_page_view(ws, &state.storage_root, page).map_err(|e| e.to_string())
+    })
+}
+
+/// Paste external clipboard markdown as a tree of blocks.
+///
+/// `caret` is a Unicode codepoint offset into the host block's text,
+/// matching the convention `outl_actions::PasteAnchor::AtCaret` uses
+/// (Rust `str::chars()` iterates codepoints, not UTF-16 code units).
+/// The frontend converts `textarea.selectionStart` (UTF-16) into a
+/// codepoint count via `utf16OffsetToCharOffset` before invoking
+/// this command, so we get the right offset for text containing
+/// emoji and other supplementary-plane characters too.
+#[tauri::command]
+fn paste_markdown_at(
+    page_id: String,
+    block_id: String,
+    caret: u32,
+    text: String,
+    state: State<'_, AppState>,
+) -> Result<PageView, String> {
+    let page = parse_node_id(&page_id)?;
+    let block = parse_node_id(&block_id)?;
+    finish_in_page(&state, page, |ws| {
+        action_paste_markdown(
+            ws,
+            &state.hlc,
+            PasteAnchor::AtCaret {
+                block,
+                caret: caret as usize,
+            },
+            &text,
+        )
+        .map(|_| ())
     })
 }
 
@@ -712,6 +752,7 @@ pub fn run() {
             move_block_up,
             move_block_down,
             set_block_collapsed,
+            paste_markdown_at,
             reload_workspace,
             // Legacy
             list_outline,
