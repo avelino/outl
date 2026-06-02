@@ -75,6 +75,16 @@ same paranoia as the CRDT.
   allocating per keystroke. Public field, but consumers must not build
   `BlockEntry` by hand — go through the index population path so
   `text_fold` stays consistent with `text`.
+- **`reconcile_md_with_page_id(ws, hlc, md_path, page_id, orphan_log)`**
+  (`reconcile.rs`) — like `reconcile_md`, but pins the page node id
+  used when no sidecar exists yet. `outl_actions::ingest_md_file` passes
+  `page_id_from_slug(slug)` so blocks attach to the same node
+  `open_or_create` just created under root. Without this, the two paths
+  mint different ids and blocks hang off a phantom node that never
+  appears in `page list`. Call sites that ingest a file as a first-class
+  page (import, serve, orphan scanners) must use this variant; the bare
+  `reconcile_md` is for in-place external-edit reconcile where the
+  sidecar already carries the correct id.
 
 ## What this crate does NOT own
 
@@ -187,7 +197,7 @@ src/
 ├── inline.rs       # InlineTok (Plain/Bold/.../BlockRef/Embed), RefTarget, ref_at_cursor
 ├── index.rs        # WorkspaceIndex — page-level + block-level facade
 ├── block_index.rs  # BlockEntry, BlockReference, BlockIndex (id ↔ handle ↔ reverse refs)
-├── reconcile.rs    # high-level reconcile_md (parse → match → diff → apply)
+├── reconcile.rs    # reconcile_md + reconcile_md_with_page_id (parse → match → diff → apply)
 ├── slug.rs         # slugify page names
 ├── view.rs         # render helpers consumed by UIs
 └── atomic.rs       # crash-safe write_atomic

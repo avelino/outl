@@ -643,8 +643,8 @@ fn reconcile_orphan_md(workspace: &mut Workspace, hlc: &HlcGenerator, storage_ro
         return;
     }
     for path in &orphans {
-        if let Err(e) = outl_md::reconcile::reconcile_md(workspace, hlc, path, None) {
-            warn!("orphan reconcile failed for {}: {e}", path.display());
+        if let Err(e) = outl_actions::ingest_md_file(workspace, hlc, path, None) {
+            warn!("orphan ingest failed for {}: {e}", path.display());
         }
     }
 }

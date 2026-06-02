@@ -278,6 +278,35 @@ payload via the normal envelope.
 on purpose — they're either interactive, long-running, or bootstrap
 commands that don't fit a tool-call shape.
 
+`outl import logseq <src> <dst>` ingests every page and journal from a
+Logseq graph directory. The import runs in two stages:
+
+1. **Normalize then ingest each `.md` file.** Before parsing, the file
+   body is passed through `normalize_outline`, which converts it from
+   Logseq's free-form markdown to outl's strict outliner dialect:
+   top-level headings and bare paragraphs become bullet items;
+   multi-paragraph blocks (blank lines inside a block) are merged into
+   a single block; orphaned indented bullets are clamped to a valid
+   parent level; fenced code blocks are dedented and re-indented with
+   canonical two-space indentation. After normalization, each file is
+   ingested via `outl_actions::ingest_md_file`, which creates the page
+   node under root (with the correct `page-slug` and `page-kind`)
+   before reconciling blocks under it. Imported pages appear
+   immediately in `outl page list`.
+
+2. **Create implicit pages.** Logseq allows `[[ref]]` links to pages
+   that have no corresponding `.md` file. After all files are ingested,
+   `outl_actions::create_missing_ref_pages` walks the workspace, finds
+   every `[[ref]]` target that lacks a page, and creates a stub page
+   for it (title = ref text, slug = slugified ref, kind = Journal for
+   date-shaped refs). Backlinks to these implicit pages resolve
+   immediately — without this step they would return `PAGE_NOT_FOUND`.
+
+`outl serve` uses the same `ingest_md_file` path when it discovers a
+`.md` without a sidecar on startup, so manually dropping a `.md` file
+into `pages/` or `journals/` and running `serve` will register it as a
+proper page.
+
 ## MCP
 
 Every machine-shaped command above is also exposed as an MCP tool

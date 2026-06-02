@@ -52,4 +52,9 @@ pub enum ActionError {
     /// with the rendered `.md` projection.
     #[error("sidecar: {0}")]
     Sidecar(#[from] outl_md::sidecar::SidecarError),
+
+    /// Reconcile of an ingested `.md` file failed (parse, match, or
+    /// op application). Surfaced by `ingest_md_file`.
+    #[error("reconcile: {0}")]
+    Reconcile(#[from] outl_md::reconcile::ReconcileError),
 }

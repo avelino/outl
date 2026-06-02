@@ -17,6 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub mod logseq;
+pub mod normalize;
 pub mod roam;
 
 /// Summary of what an import produced.
@@ -105,6 +106,14 @@ pub(super) fn write_page_md(
         // Journals don't need the `title::` header — the filename is
         // the date.
         body.to_string()
+    } else if body_starts_with_page_property(body) {
+        // The body already opens with page properties (e.g. `title::`)
+        // — re-importing an outl workspace, or a Logseq page that used
+        // `title::`. Prepending another `title::` would create two
+        // property lines; the blank line between them terminates the
+        // page-property block and orphans everything below it (the
+        // parser then sees zero blocks and the page imports empty).
+        body.to_string()
     } else {
         // Pages always carry the original human name in `title::`.
         format!("title:: {title}\n\n{body}")
@@ -112,6 +121,17 @@ pub(super) fn write_page_md(
     outl_md::write_atomic(&path, full.as_bytes())
         .with_context(|| format!("write {}", path.display()))?;
     Ok(path)
+}
+
+/// `true` when the first non-empty line of `body` is a `key:: value`
+/// page property. Used to avoid prepending a second `title::` header
+/// onto content that already carries its own frontmatter.
+fn body_starts_with_page_property(body: &str) -> bool {
+    body.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .and_then(outl_md::parse::parse_property_line)
+        .is_some()
 }
 
 /// Try to parse `name` as a journal date in any of the formats the
@@ -186,9 +206,10 @@ pub(super) struct ResolvedUid {
     pub snippet: String,
 }
 
-/// Run `reconcile_md` on every imported file so the sidecar JSON is
-/// stamped with stable IDs. Without this, the user has to open the
-/// TUI once to seed sidecars — which works but is surprising.
+/// Ingest every imported file **as a page** so it shows up in
+/// `page list` and its sidecar is stamped with stable IDs. Without
+/// this, blocks would land in the op log but no page node would be
+/// created under root — the imported graph would look empty.
 ///
 /// Acquires the same locks every other workspace opener takes
 /// (shared `WorkspaceLock` + per-actor `ActorWriteLock` via
@@ -232,8 +253,19 @@ pub(super) fn seed_sidecars(paths: &Paths) -> Result<()> {
             {
                 continue;
             }
-            let _ = outl_md::reconcile::reconcile_md(&mut ws, &hlc, p, Some(&paths.orphans));
+            if let Err(e) = outl_actions::ingest_md_file(&mut ws, &hlc, p, Some(&paths.orphans)) {
+                eprintln!("ingest failed for {}: {e}", p.display());
+            }
         }
+    }
+
+    // Logseq "implicit pages": create a stub for every `[[ref]]` that
+    // has no file of its own (`[[Acme]]`, `[[@Jane Doe]]`),
+    // so those pages are navigable and their backlinks resolve.
+    match outl_actions::create_missing_ref_pages(&mut ws, &hlc) {
+        Ok(n) if n > 0 => println!("  implicit pages created: {n}"),
+        Ok(_) => {}
+        Err(e) => eprintln!("creating implicit ref pages: {e}"),
     }
     Ok(())
 }

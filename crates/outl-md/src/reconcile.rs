@@ -64,10 +64,44 @@ fn io_err(path: &Path, source: io::Error) -> ReconcileError {
 ///
 /// `orphan_log_path` receives one line per orphan id surfaced during
 /// matching. Pass `None` to suppress logging (mostly useful for tests).
+///
+/// When the file has no sidecar yet, the page node id is minted fresh
+/// (`NodeId::new`). Callers that ingest a file *as a page* — so the
+/// node id must agree with `page_id_from_slug`, letting a peer that
+/// creates the same slug converge on one node — should use
+/// [`reconcile_md_with_page_id`] instead.
 pub fn reconcile_md(
     ws: &mut Workspace,
     hlc: &HlcGenerator,
     md_path: &Path,
+    orphan_log_path: Option<&Path>,
+) -> Result<ReconcileReport, ReconcileError> {
+    reconcile_md_inner(ws, hlc, md_path, None, orphan_log_path)
+}
+
+/// Like [`reconcile_md`], but pins the page node id used when no
+/// sidecar exists yet.
+///
+/// `outl_actions::ingest_md_file` passes `page_id_from_slug(slug)` so
+/// the blocks attach to the page node `open_or_create` just created
+/// under root. Without this the two paths mint different ids and the
+/// blocks hang off a phantom node that never appears in `page list`
+/// (the Logseq-import "blocks but no pages" bug).
+pub fn reconcile_md_with_page_id(
+    ws: &mut Workspace,
+    hlc: &HlcGenerator,
+    md_path: &Path,
+    page_id: NodeId,
+    orphan_log_path: Option<&Path>,
+) -> Result<ReconcileReport, ReconcileError> {
+    reconcile_md_inner(ws, hlc, md_path, Some(page_id), orphan_log_path)
+}
+
+fn reconcile_md_inner(
+    ws: &mut Workspace,
+    hlc: &HlcGenerator,
+    md_path: &Path,
+    explicit_page_id: Option<NodeId>,
     orphan_log_path: Option<&Path>,
 ) -> Result<ReconcileReport, ReconcileError> {
     let md_text = fs::read_to_string(md_path).map_err(|e| io_err(md_path, e))?;
@@ -78,11 +112,11 @@ pub fn reconcile_md(
     let (page_id, old_blocks, created_sidecar) = match sidecar::read(&sidecar_path) {
         Ok(sc) => (sc.page_id, sc.blocks, false),
         Err(sidecar::SidecarError::Io(e)) if e.kind() == io::ErrorKind::NotFound => {
-            (NodeId::new(), Vec::new(), true)
+            (explicit_page_id.unwrap_or_default(), Vec::new(), true)
         }
         Err(_) => {
             // Corrupt sidecar — rebuild from scratch.
-            (NodeId::new(), Vec::new(), true)
+            (explicit_page_id.unwrap_or_default(), Vec::new(), true)
         }
     };
 

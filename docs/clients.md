@@ -17,6 +17,7 @@ operation through one shared crate: **`outl-actions`**.
 ┌──────────────────────────────────────────────────────────────┐
 │ outl-actions                                                  │
 │   block · tree · todo · journal · outline · page · backlinks  │
+│   ingest (ingest_md_file, ingest_dir — page-aware bulk load)  │
 │   sync (SyncEngine: reload workspace, reproject page,         │
 │         snapshot peer jsonls, scan for orphan .md)            │
 └──────────────────────────────────────────────────────────────┘
@@ -39,7 +40,7 @@ operation through one shared crate: **`outl-actions`**.
 |--------------------------------------|---------------------------------|
 | Op log, tree CRDT, storage trait     | `outl-core`                     |
 | `.md` parse / render, sidecar        | `outl-md`                       |
-| Workspace mutations (edit, indent, todo, delete, journal render) | `outl-actions` |
+| Workspace mutations (edit, indent, todo, delete, journal render, bulk ingest) | `outl-actions` |
 | Code-block execution                 | `outl-exec`                     |
 | TUI: keymaps, modes, overlays, in-flight AST manipulation | `outl-tui`         |
 | Mobile: iCloud storage, Tauri commands, Solid frontend | `outl-mobile`         |
@@ -142,8 +143,11 @@ engine does not.
 `journals/` and `pages/` for `.md` files whose sidecar is missing or
 stale (fresh import from Roam/Logseq, peer-shipped projection
 without sidecar, external vim edit). The TUI runs the scan every 10s
-on a worker thread; mobile runs it once at boot. Both feed the same
-`outl_md::reconcile::reconcile_md`.
+on a worker thread; mobile runs it once at boot. Both call
+`outl_actions::ingest_md_file` (not the bare `reconcile_md`), so a
+`.md` discovered without a sidecar surfaces as a real page under
+`page list` with backlinks intact — not just orphan blocks hanging
+off a phantom node id.
 
 See `crates/outl-mobile/CLAUDE.md` for the full bundle ID, signing
 team, container ID set required to build it, and the

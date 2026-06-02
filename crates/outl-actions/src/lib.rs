@@ -53,6 +53,7 @@ pub mod backlinks;
 pub mod block;
 pub mod collapsed;
 pub mod error;
+pub mod ingest;
 pub mod journal;
 pub mod outline;
 pub mod page;
@@ -67,6 +68,7 @@ pub use block::{
 };
 pub use collapsed::{set_block_collapsed, toggle_block_collapsed};
 pub use error::ActionError;
+pub use ingest::{create_missing_ref_pages, ingest_dir, ingest_md_file};
 pub use journal::{
     apply_all_pages_md, apply_page_md, apply_page_md_with_sidecar, journals_dir, mutate_page_md,
     page_md_path, pages_dir, render_page_md, write_md_atomic,

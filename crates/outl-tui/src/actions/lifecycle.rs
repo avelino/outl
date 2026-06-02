@@ -283,7 +283,7 @@ impl App {
         let orphans_log = self.orphans_log.clone();
         let mut reconciled = 0usize;
         for path in &all_paths {
-            if let Ok(_report) = outl_md::reconcile::reconcile_md(
+            if let Ok(_report) = outl_actions::ingest_md_file(
                 &mut self.workspace,
                 &self.hlc,
                 path,

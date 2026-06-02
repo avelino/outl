@@ -195,6 +195,12 @@ fn convert_file(
         out_lines.push(converted);
     }
 
+    // Logseq exports break outl's strict outliner grammar in several
+    // ways (loose `## headings`, multi-paragraph block bodies, orphan
+    // indented blocks, level-skipping). Rebuild the outline so the
+    // parser preserves every line instead of dropping content.
+    let mut out_lines = super::normalize::normalize_outline(out_lines);
+
     // Strip trailing blank lines so the file ends cleanly.
     while out_lines
         .last()

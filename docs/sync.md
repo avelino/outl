@@ -356,7 +356,7 @@ engine.reproject_page(&fresh, focused_page_id)?; // rewrite the focused .md + si
 | `refresh_page(page_id)` | Convenience: reload + reproject in one call. The typical "peer fired, pull the new state in" entry point. |
 | `snapshot()` | Lists every `ops-*.jsonl` in the workspace with size + mtime. Used by polling detectors (TUI) to decide whether to fire a reload. |
 | `snapshot_peers()` | Like `snapshot()` but **filters out the local actor's file**. Reacting to your own writes closes a destructive save-reload-race loop; only peer files should trigger reloads. |
-| `scan_for_orphans()` | Walks `journals/` and `pages/` for `.md` files whose sidecar is missing or whose `last_synced_hash` no longer matches the file's current hash. Both conditions mean the op log doesn't reflect this content yet (fresh import, peer-shipped projection without sidecar, vim edits). Each path feeds `outl_md::reconcile::reconcile_md`. |
+| `scan_for_orphans()` | Walks `journals/` and `pages/` for `.md` files whose sidecar is missing or whose `last_synced_hash` no longer matches the file's current hash. Both conditions mean the op log doesn't reflect this content yet (fresh import, peer-shipped projection without sidecar, vim edits). Each path feeds `outl_actions::ingest_md_file`, which creates the page node under root before reconciling blocks, so discovered files appear in `page list`. |
 
 ### TUI policy: defer reloads while typing
 
@@ -390,10 +390,12 @@ the watcher applies reloads immediately. Same engine, simpler policy.
 without an op-log history: a user dumps a Roam export into
 `journals/`, a peer ships only the projection, someone edits a `.md`
 in vim and saves. The TUI runs the scan every 10 seconds on a worker
-thread; mobile runs it once at boot. Both call into
-`outl_md::reconcile::reconcile_md`, which uses 3-level matching to
-emit the minimum ops that translate the on-disk state into the op
-log.
+thread; mobile runs it once at boot. Both call
+`outl_actions::ingest_md_file`, which derives the page slug and kind
+from the file path, calls `open_or_create` to register the page node
+under root, then uses 3-level matching to emit the minimum ops that
+translate the on-disk state into the op log. Files that arrive without
+a sidecar now surface as real pages in `page list` immediately.
 
 ---
 
