@@ -46,6 +46,40 @@ export function countDescendants(block: BlockNode): number {
   return n;
 }
 
+/**
+ * Flatten an outline into the **visible** DFS-preorder list: the
+ * children of a collapsed block are hidden in the UI, so they're
+ * skipped here too. Use this (not `flatten`) for anything that walks
+ * the cells the user can actually see — e.g. ArrowUp/ArrowDown
+ * navigation, which must land on the next *rendered* block.
+ */
+export function flattenVisible(blocks: BlockNode[]): BlockNode[] {
+  const out: BlockNode[] = [];
+  for (const b of blocks) {
+    out.push(b);
+    if (!b.collapsed) out.push(...flattenVisible(b.children));
+  }
+  return out;
+}
+
+/**
+ * Id of the block immediately above (`"up"`) or below (`"down"`)
+ * `id` in visible order, or `null` when `id` is at the top/bottom
+ * edge (or absent). Built on `flattenVisible`, so collapsed subtrees
+ * are stepped over rather than entered.
+ */
+export function neighborId(
+  blocks: BlockNode[],
+  id: string,
+  dir: "up" | "down",
+): string | null {
+  const flat = flattenVisible(blocks);
+  const idx = flat.findIndex((b) => b.id === id);
+  if (idx === -1) return null;
+  const target = dir === "up" ? flat[idx - 1] : flat[idx + 1];
+  return target?.id ?? null;
+}
+
 /** Block that the backend inserted right after `afterId` in a fresh
  * outline, or `null` if `afterId` is the very last node. */
 export function findInsertedAfter(

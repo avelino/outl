@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parkCaret, spliceText } from "./textarea";
+import {
+  caretOnFirstLine,
+  caretOnLastLine,
+  parkCaret,
+  spliceText,
+} from "./textarea";
 
 function newTextarea(value = "", caret = 0): HTMLTextAreaElement {
   const el = document.createElement("textarea");
@@ -36,6 +41,41 @@ describe("spliceText", () => {
     el.setRangeText = undefined;
     spliceText(el, 1, 1, "Z");
     expect(el.value).toBe("aZb");
+  });
+});
+
+describe("caretOnFirstLine", () => {
+  it("is true for a single-line value at any caret", () => {
+    expect(caretOnFirstLine("hello", 0)).toBe(true);
+    expect(caretOnFirstLine("hello", 5)).toBe(true);
+  });
+
+  it("is true while the caret stays before the first newline", () => {
+    expect(caretOnFirstLine("ab\ncd", 0)).toBe(true);
+    expect(caretOnFirstLine("ab\ncd", 2)).toBe(true);
+  });
+
+  it("is false once the caret is past a newline", () => {
+    // caret at index 3 sits on the second line ("cd").
+    expect(caretOnFirstLine("ab\ncd", 3)).toBe(false);
+    expect(caretOnFirstLine("ab\ncd", 5)).toBe(false);
+  });
+});
+
+describe("caretOnLastLine", () => {
+  it("is true for a single-line value at any caret", () => {
+    expect(caretOnLastLine("hello", 0)).toBe(true);
+    expect(caretOnLastLine("hello", 5)).toBe(true);
+  });
+
+  it("is true once the caret is on the final line", () => {
+    expect(caretOnLastLine("ab\ncd", 3)).toBe(true);
+    expect(caretOnLastLine("ab\ncd", 5)).toBe(true);
+  });
+
+  it("is false while a newline still follows the caret", () => {
+    expect(caretOnLastLine("ab\ncd", 0)).toBe(false);
+    expect(caretOnLastLine("ab\ncd", 2)).toBe(false);
   });
 });
 

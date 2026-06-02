@@ -36,6 +36,7 @@ import {
   findBlock,
   findInsertedAfter,
   flatten,
+  neighborId,
   rawTextWithTodo,
 } from "../lib/outline";
 import { applySuggestion, detectRefContext } from "../lib/autocomplete";
@@ -548,6 +549,33 @@ export function Journal() {
     }
   }
 
+  /**
+   * Desktop ArrowUp/ArrowDown between cells: move the editor to the
+   * previous/next *visible* block. We persist the current draft only
+   * when it actually changed, so pure up/down navigation stays
+   * instant (no backend round-trip per keypress). The target block's
+   * editor parks the caret at end-of-text on mount, matching the
+   * Backspace-merge behaviour.
+   */
+  async function handleNavigate(fromId: string, dir: "up" | "down") {
+    const cur = view();
+    if (!cur) return;
+    const targetId = neighborId(cur.outline, fromId, dir);
+    if (!targetId) return; // top/bottom edge — nowhere to go.
+    const fromBlock = findBlock(cur.outline, fromId);
+    const changed =
+      fromBlock !== null && draft() !== rawTextWithTodo(fromBlock);
+    let outline = cur.outline;
+    if (changed) {
+      await commitEdit();
+      const committed = view();
+      if (!committed) return;
+      outline = committed.outline;
+    }
+    const target = findBlock(outline, targetId);
+    if (target) startEdit(target.id, rawTextWithTodo(target));
+  }
+
   async function handleIndent(id: string) {
     const pid = pageId();
     if (!pid) return;
@@ -943,6 +971,7 @@ export function Journal() {
                   onToggleTodo={handleToggleTodo}
                   onDelete={handleDelete}
                   onDeleteEmpty={handleDeleteEmpty}
+                  onNavigate={handleNavigate}
                   onIndent={handleIndent}
                   onOutdent={handleOutdent}
                   onCreateAfter={handleCreateAfter}

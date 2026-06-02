@@ -71,3 +71,26 @@ export function parkCaret(el: HTMLTextAreaElement, pos: number): void {
     el.focus({ preventScroll: true });
   });
 }
+
+/**
+ * True when the caret sits on the first line of `value` — i.e. there
+ * is no newline before it. Drives ArrowUp cell navigation: we only
+ * jump to the previous block when pressing Up wouldn't just move the
+ * caret up one line inside a multi-line block.
+ *
+ * This is a *logical*-line test (counts `\n`), not a visual one: a
+ * soft-wrapped long line reads as a single line here. Outline blocks
+ * are short enough that the simplification is invisible in practice;
+ * swap for caret-rect measurement if that ever stops holding.
+ */
+export function caretOnFirstLine(value: string, caret: number): boolean {
+  return !value.slice(0, Math.max(0, caret)).includes("\n");
+}
+
+/**
+ * True when the caret sits on the last line of `value` — no newline
+ * after it. Mirror of `caretOnFirstLine` for ArrowDown navigation.
+ */
+export function caretOnLastLine(value: string, caret: number): boolean {
+  return !value.slice(Math.max(0, caret)).includes("\n");
+}

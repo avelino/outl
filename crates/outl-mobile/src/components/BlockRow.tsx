@@ -4,7 +4,7 @@ import { MarkdownInline } from "../lib/markdown";
 import { autoClosePair, autoDeletePair } from "../lib/autocomplete";
 import { haptic } from "../lib/haptics";
 import { rawTextWithTodo } from "../lib/outline";
-import { parkCaret } from "../lib/textarea";
+import { caretOnFirstLine, caretOnLastLine, parkCaret } from "../lib/textarea";
 import { isDesktop } from "../lib/platform";
 import { SwipeRow } from "./SwipeRow";
 
@@ -31,6 +31,13 @@ interface BlockRowProps {
    * swipe gesture), which deletes without re-focusing a neighbour.
    */
   onDeleteEmpty: (id: string) => void;
+  /**
+   * Desktop-only: move the edit caret to the previous (`"up"`) or
+   * next (`"down"`) visible block when ArrowUp/ArrowDown is pressed
+   * at the textarea's first/last line. The parent resolves the
+   * neighbour and re-targets the editor.
+   */
+  onNavigate: (id: string, dir: "up" | "down") => void;
   onIndent: (id: string) => void;
   onOutdent: (id: string) => void;
   onCreateAfter: (id: string) => void;
@@ -98,6 +105,7 @@ export function BlockRow(props: BlockRowProps): JSX.Element {
           onIndent={() => props.onIndent(props.block.id)}
           onOutdent={() => props.onOutdent(props.block.id)}
           onDeleteEmpty={() => props.onDeleteEmpty(props.block.id)}
+          onNavigate={(dir) => props.onNavigate(props.block.id, dir)}
           onRefClick={props.onRefClick}
           onTagClick={props.onTagClick}
           onTextareaMount={props.onTextareaMount}
@@ -125,6 +133,7 @@ export function BlockRow(props: BlockRowProps): JSX.Element {
                 onToggleTodo={props.onToggleTodo}
                 onDelete={props.onDelete}
                 onDeleteEmpty={props.onDeleteEmpty}
+                onNavigate={props.onNavigate}
                 onIndent={props.onIndent}
                 onOutdent={props.onOutdent}
                 onCreateAfter={props.onCreateAfter}
@@ -163,6 +172,7 @@ function BlockBody(props: {
   onIndent: () => void;
   onOutdent: () => void;
   onDeleteEmpty: () => void;
+  onNavigate: (dir: "up" | "down") => void;
   onRefClick?: (target: string) => void;
   onTagClick?: (tag: string) => void;
   onTextareaMount?: (el: HTMLTextAreaElement) => void;
@@ -299,6 +309,7 @@ function BlockBody(props: {
             onIndent={props.onIndent}
             onOutdent={props.onOutdent}
             onBackspaceEmpty={props.onDeleteEmpty}
+            onNavigate={props.onNavigate}
           />
         </Show>
       </div>
@@ -416,6 +427,7 @@ function EditableTextarea(props: {
   onIndent: () => void;
   onOutdent: () => void;
   onBackspaceEmpty: () => void;
+  onNavigate: (dir: "up" | "down") => void;
 }) {
   let ref!: HTMLTextAreaElement;
   let resizeRaf = 0;
@@ -500,6 +512,30 @@ function EditableTextarea(props: {
             e.preventDefault();
             props.onBackspaceEmpty();
             return;
+          }
+          // ArrowUp/ArrowDown → move to the previous/next visible
+          // block, but only at the textarea's vertical edge so the
+          // arrows still move the caret line-by-line inside a
+          // multi-line block. A modifier (e.g. Shift for selection,
+          // Alt/Cmd for word/line jumps) is left to the browser.
+          if (
+            (e.key === "ArrowUp" || e.key === "ArrowDown") &&
+            !e.shiftKey &&
+            !e.altKey &&
+            !e.metaKey &&
+            !e.ctrlKey &&
+            ta.selectionStart === ta.selectionEnd
+          ) {
+            const caret = ta.selectionStart ?? 0;
+            const atEdge =
+              e.key === "ArrowUp"
+                ? caretOnFirstLine(ta.value, caret)
+                : caretOnLastLine(ta.value, caret);
+            if (atEdge) {
+              e.preventDefault();
+              props.onNavigate(e.key === "ArrowUp" ? "up" : "down");
+              return;
+            }
           }
         }
 
