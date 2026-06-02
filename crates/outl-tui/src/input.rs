@@ -49,6 +49,36 @@ fn cross_block_nav_eligible(app: &App) -> bool {
     ) && matches!(app.focus, Focus::Outline)
 }
 
+/// Commit the current buffer and move the outline selection by
+/// `delta` (`-1` for Up, `+1` for Down), then re-enter Insert on the
+/// new block preserving the cursor's preferred column.
+///
+/// **Backlinks guard:** when `move_selection` crosses past the outline
+/// (the inline backlinks panel is the next navigable zone), it lands
+/// `Focus` on `Focus::Backlink`. In that case we **stop in Normal
+/// mode** instead of dispatching to `enter_insert_backlink`, which
+/// would silently open a *different file* (the source page of the
+/// backlink) for editing. The user pressed Down expecting more of
+/// the same document, not to start editing some other page — they
+/// can step into the backlink panel intentionally with `Esc → j`.
+fn cross_block_step(app: &mut App, delta: i32) {
+    let pref_col = if let Mode::Insert { buffer, .. } = &app.mode {
+        buffer.visual_column()
+    } else {
+        0
+    };
+    app.commit_insert();
+    app.move_selection(delta);
+    if !matches!(app.focus, Focus::Outline) {
+        // Crossed into the backlinks panel (or any future non-outline
+        // focus). Stay in Normal — opening another page mid-Insert
+        // surprises the user.
+        return;
+    }
+    app.cursor_col = pref_col;
+    app.enter_insert(false);
+}
+
 /// Is `cursor` (char index) sitting inside an *open* fenced code block?
 ///
 /// "Open" here is from the *Enter-key perspective*: would pressing
@@ -707,15 +737,7 @@ pub(crate) fn handle_insert_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 false
             };
             if !moved_in_buffer && cross_block_nav_eligible(app) && app.selected > 0 {
-                let pref_col = if let Mode::Insert { buffer, .. } = &app.mode {
-                    buffer.visual_column()
-                } else {
-                    0
-                };
-                app.commit_insert();
-                app.move_selection(-1);
-                app.cursor_col = pref_col;
-                app.enter_insert(false);
+                cross_block_step(app, -1);
             }
         }
         KeyCode::Down => {
@@ -726,15 +748,7 @@ pub(crate) fn handle_insert_key(app: &mut App, key: KeyEvent) -> Result<()> {
             };
             let last_idx = app.flat_len.saturating_sub(1);
             if !moved_in_buffer && cross_block_nav_eligible(app) && app.selected < last_idx {
-                let pref_col = if let Mode::Insert { buffer, .. } = &app.mode {
-                    buffer.visual_column()
-                } else {
-                    0
-                };
-                app.commit_insert();
-                app.move_selection(1);
-                app.cursor_col = pref_col;
-                app.enter_insert(false);
+                cross_block_step(app, 1);
             }
         }
         KeyCode::Home => {

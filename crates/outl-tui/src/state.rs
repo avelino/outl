@@ -396,6 +396,22 @@ pub(crate) struct App {
     /// date.
     pub(crate) index_rx: Option<std::sync::mpsc::Receiver<WorkspaceIndex>>,
 
+    /// Cached backlinks for the currently-opened page, keyed by slug.
+    ///
+    /// `outl_actions::backlinks_for_page` is `O(blocks in workspace)`
+    /// per call. Render frames and backlink-panel keystrokes both
+    /// query the same slug repeatedly, so we cache the last result
+    /// here. `None` means "stale, recompute on next read" — the
+    /// invalidation points are `save`, `save_page_with`,
+    /// `reload_workspace_from_disk`, and any path that swaps the
+    /// open view (`load_current`, `go_today`, `shift_journal`, …).
+    ///
+    /// Wrapped in `RefCell` so the read-only render path
+    /// ([`App::backlinks_for_current`]) can populate it on a cache
+    /// miss without needing `&mut App`. See
+    /// [`App::invalidate_backlinks_cache`].
+    pub(crate) backlinks_cache: std::cell::RefCell<Option<(String, Vec<outl_actions::Backlink>)>>,
+
     /// `true` when this workspace is using the JSONL backend (shared
     /// across devices via iCloud / Syncthing / etc.). Set at boot
     /// from `[workspace].storage`; controls whether the peer-ops

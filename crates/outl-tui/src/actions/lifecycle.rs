@@ -54,6 +54,7 @@ impl App {
             last_yanked_ref: None,
             index: WorkspaceIndex::default(),
             index_rx: None,
+            backlinks_cache: std::cell::RefCell::new(None),
             shared_workspace,
             jsonl_rx: None,
             pending_reload: false,
@@ -378,6 +379,8 @@ impl App {
             (Err(_), _) => return,
         };
         self.workspace = fresh;
+        // Peer ops landed; any cached backlink list is stale.
+        self.invalidate_backlinks_cache();
         self.load_current_no_autorun();
     }
 
@@ -449,6 +452,9 @@ impl App {
     /// when something stamps a fresh hash but the hash doesn't stick
     /// for some reason).
     pub(crate) fn load_current_no_autorun(&mut self) {
+        // Switching views invalidates the cached backlinks: the new
+        // slug owns a different list.
+        self.invalidate_backlinks_cache();
         let path = self.current_path();
         let text = fs::read_to_string(&path).unwrap_or_default();
         self.page = parse(&text);
@@ -601,6 +607,9 @@ impl App {
             // rescans are reserved for cold start and `Ctrl+L`.
             self.index.patch_page(path, page);
         }
+        // Reconciling the source page may have touched blocks that
+        // mention the current view's slug.
+        self.invalidate_backlinks_cache();
         if path == self.current_path() {
             self.last_mtime = file_mtime(path);
         }
@@ -642,6 +651,8 @@ impl App {
         // synchronous — no waiting for a worker to rescan the whole
         // workspace.
         self.index.patch_page(&path, &self.page);
+        // The page just changed; any cached backlink list is stale.
+        self.invalidate_backlinks_cache();
         // Update mtime AFTER the write so the polling loop doesn't
         // mistake our own save for an external edit.
         self.last_mtime = file_mtime(&path);

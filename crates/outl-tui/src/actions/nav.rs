@@ -73,13 +73,41 @@ impl App {
     /// the TUI** — every call site (panel render, navigation,
     /// keyboard handlers) routes through here.
     ///
+    /// Result is cached on [`Self::backlinks_cache`] keyed by slug so
+    /// repeated reads (render frame, j/k in the backlink panel) hit
+    /// the cache instead of re-scanning the workspace. The cache is
+    /// transparent — callers always get a fresh `Vec<Backlink>`
+    /// owned by them, the cache stores a reference copy for the
+    /// next lookup. Invalidation happens on mutation paths via
+    /// [`Self::invalidate_backlinks_cache`] (`save`,
+    /// `save_page_with`, `reload_workspace_from_disk`,
+    /// `load_current`, view-changing nav).
+    ///
     /// The earlier code path read from `WorkspaceIndex.backlinks`,
     /// which has been removed: the `outl-md` index no longer
     /// duplicates this data (`outl_actions::backlinks_for_page` is
-    /// the only producer now, shared with the mobile client). Cost
-    /// is `O(blocks in workspace)` per call — sub-millisecond on
-    /// workspaces below ~10k blocks and well within frame budget.
+    /// the only producer now, shared with the mobile client). Raw
+    /// scan cost is `O(blocks in workspace)` per call —
+    /// sub-millisecond up to ~10k blocks, but a render frame at
+    /// 60fps still issues 60 of them per second, which is what made
+    /// the cache worth its weight.
     pub(crate) fn backlinks_for_slug(&self, slug: &str) -> Vec<outl_actions::Backlink> {
+        // Cache hit: same slug as the last read, return the clone.
+        if let Some((cached_slug, cached_list)) = self.backlinks_cache.borrow().as_ref() {
+            if cached_slug == slug {
+                return cached_list.clone();
+            }
+        }
+        // Miss: recompute, store, and return.
+        let computed = self.compute_backlinks_for_slug(slug);
+        *self.backlinks_cache.borrow_mut() = Some((slug.to_string(), computed.clone()));
+        computed
+    }
+
+    /// Raw computation path — the workspace scan without the cache
+    /// layer. Public-in-crate for tests; production callers should
+    /// go through [`Self::backlinks_for_slug`].
+    pub(crate) fn compute_backlinks_for_slug(&self, slug: &str) -> Vec<outl_actions::Backlink> {
         let Some(id) = outl_actions::find_by_slug(&self.workspace, slug) else {
             return Vec::new();
         };
@@ -92,6 +120,13 @@ impl App {
     /// Convenience: backlinks for the currently-opened page/journal.
     pub(crate) fn backlinks_for_current(&self) -> Vec<outl_actions::Backlink> {
         self.backlinks_for_slug(&self.current_slug())
+    }
+
+    /// Drop the cached backlinks list. Call this on every workspace
+    /// mutation that can change the answer — saves, peer-ops reloads,
+    /// view switches. Cheap (just sets the `Option` to `None`).
+    pub(crate) fn invalidate_backlinks_cache(&self) {
+        *self.backlinks_cache.borrow_mut() = None;
     }
 
     pub(crate) fn go_today(&mut self) -> Result<()> {

@@ -122,12 +122,20 @@ pub struct OutlineNode {
     /// never via the sidecar.
     pub collapsed: bool,
     /// `(key, value)` properties attached to this block, in
-    /// alphabetical-by-key order. Mirrors
-    /// [`outl_md::parse::OutlineNode::properties`] so the disk-driven
-    /// path (`read_page_view`) and the workspace-driven path
-    /// (`project_outline`) agree on shape. Populated from
-    /// [`outl_core::tree::Tree::properties_of`] when the workspace is
-    /// in scope, and from the parsed `.md` otherwise.
+    /// **alphabetical-by-key order**.
+    ///
+    /// Both producer paths normalise to this order so a backlink
+    /// rendering of a block (workspace-driven) and the outline of
+    /// the page that owns it (disk-driven) show properties in the
+    /// same sequence. The workspace path has no authoring order to
+    /// preserve (properties live in a `HashMap` keyed on
+    /// `(NodeId, key)`); the disk path used to keep parse-order but
+    /// now sorts on `outline_from_parsed` so the two surfaces never
+    /// disagree visually.
+    ///
+    /// Shape mirrors [`outl_md::parse::OutlineNode::properties`].
+    /// Populated from [`outl_core::tree::Tree::properties_of`] when
+    /// the workspace is in scope, and from the parsed `.md` otherwise.
     pub properties: Vec<(String, String)>,
     /// Children, in their fractional-index order.
     pub children: Vec<OutlineNode>,
@@ -268,11 +276,14 @@ fn outline_from_parsed(
         .iter()
         .map(|child| outline_from_parsed(child, iter))
         .collect();
-    // Mirror the parse-time order (the user authored them in this
-    // sequence in the `.md`). `project_outline` sorts alphabetically
-    // because the workspace path has no authoring order to preserve;
-    // here we keep what the file said.
-    let properties = block.properties.clone();
+    // Sort alphabetically so this disk-driven path matches what
+    // `project_outline` (workspace-driven) produces. The two surfaces
+    // would otherwise disagree on the order properties show up in,
+    // visible when a block renders both inside its own page (parse
+    // order) and as a backlink elsewhere (workspace order). See the
+    // `OutlineNode.properties` doc-comment.
+    let mut properties = block.properties.clone();
+    properties.sort_by(|a, b| a.0.cmp(&b.0));
     // `collapsed` is overlaid by the caller using the workspace as the
     // source of truth (`Op::SetCollapsed` lives in the op log). The
     // bare `read_page_view` path leaves it `false`; the workspace-
