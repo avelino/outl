@@ -149,16 +149,23 @@ and that's it. Everywhere else inherits:
 | Field | Where it lives | How it's resolved |
 |-------|----------------|-------------------|
 | Rust crate version | `crates/outl-mobile/src-tauri/Cargo.toml` | `version.workspace = true` |
-| Tauri config version | `crates/outl-mobile/src-tauri/tauri.conf.json` | Field intentionally **omitted** — Tauri 2 falls back to `Cargo.toml` |
-| `CFBundleShortVersionString` | iOS `Info.plist` | Tauri propagates from above during `cargo tauri ios build` |
-| `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` | `gen/apple/.../project.pbxproj` | Same — Tauri regenerates from `tauri.conf.json` (and therefore from `Cargo.toml`) every build |
+| Tauri config version | `crates/outl-mobile/src-tauri/tauri.conf.json` | Field intentionally **omitted** in the source; CI injects it via `cargo tauri ios build --config '{"version": "<short>"}'` |
+| `CFBundleShortVersionString` | iOS `Info.plist` | Tauri propagates from `--config` during `cargo tauri ios build` |
+| `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` | `gen/apple/.../project.pbxproj` | Same — Tauri regenerates from the merged config every build |
+
+**Why `--config` and not just rely on Tauri's `Cargo.toml` fallback?**
+The docs say Tauri uses `Cargo.toml` when `version` is missing, but
+the iOS code path doesn't honor that — it falls back to `1.0.0`
+instead. So CI reads the workspace version itself (`awk` against
+`Cargo.toml` in the `Compute build metadata` step) and passes it via
+`--config`. That keeps `Cargo.toml` as the only place a human bumps,
+and the `Patch archive CFBundleVersion` step has a sanity check that
+aborts the build if the propagated short version doesn't match what
+was passed in.
 
 **Never** put `"version": "x.y.z"` back in `tauri.conf.json`. If it's
-present Tauri uses it instead of `Cargo.toml`, and the two drift the
-moment someone bumps the workspace. The `Patch archive
-CFBundleVersion` step in `.github/workflows/mobile.yml` has a sanity
-check that aborts the build if the propagated short version doesn't
-match the workspace.
+present, Tauri uses the static value instead of the `--config`
+override, and the two drift the moment someone bumps the workspace.
 
 ### CI release flow
 
@@ -203,10 +210,15 @@ Tauri only exposes a single `version` field.
 ### What goes wrong if you forget this
 
 - `tauri.conf.json` left with stale `"version"`: IPA ships with that
-  version regardless of `Cargo.toml`. Apple sees a value that hasn't
-  been bumped → 409 duplicate.
+  static value regardless of `Cargo.toml` or `--config`. Apple sees a
+  value that hasn't been bumped → 409 duplicate.
+- Dropping `--config '{"version": "..."}'` from `cargo tauri ios build`
+  in `mobile.yml`: Tauri's iOS path falls back to `1.0.0` (not to
+  `Cargo.toml` as the docs imply). The sanity check in the
+  `Patch archive CFBundleVersion` step catches this — don't disable
+  it.
 - Patching `gen/apple/.../Info.plist` directly before the build: Tauri
-  regenerates the file from `tauri.conf.json` on every build. No-op.
+  regenerates the file from the merged config on every build. No-op.
 - `xcrun altool --type ios` returns exit 0 even on 409 errors. The
   `Upload IPA to TestFlight` step in `testflight.yml` greps for
   `ERROR:` and exits non-zero explicitly — don't simplify that step.

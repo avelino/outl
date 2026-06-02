@@ -203,7 +203,7 @@ and ask the user** before changing. Don't unilaterally pivot.
 | MIT license | Simple, widely understood, no patent grant baggage |
 | `outl.app` domain owned | Use for docs/landing later |
 | Repo at `github.com/avelino/outl` | Personal profile, not org (small enough team) |
-| `[workspace.package].version` in root `Cargo.toml` is the **single source of truth** | Crate manifests inherit via `version.workspace = true`. `tauri.conf.json` deliberately omits `version` so Tauri 2 falls back to `Cargo.toml`. Bumping the workspace bumps everything. See `crates/outl-mobile/CLAUDE.md` → "Versioning + TestFlight release" before changing release/CI plumbing. |
+| `[workspace.package].version` in root `Cargo.toml` is the **single source of truth** | Crate manifests inherit via `version.workspace = true`. `tauri.conf.json` deliberately omits `version`; CI reads `Cargo.toml` and injects it into `cargo tauri ios build` via `--config` (Tauri's iOS path does NOT fall back to `Cargo.toml` on its own — it defaults to `1.0.0`). Bumping the workspace bumps everything. See `crates/outl-mobile/CLAUDE.md` → "Versioning + TestFlight release" before changing release/CI plumbing. |
 
 ## What you're NOT building yet
 

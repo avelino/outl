@@ -411,21 +411,30 @@ jobs:
           magick "$ICON" -background black -alpha remove -alpha off "$ICON"
 
       # Version: `tauri.conf.json` intentionally omits the `version`
-      # field. Per Tauri 2 docs, when unset Tauri reads it from the
-      # crate's `Cargo.toml`, which inherits `version.workspace = true`
-      # from the workspace root — single source of truth. Tauri
-      # propagates this to MARKETING_VERSION / CURRENT_PROJECT_VERSION
-      # in the pbxproj and to CFBundleShortVersionString in the
-      # generated Info.plist. CFBundleVersion (build number) is handled
-      # separately below in the post-archive plutil step, since Tauri
-      # only exposes one version field.
+      # field. The Tauri docs say it falls back to `Cargo.toml` in
+      # that case, but the iOS build path does NOT honor that fallback
+      # — it ships `1.0.0` instead. So we drive the version explicitly
+      # via `--config`, reading the workspace version from `Cargo.toml`
+      # ourselves (already computed by the `meta` step).
+      #
+      # `--config` accepts an inline JSON object that gets merged
+      # (RFC 7396) into the resolved Tauri config. Tauri then
+      # propagates this version to MARKETING_VERSION /
+      # CURRENT_PROJECT_VERSION in the pbxproj and to
+      # CFBundleShortVersionString in the generated Info.plist.
+      # CFBundleVersion (build number) is handled separately below in
+      # the post-archive plutil step — Tauri only exposes one version
+      # field.
       - name: cargo tauri ios build (archive — export redone manually)
         working-directory: crates/outl-mobile
         env:
           CI: "true"
         run: |
+          SHORT="${{ steps.meta.outputs.short_version }}"
           EXPORT_RC=0
-          cargo tauri ios build --export-method app-store-connect || EXPORT_RC=$?
+          cargo tauri ios build \
+            --export-method app-store-connect \
+            --config "{\"version\": \"$SHORT\"}" || EXPORT_RC=$?
           ARCHIVE="src-tauri/gen/apple/build/outl-mobile_iOS.xcarchive"
           if [[ ! -d "$ARCHIVE" ]]; then
             echo "::error::Archive missing at $ARCHIVE — tauri build failed before archiving (rc=$EXPORT_RC)"
