@@ -12,7 +12,8 @@
 //! filename and the kind from the directory, creates the page node via
 //! [`open_or_create`] (deterministic id, `page-slug` + `page-kind`),
 //! then reconciles the file's blocks under that exact node with
-//! [`reconcile_md_with_page_id`].
+//! `reconcile_md_with_page_id_text`, reusing the markdown it already
+//! read to derive the title.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -21,7 +22,7 @@ use outl_core::hlc::HlcGenerator;
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
 use outl_md::parse::parse;
-use outl_md::reconcile::{reconcile_md_with_page_id, ReconcileReport};
+use outl_md::reconcile::{reconcile_md_with_page_id_text, ReconcileReport};
 use outl_md::slug::slugify;
 
 use crate::backlinks::extract_refs;
@@ -56,7 +57,13 @@ pub fn ingest_md_file(
     let slug = slug_from_path(md_path)
         .ok_or_else(|| ActionError::InvalidSlug(md_path.display().to_string()))?;
     let kind = kind_from_path(md_path);
-    let title = read_title(md_path).unwrap_or_else(|| slug.clone());
+
+    // Read the file once. The title comes from the parsed page
+    // properties and the same text is handed to reconcile below, so a
+    // bulk ingest (import, directory sweep) reads + parses each file
+    // once instead of twice.
+    let md_text = std::fs::read_to_string(md_path)?;
+    let title = title_from_text(&md_text).unwrap_or_else(|| slug.clone());
 
     // Create (or find) the page node under root with page-slug / page-kind.
     open_or_create(workspace, hlc, &slug, &title, kind)?;
@@ -65,7 +72,8 @@ pub fn ingest_md_file(
     // open_or_create used, hence page_id_from_slug rather than letting
     // reconcile mint a fresh random id when no sidecar exists yet.
     let page_id = page_id_from_slug(&slug);
-    let report = reconcile_md_with_page_id(workspace, hlc, md_path, page_id, orphan_log)?;
+    let report =
+        reconcile_md_with_page_id_text(workspace, hlc, md_path, page_id, &md_text, orphan_log)?;
     Ok(report)
 }
 
@@ -91,11 +99,10 @@ fn kind_from_path(md_path: &Path) -> PageKind {
     }
 }
 
-/// Read the `title::` page property from the file, if present and
-/// non-empty.
-fn read_title(md_path: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(md_path).ok()?;
-    parse(&text)
+/// Extract the `title::` page property from already-read markdown, if
+/// present and non-empty.
+fn title_from_text(md_text: &str) -> Option<String> {
+    parse(md_text)
         .properties
         .into_iter()
         .find(|(k, _)| k == "title")

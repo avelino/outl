@@ -76,7 +76,7 @@ pub fn reconcile_md(
     md_path: &Path,
     orphan_log_path: Option<&Path>,
 ) -> Result<ReconcileReport, ReconcileError> {
-    reconcile_md_inner(ws, hlc, md_path, None, orphan_log_path)
+    reconcile_md_inner(ws, hlc, md_path, None, None, orphan_log_path)
 }
 
 /// Like [`reconcile_md`], but pins the page node id used when no
@@ -94,7 +94,33 @@ pub fn reconcile_md_with_page_id(
     page_id: NodeId,
     orphan_log_path: Option<&Path>,
 ) -> Result<ReconcileReport, ReconcileError> {
-    reconcile_md_inner(ws, hlc, md_path, Some(page_id), orphan_log_path)
+    reconcile_md_inner(ws, hlc, md_path, Some(page_id), None, orphan_log_path)
+}
+
+/// Like [`reconcile_md_with_page_id`], but reuses markdown the caller
+/// already read into memory instead of reading the file a second time.
+///
+/// Bulk-ingest callers (`outl_actions::ingest_md_file`) parse the file
+/// once to pull `title::` out of the page properties; passing that same
+/// text here avoids a redundant `read_to_string` + parse per file, which
+/// is the dominant cost when importing thousands of pages. `md_path` is
+/// still needed for the sidecar location and error/hash context.
+pub fn reconcile_md_with_page_id_text(
+    ws: &mut Workspace,
+    hlc: &HlcGenerator,
+    md_path: &Path,
+    page_id: NodeId,
+    md_text: &str,
+    orphan_log_path: Option<&Path>,
+) -> Result<ReconcileReport, ReconcileError> {
+    reconcile_md_inner(
+        ws,
+        hlc,
+        md_path,
+        Some(page_id),
+        Some(md_text),
+        orphan_log_path,
+    )
 }
 
 fn reconcile_md_inner(
@@ -102,9 +128,13 @@ fn reconcile_md_inner(
     hlc: &HlcGenerator,
     md_path: &Path,
     explicit_page_id: Option<NodeId>,
+    prefetched_text: Option<&str>,
     orphan_log_path: Option<&Path>,
 ) -> Result<ReconcileReport, ReconcileError> {
-    let md_text = fs::read_to_string(md_path).map_err(|e| io_err(md_path, e))?;
+    let md_text = match prefetched_text {
+        Some(t) => t.to_owned(),
+        None => fs::read_to_string(md_path).map_err(|e| io_err(md_path, e))?,
+    };
     let new_ast = parse(&md_text);
     let md_hash = file_hash(&md_text);
 
