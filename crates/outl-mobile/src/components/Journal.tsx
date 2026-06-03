@@ -562,9 +562,12 @@ export function Journal() {
     const flat = flatten(cur.outline);
     const idx = flat.findIndex((b) => b.id === id);
     const prev = idx > 0 ? flat[idx - 1] : null;
-    setEditingId(null);
     const next = await withError(() => deleteBlock(pid, id));
+    // Delete failed (withError already surfaced it) — keep the user in
+    // edit mode on the still-existing block instead of silently kicking
+    // them out with no indication the Backspace was rejected.
     if (!next) return;
+    setEditingId(null);
     applyView(next);
     if (prev) {
       const pb = findBlock(next.outline, prev.id);

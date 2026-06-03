@@ -499,9 +499,12 @@ function EditableTextarea(props: {
         // toolbar, so we leave the textarea's default behaviour intact.
         if (isDesktop()) {
           const ta = e.currentTarget;
-          // Tab / Shift+Tab → indent / outdent. Always intercept so
-          // the browser never inserts a literal tab or moves focus.
-          if (e.key === "Tab") {
+          // Tab / Shift+Tab → indent / outdent. Skip when a non-Shift
+          // modifier is held: Ctrl/Cmd/Alt+Tab are window- and
+          // tab-switching chords and trapping the bare focus-traversal
+          // key without an escape hatch is an accessibility regression.
+          // Shift is part of our own outdent chord, so it's allowed.
+          if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) {
             e.preventDefault();
             if (e.shiftKey) props.onOutdent();
             else props.onIndent();

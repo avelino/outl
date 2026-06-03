@@ -6,27 +6,36 @@
  * (Shift+Enter to create a block, Backspace to delete an empty one,
  * Tab to indent) only make sense where there *is* a physical keyboard.
  *
- * We branch on **input capability**, not OS name. What matters for a
- * keyboard shortcut is "does this device have a hardware keyboard and
- * a precise pointer", which maps cleanly onto "no touch points". This
- * also keeps `bun run dev` (plain browser, no Tauri) working — it
- * reports `maxTouchPoints === 0` on a laptop and behaves like the
- * desktop shell. If we ever need strict OS distinction (e.g. ⌘ vs
- * Ctrl labels) swap this for `@tauri-apps/plugin-os`'s `platform()`.
+ * We branch on **input capability**, not OS name. "Has a fine pointer"
+ * (`any-pointer: fine`) is the most reliable proxy for "has a hardware
+ * keyboard": it is true on every laptop/desktop — *including*
+ * touchscreen laptops (Windows, Chromebook, Surface) that also report
+ * touch points — and false on phones/tablets whose only pointer is a
+ * coarse touch surface. Keying off touch-point count alone
+ * misclassified those hybrid devices and stripped their shortcuts. A
+ * plain desktop browser (`bun run dev`) reports a fine pointer and so
+ * behaves like the desktop shell. If we ever need strict OS distinction
+ * (⌘ vs Ctrl labels) swap this for `@tauri-apps/plugin-os`'s
+ * `platform()`.
  */
-let cachedDesktop: boolean | null = null;
 
 /**
- * True on a desktop-class device (hardware keyboard, no touchscreen).
- * Cached after the first call — the answer never changes within a
- * session.
+ * True on a desktop-class device (has a fine pointer, hence almost
+ * certainly a hardware keyboard).
+ *
+ * Not cached: recomputing is negligible and lets the answer track a
+ * keyboard/pointer being plugged in or unplugged, a switch between touch
+ * and pointer input, or a test overriding `matchMedia` / `navigator`.
  */
 export function isDesktop(): boolean {
-  if (cachedDesktop !== null) return cachedDesktop;
-  if (typeof navigator === "undefined") {
-    cachedDesktop = true;
-    return cachedDesktop;
+  if (typeof navigator === "undefined") return true;
+  if (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function"
+  ) {
+    return window.matchMedia("(any-pointer: fine)").matches;
   }
-  cachedDesktop = (navigator.maxTouchPoints ?? 0) === 0;
-  return cachedDesktop;
+  // Fallback for environments without `matchMedia`: treat "no touch
+  // points" as desktop, matching the original heuristic.
+  return (navigator.maxTouchPoints ?? 0) === 0;
 }
