@@ -560,15 +560,16 @@ export function Journal() {
     const cur = view();
     const pid = pageId();
     if (!cur || !pid) return;
-    const flat = flatten(cur.outline);
-    const idx = flat.findIndex((b) => b.id === id);
-    const prev = idx > 0 ? flat[idx - 1] : null;
+    // Land focus on the previous *visible* block (same order Arrow
+    // navigation uses) so the caret never lands inside a collapsed
+    // subtree the user can't see. `flatten` would walk hidden children.
+    const prevId = neighborId(cur.outline, id, "up");
     setEditingId(null);
     const next = await withError(() => deleteBlock(pid, id));
     if (!next) return;
     applyView(next);
-    if (prev) {
-      const pb = findBlock(next.outline, prev.id);
+    if (prevId) {
+      const pb = findBlock(next.outline, prevId);
       // EditableTextarea.onMount parks the caret at end-of-text, so
       // simply entering edit mode lands the cursor where we want it.
       if (pb) startEdit(pb.id, rawTextWithTodo(pb));
