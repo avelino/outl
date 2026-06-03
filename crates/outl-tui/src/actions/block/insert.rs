@@ -117,10 +117,12 @@ impl App {
     ///
     /// Routes by `EditTarget`:
     /// - `CurrentPage`: mutate `app.page`, snapshot undo, `save()`.
-    /// - `SourcePage`: mutate the loaded source AST and write it via
-    ///   `save_page_with(.., false)`. No undo snapshot — cross-page
-    ///   history would be confusing (undo here = revert change to
-    ///   another file you can't currently see).
+    /// - `SourcePage`: mutate the loaded source AST and write it
+    ///   via `save_page_with(.., true)` so the source page's index
+    ///   entry (block refs, page title, icon) stays current. No
+    ///   undo snapshot — cross-page history would be confusing
+    ///   (undo here = revert change to another file you can't
+    ///   currently see).
     pub(crate) fn commit_insert(&mut self) {
         if let Mode::Insert {
             target,
@@ -152,14 +154,16 @@ impl App {
                         if let Some(node) = node_at_path_mut(&mut page.blocks, &block_path) {
                             node.text = new_text;
                         }
-                        // Backlinks are computed on-demand from the
-                        // workspace (`backlinks_for_current` → the
-                        // op log via `outl_actions::backlinks_for_page`),
-                        // so once `reconcile_md` finishes inside
-                        // `save_page_with` the next render already sees
-                        // the new text — no optimistic in-memory cache
-                        // patch needed.
-                        self.save_page_with(&path, &page, false);
+                        // `rebuild_index = true` runs the cheap
+                        // `WorkspaceIndex::patch_page` on the source
+                        // page (not a full workspace rescan) so
+                        // block-ref resolution (`((blk-XXXXXX))`) on
+                        // the just-edited blocks doesn't lag behind
+                        // the on-disk text. Backlinks themselves are
+                        // computed on-demand from the workspace via
+                        // `backlinks_for_current`, so no extra cache
+                        // touch is needed for those.
+                        self.save_page_with(&path, &page, true);
                     }
                     // No restore needed — `page` was a working copy
                     // and is dropped here.

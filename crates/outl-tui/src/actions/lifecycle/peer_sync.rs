@@ -143,7 +143,10 @@ impl App {
         }
         if reconciled > 0 {
             // New blocks in the workspace mean the workspace index
-            // (backlinks, page list) is stale.
+            // (page list, block refs, icons) is stale, as is the
+            // cached backlinks list for the current view (a newly
+            // reconciled file may mention the current slug).
+            self.invalidate_backlinks_cache();
             self.spawn_index_rebuild();
         }
         true

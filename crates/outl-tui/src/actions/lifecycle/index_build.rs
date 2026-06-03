@@ -1,11 +1,15 @@
 //! Workspace-index rebuild lifecycle.
 //!
-//! The index ([`outl_md::index::WorkspaceIndex`]) powers backlinks
-//! lookups, page-title autocomplete, the quick switcher icon column.
-//! Building it walks every `.md` under `pages/` + `journals/`, which
-//! is cheap for small workspaces but blocks the UI thread on large
-//! ones — so production callers always go through the spawn path
-//! and poll the channel from the event loop.
+//! The index ([`outl_md::index::WorkspaceIndex`]) powers page-title
+//! autocomplete, the quick-switcher icon column, and block-ref
+//! resolution (`((blk-XXXXXX))`). Backlinks no longer live here —
+//! they come from `outl_actions::backlinks_for_page` and are cached
+//! on [`crate::state::App::backlinks_cache`].
+//!
+//! Building the index walks every `.md` under `pages/` + `journals/`,
+//! which is cheap for small workspaces but blocks the UI thread on
+//! large ones — so production callers always go through the spawn
+//! path and poll the channel from the event loop.
 
 use crate::state::App;
 use outl_md::index::WorkspaceIndex;

@@ -103,8 +103,11 @@ pub fn char_to_line_col(s: &str, char_idx: usize) -> (usize, usize) {
 pub fn line_col_to_char(s: &str, target_line: usize, target_col: usize) -> usize {
     let mut line = 0usize;
     let mut col = 0usize;
+    let mut total = 0usize; // char count tracked inline so the
+                            // fall-through doesn't pay a second pass.
 
     for (idx, ch) in s.chars().enumerate() {
+        total = idx + 1;
         if line == target_line && col == target_col {
             return idx;
         }
@@ -124,7 +127,7 @@ pub fn line_col_to_char(s: &str, target_line: usize, target_col: usize) -> usize
     // Ran off the end of the string. Either the target line was the
     // last line (and the column was past its end) or the target line
     // is past the buffer entirely — both clamp to end of string.
-    s.chars().count()
+    total
 }
 
 /// Decompose a block's `text` into visual rows.

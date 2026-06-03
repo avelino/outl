@@ -256,7 +256,7 @@ fn left_segments(app: &App) -> Line<'static> {
     ];
 
     // Backlink count — kept in the footer (was already here pre-refactor).
-    let bl_count = app.backlinks_for_current().len();
+    let bl_count = app.backlinks_count_for_current();
     if bl_count > 0 {
         spans.push(Span::styled(
             format!(

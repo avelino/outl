@@ -122,6 +122,38 @@ impl App {
         self.backlinks_for_slug(&self.current_slug())
     }
 
+    /// Number of backlinks pointing at `slug`, without cloning the
+    /// list.
+    ///
+    /// Callers that only need a count (the footer chip in
+    /// `view::chrome`, the navigability probe in
+    /// [`Self::backlinks_navigable`]) take this instead of
+    /// [`Self::backlinks_for_slug`]. The rich `Backlink` struct now
+    /// carries `source_block: OutlineNode` plus its subtree, so the
+    /// clone the full accessor performs is non-trivial. On a cache
+    /// hit `len()` is `O(1)`; on a miss we still scan and populate
+    /// the cache but skip the extra `Vec` clone.
+    pub(crate) fn backlinks_count_for_slug(&self, slug: &str) -> usize {
+        if let Some((cached_slug, cached_list)) = self.backlinks_cache.borrow().as_ref() {
+            if cached_slug == slug {
+                return cached_list.len();
+            }
+        }
+        // Miss: recompute and store. Length-only callers still benefit
+        // because the next read (probably from a richer call site)
+        // hits the cache.
+        let computed = self.compute_backlinks_for_slug(slug);
+        let len = computed.len();
+        *self.backlinks_cache.borrow_mut() = Some((slug.to_string(), computed));
+        len
+    }
+
+    /// Convenience: number of backlinks for the currently-opened
+    /// page/journal. See [`Self::backlinks_count_for_slug`].
+    pub(crate) fn backlinks_count_for_current(&self) -> usize {
+        self.backlinks_count_for_slug(&self.current_slug())
+    }
+
     /// Drop the cached backlinks list. Call this on every workspace
     /// mutation that can change the answer — saves, peer-ops reloads,
     /// view switches. Cheap (just sets the `Option` to `None`).
@@ -308,7 +340,7 @@ impl App {
     /// at least one block the cursor can land on. Drives the cross-zone
     /// transition in `step_forward`/`step_backward`.
     fn backlinks_navigable(&self) -> bool {
-        self.show_backlinks && !self.backlinks_for_current().is_empty()
+        self.show_backlinks && self.backlinks_count_for_current() > 0
     }
 
     /// Current selected block's text (or empty if no selection).

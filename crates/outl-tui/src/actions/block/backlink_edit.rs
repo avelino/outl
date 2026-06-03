@@ -22,10 +22,12 @@ impl App {
     /// 1. `Focus.sub_path` is rewritten from the post-op absolute path
     ///    (relative to `source_block_path`; clamped to `[]` if the op
     ///    moved the block out of the backlink's scope).
-    /// 2. The page is saved with `save_page_with(.., false)` —
-    ///    backlinks are now computed straight from the workspace
-    ///    (`backlinks_for_current`), so the post-op tree is visible
-    ///    on the next render with no cache patch required.
+    /// 2. The page is saved with `save_page_with(.., true)` so the
+    ///    source page's index entry (block refs, page title, icon)
+    ///    is patched incrementally. Backlinks themselves are
+    ///    computed straight from the workspace
+    ///    (`backlinks_for_current`); the post-op tree is visible on
+    ///    the next render with no extra cache touch.
     ///
     /// Returns the post-op `ParsedPage` so callers that need to follow
     /// up (e.g. enter Insert on the newly created block) can reuse it
@@ -92,7 +94,12 @@ impl App {
             *sub_path = new_sub_path;
         }
 
-        self.save_page_with(&source_path, &source_page, false);
+        // `rebuild_index = true` runs `WorkspaceIndex::patch_page` on
+        // the source page so block-ref resolution stays current after
+        // the structural op. Workspace-driven `backlinks_for_current`
+        // already sees the new tree as soon as `reconcile_md`
+        // finishes, no extra cache touch needed for that side.
+        self.save_page_with(&source_path, &source_page, true);
 
         Some((source_path, source_page))
     }
@@ -126,6 +133,9 @@ impl App {
             return;
         };
         node.text = super::cycle_todo_state(&node.text);
-        self.save_page_with(&source_path, &source_page, false);
+        // Same rationale as the structural cross-page path: patch the
+        // source page's index entry so `((blk-XXXXXX))` resolution
+        // doesn't lag the TODO/DONE flip until a full rebuild.
+        self.save_page_with(&source_path, &source_page, true);
     }
 }
