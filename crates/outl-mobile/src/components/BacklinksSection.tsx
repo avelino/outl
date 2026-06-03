@@ -1,5 +1,5 @@
 import { For, JSX, Show } from "solid-js";
-import { Backlink } from "../lib/api";
+import { Backlink, TodoState } from "../lib/api";
 import { MarkdownInline } from "../lib/markdown";
 
 interface BacklinksSectionProps {
@@ -73,9 +73,20 @@ export function BacklinksSection(props: BacklinksSectionProps): JSX.Element {
                   <p class="text-[13px] font-medium text-(--color-ios-accent) dark:text-(--color-iosd-accent)">
                     {link.source_page?.title ?? "untitled"}
                   </p>
-                  <p class="mt-1 text-[15px] leading-snug">
-                    <MarkdownInline text={link.block_text} />
-                  </p>
+                  <div class="mt-1 flex items-start gap-2">
+                    <Show when={link.todo !== null}>
+                      <BacklinkCheckbox todo={link.todo} />
+                    </Show>
+                    <p
+                      class="flex-1 text-[15px] leading-snug"
+                      classList={{
+                        "text-(--color-ios-text-tertiary) line-through dark:text-(--color-iosd-text-tertiary)":
+                          link.todo === "DONE",
+                      }}
+                    >
+                      <MarkdownInline text={link.block_text} />
+                    </p>
+                  </div>
                 </div>
               </button>
             )}
@@ -83,5 +94,41 @@ export function BacklinksSection(props: BacklinksSectionProps): JSX.Element {
         </div>
       </Show>
     </section>
+  );
+}
+
+/**
+ * Read-only checkbox marker for a backlink whose source block carries
+ * a TODO/DONE state. Mirrors the visual treatment used by
+ * `BulletOrCheckbox` in `BlockRow.tsx`, but is presentational only —
+ * to toggle the task the user opens the source page.
+ */
+function BacklinkCheckbox(props: { todo: TodoState | null }): JSX.Element {
+  return (
+    <span
+      aria-hidden="true"
+      class="mt-[3px] flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border-[1.5px]"
+      classList={{
+        "border-(--color-ios-accent) bg-(--color-ios-accent) dark:border-(--color-iosd-accent) dark:bg-(--color-iosd-accent)":
+          props.todo === "DONE",
+        "border-(--color-ios-text-secondary) bg-transparent dark:border-(--color-iosd-text-secondary)":
+          props.todo !== "DONE",
+      }}
+    >
+      <Show when={props.todo === "DONE"}>
+        <svg
+          width="10"
+          height="10"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="white"
+          stroke-width="3.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M5 12l4 4 10-10" />
+        </svg>
+      </Show>
+    </span>
   );
 }

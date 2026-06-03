@@ -24,6 +24,7 @@ your notes survive being on more than one device.
 | Script outl or plug it into Claude Code | [CLI](cli.md) |
 | Connect outl to Claude Desktop, Cursor, etc. | [MCP](mcp.md) |
 | See where the project is going | [Roadmap](roadmap.md) |
+| Send a PR and know what reviewers look at | [Contributing & code review](contributing.md) |
 
 ## What's locked in
 
@@ -82,9 +83,12 @@ Long-form posts about the engineering behind outl, published on
 
 ## Contributing
 
-The README on GitHub has the install bits and the dev workflow. Open
-issues to discuss design before sending big PRs — the sync algorithm
-in particular has a 100% coverage rule on its critical functions.
+The [README on GitHub](https://github.com/avelino/outl) has the install
+bits and the dev workflow. Before sending a PR, read
+[Contributing & code review](contributing.md) — the rules of the game
+are written down so you know exactly what reviewers will look at. Open
+issues to discuss design before sending big PRs; the sync algorithm in
+particular has a 100% coverage rule on its critical functions.
 
 ## License
 

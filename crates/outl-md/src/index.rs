@@ -6,18 +6,22 @@
 //!
 //! - `slug → PageEntry` (filename without `.md`).
 //! - `title → slug` (the `title::` property; falls back to slug).
-//! - `slug → Vec<Backlink>` (every block that contains `[[name]]` or
-//!   `#name` where `slugify(name) == this`).
+//! - block-level lookup (`((blk-XXXXXX))` → block, reverse refs, etc).
+//!
+//! **Backlinks live in `outl_actions::backlinks`**, not here. Both the
+//! TUI and the mobile client compute them straight from the
+//! `Workspace` so policy (self-refs, dedup) never drifts between
+//! surfaces. The earlier parallel cache on this index was the bug
+//! that hid self-references on the TUI panel while the mobile path
+//! showed them.
 //!
 //! Rebuild on demand: this is cheap for hundreds of pages, expensive
 //! for thousands. The TUI calls `rebuild()` at startup and on a debounce
 //! after writes.
 
 use crate::block_index::{BlockEntry, BlockIndex, BlockReference};
-use crate::inline::{tokenize, InlineTok};
-use crate::parse::{parse, OutlineNode};
+use crate::parse::parse;
 use crate::sidecar::{self, Sidecar};
-use crate::slug::slugify;
 use outl_core::id::NodeId;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -44,42 +48,11 @@ pub struct PageEntry {
     pub pinned: bool,
 }
 
-/// One backlink — a block in another page that references this slug.
-///
-/// Carries the full source `OutlineNode` (including its children
-/// subtree) so the UI can render the referencing block in context —
-/// not just as a truncated snippet. Editing surfaces resolve the
-/// target block by descending into `source_block` along an extra
-/// sub-path relative to `source_block_path`.
-#[derive(Debug, Clone)]
-pub struct Backlink {
-    /// Slug of the page containing the reference.
-    pub source_slug: String,
-    /// Title of the source page.
-    pub source_title: String,
-    /// Icon of the source page (if any) — propagated so backlink
-    /// surfaces can render the same `<icon> <title>` shape every other
-    /// surface uses.
-    pub source_icon: Option<String>,
-    /// Filesystem path of the source.
-    pub source_path: PathBuf,
-    /// DFS path of the referencing block inside the source page's AST.
-    /// Combined with a sub-path inside `source_block`, this lets the
-    /// TUI/editor locate the exact node to mutate when the user edits
-    /// a backlink in place.
-    pub source_block_path: Vec<usize>,
-    /// The referencing `OutlineNode` itself, including children.
-    /// Cloned so backlink consumers don't need to re-read the source
-    /// page from disk to render context.
-    pub source_block: OutlineNode,
-}
-
 /// Full workspace index.
 #[derive(Debug, Default, Clone)]
 pub struct WorkspaceIndex {
     pages: HashMap<String, PageEntry>,
     title_to_slug: HashMap<String, String>,
-    backlinks: HashMap<String, Vec<Backlink>>,
     /// Block-level index — owns the `((blk-XXXXXX))` lookup machinery.
     /// Kept private so the public surface stays a single `WorkspaceIndex`.
     blocks: BlockIndex,
@@ -90,16 +63,13 @@ impl WorkspaceIndex {
     /// `.md`, and return the populated index. Files that fail to parse
     /// are skipped with no error — the index is best-effort.
     ///
-    /// Two logical passes (pages metadata first, then backlinks) but
-    /// only **one read+parse per file**: the parsed AST is held in a
-    /// buffer between passes. Halves the I/O + parsing cost vs the
-    /// naive two-pass implementation; verified in `benches/index.rs`.
+    /// Block-level indexing runs in two phases (register every block
+    /// first, then collect reverse references) so a page B citing a
+    /// block of page A still wins an edge even when B is walked first.
     pub fn build(workspace_root: &Path) -> Self {
         let mut idx = WorkspaceIndex::default();
-        // Buffer of (slug, parsed AST). Populated in pass 1 alongside
-        // the `pages` map; consumed in pass 2 for backlink collection.
-        // Capacity-hint avoids regrowth on workspaces of any reasonable
-        // size.
+        // Buffer of (slug, parsed AST, sidecar). Populated alongside
+        // the `pages` map; consumed below for the block-index phase 2.
         let mut parsed_pages: Vec<(String, crate::parse::ParsedPage, Option<Sidecar>)> =
             Vec::with_capacity(64);
 
@@ -169,9 +139,7 @@ impl WorkspaceIndex {
                 // Block-level indexing phase 1: register every block
                 // (id, handle, text, subtree) without recording
                 // reverse refs yet. Phase 2 below scans citations
-                // once all handles are known — that way a page B
-                // that cites a block of page A still gets its edge
-                // registered even when B is walked before A.
+                // once all handles are known.
                 let cached_sidecar = read_sidecar_best_effort(path);
                 if let Some(sc) = &cached_sidecar {
                     idx.blocks
@@ -190,20 +158,6 @@ impl WorkspaceIndex {
                 idx.blocks
                     .collect_page_refs(slug, &parsed.blocks, &sc.blocks);
             }
-        }
-
-        // Second pass: scan blocks for `[[ref]]` and `#tag`, populate
-        // backlinks. Reuses the AST cached in `parsed_pages` so we
-        // don't pay another read + parse round-trip.
-        for (slug, parsed, _sc) in &parsed_pages {
-            // Clone is cheap — `PageEntry` is small and `Arc`-less.
-            // Avoids holding an immutable borrow of `idx.pages` while
-            // we mutate `idx.backlinks` below.
-            let Some(entry) = idx.pages.get(slug).cloned() else {
-                continue;
-            };
-            let mut path_stack: Vec<usize> = Vec::new();
-            collect_backlinks_recursive(&parsed.blocks, &mut path_stack, &entry, &mut idx);
         }
 
         idx
@@ -231,22 +185,13 @@ impl WorkspaceIndex {
         self.pages.len()
     }
 
-    /// Backlinks pointing at a given slug. The returned slice may be
-    /// empty.
-    pub fn backlinks(&self, slug: &str) -> &[Backlink] {
-        self.backlinks
-            .get(slug)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
-    }
-
     /// Re-index a single page in place — replacement for the global
     /// scan when only one page changed.
     ///
-    /// Removes every backlink whose source was this slug, walks the
-    /// new AST to emit fresh backlinks, and refreshes the `PageEntry`
-    /// metadata (title/icon). `is_journal` is inferred from the
-    /// parent directory of `path` (`journals/...` vs anything else).
+    /// Refreshes the `PageEntry` metadata (title/icon/pinned) and
+    /// rebuilds the block-level entries for this slug. `is_journal`
+    /// is inferred from the parent directory of `path`
+    /// (`journals/...` vs anything else).
     ///
     /// Roughly `O(blocks_in_this_page)` — orders of magnitude cheaper
     /// than `build`, which walks every `.md` in the workspace. Use
@@ -281,13 +226,6 @@ impl WorkspaceIndex {
             .iter()
             .any(|(k, v)| k == "pinned" && is_truthy(v));
 
-        // Drop every backlink that used to come from this page —
-        // we'll re-emit the fresh set below.
-        for list in self.backlinks.values_mut() {
-            list.retain(|bl| bl.source_slug != slug);
-        }
-        self.backlinks.retain(|_, v| !v.is_empty());
-
         // Forget the page's previous `title -> slug` mapping in case
         // the title changed (otherwise a stale alias would shadow the
         // new one for `by_title` lookups).
@@ -301,16 +239,12 @@ impl WorkspaceIndex {
             is_journal,
             pinned,
         };
-        self.pages.insert(slug.clone(), entry.clone());
-        self.title_to_slug.insert(title.clone(), slug.clone());
-
-        let mut path_stack: Vec<usize> = Vec::new();
-        collect_backlinks_recursive(&page.blocks, &mut path_stack, &entry, self);
+        self.pages.insert(slug.clone(), entry);
+        self.title_to_slug.insert(title, slug.clone());
 
         // Block-level re-index: drop everything this page used to
         // contribute, then re-collect from the fresh AST + current
-        // sidecar. `forget_page` is O(blocks_in_workspace) today; the
-        // bench in #12 measures whether that holds up at scale.
+        // sidecar.
         self.blocks.forget_page(&slug);
         if let Some(sc) = read_sidecar_best_effort(path) {
             self.blocks
@@ -320,82 +254,11 @@ impl WorkspaceIndex {
 
     /// Drop a page from the index entirely. Use when a `.md` is
     /// deleted on disk. Removes the `PageEntry`, its title alias,
-    /// every backlink whose source was this slug, and every block
-    /// the page contributed to the block index.
+    /// and every block the page contributed to the block index.
     pub fn remove_page(&mut self, slug: &str) {
         self.pages.remove(slug);
         self.title_to_slug.retain(|_, s| s != slug);
-        for list in self.backlinks.values_mut() {
-            list.retain(|bl| bl.source_slug != slug);
-        }
-        self.backlinks.retain(|_, v| !v.is_empty());
         self.blocks.forget_page(slug);
-    }
-
-    /// Re-clone the cached `source_block` of every backlink whose
-    /// `source_path` matches, pulling fresh content from `source_page`.
-    ///
-    /// Used as an **optimistic** refresh after the TUI mutates the
-    /// source page in memory (e.g. structural ops triggered from
-    /// inside a backlink). Lets the next frame show the new tree
-    /// without paying for a full workspace rebuild. The next natural
-    /// rebuild reconverges with disk truth.
-    ///
-    /// Backlinks whose `source_block_path` no longer resolves (e.g.
-    /// the referencing block was moved or deleted) keep their stale
-    /// node — the canonical fix happens when the index rebuilds.
-    pub fn refresh_backlinks_from_source(
-        &mut self,
-        source_path: &Path,
-        source_page: &crate::parse::ParsedPage,
-    ) {
-        for list in self.backlinks.values_mut() {
-            for bl in list.iter_mut() {
-                if bl.source_path != source_path {
-                    continue;
-                }
-                if let Some(node) = walk_node(&source_page.blocks, &bl.source_block_path) {
-                    bl.source_block = node.clone();
-                }
-            }
-        }
-    }
-
-    /// Apply `new_text` to every cached `source_block` whose `(source_path,
-    /// absolute_block_path)` matches `(source_path, target_path)`.
-    ///
-    /// `target_path` is interpreted as the DFS path inside the source
-    /// page's AST — i.e. `source_block_path` (where the referencing
-    /// block lives) concatenated with the sub-path *inside* that block
-    /// (zero or more steps).
-    ///
-    /// This is an **optimistic** in-memory patch used by the TUI to
-    /// reflect a backlink edit instantly while the actual disk write
-    /// and reconcile happen out of the critical path. The next full
-    /// index rebuild reconverges this with disk truth — until then,
-    /// every backlink list that references the same source block
-    /// stays consistent because they all carry their own clone of the
-    /// node, and this method walks them all.
-    pub fn patch_backlink_text(
-        &mut self,
-        source_path: &Path,
-        target_path: &[usize],
-        new_text: &str,
-    ) {
-        for list in self.backlinks.values_mut() {
-            for bl in list.iter_mut() {
-                if bl.source_path != source_path {
-                    continue;
-                }
-                if !target_path.starts_with(&bl.source_block_path) {
-                    continue;
-                }
-                let tail = &target_path[bl.source_block_path.len()..];
-                if let Some(node) = walk_node_mut(&mut bl.source_block, tail) {
-                    node.text = new_text.to_string();
-                }
-            }
-        }
     }
 
     /// Resolve `((blk-XXXXXX))` to the indexed block, if known.
@@ -462,25 +325,6 @@ impl WorkspaceIndex {
     }
 }
 
-fn walk_node_mut<'a>(root: &'a mut OutlineNode, path: &[usize]) -> Option<&'a mut OutlineNode> {
-    let mut node = root;
-    for &i in path {
-        node = node.children.get_mut(i)?;
-    }
-    Some(node)
-}
-
-fn walk_node<'a>(blocks: &'a [OutlineNode], path: &[usize]) -> Option<&'a OutlineNode> {
-    let mut current = blocks;
-    let mut node: Option<&OutlineNode> = None;
-    for &i in path {
-        let n = current.get(i)?;
-        node = Some(n);
-        current = &n.children;
-    }
-    node
-}
-
 /// Read the sidecar paired with `md_path`, swallowing I/O and parse
 /// errors so the index build (a best-effort pass) cannot abort over a
 /// single bad file.
@@ -498,56 +342,6 @@ fn is_truthy(v: &str) -> bool {
         v.trim().to_ascii_lowercase().as_str(),
         "true" | "yes" | "1" | "on"
     )
-}
-
-fn collect_backlinks_recursive(
-    blocks: &[OutlineNode],
-    path_stack: &mut Vec<usize>,
-    source: &PageEntry,
-    idx: &mut WorkspaceIndex,
-) {
-    for (i, b) in blocks.iter().enumerate() {
-        path_stack.push(i);
-        // A block may reference several pages/tags — but we record one
-        // backlink per *unique* target slug so a page referenced twice
-        // in the same block doesn't show up duplicated.
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for tok in tokenize(&b.text) {
-            let target_slug = match tok {
-                InlineTok::PageRef { name } | InlineTok::Tag { name } => slugify(name),
-                _ => continue,
-            };
-            if seen.insert(target_slug.clone()) {
-                push_backlink(idx, &target_slug, source, path_stack, b);
-            }
-        }
-        collect_backlinks_recursive(&b.children, path_stack, source, idx);
-        path_stack.pop();
-    }
-}
-
-fn push_backlink(
-    idx: &mut WorkspaceIndex,
-    target_slug: &str,
-    source: &PageEntry,
-    source_block_path: &[usize],
-    source_block: &OutlineNode,
-) {
-    // Skip self-references: a page linking to itself is noise.
-    if target_slug == source.slug {
-        return;
-    }
-    idx.backlinks
-        .entry(target_slug.to_string())
-        .or_default()
-        .push(Backlink {
-            source_slug: source.slug.clone(),
-            source_title: source.title.clone(),
-            source_icon: source.icon.clone(),
-            source_path: source.path.clone(),
-            source_block_path: source_block_path.to_vec(),
-            source_block: source_block.clone(),
-        });
 }
 
 // Integration-level tests for WorkspaceIndex live in

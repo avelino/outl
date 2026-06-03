@@ -193,57 +193,24 @@ jobs:
         id: meta
         shell: bash
         run: |
-          # Marketing string: workspace version with any pre-release
-          # suffix stripped (Apple rejects `-beta.N` in
-          # CFBundleShortVersionString).
           # CFBundleShortVersionString: marketing version from Cargo.toml
           # with the `-beta.N` suffix stripped (Apple rejects pre-release
           # tags in this field).
           BASE=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
           SHORT_VERSION="${BASE%%-*}"
 
-          # CFBundleVersion: marketing version concatenated with the
-          # beta counter that the Release workflow publishes as a git
-          # tag. Convention:
-          #   marketing  0.5.1     +  beta  27   =>  CFBundleVersion 0.5.1027
-          # BETA is zero-padded to 3 digits so the third component is
-          # always `<PATCH><BETA_PADDED>`. This keeps Apple's
-          # component-wise comparison monotonic across PATCH bumps:
-          #   0.5.1099 (patch 1 beta 99)  <  0.5.2001 (patch 2 beta 1)
-          # Apple sees three period-separated integers and the value
-          # only grows.
-          #
-          # BETA source priority:
-          #   1. Latest `v<SHORT_VERSION>-beta.<N>` tag in the repo.
-          #      This keeps Mobile in lockstep with whatever the
-          #      Release workflow last published for this marketing
-          #      version (run_number lives on Release, not Mobile).
-          #   2. Mobile's own `github.run_number` as fallback, used
-          #      when no beta tag has been cut yet (first run on a
-          #      brand-new marketing version).
-          LAST_BETA_TAG=$(git tag --list "v${SHORT_VERSION}-beta.*" --sort=-version:refname | head -n1)
-          if [[ -n "$LAST_BETA_TAG" ]]; then
-            BETA=$(echo "$LAST_BETA_TAG" | sed -E "s/^v${SHORT_VERSION}-beta\.([0-9]+)$/\1/")
-            echo "::notice::beta number ${BETA} from tag ${LAST_BETA_TAG}"
-          else
-            BETA="${{ github.run_number }}"
-            echo "::notice::no beta tag for ${SHORT_VERSION}, falling back to Mobile run_number ${BETA}"
-          fi
-
-          # Pad BETA to 3 digits. Caps at 999 betas per PATCH; bump
-          # PATCH before that limit is anywhere near hit.
-          if (( BETA > 999 )); then
-            echo "::error::BETA=${BETA} overflows 3-digit pad; bump PATCH in Cargo.toml"
-            exit 1
-          fi
-          BETA_PAD=$(printf '%03d' "$BETA")
-          BUILD_NUMBER="${SHORT_VERSION}${BETA_PAD}"
+          # CFBundleVersion: Apple only requires a monotonically
+          # increasing integer string per CFBundleShortVersionString.
+          # github.run_number on this workflow is unique, always
+          # increases, and never depends on tags from another workflow
+          # — perfect fit. Marketing version 0.5.3 may ship as build
+          # 47, 48, 49... and Apple ranks them correctly.
+          BUILD_NUMBER="${{ github.run_number }}"
 
           # Re-run of the same Mobile workflow would otherwise produce
           # the same BUILD_NUMBER and trigger Apple's duplicate guard
           # (409 ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE). Appending a
-          # fourth component on attempts > 1 keeps each attempt unique
-          # without bumping the published beta counter.
+          # second component on attempts > 1 keeps each attempt unique.
           if [[ "${{ github.run_attempt }}" -gt 1 ]]; then
             BUILD_NUMBER="${BUILD_NUMBER}.${{ github.run_attempt }}"
           fi
@@ -251,6 +218,62 @@ jobs:
           echo "short_version=${SHORT_VERSION}" >> "$GITHUB_OUTPUT"
           echo "build_number=${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "::notice::iOS release ${SHORT_VERSION} (build ${BUILD_NUMBER})"
+
+      # User-facing release notes for TestFlight. `conventional-changelog`
+      # reads Conventional Commits since the last `v*` tag and emits a
+      # markdown changelog grouped by type (Features / Bug Fixes /
+      # Performance / etc.). `testflight.yml` picks `release-notes.md`
+      # out of the IPA artifact and posts it as
+      # `betaBuildLocalizations.whatsNew` via the App Store Connect API.
+      #
+      # Why `conventional-changelog-cli` and not `semantic-release`:
+      # semantic-release runs a `git push --dry-run` even in `--dry-run`
+      # mode to validate write permission, and this job's GITHUB_TOKEN
+      # is read-only (no `contents: write`). conventional-changelog is
+      # the same generator semantic-release uses internally for notes;
+      # it just doesn't touch the remote.
+      #
+      # Fallback: if no Conventional Commits landed since the last
+      # tag (early days of the convention), fall back to raw `git log`
+      # subjects so the build still ships with *something* readable.
+      - name: Setup Node (conventional-changelog)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          set -euo pipefail
+          LAST_TAG=$(git tag --list 'v*' --sort=-version:refname | head -n1)
+          echo "::notice::generating notes since ${LAST_TAG:-<no previous tag>}"
+
+          # `-r 1` = render only the most recent release (commits since
+          # the previous tag). Drops the auto-generated `## [version]`
+          # heading via `tail` so what reaches TestFlight is just the
+          # categorized list.
+          npx -y \
+            -p conventional-changelog-cli@5 \
+            -p conventional-changelog-conventionalcommits@8 \
+            conventional-changelog -p conventionalcommits -r 1 \
+            > release-notes.full.md
+
+          # Strip the leading "## [x.y.z] (date)" heading; keep body.
+          awk 'NR==1 && /^##/ {next} /^$/ && !printed {next} {printed=1; print}' \
+            release-notes.full.md > release-notes.md
+
+          if [[ ! -s release-notes.md ]]; then
+            echo "::warning::no Conventional Commits since last tag; falling back to git log."
+            if [[ -n "$LAST_TAG" ]]; then
+              git log --pretty=format:'- %s' "${LAST_TAG}..HEAD" > release-notes.md
+            else
+              echo "- Initial TestFlight build." > release-notes.md
+            fi
+          fi
+
+          echo "::group::Release notes (release-notes.md)"
+          cat release-notes.md
+          echo "::endgroup::"
 
       # App Store Connect requires the iOS 26 SDK as of 2026-04;
       # pin to the latest stable Xcode (Xcode 26.x on macos-15).
@@ -542,6 +565,14 @@ jobs:
           META_DIR="$RUNNER_TEMP/ipa-bundle"
           mkdir -p "$META_DIR"
           cp "${{ steps.ipa.outputs.path }}" "$META_DIR/outl.ipa"
+          # release-notes.md is required by testflight.yml's
+          # `Set TestFlight release notes` step. It was generated
+          # earlier in the job by the `Generate release notes` step.
+          if [[ -f release-notes.md ]]; then
+            cp release-notes.md "$META_DIR/release-notes.md"
+          else
+            echo "::warning::release-notes.md missing; TestFlight will skip whatsNew."
+          fi
           cat >"$META_DIR/metadata.env" <<EOF
           short_version=${{ steps.meta.outputs.short_version }}
           build_number=${{ steps.meta.outputs.build_number }}

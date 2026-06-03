@@ -214,31 +214,6 @@ pub fn outdent_at_path(blocks: &mut Vec<OutlineNode>, path: &[usize]) -> Option<
     Some(new_path)
 }
 
-/// Flatten the subtree rooted at `root` into a DFS-ordered sequence of
-/// paths relative to that root. The first entry is always the empty
-/// path `[]` (the root itself); subsequent entries descend into
-/// children in order.
-///
-/// Used by the inline backlinks section so `j`/`k` can step through a
-/// referencing block and its children the same way the main outline
-/// stepping works on `app.page`.
-pub fn flatten_backlink_subtree(root: &OutlineNode) -> Vec<Vec<usize>> {
-    let mut out = Vec::new();
-    let mut stack: Vec<usize> = Vec::new();
-    out.push(stack.clone()); // the root, path = []
-    walk_subtree(root, &mut stack, &mut out);
-    out
-}
-
-fn walk_subtree(node: &OutlineNode, stack: &mut Vec<usize>, out: &mut Vec<Vec<usize>>) {
-    for (i, child) in node.children.iter().enumerate() {
-        stack.push(i);
-        out.push(stack.clone());
-        walk_subtree(child, stack, out);
-        stack.pop();
-    }
-}
-
 /// Delete the node at `path`. Silently no-ops on out-of-range or root.
 pub fn delete_at_path(blocks: &mut Vec<OutlineNode>, path: &[usize]) {
     if path.is_empty() {
@@ -380,38 +355,10 @@ mod tests {
         assert_eq!(blocks[0].text, "b");
     }
 
-    #[test]
-    fn flatten_backlink_subtree_returns_dfs_paths() {
-        let root = OutlineNode {
-            text: "root".into(),
-            children: vec![
-                OutlineNode {
-                    text: "a".into(),
-                    children: vec![block("a1"), block("a2")],
-                    ..Default::default()
-                },
-                block("b"),
-            ],
-            ..Default::default()
-        };
-        // DFS preorder: root, a, a1, a2, b
-        assert_eq!(
-            flatten_backlink_subtree(&root),
-            vec![
-                vec![],     // root
-                vec![0],    // a
-                vec![0, 0], // a1
-                vec![0, 1], // a2
-                vec![1],    // b
-            ]
-        );
-    }
-
-    #[test]
-    fn flatten_backlink_subtree_leaf_returns_just_root() {
-        let leaf = block("only-me");
-        assert_eq!(flatten_backlink_subtree(&leaf), vec![Vec::<usize>::new()]);
-    }
+    // `flatten_backlink_subtree` moved to
+    // `outl_actions::flatten_subtree_paths` along with the rest of the
+    // backlinks pipeline. Coverage now lives in `outl-actions::outline`
+    // tests next to the helper it operates on.
 
     #[test]
     fn descendants_count_handles_nested() {

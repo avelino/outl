@@ -74,7 +74,10 @@ pub use journal::{
     apply_all_pages_md, apply_page_md, apply_page_md_with_sidecar, journals_dir, mutate_page_md,
     page_md_path, pages_dir, render_page_md, write_md_atomic,
 };
-pub use outline::{project_outline, read_page_view, read_page_view_with_workspace, OutlineNode};
+pub use outline::{
+    flatten_subtree_paths, project_outline, project_outline_node, read_page_view,
+    read_page_view_with_workspace, OutlineNode,
+};
 pub use page::{
     date_from_slug, find_by_slug, is_valid_slug, journal_slug, journal_title,
     list_all as list_pages, migrate_legacy_into_today, next_journal_date, open_journal,

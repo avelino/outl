@@ -252,6 +252,27 @@ laptop):
 - ❌ Drop sidecar version 1 support when adding version 2 (always backward read)
 - ❌ Block on a corrupt sidecar — fall back to "regenerate from op log" via `outl doctor`
 
+## Reuse-first
+
+This crate owns the **shared parsing and view primitives** every
+client needs (`char_to_line_col` / `line_col_to_char`,
+`block_to_rows`, `tokenize`, `slugify`, `derive_ref_handle`, …).
+Clients should *wrap* these, not re-derive them.
+
+When you add a primitive, pair it: `char_to_line_col` already
+existed; the recent `line_col_to_char` addition made the pair
+complete so `outl-tui::EditBuffer::move_up` / `move_down` could be
+3-line wrappers instead of duplicating the line/column scan.
+**Inverses, encoders/decoders, and parser/renderer pairs always
+ship together** so the next consumer doesn't have to re-derive
+half of one.
+
+If you find a client (`outl-tui`, `outl-mobile`,
+`outl-actions`) hand-rolling something that's already here, move
+the call to your API and delete the duplicate. The root
+[`CLAUDE.md`](../../CLAUDE.md#reuse-first-no-parallel-implementations)
+documents this at the workspace level.
+
 ## When you're done
 
 1. `cargo fmt`

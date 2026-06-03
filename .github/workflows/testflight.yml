@@ -78,6 +78,11 @@ jobs:
       APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
 
     steps:
+      # Needed for `.github/scripts/testflight_set_whatsnew.py`
+      # invoked later. The script is small and the checkout is cheap
+      # (a few MB), so we always do it.
+      - uses: actions/checkout@v4
+
       - name: Resolve Mobile run ID
         id: src
         env:
@@ -195,6 +200,26 @@ jobs:
             echo "::error::altool reported ERROR despite exit 0 — see log above"
             exit 1
           fi
+
+      # Attach the release notes produced by mobile.yml (via
+      # semantic-release) as the TestFlight build's "What to Test"
+      # text. The build needs to materialize in App Store Connect
+      # first — the script polls up to 5min and best-effort skips
+      # on timeout (the upload already succeeded).
+      - name: Install Python deps (App Store Connect API)
+        run: pip3 install --quiet --break-system-packages pyjwt cryptography requests
+
+      - name: Set TestFlight release notes (whatsNew)
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_PATH: ${{ env.HOME }}/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_KEY_ID }}.p8
+          BUNDLE_ID: app.outl.mobile-app
+          SHORT_VERSION: ${{ steps.meta.outputs.short_version }}
+          BUILD_NUMBER: ${{ steps.meta.outputs.build_number }}
+          NOTES_PATH: ipa-bundle/release-notes.md
+          LOCALE: en-US
+        run: python3 .github/scripts/testflight_set_whatsnew.py
 
       - name: Re-upload IPA as workflow artifact (audit trail)
         if: always() && steps.ipa.outputs.path != ''

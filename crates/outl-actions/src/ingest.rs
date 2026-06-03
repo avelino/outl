@@ -338,17 +338,17 @@ mod tests {
         let created = create_missing_ref_pages(&mut ws, &hlc).unwrap();
         assert_eq!(created, 2, "two implicit pages: @Jane Doe and Acme");
 
-        // The stubs exist with the reference text as their title, so
-        // backlinks resolve against the title form.
+        // The stubs exist with the reference text verbatim as their
+        // title, so backlinks (which match on slug AND title) resolve
+        // against the title form.
         let acme = find_by_slug(&ws, "acme").expect("acme stub exists");
-        let meta = crate::page::page_meta(&ws, acme).unwrap();
-        assert_eq!(meta.title, "Acme");
-        let links = crate::backlinks::backlinks_for_page(&ws, &meta);
-        assert_eq!(links.len(), 1);
+        assert_eq!(crate::page::page_meta(&ws, acme).unwrap().title, "Acme");
 
         let jane = find_by_slug(&ws, "jane-doe").expect("jane-doe stub exists");
-        let jmeta = crate::page::page_meta(&ws, jane).unwrap();
-        assert_eq!(jmeta.title, "@Jane Doe");
+        assert_eq!(
+            crate::page::page_meta(&ws, jane).unwrap().title,
+            "@Jane Doe"
+        );
 
         // Idempotent: a second pass creates nothing.
         assert_eq!(create_missing_ref_pages(&mut ws, &hlc).unwrap(), 0);

@@ -414,7 +414,7 @@ pub fn rename(ctx: &mut WsCtx, old_slug: &str, new_slug: &str) -> Result<Value, 
 
     // Affected backlinks: keep the old textual form so the caller can
     // grep / rewrite.
-    let affected = outl_actions::backlinks_for_target(&ctx.workspace, old_slug);
+    let affected = outl_actions::backlinks_for_target(&ctx.workspace, &ctx.root, old_slug);
     Ok(json!({
         "meta": page_meta_inner(ctx, id)?,
         "old_slug": old_slug,

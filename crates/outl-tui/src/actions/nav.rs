@@ -6,10 +6,11 @@
 //! `self.selected`, and `self.cursor_col`. The lifecycle module is
 //! the one that touches disk.
 
-use crate::outline_ops::{flatten_backlink_subtree, node_at_path, path_for_index};
+use crate::outline_ops::{node_at_path, path_for_index};
 use crate::state::{App, Focus, Mode, View};
 use anyhow::Result;
 use chrono::{Duration, Local};
+use outl_actions::flatten_subtree_paths;
 use outl_md::inline::{ref_at_cursor, RefTarget};
 use outl_md::reconcile::reconcile_md;
 use std::fs;
@@ -65,6 +66,99 @@ impl App {
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string()
+    }
+
+    /// Compute the backlinks pointing at `slug` directly from the
+    /// workspace. **This is the single source for backlinks across
+    /// the TUI** — every call site (panel render, navigation,
+    /// keyboard handlers) routes through here.
+    ///
+    /// Result is cached on [`Self::backlinks_cache`] keyed by slug so
+    /// repeated reads (render frame, j/k in the backlink panel) hit
+    /// the cache instead of re-scanning the workspace. The cache is
+    /// transparent — callers always get a fresh `Vec<Backlink>`
+    /// owned by them, the cache stores a reference copy for the
+    /// next lookup. Invalidation happens on mutation paths via
+    /// [`Self::invalidate_backlinks_cache`] (`save`,
+    /// `save_page_with`, `reload_workspace_from_disk`,
+    /// `load_current`, view-changing nav).
+    ///
+    /// The earlier code path read from `WorkspaceIndex.backlinks`,
+    /// which has been removed: the `outl-md` index no longer
+    /// duplicates this data (`outl_actions::backlinks_for_page` is
+    /// the only producer now, shared with the mobile client). Raw
+    /// scan cost is `O(blocks in workspace)` per call —
+    /// sub-millisecond up to ~10k blocks, but a render frame at
+    /// 60fps still issues 60 of them per second, which is what made
+    /// the cache worth its weight.
+    pub(crate) fn backlinks_for_slug(&self, slug: &str) -> Vec<outl_actions::Backlink> {
+        // Cache hit: same slug as the last read, return the clone.
+        if let Some((cached_slug, cached_list)) = self.backlinks_cache.borrow().as_ref() {
+            if cached_slug == slug {
+                return cached_list.clone();
+            }
+        }
+        // Miss: recompute, store, and return.
+        let computed = self.compute_backlinks_for_slug(slug);
+        *self.backlinks_cache.borrow_mut() = Some((slug.to_string(), computed.clone()));
+        computed
+    }
+
+    /// Raw computation path — the workspace scan without the cache
+    /// layer. Public-in-crate for tests; production callers should
+    /// go through [`Self::backlinks_for_slug`].
+    pub(crate) fn compute_backlinks_for_slug(&self, slug: &str) -> Vec<outl_actions::Backlink> {
+        let Some(id) = outl_actions::find_by_slug(&self.workspace, slug) else {
+            return Vec::new();
+        };
+        let Some(meta) = outl_actions::page_meta(&self.workspace, id) else {
+            return Vec::new();
+        };
+        outl_actions::backlinks_for_page(&self.workspace, &self.workspace_root, &meta)
+    }
+
+    /// Convenience: backlinks for the currently-opened page/journal.
+    pub(crate) fn backlinks_for_current(&self) -> Vec<outl_actions::Backlink> {
+        self.backlinks_for_slug(&self.current_slug())
+    }
+
+    /// Number of backlinks pointing at `slug`, without cloning the
+    /// list.
+    ///
+    /// Callers that only need a count (the footer chip in
+    /// `view::chrome`, the navigability probe in
+    /// [`Self::backlinks_navigable`]) take this instead of
+    /// [`Self::backlinks_for_slug`]. The rich `Backlink` struct now
+    /// carries `source_block: OutlineNode` plus its subtree, so the
+    /// clone the full accessor performs is non-trivial. On a cache
+    /// hit `len()` is `O(1)`; on a miss we still scan and populate
+    /// the cache but skip the extra `Vec` clone.
+    pub(crate) fn backlinks_count_for_slug(&self, slug: &str) -> usize {
+        if let Some((cached_slug, cached_list)) = self.backlinks_cache.borrow().as_ref() {
+            if cached_slug == slug {
+                return cached_list.len();
+            }
+        }
+        // Miss: recompute and store. Length-only callers still benefit
+        // because the next read (probably from a richer call site)
+        // hits the cache.
+        let computed = self.compute_backlinks_for_slug(slug);
+        let len = computed.len();
+        *self.backlinks_cache.borrow_mut() = Some((slug.to_string(), computed));
+        len
+    }
+
+    /// Convenience: number of backlinks for the currently-opened
+    /// page/journal. See [`Self::backlinks_count_for_slug`].
+    pub(crate) fn backlinks_count_for_current(&self) -> usize {
+        self.backlinks_count_for_slug(&self.current_slug())
+    }
+
+    /// Drop the cached backlinks list. Call this on every workspace
+    /// mutation that can change the answer — saves, peer-ops reloads,
+    /// view switches. Cheap (just sets the `Option` to `None`).
+    pub(crate) fn invalidate_backlinks_cache(&self) {
+        *self.backlinks_cache.borrow_mut() = None;
     }
 
     pub(crate) fn go_today(&mut self) -> Result<()> {
@@ -151,11 +245,11 @@ impl App {
                 // clone per keystroke).
                 let slug = self.current_slug();
                 let new_focus = {
-                    let backlinks = self.index.backlinks(&slug);
+                    let backlinks = self.backlinks_for_slug(&slug);
                     let Some(bl) = backlinks.get(idx) else {
                         return false;
                     };
-                    let paths = flatten_backlink_subtree(&bl.source_block);
+                    let paths = flatten_subtree_paths(&bl.source_block);
                     let cur_pos = paths.iter().position(|p| p == &sub_path).unwrap_or(0);
                     if cur_pos + 1 < paths.len() {
                         Focus::Backlink {
@@ -205,11 +299,11 @@ impl App {
                 // Resolve the new focus value while only borrowing the
                 // backlinks slice — no `to_vec` clone per keystroke.
                 let new_focus_opt = {
-                    let backlinks = self.index.backlinks(&slug);
+                    let backlinks = self.backlinks_for_slug(&slug);
                     let Some(bl) = backlinks.get(idx) else {
                         return false;
                     };
-                    let paths = flatten_backlink_subtree(&bl.source_block);
+                    let paths = flatten_subtree_paths(&bl.source_block);
                     let cur_pos = paths.iter().position(|p| p == &sub_path).unwrap_or(0);
                     if cur_pos > 0 {
                         Some(Focus::Backlink {
@@ -218,7 +312,7 @@ impl App {
                         })
                     } else if idx > 0 {
                         // Jump to the last block of the previous backlink.
-                        let prev_paths = flatten_backlink_subtree(&backlinks[idx - 1].source_block);
+                        let prev_paths = flatten_subtree_paths(&backlinks[idx - 1].source_block);
                         let last = prev_paths.last().cloned().unwrap_or_default();
                         Some(Focus::Backlink {
                             idx: idx - 1,
@@ -246,7 +340,7 @@ impl App {
     /// at least one block the cursor can land on. Drives the cross-zone
     /// transition in `step_forward`/`step_backward`.
     fn backlinks_navigable(&self) -> bool {
-        self.show_backlinks && !self.index.backlinks(&self.current_slug()).is_empty()
+        self.show_backlinks && self.backlinks_count_for_current() > 0
     }
 
     /// Current selected block's text (or empty if no selection).
@@ -262,7 +356,7 @@ impl App {
                     .unwrap_or_default()
             }
             Focus::Backlink { idx, sub_path } => {
-                let backlinks = self.index.backlinks(&self.current_slug());
+                let backlinks = self.backlinks_for_current();
                 let Some(bl) = backlinks.get(*idx) else {
                     return String::new();
                 };

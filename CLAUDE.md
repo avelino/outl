@@ -226,7 +226,50 @@ Don't add code for these unless explicitly asked:
 - No `unsafe` in `outl-core` without documented justification
 - Variable names, function names, doc comments: **English** (global audience)
 - User-facing strings (CLI help, TUI labels): English for now (i18n later)
-- Conventional Commits (`feat:`, `fix:`, `refactor:`, etc) on commit messages
+- **Conventional Commits are load-bearing.** Use `feat:`, `fix:`,
+  `perf:`, `docs:`, `refactor:`, `chore:`, `test:`, `build:`, `ci:`
+  on every commit (and on PR merge commits). The Mobile pipeline
+  generates TestFlight release notes by feeding the commit log
+  since the last tag into `conventional-changelog-cli` (preset
+  `conventionalcommits`); the rendered markdown lands as the
+  build's "What to Test" text via the App Store Connect API.
+  Commits without a prefix all fall into a single "Other changes"
+  bucket on TestFlight, so the user loses the per-build context.
+  If a commit doesn't fit a type, prefer `chore:` over no prefix.
+
+### Reuse-first (no parallel implementations)
+
+Before adding a helper, struct, or constant, **grep the workspace
+for what already does the same thing**. Duplication here is a real
+hazard: two implementations of the same logic drift apart over time,
+and the user is the one who hits the divergence (recent example:
+`outl_md::index::Backlink` and `outl_actions::Backlink` were two
+parallel "backlinks" pipelines that started identical and ended up
+disagreeing on self-references — a bug the user had to spot
+because each surface looked fine in isolation).
+
+The rule:
+
+1. **Grep before writing.** `rg "fn foo"` / `rg "struct Foo"` across
+   `crates/`. Look in **upstream crates first** — `outl-core`,
+   `outl-md`, `outl-actions` are where shared primitives live.
+2. **Prefer evolving the existing API** over duplicating, even if
+   that means a small refactor (rename, generalize a parameter,
+   move into a sibling module). One owner per concept; many callers.
+3. **Duplication is OK only when the platforms are genuinely
+   different.** `outl-tui::EditBuffer` and the mobile `<textarea>`
+   are both "cursor + text" — but one is a terminal widget Rust has
+   to render itself, the other is a browser primitive. Same role,
+   different runtime; not duplication. **Recalculating** `(line,
+   col)` from `cursor` in both places, though, would be — extract
+   to `outl_md::view::char_to_line_col` and let both wrap it.
+4. **Refactor *into* the shared crate, not *around* it.** If a TUI
+   helper feels like it could live in `outl-actions`, move it there
+   *now* (the mobile client will need it soon). The
+   `flatten_subtree_paths` migration is the canonical pattern.
+
+When in doubt, name the would-be helper, search for it, then ask
+yourself: "is the existing thing one rename away?" If yes, rename.
 
 ### File size discipline
 
@@ -262,6 +305,9 @@ evolve.
 - ❌ Using `id::` Logseq-style metadata anywhere
 - ❌ Marking work "done" without `/check` passing
 - ❌ Re-introducing `"version"` in `crates/outl-mobile/src-tauri/tauri.conf.json` — Tauri must keep falling back to `Cargo.toml` (see "Versioning + TestFlight release" in `crates/outl-mobile/CLAUDE.md`)
+- ❌ Adding a helper that re-implements something already in
+  `outl-core` / `outl-md` / `outl-actions` (see **Reuse-first**). The
+  fix is to wrap the upstream API, not to write a parallel one.
 
 ## When in doubt
 
