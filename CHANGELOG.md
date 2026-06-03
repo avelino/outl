@@ -4,6 +4,148 @@ All notable changes to outl are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project
 uses [Semantic Versioning](https://semver.org/).
 
+## [0.5.3] — 2026-06-02
+
+**Unify backlinks, Insert-mode cross-block nav, anti-duplication policy.**
+
+Two parallel backlinks pipelines (one on `outl-md::index`, one on
+`outl-actions`) had drifted on policy — self-references were dropped
+on the TUI panel but kept on mobile, and the user had to spot the
+divergence by comparing surfaces. 0.5.3 collapses them into one path
+through `outl_actions::backlinks_for_page`, deletes the cache on
+`outl-md::index`, and renames the related helpers so the call sites
+land on the shared API by default.
+
+Insert mode also picks up the missing piece for vim/emacs muscle
+memory: `Up`/`Down` cross blocks (commit, move selection, re-enter
+Insert preserving the cursor column) the same way `Left`/`Right`
+already did. Multi-line buffers (fenced code) absorb the move
+internally first.
+
+### Added
+
+- **`outl_core::Tree::properties_of(node)`** — iterator over every
+  property currently set on a node, in one pass. Used by the outline
+  DTO so each `OutlineNode` carries its own properties without
+  scanning the workspace-wide map per block.
+- **`outl_md::view::line_col_to_char(s, line, col)`** — inverse of
+  the existing `char_to_line_col`. Vim-style column clamping (past
+  EOL → end of line) and line clamping (past last → end of string).
+  Lets `outl_tui::EditBuffer::move_up` / `move_down` wrap the same
+  primitives the renderer (`block_to_rows`) already uses.
+- **`outl_tui::EditBuffer::move_up` / `move_down` / `visual_column`** —
+  three thin wrappers over `outl_md::view::char_to_line_col` +
+  `line_col_to_char`. Cross-block Up/Down in Insert calls these
+  first; only spills into the next block when the cursor was already
+  on the buffer's first/last line.
+- **`outl_actions::project_outline_node(workspace, node)`** — build
+  a single `OutlineNode` (subtree + properties) from the workspace.
+  Used by the backlinks builder so each backlink carries its source
+  block as a self-contained outline.
+- **`outl_actions::flatten_subtree_paths(node)`** — DFS-ordered paths
+  inside an `OutlineNode` subtree. Moved here from
+  `outl_md::outline_ops` so any client that consumes
+  `Backlink::source_block` can navigate it.
+- **`outl_actions::OutlineNode.properties`** — `(key, value)` pairs
+  in alphabetical order. Workspace and disk paths both normalise to
+  the same order so backlink panels and outline pages never disagree
+  visually.
+- **`outl_actions::PageMeta.icon`** — page-level `icon::` property
+  surfaced on the meta. Clients pick their own fallback (mobile uses
+  `📄`/`📅` by `kind`; TUI uses `📄`).
+
+### Changed
+
+- **Backlinks now route through `outl_actions::backlinks_for_page`
+  only.** `outl_md::index::Backlink`, `WorkspaceIndex.backlinks()`,
+  `refresh_backlinks_from_source`, `patch_backlink_text`,
+  `flatten_backlink_subtree` were deleted. The `outl-md` index still
+  owns page metadata and the block-level index; only the parallel
+  backlinks cache went away.
+- **`outl_actions::Backlink` is the rich struct.** Now carries
+  `source_block: OutlineNode` (subtree + properties),
+  `source_block_path: Vec<usize>`, `source_path: Option<PathBuf>`
+  alongside `block_id`, `block_text` (TODO/DONE prefix stripped),
+  `todo`, `source_page`. Mobile renders just `block_text` + `todo`
+  today and ignores the rest; the TUI uses the full subtree to
+  render its mini-outline in the backlinks panel.
+- **`outl_actions::backlinks_for_page(workspace, root, meta)` /
+  `backlinks_for_target(workspace, root, target)`** now take the
+  workspace root so each backlink can carry its source `.md` path.
+  CLI passes `&ctx.root`, TUI passes `&self.workspace_root`, mobile
+  passes `storage_root`.
+- **TUI cross-block Up/Down in Insert.** Commits the current buffer,
+  moves the outline selection, re-enters Insert with the cursor on
+  the preserved column. Guard: when `move_selection` would land
+  `Focus` on the backlinks panel, the TUI stops in Normal mode
+  instead of opening a different page mid-Insert. Backlink edits
+  keep the older Esc → j/k → i workflow until cross-page commits
+  get their own pass.
+- **`App::backlinks_for_current` is cached.** Per-frame and
+  per-keystroke render calls hit a `RefCell<Option<(slug, Vec)>>`
+  cache; invalidated on `save`, `save_page_with`,
+  `reload_workspace_from_disk`, and any view switch. Cuts the
+  workspace scan from `O(blocks)` per call to one per slug change.
+- **Self-references are kept in backlinks.** The "skip
+  self-references as noise" heuristic on `outl_md::index` was
+  dropped — a block on today's journal that mentions
+  `[[2026-06-02]]` is exactly the "linked from" pin the user expects
+  to see when revisiting that day.
+
+### Refactored
+
+- **`crates/outl-core/src/tree.rs` (854 lines) →
+  `crates/outl-core/src/tree/{mod, cycle, op, apply}`** —
+  `Tree::creates_cycle` in `cycle.rs`, `Tree::do_op` +
+  `Tree::undo_op` in `op.rs`, `Tree::apply_op` in `apply.rs`. Struct
+  and accessors stay in `mod.rs`. The 11 inline CRDT tests moved to
+  `crates/outl-core/tests/tree_unit.rs`. **Algorithm semantics
+  unchanged** — verified line-by-line against Kleppmann et al. 2022
+  and against the full invariant battery (convergence, cycle,
+  cycle_chain, concurrent_edit_move, concurrent_delete_edit,
+  late_op, idempotency, fractional_index, property_based,
+  large_log: 32/32 green).
+- **`crates/outl-tui/src/input.rs` (835 lines) →
+  `crates/outl-tui/src/input/{mod, normal, insert, overlay, visual}`** —
+  one handler per file, shared helpers (`cross_block_step`,
+  `cursor_inside_open_fence`, `cross_block_nav_eligible`) stay in
+  `mod.rs`.
+- **`crates/outl-tui/src/actions/block.rs` (843 lines) →
+  `crates/outl-tui/src/actions/block/{mod, insert, structural,
+  backlink_edit, metadata}`** — Insert mode in `insert.rs`,
+  create/indent/outdent/delete/move in `structural.rs`, cross-page
+  backlink ops in `backlink_edit.rs`, properties + TODO toggle +
+  pin in `metadata.rs`. TODO-prefix cycle helpers shared via
+  `mod.rs`.
+- **`crates/outl-tui/src/actions/lifecycle.rs` (669 lines) →
+  `crates/outl-tui/src/actions/lifecycle/{mod, index_build,
+  peer_sync, external, loading, persistence}`** — `App::new` and
+  the shared `file_mtime` helper in `mod.rs`. Each submodule owns
+  one concern.
+
+No public API changed during the splits. Clients (mobile, CLI,
+external consumers) need no update.
+
+### Documentation
+
+- **Anti-duplication policy** added to the root `CLAUDE.md` and
+  echoed in every per-crate `CLAUDE.md`. Captures the lesson
+  surfaced by the parallel `Backlink` structs and the near-miss with
+  `line_start_and_column` (almost re-derived inside `EditBuffer`
+  before the inverse `line_col_to_char` landed in `outl-md::view`).
+  Rule: grep upstream first, prefer evolving the existing API over
+  cloning the math.
+
+### Internal
+
+- `outl_md::Backlink`, `WorkspaceIndex.backlinks`,
+  `refresh_backlinks_from_source`, `patch_backlink_text`,
+  `flatten_backlink_subtree`, `outl_md::index::Backlink` removed.
+- `outl_md::view` gained the `line_col_to_char` inverse.
+- `outl_core::Tree.{nodes, properties, collapsed}` are now
+  `pub(super)` so the split submodules can reach them. Public API
+  unchanged.
+
 ## [0.5.1] — 2026-06-01
 
 **Fix: multi-process writes against the same workspace.**
