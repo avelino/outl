@@ -118,10 +118,13 @@ export function Journal() {
   // Navigation back-stack so a swipe from a `[[ref]]`-opened page
   // returns to where we came from.
   const [history, setHistory] = createSignal<PageView[]>([]);
-  // Today's journal slug, resolved once on mount. Drives the
-  // "back to today" affordance: we only show it when the current
-  // view is somewhere *other* than today's journal, so there is
-  // always a meaningful place to return to.
+  // Today's journal slug. Re-resolved on mount and whenever the app
+  // returns to the foreground, so the affordance stays correct across a
+  // midnight rollover (the app can sit open past midnight: "today"
+  // changes but a value cached once on mount wouldn't). Single source of
+  // truth for every "is this today?" decision — `canJumpToday` here and
+  // `JournalHeader`'s label both read it, instead of resolving "today"
+  // independently and risking disagreement.
   const [todaySlugValue, setTodaySlugValue] = createSignal<string | null>(null);
 
   /** True when the current view is not today's journal, so a
@@ -183,14 +186,40 @@ export function Journal() {
     });
   }
 
+  // Resolve "today" up front and again every time the app comes back to
+  // the foreground (covers the midnight rollover). `disposed` guards the
+  // async setter so a resolution that lands after the component unmounts
+  // doesn't poke a torn-down signal.
+  let disposed = false;
+  function refreshTodaySlug() {
+    todaySlug()
+      .then((t) => {
+        if (!disposed) setTodaySlugValue(t);
+      })
+      .catch((e) => {
+        // Best effort; the affordance just stays hidden until we know
+        // today's slug. Log so a backend regression is still visible.
+        console.warn("failed to resolve today's slug", e);
+      });
+  }
+  refreshTodaySlug();
+  if (typeof document !== "undefined") {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refreshTodaySlug();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    onCleanup(() => {
+      disposed = true;
+      document.removeEventListener("visibilitychange", onVisible);
+    });
+  } else {
+    onCleanup(() => {
+      disposed = true;
+    });
+  }
+
   onMount(async () => {
     listenForWorkspaceReady();
-    todaySlug()
-      .then(setTodaySlugValue)
-      .catch(() => {
-        // best effort; the button just stays hidden until we know
-        // today's slug, which is harmless.
-      });
     await loadTodayWithRetry();
   });
 
@@ -832,6 +861,7 @@ export function Journal() {
             >
               <JournalHeader
                 slug={view()?.page.slug ?? ""}
+                todaySlug={todaySlugValue()}
                 onPrev={handlePrevDay}
                 onNext={handleNextDay}
                 onToday={handleJumpToday}
@@ -1154,15 +1184,15 @@ export function Journal() {
 
 function JournalHeader(props: {
   slug: string;
+  /** Today's slug, resolved once by the parent `Journal` so the header
+   *  and the "back to today" button share a single source of truth.
+   *  `null` while the parent is still resolving it. */
+  todaySlug: string | null;
   onPrev: () => void;
   onNext: () => void;
   onToday: () => void;
 }) {
-  const [isToday, setIsToday] = createSignal(true);
-  onMount(async () => {
-    const t = await todaySlug();
-    setIsToday(t === props.slug);
-  });
+  const isToday = () => props.todaySlug !== null && props.todaySlug === props.slug;
   return (
     <div class="flex-1">
       <div class="flex items-center gap-1.5 text-(--color-ios-text-secondary) dark:text-(--color-iosd-text-secondary)">
