@@ -199,18 +199,33 @@ jobs:
           BASE=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
           SHORT_VERSION="${BASE%%-*}"
 
-          # CFBundleVersion: Apple only requires a monotonically
-          # increasing integer string per CFBundleShortVersionString.
-          # github.run_number on this workflow is unique, always
-          # increases, and never depends on tags from another workflow
-          # — perfect fit. Marketing version 0.5.3 may ship as build
-          # 47, 48, 49... and Apple ranks them correctly.
-          BUILD_NUMBER="${{ github.run_number }}"
+          # CFBundleVersion: marketing version concatenated with a
+          # zero-padded run number, e.g. SHORT 0.5.3 + run 47 → 0.5.3047.
+          # Apple compares CFBundleVersion as a tuple of integers split
+          # on `.`, component-by-component. Padding the run number to a
+          # fixed width keeps the third component monotonic across the
+          # full history:
+          #   (0, 5, 3047) > (0, 5, 3027)   because 3047 > 3027
+          # And across run-number generations (run 999 → 1000) the
+          # integer keeps growing, so `printf '%03d'` is a floor, not
+          # a cap — `1000` widens naturally and stays correct.
+          #
+          # This is the standard "semver-aligned build counter" pattern
+          # for an iOS app whose marketing version stays stable across
+          # many TestFlight builds. The trade-off (the build column
+          # looks like `0.5.3047`, visually close to a semver) is
+          # accepted because the alternative — a fresh integer like
+          # `47` — gets ranked below the existing `0.5.3027` history
+          # by Apple's left-pad comparison rule.
+          RUN_PAD=$(printf '%03d' "${{ github.run_number }}")
+          BUILD_NUMBER="${SHORT_VERSION}${RUN_PAD}"
 
-          # Re-run of the same Mobile workflow would otherwise produce
-          # the same BUILD_NUMBER and trigger Apple's duplicate guard
-          # (409 ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE). Appending a
-          # second component on attempts > 1 keeps each attempt unique.
+          # Re-runs of the same Mobile workflow would otherwise hit
+          # Apple's duplicate guard (409 ENTITY_ERROR.ATTRIBUTE.
+          # INVALID.DUPLICATE). A fourth component on attempts > 1
+          # keeps each upload unique. TestFlight accepts 4 components;
+          # App Store production submission caps at 3, but we never
+          # ship a re-run to production directly.
           if [[ "${{ github.run_attempt }}" -gt 1 ]]; then
             BUILD_NUMBER="${BUILD_NUMBER}.${{ github.run_attempt }}"
           fi
