@@ -199,18 +199,33 @@ jobs:
           BASE=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
           SHORT_VERSION="${BASE%%-*}"
 
-          # CFBundleVersion: Apple only requires a monotonically
-          # increasing integer string per CFBundleShortVersionString.
-          # github.run_number on this workflow is unique, always
-          # increases, and never depends on tags from another workflow
-          # — perfect fit. Marketing version 0.5.3 may ship as build
-          # 47, 48, 49... and Apple ranks them correctly.
-          BUILD_NUMBER="${{ github.run_number }}"
+          # CFBundleVersion: marketing version concatenated with a
+          # zero-padded run number, e.g. SHORT 0.5.3 + run 47 → 0.5.3047.
+          # Apple compares CFBundleVersion as a tuple of integers split
+          # on `.`, component-by-component. Padding the run number to a
+          # fixed width keeps the third component monotonic across the
+          # full history:
+          #   (0, 5, 3047) > (0, 5, 3027)   because 3047 > 3027
+          # And across run-number generations (run 999 → 1000) the
+          # integer keeps growing, so `printf '%03d'` is a floor, not
+          # a cap — `1000` widens naturally and stays correct.
+          #
+          # This is the standard "semver-aligned build counter" pattern
+          # for an iOS app whose marketing version stays stable across
+          # many TestFlight builds. The trade-off (the build column
+          # looks like `0.5.3047`, visually close to a semver) is
+          # accepted because the alternative — a fresh integer like
+          # `47` — gets ranked below the existing `0.5.3027` history
+          # by Apple's left-pad comparison rule.
+          RUN_PAD=$(printf '%03d' "${{ github.run_number }}")
+          BUILD_NUMBER="${SHORT_VERSION}${RUN_PAD}"
 
-          # Re-run of the same Mobile workflow would otherwise produce
-          # the same BUILD_NUMBER and trigger Apple's duplicate guard
-          # (409 ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE). Appending a
-          # second component on attempts > 1 keeps each attempt unique.
+          # Re-runs of the same Mobile workflow would otherwise hit
+          # Apple's duplicate guard (409 ENTITY_ERROR.ATTRIBUTE.
+          # INVALID.DUPLICATE). A fourth component on attempts > 1
+          # keeps each upload unique. TestFlight accepts 4 components;
+          # App Store production submission caps at 3, but we never
+          # ship a re-run to production directly.
           if [[ "${{ github.run_attempt }}" -gt 1 ]]; then
             BUILD_NUMBER="${BUILD_NUMBER}.${{ github.run_attempt }}"
           fi
@@ -417,6 +432,54 @@ jobs:
           print(f"::notice::Stripped libapp.a from Resources (def={n1}, ref={n2})")
           PY
 
+      # The committed `project.pbxproj` carries Tauri's scaffold defaults
+      # `MARKETING_VERSION = 0.2.0;` and `CURRENT_PROJECT_VERSION = 0.2.0;`.
+      # Tauri's `--config "version"` only writes the Info.plist during
+      # the build; it does NOT touch the pbxproj. The downstream
+      # `xcodebuild -exportArchive` step then *regenerates* the
+      # archived app's Info.plist from those pbxproj keys while
+      # re-signing for distribution — silently overwriting the version
+      # we patched into the archive (and producing TestFlight uploads
+      # that all carry `CFBundleVersion = 0.5.3`, which Apple rejects
+      # as DUPLICATE on the second attempt).
+      #
+      # Fix: pin both keys in the pbxproj before the build, so every
+      # downstream step (xcodebuild archive, exportArchive, altool
+      # upload) reads the correct values straight from source.
+      - name: Patch xcodeproj — MARKETING_VERSION + CURRENT_PROJECT_VERSION
+        env:
+          SHORT_VERSION: ${{ steps.meta.outputs.short_version }}
+          BUILD_NUMBER: ${{ steps.meta.outputs.build_number }}
+        run: |
+          set -euo pipefail
+          PBX="crates/outl-mobile/src-tauri/gen/apple/outl-mobile.xcodeproj/project.pbxproj"
+          # Capture before-state for the run log.
+          echo "::group::pbxproj version keys before patch"
+          grep -nE 'MARKETING_VERSION|CURRENT_PROJECT_VERSION' "$PBX" || true
+          echo "::endgroup::"
+
+          # The keys can appear with or without quotes around the
+          # value (Xcode/Tauri are inconsistent across templates).
+          # Replace both shapes for every Debug/Release configuration.
+          sed -i.bak -E \
+            -e "s|(MARKETING_VERSION = )\"?[^;\"]*\"?;|\1${SHORT_VERSION};|g" \
+            -e "s|(CURRENT_PROJECT_VERSION = )\"?[^;\"]*\"?;|\1${BUILD_NUMBER};|g" \
+            "$PBX"
+          rm -f "$PBX.bak"
+
+          echo "::group::pbxproj version keys after patch"
+          grep -nE 'MARKETING_VERSION|CURRENT_PROJECT_VERSION' "$PBX"
+          echo "::endgroup::"
+
+          # Sanity check: refuse to continue if patching produced
+          # nothing matching what we expect.
+          if ! grep -q "MARKETING_VERSION = ${SHORT_VERSION};" "$PBX"; then
+            echo "::error::MARKETING_VERSION patch did not land"; exit 1
+          fi
+          if ! grep -q "CURRENT_PROJECT_VERSION = ${BUILD_NUMBER};" "$PBX"; then
+            echo "::error::CURRENT_PROJECT_VERSION patch did not land"; exit 1
+          fi
+
       # App Store Connect rejects marketing icons with alpha. The
       # 1024x1024 icon ships with RGBA; composite over solid black
       # and strip alpha. ImageMagick installs in ~20s from brew.
@@ -469,33 +532,62 @@ jobs:
 
       # Tauri propagates `tauri.conf.json.version` to both
       # CFBundleShortVersionString and CFBundleVersion. For TestFlight
-      # we need them different (marketing "0.5.1" vs build "0.5.1028"),
-      # so override CFBundleVersion directly in the archived .app's
-      # Info.plist. `xcodebuild -exportArchive` re-signs everything on
-      # export, so we don't need to re-sign manually here.
-      - name: Patch archive CFBundleVersion (build number)
+      # we need them different (marketing "0.5.3" vs build "0.5.3047"),
+      # so override CFBundleVersion in TWO places:
+      #
+      #   1. The archived `.app`'s own Info.plist.
+      #   2. The archive's root `Info.plist` (the archive manifest),
+      #      under `ApplicationProperties.CFBundleVersion`.
+      #
+      # Why (2) matters: `xcodebuild -exportArchive` regenerates the
+      # app's Info.plist during re-signing from the archive manifest's
+      # `ApplicationProperties` block. Patching only (1) was silently
+      # reverted on export, every IPA shipped with the manifest's
+      # `0.5.3`, and TestFlight rejected the second upload with
+      # `ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE`.
+      #
+      # Confirmed locally via `scripts/local-testflight.sh`: with both
+      # patches the IPA carries the right CFBundleVersion.
+      - name: Patch archive CFBundleVersion (app + manifest)
         shell: bash
+        env:
+          BUILD_NUMBER: ${{ steps.meta.outputs.build_number }}
+          SHORT_VERSION: ${{ steps.meta.outputs.short_version }}
         run: |
+          set -euo pipefail
           ARCHIVE="crates/outl-mobile/src-tauri/gen/apple/build/outl-mobile_iOS.xcarchive"
           APP_PLIST="$ARCHIVE/Products/Applications/outl.app/Info.plist"
-          if [[ ! -f "$APP_PLIST" ]]; then
-            echo "::error::Archived Info.plist not found at $APP_PLIST"
-            find "$ARCHIVE" -name "Info.plist" | head -10
-            exit 1
-          fi
-          echo "::group::Info.plist before patch"
+          MANIFEST_PLIST="$ARCHIVE/Info.plist"
+          for f in "$APP_PLIST" "$MANIFEST_PLIST"; do
+            if [[ ! -f "$f" ]]; then
+              echo "::error::expected plist not found: $f"
+              find "$ARCHIVE" -name "Info.plist" | head -10
+              exit 1
+            fi
+          done
+
+          echo "::group::app Info.plist before patch"
           plutil -p "$APP_PLIST" | grep -E 'CFBundle(Version|ShortVersionString|Identifier|Name)'
           echo "::endgroup::"
-          plutil -replace CFBundleVersion \
-            -string "${{ steps.meta.outputs.build_number }}" "$APP_PLIST"
-          echo "::group::Info.plist after patch"
+          echo "::group::archive manifest Info.plist before patch"
+          plutil -p "$MANIFEST_PLIST" | grep -E 'CFBundle(Version|ShortVersionString)' || true
+          echo "::endgroup::"
+
+          plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "$APP_PLIST"
+          plutil -replace ApplicationProperties.CFBundleVersion \
+            -string "$BUILD_NUMBER" "$MANIFEST_PLIST"
+
+          echo "::group::app Info.plist after patch"
           plutil -p "$APP_PLIST" | grep -E 'CFBundle(Version|ShortVersionString|Identifier|Name)'
           echo "::endgroup::"
-          # Sanity check: short_version should already match what Tauri
-          # propagated from tauri.conf.json.
+          echo "::group::archive manifest Info.plist after patch"
+          plutil -p "$MANIFEST_PLIST" | grep -E 'CFBundle(Version|ShortVersionString)'
+          echo "::endgroup::"
+
+          # Sanity: short_version should already match (Tauri's job).
           ACTUAL_SHORT=$(plutil -extract CFBundleShortVersionString raw "$APP_PLIST")
-          if [[ "$ACTUAL_SHORT" != "${{ steps.meta.outputs.short_version }}" ]]; then
-            echo "::error::CFBundleShortVersionString in archive is '$ACTUAL_SHORT', expected '${{ steps.meta.outputs.short_version }}'. tauri.conf.json patch did not propagate."
+          if [[ "$ACTUAL_SHORT" != "$SHORT_VERSION" ]]; then
+            echo "::error::CFBundleShortVersionString in archive is '$ACTUAL_SHORT', expected '$SHORT_VERSION'."
             exit 1
           fi
 
@@ -559,6 +651,47 @@ jobs:
           fi
           echo "path=$IPA" >> "$GITHUB_OUTPUT"
           ls -lh "$IPA"
+
+      # End-to-end verification: the only thing that matters is what
+      # CFBundleVersion lands inside the actual .ipa, since that's
+      # what altool ships to Apple. Earlier patches (Info.plist of the
+      # archive, pbxproj) can all be silently undone by Tauri's build
+      # or xcodebuild's exportArchive; this step unzips the produced
+      # .ipa and refuses to continue unless the embedded Info.plist
+      # matches the build number we computed.
+      - name: Verify CFBundleVersion in built IPA
+        env:
+          EXPECTED_SHORT: ${{ steps.meta.outputs.short_version }}
+          EXPECTED_BUILD: ${{ steps.meta.outputs.build_number }}
+          IPA_PATH: ${{ steps.ipa.outputs.path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/ipa-verify"
+          rm -rf "$WORK"
+          mkdir -p "$WORK"
+          unzip -q "$IPA_PATH" -d "$WORK"
+          APP_PLIST=$(find "$WORK/Payload" -maxdepth 2 -name 'Info.plist' | head -1)
+          if [[ -z "$APP_PLIST" ]]; then
+            echo "::error::No Info.plist inside IPA payload"
+            find "$WORK" -maxdepth 4 -type f | head -30
+            exit 1
+          fi
+          echo "::group::Embedded Info.plist (CFBundle keys)"
+          plutil -p "$APP_PLIST" | grep -E 'CFBundle(Version|ShortVersionString|Identifier|Name)'
+          echo "::endgroup::"
+
+          ACTUAL_SHORT=$(plutil -extract CFBundleShortVersionString raw "$APP_PLIST")
+          ACTUAL_BUILD=$(plutil -extract CFBundleVersion raw "$APP_PLIST")
+          if [[ "$ACTUAL_SHORT" != "$EXPECTED_SHORT" ]]; then
+            echo "::error::CFBundleShortVersionString in IPA is '$ACTUAL_SHORT', expected '$EXPECTED_SHORT'"
+            exit 1
+          fi
+          if [[ "$ACTUAL_BUILD" != "$EXPECTED_BUILD" ]]; then
+            echo "::error::CFBundleVersion in IPA is '$ACTUAL_BUILD', expected '$EXPECTED_BUILD'. Apple's duplicate guard will reject this upload — something between 'Patch archive CFBundleVersion' and 'Export IPA from archive' is regenerating the plist."
+            exit 1
+          fi
+          echo "::notice::IPA carries CFBundleVersion=$ACTUAL_BUILD as expected"
 
       - name: Write build metadata (consumed by TestFlight)
         run: |

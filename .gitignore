@@ -45,3 +45,12 @@ note-example/
 
 # Claude Code session-local state (process locks, etc.)
 .claude/*.lock
+
+# Python bytecode (CI scripts run uncached; locally we may have caches)
+__pycache__/
+*.pyc
+
+# Local-only helper scripts (per-machine TestFlight smoke tests, etc.)
+# Versioned scripts live elsewhere; anything matching `local-*` is
+# treated as personal scratch and never goes to the repo.
+scripts/local-*.sh

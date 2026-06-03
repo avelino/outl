@@ -150,13 +150,22 @@ def find_build(
 def find_existing_localization(
     session: requests.Session, build_id: str, locale: str
 ) -> str | None:
+    # The nested relationship endpoint
+    # `GET /v1/builds/{id}/betaBuildLocalizations` does NOT accept
+    # `filter[locale]` (returns 400 PARAMETER_ERROR.ILLEGAL). The
+    # top-level `/v1/betaBuildLocalizations` collection does — and
+    # supports `filter[build]` to scope to a single build.
     r = session.get(
-        f"{API_BASE}/v1/builds/{build_id}/betaBuildLocalizations",
-        params={"filter[locale]": locale, "limit": 1},
+        f"{API_BASE}/v1/betaBuildLocalizations",
+        params={
+            "filter[build]": build_id,
+            "filter[locale]": locale,
+            "limit": 1,
+        },
     )
     if r.status_code != 200:
         sys.stderr.write(
-            f"::error::GET betaBuildLocalizations -> {r.status_code}: {r.text}\n"
+            f"::error::GET /v1/betaBuildLocalizations -> {r.status_code}: {r.text}\n"
         )
         sys.exit(1)
     data = r.json().get("data", [])
