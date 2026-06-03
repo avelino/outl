@@ -41,11 +41,11 @@ use std::path::{Path, PathBuf};
 /// `WorkspaceIndex::resolve_block_ref` (see `crate::index`) can return
 /// it directly — no follow-up disk read needed for the common path.
 ///
-/// `children` is a clone of the block's subtree (same shape used by
-/// [`crate::index::Backlink`]). The cost is bounded: one clone per
-/// indexed block, not one per reference. For an embed surface, the
-/// consumer renders `text` + `children` exactly as the source page
-/// would.
+/// `children` is a clone of the block's subtree (same shape
+/// `outl_actions::Backlink::source_block` carries for backlinks).
+/// The cost is bounded: one clone per indexed block, not one per
+/// reference. For an embed surface, the consumer renders `text` +
+/// `children` exactly as the source page would.
 #[derive(Debug, Clone)]
 pub struct BlockEntry {
     /// Block's stable ULID.

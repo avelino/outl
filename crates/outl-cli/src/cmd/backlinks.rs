@@ -74,7 +74,7 @@ pub fn page(ctx: &WsCtx, slug: &str) -> Result<Value, ApiError> {
         .ok_or_else(|| ApiError::new(codes::PAGE_NOT_FOUND, format!("page `{slug}` not found")))?;
     let meta = page_meta(&ctx.workspace, id)
         .ok_or_else(|| ApiError::new(codes::INTERNAL, "page meta missing".to_string()))?;
-    let links = backlinks_for_page(&ctx.workspace, &meta);
+    let links = backlinks_for_page(&ctx.workspace, &ctx.root, &meta);
     Ok(json!({
         "page": meta,
         "backlinks": links,

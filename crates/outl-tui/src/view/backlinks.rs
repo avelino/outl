@@ -6,11 +6,14 @@
 //! highlights the bullet the same way the outline does — same theme
 //! `selected_bullet`, same cursor styles. The TUI scrolls so the
 //! selection stays visible (handled by the caller in `view::render_main`).
+//!
+//! The list is produced by [`crate::actions::App::backlinks_for_current`]
+//! — the single source for backlinks across the TUI, shared with the
+//! mobile client through `outl_actions::backlinks_for_page`.
 
 use crate::state::{App, EditTarget, Focus, Mode};
 use crate::view::outline::{emit_block_lines, RenderMode};
-use outl_md::index::Backlink;
-use outl_md::parse::OutlineNode;
+use outl_actions::{Backlink, OutlineNode};
 use ratatui::text::{Line, Span};
 
 /// Render the inline backlinks section.
@@ -30,7 +33,7 @@ pub(crate) fn render_backlinks_inline(
     if !app.show_backlinks {
         return (Vec::new(), None);
     }
-    let backlinks = app.index.backlinks(&app.current_slug());
+    let backlinks = app.backlinks_for_current();
     if backlinks.is_empty() {
         return (Vec::new(), None);
     }
@@ -51,18 +54,29 @@ pub(crate) fn render_backlinks_inline(
 
     let mut prev_source: Option<String> = None;
     for (idx, bl) in backlinks.iter().enumerate() {
+        let source_slug = bl
+            .source_page
+            .as_ref()
+            .map(|p| p.slug.as_str())
+            .unwrap_or("");
+        let source_title = bl
+            .source_page
+            .as_ref()
+            .map(|p| p.title.as_str())
+            .unwrap_or("");
+        let source_icon = bl.source_page.as_ref().and_then(|p| p.icon.as_deref());
         // Header per source page. Multiple backlinks from the same
         // page collapse under one header.
-        if prev_source.as_deref() != Some(bl.source_slug.as_str()) {
+        if prev_source.as_deref() != Some(source_slug) {
             if prev_source.is_some() {
                 out.push(Line::from(""));
             }
-            let header = match &bl.source_icon {
-                Some(icon) => format!("{icon}  {}", bl.source_title),
-                None => format!("📄  {}", bl.source_title),
+            let header = match source_icon {
+                Some(icon) => format!("{icon}  {source_title}"),
+                None => format!("📄  {source_title}"),
             };
             out.push(Line::from(Span::styled(header, app.theme.heading)));
-            prev_source = Some(bl.source_slug.clone());
+            prev_source = Some(source_slug.to_string());
         }
 
         // Sub-path inside the source_block that's currently focused,
@@ -130,7 +144,7 @@ fn render_backlink_node(
                 target: EditTarget::SourcePage { path, .. },
                 block_path,
                 ..
-            } if path == &bl.source_path => {
+            } if Some(path.as_path()) == bl.source_path.as_deref() => {
                 let prefix = &bl.source_block_path;
                 block_path.len() == prefix.len() + current_path.len()
                     && block_path.starts_with(prefix)
@@ -138,6 +152,14 @@ fn render_backlink_node(
             }
             _ => false,
         };
+
+    // Source block carries the body without the TODO/DONE prefix —
+    // reattach it so the outline renderer shows the same checkbox
+    // decoration the main outline uses on the source page.
+    let raw_text = match node.todo {
+        Some(state) => format!("{} {}", state.as_str(), node.text),
+        None => node.text.clone(),
+    };
 
     let mode = if editing_here {
         if let Mode::Insert { buffer, .. } = &app.mode {
@@ -150,12 +172,12 @@ fn render_backlink_node(
         }
     } else if is_focused && matches!(app.mode, Mode::Normal) {
         RenderMode::NormalCursor {
-            text: node.text.clone(),
+            text: raw_text.clone(),
             cursor_char: app.cursor_col,
         }
     } else {
         RenderMode::Pretty {
-            text: node.text.clone(),
+            text: raw_text.clone(),
         }
     };
 

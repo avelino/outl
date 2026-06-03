@@ -151,3 +151,10 @@ directly. New tools land by:
 - ❌ Network anything (phase 2)
 - ❌ Duplicate logic between CLI and MCP shim (always route through
   the same `cmd/*::pub fn`)
+- ❌ Add a helper here that re-implements something already in
+  `outl-core` / `outl-md` / `outl-actions`. `cmd/*` handlers are
+  glue — they parse args, call the upstream API, and JSON-envelope
+  the result. If you need a new operation, add it upstream first
+  (`outl-actions` is the usual home), then call it. See root
+  [`CLAUDE.md`](../../CLAUDE.md#reuse-first-no-parallel-implementations)
+  for the policy.

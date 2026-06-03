@@ -26,6 +26,7 @@ pub(crate) mod history;
 pub(crate) mod lifecycle;
 pub(crate) mod nav;
 pub(crate) mod overlay;
+pub(crate) mod paste;
 pub(crate) mod sidebar;
 pub(crate) mod toast;
 pub(crate) mod visual;

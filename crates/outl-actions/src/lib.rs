@@ -56,6 +56,7 @@ pub mod error;
 pub mod journal;
 pub mod outline;
 pub mod page;
+pub mod paste;
 pub mod sync;
 pub mod todo;
 pub mod tree;
@@ -71,12 +72,18 @@ pub use journal::{
     apply_all_pages_md, apply_page_md, apply_page_md_with_sidecar, journals_dir, mutate_page_md,
     page_md_path, pages_dir, render_page_md, write_md_atomic,
 };
-pub use outline::{project_outline, read_page_view, read_page_view_with_workspace, OutlineNode};
+pub use outline::{
+    flatten_subtree_paths, project_outline, project_outline_node, read_page_view,
+    read_page_view_with_workspace, OutlineNode,
+};
 pub use page::{
     date_from_slug, find_by_slug, is_valid_slug, journal_slug, journal_title,
     list_all as list_pages, migrate_legacy_into_today, next_journal_date, open_journal,
     open_or_create as open_or_create_page, open_today, page_meta, previous_journal_date,
     read_text_prop, set_property, today, PageKind, PageMeta,
+};
+pub use paste::{
+    looks_like_outline, normalize_external_syntax, paste_markdown, PasteAnchor, PasteOutcome,
 };
 pub use sync::{OpsFileSnapshot, SyncEngine};
 pub use todo::{cycle_todo, split_todo, TodoState, DONE_PREFIX, TODO_PREFIX};
