@@ -233,10 +233,12 @@ pub(crate) enum SwitchKind {
 #[derive(Debug)]
 pub(crate) struct QuickSwitchState {
     pub(crate) query: String,
-    /// The full, immutable candidate set captured when the switcher
-    /// opens. `refresh_quick_switch` always filters *from here* into
-    /// `candidates` — never destructively narrows the displayed list,
-    /// or deleting query characters could never restore dropped items.
+    /// The full candidate set captured when the switcher opens.
+    /// Treated as read-only after `open_quick_switch` populates it:
+    /// `refresh_quick_switch` always filters *from here* into
+    /// `candidates` and never writes back, so deleting query
+    /// characters can always restore candidates a longer query had
+    /// dropped.
     pub(crate) all_candidates: Vec<SwitchCandidate>,
     /// The filtered + scored subset currently shown, recomputed from
     /// `all_candidates` on every keystroke.
