@@ -32,12 +32,46 @@ journal render), it delegates to `outl-actions`. If you find yourself
 writing a tree walk or an op-generating helper inside `lib.rs`, stop
 — move it to `outl-actions` instead. The TUI will need it too.
 
+The same rule extends to the **Solid frontend** (`src/`). Before
+adding a helper that walks blocks, normalises text, or maps a
+cursor across `\n`, check `outl-md`/`outl-actions` — the Rust
+side likely already exposes it through a Tauri command or could
+with a tiny addition. The two cross-runtime contracts already
+documented below (`looksLikeOutline` mirroring
+`outl_actions::paste::looks_like_outline`, and the UTF-16 caret
+conversion) are *examples of contracts we explicitly maintain*,
+not green-lights to keep cloning Rust logic into TS.
+
+Workspace-level policy:
+[`CLAUDE.md`](../../CLAUDE.md#reuse-first-no-parallel-implementations).
+
 What this crate **does** own:
 
 - iCloud Ubiquity Container resolution and the `Storage` impl on top.
 - Per-device actor id persistence (`<sandbox>/actor`).
 - Tauri command surface (argument parsing, error mapping).
 - Solid frontend that consumes the commands.
+
+## Paste from external apps
+
+The textarea in `BlockRow.tsx` intercepts paste events whose payload
+looks like a bullet list (`lib/paste.ts::looksLikeOutline`) and routes
+the text to `outl_actions::paste_markdown` via the `paste_markdown_at`
+Tauri command. Plain text falls through to the browser's default
+splice so a one-off URL or code snippet still pastes the way the user
+expects.
+
+Two cross-runtime contracts live here. Both must stay in sync:
+
+1. **`looksLikeOutline`** mirrors `outl_actions::paste::looks_like_outline`.
+   Extending the Rust detector (e.g. accept `*` bullets or ordered
+   lists) requires the same change in `lib/paste.ts` plus a Vitest case.
+2. **Caret offset.** `textarea.selectionStart` is a UTF-16 code unit
+   offset; the Rust backend expects a Unicode codepoint count.
+   `lib/paste.ts::utf16OffsetToCharOffset` does the conversion before
+   the Tauri call so pasting after an emoji lands the splice at the
+   right place. Skip this and supplementary-plane characters shift
+   the splice by one per char.
 
 ## iCloud layout
 
@@ -132,13 +166,96 @@ cargo tauri ios dev "iPhone 17 Pro outl"
 # Physical device (Mac + iPhone on the same WiFi)
 cargo tauri ios dev "<device-name>" --host
 
-# Release archive for TestFlight
+# Release archive for TestFlight (local smoke test only — CI ships)
 cargo tauri ios build
 ```
 
 After the first run, the iCloud capability must be confirmed in
 Xcode (Signing & Capabilities → iCloud → Containers →
 `iCloud.app.outl.mobile-app`).
+
+## Versioning + TestFlight release
+
+**Single source of truth: `Cargo.toml` workspace `version`.** To bump
+the app version, edit `[workspace.package].version` at the repo root
+and that's it. Everywhere else inherits:
+
+| Field | Where it lives | How it's resolved |
+|-------|----------------|-------------------|
+| Rust crate version | `crates/outl-mobile/src-tauri/Cargo.toml` | `version.workspace = true` |
+| Tauri config version | `crates/outl-mobile/src-tauri/tauri.conf.json` | Field intentionally **omitted** in the source; CI injects it via `cargo tauri ios build --config '{"version": "<short>"}'` |
+| `CFBundleShortVersionString` | iOS `Info.plist` | Tauri propagates from `--config` during `cargo tauri ios build` |
+| `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` | `gen/apple/.../project.pbxproj` | Same — Tauri regenerates from the merged config every build |
+
+**Why `--config` and not just rely on Tauri's `Cargo.toml` fallback?**
+The docs say Tauri uses `Cargo.toml` when `version` is missing, but
+the iOS code path doesn't honor that — it falls back to `1.0.0`
+instead. So CI reads the workspace version itself (`awk` against
+`Cargo.toml` in the `Compute build metadata` step) and passes it via
+`--config`. That keeps `Cargo.toml` as the only place a human bumps,
+and the `Patch archive CFBundleVersion` step has a sanity check that
+aborts the build if the propagated short version doesn't match what
+was passed in.
+
+**Never** put `"version": "x.y.z"` back in `tauri.conf.json`. If it's
+present, Tauri uses the static value instead of the `--config`
+override, and the two drift the moment someone bumps the workspace.
+
+### CI release flow
+
+A push to `main` triggers two workflows in parallel:
+
+1. **`Release`** (`release.yml`) — auto-bumps `Cargo.toml` locally to
+   `<base>-beta.<run_number>` (e.g. `0.5.1-beta.27`), cuts a tag
+   `v0.5.1-beta.27`, builds desktop binaries, ships the Homebrew
+   formula. Never commits the bump back.
+2. **`Mobile`** (`mobile.yml`) — builds the signed iOS IPA from the
+   *unbumped* `Cargo.toml`, then uploads it as the
+   `outl-ios-release` artifact. Triggers `TestFlight` on success.
+3. **`TestFlight`** (`testflight.yml`) — downloads the IPA artifact
+   and uploads to App Store Connect via `xcrun altool`.
+
+### CFBundleVersion (build number) scheme
+
+Apple needs `CFBundleVersion` strictly monotonic across **every** IPA
+ever uploaded. We can't reuse `tauri.conf.json.version` directly
+because the marketing version (`0.5.1`) repeats across many beta
+builds. The scheme:
+
+```
+CFBundleShortVersionString = <SHORT_VERSION>            e.g. 0.5.1
+CFBundleVersion            = <SHORT_VERSION><BETA_PAD>  e.g. 0.5.1027
+                                              ^^^
+                              beta number zero-padded to 3 digits
+```
+
+Where `BETA` comes from the latest `v<SHORT_VERSION>-beta.<N>` git
+tag (set by the `Release` workflow). Fallback to Mobile's
+`github.run_number` when no beta tag exists for the current
+`SHORT_VERSION`. Re-runs append `.<run_attempt>` as a 4th component
+to dodge Apple's duplicate guard.
+
+The build number is set by patching the `.xcarchive`'s embedded
+`Info.plist` after `cargo tauri ios build` produces the archive, but
+**before** `xcodebuild -exportArchive` re-signs and exports the IPA.
+This is the only injection point that survives the build because
+Tauri only exposes a single `version` field.
+
+### What goes wrong if you forget this
+
+- `tauri.conf.json` left with stale `"version"`: IPA ships with that
+  static value regardless of `Cargo.toml` or `--config`. Apple sees a
+  value that hasn't been bumped → 409 duplicate.
+- Dropping `--config '{"version": "..."}'` from `cargo tauri ios build`
+  in `mobile.yml`: Tauri's iOS path falls back to `1.0.0` (not to
+  `Cargo.toml` as the docs imply). The sanity check in the
+  `Patch archive CFBundleVersion` step catches this — don't disable
+  it.
+- Patching `gen/apple/.../Info.plist` directly before the build: Tauri
+  regenerates the file from the merged config on every build. No-op.
+- `xcrun altool --type ios` returns exit 0 even on 409 errors. The
+  `Upload IPA to TestFlight` step in `testflight.yml` greps for
+  `ERROR:` and exits non-zero explicitly — don't simplify that step.
 
 ## Testing
 

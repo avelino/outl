@@ -72,6 +72,12 @@ pub struct PageMeta {
     pub title: String,
     /// `page` or `journal`.
     pub kind: PageKind,
+    /// Optional emoji / icon string the user set on the page (via the
+    /// `icon::` page property). `None` when unset — clients pick their
+    /// own fallback (mobile uses the page kind to decide between 📄
+    /// and 📅; TUI uses `📄` for everything by default).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 /// Look up a page by slug. Returns the page root [`NodeId`] when found.
@@ -106,11 +112,22 @@ pub fn page_meta(workspace: &Workspace, id: NodeId) -> Option<PageMeta> {
     };
     let kind = PageKind::parse(workspace.tree().property(id, KIND_KEY));
     let title = workspace.block_text(id).unwrap_or_else(|| slug.clone());
+    // `icon::` is a free-form page property. It survives as a
+    // `PropValue::Text` after `reconcile_md` applies the page's
+    // properties; we surface only the textual variant so the wire
+    // format stays a plain string. Other PropValue shapes (PageRef /
+    // Tag / List) are not legal for an icon and would silently
+    // mismatch the renderer, so we treat them as absent.
+    let icon = match workspace.tree().property(id, "icon") {
+        Some(PropValue::Text(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        _ => None,
+    };
     Some(PageMeta {
         id: id.to_string(),
         slug,
         title,
         kind,
+        icon,
     })
 }
 

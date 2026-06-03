@@ -17,6 +17,13 @@ export interface BlockNode {
    * this flag.
    */
   collapsed: boolean;
+  /**
+   * `(key, value)` block properties — the `key:: value` lines a user
+   * authored under the block in markdown. Empty when the block has
+   * none. Backend builds this from `Op::SetProp` entries so it
+   * survives the same way collapsed does (op log, not sidecar).
+   */
+  properties: Array<[string, string]>;
   children: BlockNode[];
 }
 
@@ -25,12 +32,44 @@ export interface PageMeta {
   slug: string;
   title: string;
   kind: PageKind;
+  /**
+   * Optional emoji / icon string the user set on the page via the
+   * `icon::` page property. Backend omits the field when unset; the
+   * frontend can fall back to `📄`/`📅` based on `kind`.
+   */
+  icon?: string;
 }
 
 export interface Backlink {
   block_id: string;
+  /** Source block body **without** the TODO/DONE prefix. The prefix
+   * lives in {@link Backlink.todo} so the checkbox can render
+   * separately from the markdown body. */
   block_text: string;
+  todo: TodoState | null;
   source_page: PageMeta | null;
+  /**
+   * Source block as a self-contained outline subtree (children +
+   * properties). Mirrors what `read_page_view_with_workspace` would
+   * return for the same block. Today the mobile frontend renders
+   * only `block_text` + `todo`; this field is exposed so a future UI
+   * pass can surface children + properties without extending the
+   * backend contract.
+   */
+  source_block: BlockNode;
+  /**
+   * DFS path of the source block inside `source_page`. Empty array
+   * means the block is a direct child of the page root. Mirrors
+   * `outl_actions::Backlink::source_block_path` — used by clients
+   * that navigate inside a backlink's subtree (the TUI today).
+   */
+  source_block_path: number[];
+  /**
+   * On-disk path of `source_page`'s `.md` (inside the iCloud
+   * container). Backend omits the field when the source block has
+   * no enclosing page (legacy data).
+   */
+  source_path?: string;
 }
 
 export interface PageView {
@@ -149,6 +188,33 @@ export function moveBlockDown(pageId: string, id: string): Promise<PageView> {
 
 export function reloadWorkspace(): Promise<void> {
   return invoke<void>("reload_workspace");
+}
+
+/**
+ * Hand off an external-clipboard paste to the backend for conversion
+ * into a tree of blocks. The Rust side normalises external syntax
+ * (Roam `{{[[TODO]]}}`, GitHub checkboxes, etc.), parses the bullet
+ * structure, and grafts it under `blockId` at the caret position.
+ *
+ * Returns the refreshed `PageView` so the caller can re-render.
+ * `caret` is a `char` offset into the host block's text — for ASCII
+ * content the textarea's `selectionStart` (UTF-16 code units) is
+ * equivalent. The frontend should `preventDefault` on the original
+ * paste event before calling this so the default browser splice
+ * doesn't run alongside the backend conversion.
+ */
+export function pasteMarkdown(
+  pageId: string,
+  blockId: string,
+  caret: number,
+  text: string,
+): Promise<PageView> {
+  return invoke<PageView>("paste_markdown_at", {
+    pageId,
+    blockId,
+    caret,
+    text,
+  });
 }
 
 /**

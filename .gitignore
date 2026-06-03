@@ -42,3 +42,6 @@ note-example/
 
 # Criterion bench artefacts (regenerated on every run, large)
 **/criterion/
+
+# Claude Code session-local state (process locks, etc.)
+.claude/*.lock

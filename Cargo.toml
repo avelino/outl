@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.1"
+version = "0.5.3"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT"
@@ -23,11 +23,11 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Internal crates
-outl-core = { path = "crates/outl-core", version = "0.5.1" }
-outl-md = { path = "crates/outl-md", version = "0.5.1" }
-outl-actions = { path = "crates/outl-actions", version = "0.5.1" }
-outl-exec = { path = "crates/outl-exec", version = "0.5.1" }
-outl-tui = { path = "crates/outl-tui", version = "0.5.1" }
+outl-core = { path = "crates/outl-core", version = "0.5.3" }
+outl-md = { path = "crates/outl-md", version = "0.5.3" }
+outl-actions = { path = "crates/outl-actions", version = "0.5.3" }
+outl-exec = { path = "crates/outl-exec", version = "0.5.3" }
+outl-tui = { path = "crates/outl-tui", version = "0.5.3" }
 
 # IDs and time
 ulid = { version = "1", features = ["serde"] }
@@ -35,7 +35,6 @@ ulid = { version = "1", features = ["serde"] }
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-bincode = { version = "2", features = ["serde"] }
 toml = "1.1"
 
 # Errors

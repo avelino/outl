@@ -432,4 +432,57 @@ A TUI opens showing one orphan at a time with candidates. Keys:
 | `s` | skip (revisit later) |
 | `q` | quit |
 
+---
+
+## External paste → outl syntax
+
+When the user pastes clipboard markdown from another outliner / note
+app into outl, `outl_actions::paste_markdown` (in `outl-actions`)
+normalises the input before parsing it as bullets. The same pipeline
+runs in the TUI (bracketed-paste handler) and the mobile client
+(textarea `onPaste`).
+
+| Input (external) | Output (outl) | Origin |
+|------------------|---------------|--------|
+| `{{[[TODO]]}} foo` | `TODO foo` | Roam |
+| `{{[[DONE]]}} foo` | `DONE foo` | Roam |
+| `- [ ] foo` | `- TODO foo` | GitHub / CommonMark task list |
+| `- [x] foo` / `- [X] foo` | `- DONE foo` | GitHub / CommonMark |
+| `{{embed: ((blk-XXXXXX))}}` | `!((blk-XXXXXX))` | Roam |
+| `{{[[query]]: foo}}` | `{{query: foo}}` | Roam |
+| `^^highlight^^` | (stripped) | Roam |
+| `{{video: url}}` and other unknown `{{…}}` | (stripped) | various |
+| `id:: <26-char Crockford ULID>` (alone on a line) | (line dropped) | Logseq |
+| `[[June 2nd, 2026]]`, `[[Apr 22nd, 2026]]`, `[[2026/04/22]]` | `[[2026-06-02]]` etc. | Roam / mixed |
+| 4-space indent | 2-space indent | Roam / Notion export |
+
+Unknown tokens (`{{…}}` and `^^…^^` that aren't outl-native) are
+stripped on purpose so blocks land clean. Block properties parsed off
+the source (`key:: value` indented under a bullet) become
+`Op::SetProp` on the newly-created node so they converge across
+devices like every other op.
+
+Date refs `[[…]]` whose inner text parses as a date land as the ISO
+slug outl uses for journals. Supported forms: long month (`June 2nd,
+2026`), short month (`Apr 22nd, 2026`), slashed ISO (`2026/04/22`).
+Plain page refs (`[[Avelino]]`) and ambiguous dates (`[[June 2nd]]`
+without a year) pass through untouched.
+
+The `id::` line strip is strict. Only 26-character Crockford
+base32 strings count. A random 26-character alphanumeric label
+(e.g. `id:: IIIILLLLOOOO0000000000000A`) is not a ULID and stays
+on the page.
+
+Heuristic: when no line is either a bare `-` or starts with `- `
+(after leading whitespace), the paste is treated as plain text. The
+clipboard payload is spliced into the current block at the caret,
+no tree conversion. The bare `-` form matches the parser, which
+treats a lone `-` on a line as an empty bullet.
+
+Caret offsets in the mobile client are converted from UTF-16 code
+units (what `textarea.selectionStart` reports) into Unicode
+codepoints before the Tauri round-trip, so pasting after an emoji
+or other supplementary-plane character lands the splice at the
+right spot.
+
 The orphan log is cleared as items are resolved.

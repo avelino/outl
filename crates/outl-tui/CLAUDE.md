@@ -126,12 +126,27 @@ logic that's not strictly about ratatui rendering lives in `outl-md`
 
 Pattern when adding a new feature:
 
-1. If it's data or pure logic → put in `outl-md` (or `outl-core`).
-2. If it's a workspace mutation two clients would call the same way →
+1. **Grep first.** Before writing a helper here, `rg "fn <name>"` /
+   `rg "struct <Name>"` across `crates/outl-core`,
+   `crates/outl-md`, `crates/outl-actions`. The thing you're about
+   to write probably exists upstream — wrap it instead of cloning
+   the logic.
+2. If it's data or pure logic → put in `outl-md` (or `outl-core`).
+3. If it's a workspace mutation two clients would call the same way →
    put it in `outl-actions`.
-3. If it's how it's drawn on a terminal → put in `outl-tui`.
-4. Never write a function in `outl-tui` that a Tauri/mobile client
+4. If it's how it's drawn on a terminal → put in `outl-tui`.
+5. Never write a function in `outl-tui` that a Tauri/mobile client
    would also need byte-for-byte. Extract upstream first.
+
+**Concrete example:** `EditBuffer::move_up` / `move_down` (cursor
+nav across `\n` inside a multi-line block) are TUI-specific
+primitives, but the `(line, col) ↔ char_idx` math underneath isn't
+— it's shared with how the renderer maps a cursor onto a
+[`outl_md::view::BlockRow`]. Both directions live in
+`outl_md::view::{char_to_line_col, line_col_to_char}` and the
+`EditBuffer` methods are thin wrappers. **Don't** add a
+`line_start_and_column` helper here; extract the inverse to
+`outl-md` if it's missing and wrap from here.
 
 ## Persistence model
 
@@ -161,7 +176,8 @@ src/
 │   ├── block.rs         # Insert mode, create/indent/outdent/delete blocks
 │   ├── history.rs       # undo / redo snapshots
 │   ├── visual.rs        # Visual mode + range ops
-│   ├── yank.rs          # yank register, paste
+│   ├── yank.rs          # yank register, in-app paste of yanked blocks
+│   ├── paste.rs         # external-clipboard paste (bracketed paste → outl_actions::paste_markdown)
 │   ├── exec.rs          # run code block via outl_exec
 │   └── overlay.rs       # quick switcher, search, palette, autocomplete
 ├── input.rs             # key → action routing
