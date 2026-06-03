@@ -219,47 +219,51 @@ jobs:
           echo "build_number=${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "::notice::iOS release ${SHORT_VERSION} (build ${BUILD_NUMBER})"
 
-      # User-facing release notes for TestFlight. semantic-release in
-      # dry-run mode reads Conventional Commits since the last
-      # `v<version>` tag and emits a markdown changelog grouped by
-      # type (Features / Bug Fixes / Performance / etc.). The
-      # `testflight.yml` workflow picks `release-notes.md` out of the
-      # IPA artifact and posts it as `betaBuildLocalizations.whatsNew`
-      # via the App Store Connect API.
+      # User-facing release notes for TestFlight. `conventional-changelog`
+      # reads Conventional Commits since the last `v*` tag and emits a
+      # markdown changelog grouped by type (Features / Bug Fixes /
+      # Performance / etc.). `testflight.yml` picks `release-notes.md`
+      # out of the IPA artifact and posts it as
+      # `betaBuildLocalizations.whatsNew` via the App Store Connect API.
+      #
+      # Why `conventional-changelog-cli` and not `semantic-release`:
+      # semantic-release runs a `git push --dry-run` even in `--dry-run`
+      # mode to validate write permission, and this job's GITHUB_TOKEN
+      # is read-only (no `contents: write`). conventional-changelog is
+      # the same generator semantic-release uses internally for notes;
+      # it just doesn't touch the remote.
       #
       # Fallback: if no Conventional Commits landed since the last
       # tag (early days of the convention), fall back to raw `git log`
       # subjects so the build still ships with *something* readable.
-      - name: Setup Node (semantic-release)
+      - name: Setup Node (conventional-changelog)
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - name: Generate release notes
         id: notes
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          npx -y \
-            -p semantic-release@24 \
-            -p @semantic-release/commit-analyzer@13 \
-            -p @semantic-release/release-notes-generator@14 \
-            -p conventional-changelog-conventionalcommits@8 \
-            semantic-release --dry-run --no-ci 2>&1 | tee sr.log
+          LAST_TAG=$(git tag --list 'v*' --sort=-version:refname | head -n1)
+          echo "::notice::generating notes since ${LAST_TAG:-<no previous tag>}"
 
-          # semantic-release prints the rendered release notes between
-          # a "Release note for version X.Y.Z:" header and the next
-          # bracketed log line. Extract that block.
-          awk '
-            /\[semantic-release\] .* Release note for version/ { flag=1; next }
-            /^\[/ && flag { exit }
-            flag { print }
-          ' sr.log | sed '/^$/N;/^\n$/D' > release-notes.md
+          # `-r 1` = render only the most recent release (commits since
+          # the previous tag). Drops the auto-generated `## [version]`
+          # heading via `tail` so what reaches TestFlight is just the
+          # categorized list.
+          npx -y \
+            -p conventional-changelog-cli@5 \
+            -p conventional-changelog-conventionalcommits@8 \
+            conventional-changelog -p conventionalcommits -r 1 \
+            > release-notes.full.md
+
+          # Strip the leading "## [x.y.z] (date)" heading; keep body.
+          awk 'NR==1 && /^##/ {next} /^$/ && !printed {next} {printed=1; print}' \
+            release-notes.full.md > release-notes.md
 
           if [[ ! -s release-notes.md ]]; then
-            echo "::warning::semantic-release produced no notes; falling back to git log."
-            LAST_TAG=$(git tag --list 'v*' --sort=-version:refname | head -n1)
+            echo "::warning::no Conventional Commits since last tag; falling back to git log."
             if [[ -n "$LAST_TAG" ]]; then
               git log --pretty=format:'- %s' "${LAST_TAG}..HEAD" > release-notes.md
             else
