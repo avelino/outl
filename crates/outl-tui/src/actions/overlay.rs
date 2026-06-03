@@ -101,6 +101,7 @@ impl App {
         let candidates = self.collect_switch_candidates();
         self.overlay = Some(Overlay::QuickSwitch(QuickSwitchState {
             query: String::new(),
+            all_candidates: candidates.clone(),
             candidates,
             selected: 0,
             preview_cache: std::cell::RefCell::new(None),
@@ -110,8 +111,12 @@ impl App {
     pub(crate) fn refresh_quick_switch(&mut self) {
         if let Some(Overlay::QuickSwitch(ref mut qs)) = self.overlay {
             // Score every candidate by the current query; drop misses.
+            // Always filter from the full, immutable `all_candidates`
+            // set — never from the already-narrowed `candidates`, or
+            // deleting query characters could never restore items that
+            // an earlier, longer query had dropped.
             let mut filtered: Vec<SwitchCandidate> = qs
-                .candidates
+                .all_candidates
                 .iter()
                 .filter_map(|c| {
                     let primary = crate::fuzzy::fuzzy_score(&qs.query, &c.label);
@@ -780,4 +785,84 @@ pub(crate) fn read_page_title(md: &Path) -> Option<String> {
         .find(|(k, _)| k == "title")
         .map(|(_, v)| v.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::state::{App, Overlay, QuickSwitchState, SwitchCandidate, SwitchKind};
+    use outl_core::id::ActorId;
+    use outl_core::workspace::Workspace;
+    use tempfile::TempDir;
+
+    fn page(label: &str) -> SwitchCandidate {
+        SwitchCandidate {
+            label: label.to_string(),
+            key: label.to_string(),
+            kind: SwitchKind::Page,
+            score: 0,
+        }
+    }
+
+    fn test_app() -> (App, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let actor = ActorId::new();
+        let ws = Workspace::open_in_memory(actor).unwrap();
+        let app = App::new(
+            dir.path().to_path_buf(),
+            ws,
+            actor,
+            crate::theme::default_theme(),
+            false,
+        )
+        .unwrap();
+        (app, dir)
+    }
+
+    /// Regression: deleting query characters must restore candidates an
+    /// earlier, longer query had filtered out. The bug was that
+    /// `refresh_quick_switch` narrowed `candidates` in place, destroying
+    /// the source set, so backspacing could never bring matches back.
+    #[test]
+    fn quick_switch_widens_when_query_shrinks() {
+        let (mut app, _dir) = test_app();
+        let all = vec![page("foo"), page("food"), page("bar")];
+        app.overlay = Some(Overlay::QuickSwitch(QuickSwitchState {
+            query: String::new(),
+            all_candidates: all.clone(),
+            candidates: all,
+            selected: 0,
+            preview_cache: std::cell::RefCell::new(None),
+        }));
+
+        // Type "food": only the "food" page survives.
+        if let Some(Overlay::QuickSwitch(ref mut qs)) = app.overlay {
+            qs.query = "food".into();
+        }
+        app.refresh_quick_switch();
+        let after_food: Vec<String> = match &app.overlay {
+            Some(Overlay::QuickSwitch(qs)) => {
+                qs.candidates.iter().map(|c| c.label.clone()).collect()
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(after_food, vec!["food".to_string()]);
+
+        // Backspace down to "foo": both "foo" and "food" must come back.
+        if let Some(Overlay::QuickSwitch(ref mut qs)) = app.overlay {
+            qs.query = "foo".into();
+        }
+        app.refresh_quick_switch();
+        let mut after_foo: Vec<String> = match &app.overlay {
+            Some(Overlay::QuickSwitch(qs)) => {
+                qs.candidates.iter().map(|c| c.label.clone()).collect()
+            }
+            _ => unreachable!(),
+        };
+        after_foo.sort();
+        assert_eq!(
+            after_foo,
+            vec!["foo".to_string(), "food".to_string()],
+            "shrinking the query must restore candidates the longer query dropped"
+        );
+    }
 }

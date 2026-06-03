@@ -233,6 +233,13 @@ pub(crate) enum SwitchKind {
 #[derive(Debug)]
 pub(crate) struct QuickSwitchState {
     pub(crate) query: String,
+    /// The full, immutable candidate set captured when the switcher
+    /// opens. `refresh_quick_switch` always filters *from here* into
+    /// `candidates` — never destructively narrows the displayed list,
+    /// or deleting query characters could never restore dropped items.
+    pub(crate) all_candidates: Vec<SwitchCandidate>,
+    /// The filtered + scored subset currently shown, recomputed from
+    /// `all_candidates` on every keystroke.
     pub(crate) candidates: Vec<SwitchCandidate>,
     pub(crate) selected: usize,
     /// One-slot cache for the preview pane so the renderer doesn't
