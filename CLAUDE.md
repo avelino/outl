@@ -226,7 +226,16 @@ Don't add code for these unless explicitly asked:
 - No `unsafe` in `outl-core` without documented justification
 - Variable names, function names, doc comments: **English** (global audience)
 - User-facing strings (CLI help, TUI labels): English for now (i18n later)
-- Conventional Commits (`feat:`, `fix:`, `refactor:`, etc) on commit messages
+- **Conventional Commits are load-bearing.** Use `feat:`, `fix:`,
+  `perf:`, `docs:`, `refactor:`, `chore:`, `test:`, `build:`, `ci:`
+  on every commit (and on PR merge commits). The Mobile pipeline
+  generates TestFlight release notes by feeding the commit log
+  since the last tag into `semantic-release` (config: `.releaserc.json`);
+  the rendered markdown lands as the build's "What to Test" text via
+  the App Store Connect API. Commits without a prefix all fall into
+  a single "Other changes" bucket on TestFlight, so the user loses
+  the per-build context. If a commit doesn't fit a type, prefer
+  `chore:` over no prefix.
 
 ### Reuse-first (no parallel implementations)
 
