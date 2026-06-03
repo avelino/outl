@@ -835,14 +835,14 @@ export function Journal() {
                 type="button"
                 aria-label="Back to today"
                 onClick={handleJumpToday}
-                class="-ml-1 shrink-0 rounded-full p-2 active:opacity-50"
+                class="-ml-1 shrink-0 rounded-full p-2 text-(--color-ios-accent) active:opacity-50 dark:text-(--color-iosd-accent)"
               >
                 <svg
                   width="22"
                   height="22"
                   viewBox="0 0 24 24"
                   fill="none"
-                  stroke="var(--color-ios-accent)"
+                  stroke="currentColor"
                   stroke-width="2"
                   stroke-linecap="round"
                   stroke-linejoin="round"
