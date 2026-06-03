@@ -22,6 +22,7 @@ import {
   openPageBySlug,
   openTodayJournal,
   outdentBlock,
+  pasteMarkdown,
   previousDay,
   reloadWorkspace,
   resolveRef,
@@ -456,6 +457,31 @@ export function Journal() {
         void commitEdit();
       });
     }
+  }
+
+  /**
+   * Apply an external-clipboard markdown paste to the workspace.
+   *
+   * `BlockRow`'s textarea has already detected via `looksLikeOutline`
+   * that the payload deserves the outline → blocks conversion and
+   * called `preventDefault` on the original paste event. We commit
+   * any in-flight draft first (the host block's text would otherwise
+   * race with the paste's `AtCaret` splice), hand the raw text to
+   * the backend, then re-apply the resulting `PageView`.
+   */
+  async function handlePasteMarkdown(blockId: string, caret: number, text: string) {
+    const pid = pageId();
+    if (!pid) return;
+    if (editingId() === blockId) {
+      // Flush whatever the user was typing so the splice operates on
+      // the workspace state the textarea is showing, not on stale
+      // backend text.
+      const draftText = draft();
+      const committed = await withError(() => editBlock(pid, blockId, draftText));
+      if (committed) setView(committed);
+    }
+    const next = await withError(() => pasteMarkdown(pid, blockId, caret, text));
+    if (next) applyView(next);
   }
 
   async function handleToggleTodo(id: string) {
@@ -978,6 +1004,7 @@ export function Journal() {
                   onToggleCollapse={handleToggleCollapse}
                   onRefClick={handleRefClick}
                   onTagClick={handleTagClick}
+                  onPasteMarkdown={handlePasteMarkdown}
                   onTextareaMount={(el) => {
                     activeTextarea = el;
                     setActiveTextareaSignal(el);

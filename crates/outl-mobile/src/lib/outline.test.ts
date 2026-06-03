@@ -11,13 +11,13 @@ import {
 } from "./outline";
 
 function block(id: string, text = "", children: BlockNode[] = []): BlockNode {
-  return { id, text, todo: null, collapsed: false, children };
+  return { id, text, todo: null, collapsed: false, properties: [], children };
 }
 
 /** Same as `block` but pre-collapsed, so its children are hidden in
  *  the visible flatten / navigation order. */
 function collapsed(id: string, children: BlockNode[] = []): BlockNode {
-  return { id, text: "", todo: null, collapsed: true, children };
+  return { id, text: "", todo: null, collapsed: true, properties: [], children };
 }
 
 describe("findBlock", () => {
@@ -150,6 +150,7 @@ describe("rawTextWithTodo", () => {
       text: "ship it",
       todo: "TODO",
       collapsed: false,
+      properties: [],
       children: [],
     };
     expect(rawTextWithTodo(b)).toBe("TODO ship it");
@@ -161,6 +162,7 @@ describe("rawTextWithTodo", () => {
       text: "ship it",
       todo: "DONE",
       collapsed: false,
+      properties: [],
       children: [],
     };
     expect(rawTextWithTodo(b)).toBe("DONE ship it");

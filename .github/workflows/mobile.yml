@@ -193,15 +193,102 @@ jobs:
         id: meta
         shell: bash
         run: |
-          # Marketing string: workspace version with any pre-release
-          # suffix stripped (Apple rejects `-beta.N` in
-          # CFBundleShortVersionString).
+          # CFBundleShortVersionString: marketing version from Cargo.toml
+          # with the `-beta.N` suffix stripped (Apple rejects pre-release
+          # tags in this field).
           BASE=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
           SHORT_VERSION="${BASE%%-*}"
-          BUILD_NUMBER="${{ github.run_number }}"
+
+          # CFBundleVersion: marketing version concatenated with a
+          # zero-padded run number, e.g. SHORT 0.5.3 + run 47 → 0.5.3047.
+          # Apple compares CFBundleVersion as a tuple of integers split
+          # on `.`, component-by-component. Padding the run number to a
+          # fixed width keeps the third component monotonic across the
+          # full history:
+          #   (0, 5, 3047) > (0, 5, 3027)   because 3047 > 3027
+          # And across run-number generations (run 999 → 1000) the
+          # integer keeps growing, so `printf '%03d'` is a floor, not
+          # a cap — `1000` widens naturally and stays correct.
+          #
+          # This is the standard "semver-aligned build counter" pattern
+          # for an iOS app whose marketing version stays stable across
+          # many TestFlight builds. The trade-off (the build column
+          # looks like `0.5.3047`, visually close to a semver) is
+          # accepted because the alternative — a fresh integer like
+          # `47` — gets ranked below the existing `0.5.3027` history
+          # by Apple's left-pad comparison rule.
+          RUN_PAD=$(printf '%03d' "${{ github.run_number }}")
+          BUILD_NUMBER="${SHORT_VERSION}${RUN_PAD}"
+
+          # Re-runs of the same Mobile workflow would otherwise hit
+          # Apple's duplicate guard (409 ENTITY_ERROR.ATTRIBUTE.
+          # INVALID.DUPLICATE). A fourth component on attempts > 1
+          # keeps each upload unique. TestFlight accepts 4 components;
+          # App Store production submission caps at 3, but we never
+          # ship a re-run to production directly.
+          if [[ "${{ github.run_attempt }}" -gt 1 ]]; then
+            BUILD_NUMBER="${BUILD_NUMBER}.${{ github.run_attempt }}"
+          fi
+
           echo "short_version=${SHORT_VERSION}" >> "$GITHUB_OUTPUT"
           echo "build_number=${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "::notice::iOS release ${SHORT_VERSION} (build ${BUILD_NUMBER})"
+
+      # User-facing release notes for TestFlight. `conventional-changelog`
+      # reads Conventional Commits since the last `v*` tag and emits a
+      # markdown changelog grouped by type (Features / Bug Fixes /
+      # Performance / etc.). `testflight.yml` picks `release-notes.md`
+      # out of the IPA artifact and posts it as
+      # `betaBuildLocalizations.whatsNew` via the App Store Connect API.
+      #
+      # Why `conventional-changelog-cli` and not `semantic-release`:
+      # semantic-release runs a `git push --dry-run` even in `--dry-run`
+      # mode to validate write permission, and this job's GITHUB_TOKEN
+      # is read-only (no `contents: write`). conventional-changelog is
+      # the same generator semantic-release uses internally for notes;
+      # it just doesn't touch the remote.
+      #
+      # Fallback: if no Conventional Commits landed since the last
+      # tag (early days of the convention), fall back to raw `git log`
+      # subjects so the build still ships with *something* readable.
+      - name: Setup Node (conventional-changelog)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          set -euo pipefail
+          LAST_TAG=$(git tag --list 'v*' --sort=-version:refname | head -n1)
+          echo "::notice::generating notes since ${LAST_TAG:-<no previous tag>}"
+
+          # `-r 1` = render only the most recent release (commits since
+          # the previous tag). Drops the auto-generated `## [version]`
+          # heading via `tail` so what reaches TestFlight is just the
+          # categorized list.
+          npx -y \
+            -p conventional-changelog-cli@5 \
+            -p conventional-changelog-conventionalcommits@8 \
+            conventional-changelog -p conventionalcommits -r 1 \
+            > release-notes.full.md
+
+          # Strip the leading "## [x.y.z] (date)" heading; keep body.
+          awk 'NR==1 && /^##/ {next} /^$/ && !printed {next} {printed=1; print}' \
+            release-notes.full.md > release-notes.md
+
+          if [[ ! -s release-notes.md ]]; then
+            echo "::warning::no Conventional Commits since last tag; falling back to git log."
+            if [[ -n "$LAST_TAG" ]]; then
+              git log --pretty=format:'- %s' "${LAST_TAG}..HEAD" > release-notes.md
+            else
+              echo "- Initial TestFlight build." > release-notes.md
+            fi
+          fi
+
+          echo "::group::Release notes (release-notes.md)"
+          cat release-notes.md
+          echo "::endgroup::"
 
       # App Store Connect requires the iOS 26 SDK as of 2026-04;
       # pin to the latest stable Xcode (Xcode 26.x on macos-15).
@@ -288,18 +375,6 @@ jobs:
           echo "uuid=$PROFILE_UUID" >> "$GITHUB_OUTPUT"
           echo "::notice::Provisioning profile '$PROFILE_NAME' ($PROFILE_UUID) installed"
 
-      - name: Patch Info.plist (CFBundleVersion + CFBundleShortVersionString)
-        shell: bash
-        run: |
-          PLIST="crates/outl-mobile/src-tauri/gen/apple/outl-mobile_iOS/Info.plist"
-          plutil -replace CFBundleShortVersionString \
-            -string "${{ steps.meta.outputs.short_version }}" "$PLIST"
-          plutil -replace CFBundleVersion \
-            -string "${{ steps.meta.outputs.build_number }}" "$PLIST"
-          echo "::group::Patched Info.plist"
-          plutil -p "$PLIST" | grep -E 'CFBundle(Version|ShortVersionString|Identifier)'
-          echo "::endgroup::"
-
       # See testflight.yml's "Patch xcodeproj for Manual signing" for
       # the rationale (CI runners have no Apple ID, default
       # `iPhone Developer` identity looks up Development profiles
@@ -373,13 +448,31 @@ jobs:
           fi
           magick "$ICON" -background black -alpha remove -alpha off "$ICON"
 
+      # Version: `tauri.conf.json` intentionally omits the `version`
+      # field. The Tauri docs say it falls back to `Cargo.toml` in
+      # that case, but the iOS build path does NOT honor that fallback
+      # — it ships `1.0.0` instead. So we drive the version explicitly
+      # via `--config`, reading the workspace version from `Cargo.toml`
+      # ourselves (already computed by the `meta` step).
+      #
+      # `--config` accepts an inline JSON object that gets merged
+      # (RFC 7396) into the resolved Tauri config. Tauri then
+      # propagates this version to MARKETING_VERSION /
+      # CURRENT_PROJECT_VERSION in the pbxproj and to
+      # CFBundleShortVersionString in the generated Info.plist.
+      # CFBundleVersion (build number) is handled separately below in
+      # the post-archive plutil step — Tauri only exposes one version
+      # field.
       - name: cargo tauri ios build (archive — export redone manually)
         working-directory: crates/outl-mobile
         env:
           CI: "true"
         run: |
+          SHORT="${{ steps.meta.outputs.short_version }}"
           EXPORT_RC=0
-          cargo tauri ios build --export-method app-store-connect || EXPORT_RC=$?
+          cargo tauri ios build \
+            --export-method app-store-connect \
+            --config "{\"version\": \"$SHORT\"}" || EXPORT_RC=$?
           ARCHIVE="src-tauri/gen/apple/build/outl-mobile_iOS.xcarchive"
           if [[ ! -d "$ARCHIVE" ]]; then
             echo "::error::Archive missing at $ARCHIVE — tauri build failed before archiving (rc=$EXPORT_RC)"
@@ -387,6 +480,38 @@ jobs:
           fi
           if [[ $EXPORT_RC -ne 0 ]]; then
             echo "::notice::tauri export step exited with $EXPORT_RC — expected; redoing manually next."
+          fi
+
+      # Tauri propagates `tauri.conf.json.version` to both
+      # CFBundleShortVersionString and CFBundleVersion. For TestFlight
+      # we need them different (marketing "0.5.1" vs build "0.5.1028"),
+      # so override CFBundleVersion directly in the archived .app's
+      # Info.plist. `xcodebuild -exportArchive` re-signs everything on
+      # export, so we don't need to re-sign manually here.
+      - name: Patch archive CFBundleVersion (build number)
+        shell: bash
+        run: |
+          ARCHIVE="crates/outl-mobile/src-tauri/gen/apple/build/outl-mobile_iOS.xcarchive"
+          APP_PLIST="$ARCHIVE/Products/Applications/outl.app/Info.plist"
+          if [[ ! -f "$APP_PLIST" ]]; then
+            echo "::error::Archived Info.plist not found at $APP_PLIST"
+            find "$ARCHIVE" -name "Info.plist" | head -10
+            exit 1
+          fi
+          echo "::group::Info.plist before patch"
+          plutil -p "$APP_PLIST" | grep -E 'CFBundle(Version|ShortVersionString|Identifier|Name)'
+          echo "::endgroup::"
+          plutil -replace CFBundleVersion \
+            -string "${{ steps.meta.outputs.build_number }}" "$APP_PLIST"
+          echo "::group::Info.plist after patch"
+          plutil -p "$APP_PLIST" | grep -E 'CFBundle(Version|ShortVersionString|Identifier|Name)'
+          echo "::endgroup::"
+          # Sanity check: short_version should already match what Tauri
+          # propagated from tauri.conf.json.
+          ACTUAL_SHORT=$(plutil -extract CFBundleShortVersionString raw "$APP_PLIST")
+          if [[ "$ACTUAL_SHORT" != "${{ steps.meta.outputs.short_version }}" ]]; then
+            echo "::error::CFBundleShortVersionString in archive is '$ACTUAL_SHORT', expected '${{ steps.meta.outputs.short_version }}'. tauri.conf.json patch did not propagate."
+            exit 1
           fi
 
       - name: Write App Store ExportOptions.plist
@@ -455,6 +580,14 @@ jobs:
           META_DIR="$RUNNER_TEMP/ipa-bundle"
           mkdir -p "$META_DIR"
           cp "${{ steps.ipa.outputs.path }}" "$META_DIR/outl.ipa"
+          # release-notes.md is required by testflight.yml's
+          # `Set TestFlight release notes` step. It was generated
+          # earlier in the job by the `Generate release notes` step.
+          if [[ -f release-notes.md ]]; then
+            cp release-notes.md "$META_DIR/release-notes.md"
+          else
+            echo "::warning::release-notes.md missing; TestFlight will skip whatsNew."
+          fi
           cat >"$META_DIR/metadata.env" <<EOF
           short_version=${{ steps.meta.outputs.short_version }}
           build_number=${{ steps.meta.outputs.build_number }}
