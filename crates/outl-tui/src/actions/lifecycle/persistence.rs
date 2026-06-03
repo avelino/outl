@@ -40,15 +40,20 @@ impl App {
         self.save_page_with(path, page, true);
     }
 
-    /// Same as [`Self::save_page`] but skips the index rebuild when
-    /// the caller has already patched the in-memory state optimistically.
+    /// Same as [`Self::save_page`] but lets the caller opt out of
+    /// refreshing the workspace index for this page.
     ///
-    /// On `rebuild_index == true`, the cheaper [`patch_page`] is used
-    /// instead of the workspace-wide rescan — single-file work
-    /// proportional to the page's block count, not to the workspace
-    /// size.
+    /// **The `true` branch is incremental.** It calls
+    /// [`outl_md::index::WorkspaceIndex::patch_page`] on `path` only,
+    /// which is `O(blocks in this page)` — *not* a full workspace
+    /// rescan. Pick `true` whenever the write changes anything the
+    /// index tracks (block refs `((blk-XXXXXX))`, page title, icon,
+    /// pinned flag); pick `false` only when you've already patched
+    /// the index by hand and the call would just redo the same work.
     ///
-    /// [`patch_page`]: outl_md::index::WorkspaceIndex::patch_page
+    /// Whether or not the index is patched, `App.backlinks_cache` is
+    /// invalidated unconditionally because backlinks live outside
+    /// the index now.
     pub(crate) fn save_page_with(&mut self, path: &Path, page: &ParsedPage, rebuild_index: bool) {
         let md = render(page);
         if let Err(e) = outl_md::write_atomic(path, md.as_bytes()) {
