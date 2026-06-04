@@ -124,10 +124,14 @@ jobs:
 
       - name: Tauri bundle
         working-directory: crates/outl-desktop
-        run: bun run tauri build -- --no-bundle
+        # `--no-bundle` is a tauri-cli flag, not a cargo flag, so it
+        # rides BEFORE any `--` separator. The original form
+        # (`-- --no-bundle`) forwarded the flag through to `cargo
+        # build`, which doesn't know it and bailed.
         # `--no-bundle` keeps CI fast (skip dmg/msi/AppImage packagers
         # that we don't sign on PRs anyway). The release.yml workflow
         # drops the flag and signs.
+        run: bun run tauri build --no-bundle
 
       - name: Upload unsigned binary artefact
         if: always()

@@ -270,10 +270,108 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --clobber
 
+  build_desktop:
+    name: build desktop ${{ matrix.label }}
+    needs: [prepare, create_release]
+    if: needs.create_release.result == 'success'
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            label: macos-arm64
+            tauri_arch: aarch64
+          - target: x86_64-apple-darwin
+            label: macos-x64
+            tauri_arch: x64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Patch workspace version to ${{ needs.prepare.outputs.version }}
+        shell: bash
+        # Same sed pass as the CLI/TUI `build` job. We rewrite every
+        # literal `version = "<base>"` in the root manifest. Crate
+        # manifests use `version.workspace = true` and don't need
+        # patching, including `crates/outl-desktop/src-tauri/Cargo.toml`.
+        run: |
+          BASE='${{ needs.prepare.outputs.base }}'
+          VERSION='${{ needs.prepare.outputs.version }}'
+          sed -i.bak "s|version = \"${BASE}\"|version = \"${VERSION}\"|g" Cargo.toml
+          rm Cargo.toml.bak
+
+      - name: Cache cargo (desktop ${{ matrix.label }})
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-desktop-release-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install frontend dependencies
+        run: bun install
+
+      - name: Build dmg
+        # `cargo tauri build --target <triple>` produces the bundle
+        # under `target/<triple>/release/bundle/dmg/`. The flag
+        # `--bundles dmg` skips the .app-only export the macOS path
+        # would otherwise also produce — we ship the dmg as the
+        # cask source, the bare .app is not useful on its own.
+        working-directory: crates/outl-desktop
+        run: bun run tauri build --target ${{ matrix.target }} --bundles dmg
+
+      - name: Stage dmg + sha256
+        shell: bash
+        # Tauri 2's dmg name is `<productName>_<version>_<arch>.dmg`.
+        # We rename to the convention the Formula already uses
+        # (`outl-<artifact>.<ext>`) so a single sed-anchor scheme
+        # works for both Formula and Cask in the bump job.
+        #
+        # The dmg is unsigned. Adding a Developer ID + notarytool
+        # step lands when we register the Apple Developer account;
+        # the cask carries a `caveats` block explaining the
+        # `xattr -dr com.apple.quarantine` workaround in the meantime.
+        run: |
+          set -euo pipefail
+          VERSION='${{ needs.prepare.outputs.version }}'
+          SRC="target/${{ matrix.target }}/release/bundle/dmg/outl_${VERSION}_${{ matrix.tauri_arch }}.dmg"
+          DST="outl-desktop-${{ matrix.label }}.dmg"
+          if [[ ! -f "${SRC}" ]]; then
+            echo "::error::expected dmg at ${SRC} (run produced:)"
+            find target/${{ matrix.target }}/release/bundle -name '*.dmg' -print
+            exit 1
+          fi
+          cp "${SRC}" "${DST}"
+          shasum -a 256 "${DST}" > "${DST}.sha256"
+
+      - name: Upload dmg to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG='${{ needs.prepare.outputs.tag }}'
+          gh release upload "${TAG}" \
+            "outl-desktop-${{ matrix.label }}.dmg" \
+            "outl-desktop-${{ matrix.label }}.dmg.sha256" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber
+
   publish_release:
     name: Publish release
-    needs: [prepare, build]
-    if: needs.build.result == 'success'
+    needs: [prepare, build, build_desktop]
+    if: needs.build.result == 'success' && needs.build_desktop.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -289,10 +387,11 @@ jobs:
           echo "::notice::Published ${TAG}"
 
   update_tap:
-    name: Bump outl@beta formula
+    name: Bump outl@beta formula + desktop cask
     needs: [prepare, publish_release]
-    # Only beta releases for now. GA bumps `Formula/outl.rb` by hand
-    # the first time; after that we can add a similar job for GA.
+    # Only beta releases for now. GA bumps `Formula/outl.rb` and the
+    # GA cask by hand the first time; after that we can add a
+    # similar job for GA.
     if: needs.publish_release.result == 'success' && needs.prepare.outputs.prerelease == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -302,11 +401,20 @@ jobs:
         with:
           ref: main
 
-      - name: Bump Formula/outl@beta.rb
+      - name: Bump Formula/outl@beta.rb + Casks/outl-desktop@beta.rb
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.tag }}
           VERSION: ${{ needs.prepare.outputs.version }}
+        # Patches two files in one pass so the published release
+        # carries a matching formula and cask. The dmg sha files
+        # share the `outl-desktop-<arch>.dmg.sha256` naming convention
+        # used by the `build_desktop` job above.
+        #
+        # `git diff --quiet` early-outs when an asset went missing
+        # (e.g. one matrix leg failed but `publish_release` still
+        # flipped the draft). We log a notice rather than fail so
+        # the rest of the workflow stays green.
         run: |
           set -euo pipefail
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.sha256' --dir shas
@@ -318,14 +426,22 @@ jobs:
             sed -i "s|sha256 \"[a-f0-9]*\" # anchor: ${arch}|sha256 \"${sha}\" # anchor: ${arch}|" "$F"
           done
 
-          if git diff --quiet "$F"; then
-            echo "::notice::No formula changes for $TAG"
+          C=Casks/outl-desktop@beta.rb
+          sed -i "s|^  version .*|  version \"$VERSION\"|" "$C"
+          for arch in macos-arm64 macos-x64; do
+            sha=$(awk '{print $1}' "shas/outl-desktop-${arch}.dmg.sha256")
+            sed -i "s|\"[a-f0-9]\{64\}\", # anchor: ${arch}|\"${sha}\", # anchor: ${arch}|" "$C"
+            sed -i "s|\"[a-f0-9]\{64\}\"  # anchor: ${arch}|\"${sha}\"  # anchor: ${arch}|" "$C"
+          done
+
+          if git diff --quiet "$F" "$C"; then
+            echo "::notice::No formula or cask changes for $TAG"
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$F"
+          git add "$F" "$C"
           # `[skip ci]` keeps this commit from re-triggering the release
           # workflow (which is `on: push: branches: [main]`).
           git commit -m "homebrew: outl ${VERSION} [skip ci]"
