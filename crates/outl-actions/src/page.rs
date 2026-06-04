@@ -524,11 +524,15 @@ mod tests {
 
     #[test]
     fn open_or_create_by_ref_routes_valid_date_to_journal() {
+        // Use a fixed past date so the intent ("any valid YYYY-MM-DD
+        // → journal") is obvious. Today's date would compile and pass
+        // but suggests a system-clock coupling the function does not
+        // actually have.
         let (mut w, hlc) = ws();
-        let id = open_or_create_by_ref(&mut w, &hlc, "2026-06-04").unwrap();
+        let id = open_or_create_by_ref(&mut w, &hlc, "2020-01-01").unwrap();
         let meta = page_meta(&w, id).unwrap();
         assert_eq!(meta.kind, PageKind::Journal);
-        assert_eq!(meta.slug, "2026-06-04");
+        assert_eq!(meta.slug, "2020-01-01");
     }
 
     #[test]

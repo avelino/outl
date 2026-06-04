@@ -69,19 +69,20 @@ export interface PageMeta {
 
 export interface Backlink {
   block_id: string;
-  /** Source block body **without** the TODO/DONE prefix. The prefix
-   * lives in {@link Backlink.todo} so the checkbox can render
-   * separately from the markdown body. */
-  block_text: string;
   todo: TodoState | null;
   source_page: PageMeta | null;
   /**
-   * Source block as a self-contained outline subtree (children +
-   * properties). Mirrors what `read_page_view_with_workspace` would
-   * return for the same block. Today the mobile frontend renders
-   * only `block_text` + `todo`; this field is exposed so a future UI
-   * pass can surface children + properties without extending the
-   * backend contract.
+   * Source block as a self-contained outline subtree (text, tokens,
+   * children, properties). Mirrors what `read_page_view_with_workspace`
+   * would return for the same block. The mobile renderer reads
+   * `source_block.tokens` for the inline markdown; the raw text
+   * lives at `source_block.text` if a caller ever needs it.
+   *
+   * Note: the Rust `Backlink` struct also carries `block_text` for
+   * the CLI/MCP JSON envelope (`outl page rename` returns it under
+   * `affected_refs`). It's intentionally omitted from this TS
+   * interface because mobile never reads it — Tauri still ships the
+   * field over the wire; JS just ignores it.
    */
   source_block: BlockNode;
   /**

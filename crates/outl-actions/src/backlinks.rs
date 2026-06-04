@@ -40,6 +40,12 @@ pub struct Backlink {
     /// Block that contains the `[[target]]` mention.
     pub block_id: String,
     /// Body of the source block, with the TODO/DONE prefix stripped.
+    ///
+    /// **Consumed by the CLI/MCP JSON envelope** (`outl page rename`
+    /// returns it inside `affected_refs`), not by the mobile renderer.
+    /// Mobile reads `source_block.tokens` / `source_block.text` instead;
+    /// the TS `Backlink` interface deliberately omits this field.
+    /// Removing it from Rust would break the CLI contract.
     pub block_text: String,
     /// `None` for a plain bullet, `Some(Todo)` / `Some(Done)` otherwise.
     /// Serialised as `"TODO"` / `"DONE"` / `null` to match

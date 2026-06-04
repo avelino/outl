@@ -640,6 +640,38 @@ mod tokenize_owned_tests {
     }
 
     #[test]
+    fn empty_input_yields_no_tokens() {
+        // Replaces coverage from the deleted mobile `markdown.test.ts`
+        // — the old TS tokenizer used to push a phantom `plain` run on
+        // empty input. Pin the Rust behaviour so a future refactor
+        // doesn't reintroduce it.
+        assert!(tokenize_owned("").is_empty());
+    }
+
+    #[test]
+    fn bare_text_is_one_plain_run() {
+        let toks = tokenize_owned("tail");
+        assert_eq!(toks.len(), 1);
+        assert!(matches!(
+            &toks[0],
+            InlineToken::Plain { value } if value == "tail"
+        ));
+    }
+
+    #[test]
+    fn plain_text_after_last_match_survives() {
+        // The deleted TS test "preserves trailing text after the last
+        // match" guarded a tokenizer bug where the tail run got
+        // dropped. Pin the same invariant on the Rust side.
+        let toks = tokenize_owned("**bold** tail");
+        let trailing = toks.last().expect("at least one token");
+        assert!(
+            matches!(trailing, InlineToken::Plain { value } if value == " tail"),
+            "expected trailing Plain(\" tail\"), got {trailing:?}",
+        );
+    }
+
+    #[test]
     fn serde_json_kind_field_matches_mobile_dto() {
         // Mobile reads `kind` lowercase via Serde's
         // `rename_all = "lowercase"`. If we ever change the rename
