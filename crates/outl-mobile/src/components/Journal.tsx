@@ -20,12 +20,12 @@ import {
   nextDay,
   openJournalFor,
   openPageBySlug,
+  openRef,
   openTodayJournal,
   outdentBlock,
   pasteMarkdown,
   previousDay,
   reloadWorkspace,
-  resolveRef,
   searchPages,
   setBlockCollapsed,
   todaySlug,
@@ -711,33 +711,15 @@ export function Journal() {
   }
 
   async function handleRefClick(target: string) {
+    // One Tauri call — `openRef` runs the journal-vs-page decision
+    // tree on the Rust side and creates the page if nothing exists,
+    // so this handler has no branching to keep in sync with the
+    // backend. Used to be three commands gated by a `^\d{4}-\d{2}-\d{2}$`
+    // regex, which surfaced `invalid date slug` toasts on inputs
+    // like `[[2026-13-01]]` (regex shape OK, semantic parse fails).
     haptic("light");
     const currentView = view();
-    // Try as date slug first.
-    const asDate = /^\d{4}-\d{2}-\d{2}$/.test(target);
-    if (asDate) {
-      const next = await withError(() => openJournalFor(target));
-      if (next) {
-        if (currentView) pushHistory(currentView);
-        applyView(next);
-        return;
-      }
-    }
-    // Resolve as page slug or title.
-    const meta = await withError(() => resolveRef(target));
-    if (meta) {
-      const next =
-        meta.kind === "journal"
-          ? await withError(() => openJournalFor(meta.slug))
-          : await withError(() => openPageBySlug(meta.slug));
-      if (next) {
-        if (currentView) pushHistory(currentView);
-        applyView(next);
-      }
-      return;
-    }
-    // Fallback: open/create by slug.
-    const next = await withError(() => openPageBySlug(target));
+    const next = await withError(() => openRef(target));
     if (next) {
       if (currentView) pushHistory(currentView);
       applyView(next);
@@ -745,13 +727,13 @@ export function Journal() {
   }
 
   async function handleTagClick(tag: string) {
-    // `#foo` arrives as "#foo"; strip the leading hash and open the
-    // page with that slug (same semantics as a `[[foo]]` ref).
+    // `#foo` arrives as `#foo`; strip the leading hash and route
+    // through the same `openRef` decision tree as `[[foo]]`.
     const target = tag.startsWith("#") ? tag.slice(1) : tag;
     if (!target) return;
     haptic("light");
     const currentView = view();
-    const next = await withError(() => openPageBySlug(target));
+    const next = await withError(() => openRef(target));
     if (next) {
       if (currentView) pushHistory(currentView);
       applyView(next);

@@ -41,27 +41,33 @@ What this crate **does** own:
 
 ## Opening a ref that may not exist yet
 
-`[[avelino/outl]]`, `#code-review`, the picker query field — every
-"go to this page" path on the frontend ends up calling the
-`open_page_by_slug` Tauri command. The command name is a historical
-artefact; the input is the raw string the user typed or clicked, not
-a pre-validated slug. The command must therefore:
+`[[avelino/outl]]`, `[[2026-06-04]]`, `#code-review`, picker entries
+— every "tap a ref → see a page" path on the frontend goes through
+**one** Tauri command, `open_ref(target)`, which wraps
+`outl_actions::page::open_or_create_by_ref`. The single decision
+tree (date → journal, else literal/slugified/title match → existing
+page, else create as page) lives in the shared crate so a frontend
+regex cannot drift from a backend parser the way it did before
+`open_ref` existed.
 
-1. Try `find_by_slug` literally (covers a clean slug from the picker
-   or a programmatic caller).
-2. Fall through to `outl_actions::page::open_or_create_by_name`,
-   which slugifies the input for the disk path
-   (`avelino/outl → avelino-outl`) and keeps the original string as
-   the page's title. This is what turns a click on a non-existent
-   ref into "page opens in the same round-trip" instead of an
-   `invalid page slug` toast.
+What used to be wrong: the frontend split the journal-vs-page
+decision with `/^\d{4}-\d{2}-\d{2}$/` and routed to one of two
+strict-validating commands (`open_journal_for` / `open_page_by_slug`).
+`[[2026-13-01]]` matched the regex, hit `open_journal_for`, and
+surfaced an `invalid date slug` toast — even though falling through
+to "create a regular page" was clearly the right behaviour.
 
-`resolve_ref` (used by the click handler to pick the best target
-before navigating) follows the same shape: literal slug, then
-slugified slug, then case-insensitive title match. Skipping the
-slugified-slug step would mean a ref typed before its page existed
-never finds the page after creation, because the disk slug
-(`avelino-outl`) no longer equals the typed string (`avelino/outl`).
+`open_page_by_slug` is kept for the picker (the picker already
+hands the command a clean slug from a known page). `open_journal_for`
+stays for date-navigation commands (`previousDay` / `nextDay`) whose
+input is derived from controlled state, not from a user tap. Every
+**ref-click** code path on the frontend (`handleRefClick`,
+`handleTagClick`) must call `openRef` so the decision tree is
+single-sourced.
+
+`resolve_ref` survives for autocomplete previews ("this ref will
+land on `<page>`") but is **not** the navigation entry point — for
+that, always call `openRef`.
 
 ## Paste from external apps
 

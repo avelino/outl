@@ -118,6 +118,22 @@ export function openPageBySlug(slug: string): Promise<PageView> {
   return invoke<PageView>("open_page_by_slug", { slug });
 }
 
+/**
+ * Resolve and open whatever a user-typed ref / tag / picker entry
+ * points at, in one round-trip. The backend runs the canonical
+ * decision tree (date → journal, else literal/slugified/title match
+ * → existing page, else create a fresh page with the typed string
+ * as the title). This is the entry point every ref-click handler
+ * on the frontend should use; never branch by shape in TS before
+ * calling — the regex-vs-parser drift is exactly what this command
+ * exists to remove (`[[2026-13-01]]` used to surface
+ * `invalid date slug` because the TS shape regex disagreed with
+ * the Rust semantic parser).
+ */
+export function openRef(target: string): Promise<PageView> {
+  return invoke<PageView>("open_ref", { target });
+}
+
 export function previousDay(slug: string): Promise<string> {
   return invoke<string>("previous_day", { slug });
 }
