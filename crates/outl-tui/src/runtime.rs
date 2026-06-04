@@ -185,11 +185,15 @@ fn install_panic_restore_hook() {
 ///
 /// Precedence (first hit wins):
 /// 1. `--theme <preset>` CLI override.
-/// 2. `[theme] preset = "..."` in `config.toml`.
-/// 3. [`theme::default_theme`].
+/// 2. `[theme] preset = "..."` in the **per-workspace**
+///    `.outl/config.toml`.
+/// 3. `[theme] preset = "..."` in the **global**
+///    `~/.config/outl/config.toml` (shared with the desktop client
+///    via the `outl-config` crate).
+/// 4. [`theme::default_theme`].
 ///
-/// An unknown name falls through silently to the default. The caller can
-/// surface the choice via the status line if it cares.
+/// An unknown name falls through silently to the next level. The
+/// caller can surface the choice via the status line if it cares.
 fn resolve_theme(cli_override: Option<&str>, cfg: &toml::Value) -> Theme {
     if let Some(name) = cli_override {
         if let Some(t) = theme::by_name(name) {
@@ -204,6 +208,14 @@ fn resolve_theme(cli_override: Option<&str>, cfg: &toml::Value) -> Theme {
         if let Some(t) = theme::by_name(preset) {
             return t;
         }
+    }
+    // Global fallback — same TOML file the desktop reads / writes,
+    // so changing the theme in the desktop's Settings modal
+    // propagates to the next `outl-tui` launch automatically (and
+    // vice versa).
+    let global = outl_config::load();
+    if let Some(t) = theme::by_name(&global.theme.preset) {
+        return t;
     }
     theme::default_theme()
 }

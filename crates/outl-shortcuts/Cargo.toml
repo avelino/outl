@@ -1,0 +1,16 @@
+[package]
+name = "outl-shortcuts"
+description = "Shared keyboard binding catalog (Action / Chord / Mode) consumed by outl-tui and outl-desktop."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -1,0 +1,11 @@
+{
+  "name": "outl-frontend",
+  "private": true,
+  "description": "outl frontend monorepo — shared Solid+Tailwind lib consumed by mobile and (upcoming) desktop clients.",
+  "license": "MIT",
+  "workspaces": [
+    "crates/outl-frontend-shared",
+    "crates/outl-mobile",
+    "crates/outl-desktop"
+  ]
+}

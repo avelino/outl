@@ -15,7 +15,104 @@
 //! Adding a preset means adding one constructor function and a string in
 //! [`PRESETS`]. The render path doesn't need to change.
 
+use outl_theme::Palette;
 use ratatui::style::{Color, Modifier, Style};
+
+/// Convert a `#rrggbb` palette string into a ratatui [`Color`].
+///
+/// Malformed input degrades to [`Color::Reset`] instead of panicking
+/// so a bad config never blocks the TUI from booting. The
+/// `outl-theme` crate has a test guard (`every_palette_field_is_hex`)
+/// that catches a typo before it gets here.
+fn hex_to_color(s: &str) -> Color {
+    match outl_theme::palette::parse_hex(s) {
+        Some((r, g, b)) => Color::Rgb(r, g, b),
+        None => Color::Reset,
+    }
+}
+
+/// Build a `Theme` from a shared `Palette` plus the static name.
+///
+/// Modifiers (`BOLD` on `bold`, `UNDERLINED` on links, `ITALIC` on
+/// `italic`, `CROSSED_OUT` on `strike`) are consistent across every
+/// preset — only the hues vary — so the formula is hard-coded here.
+/// A new field in the palette = a new field in `Theme` + a line
+/// below.
+fn theme_from_palette(name: &'static str, p: &Palette) -> Theme {
+    Theme {
+        name,
+        background: hex_to_color(&p.bg),
+        bullet: Style::default().fg(hex_to_color(&p.fg_dimmer)),
+        selected_bullet: Style::default()
+            .fg(hex_to_color(&p.selected_bullet_fg))
+            .bg(hex_to_color(&p.selected_bullet_bg))
+            .add_modifier(Modifier::BOLD),
+        cursor_block: Style::default()
+            .fg(hex_to_color(&p.cursor_block_fg))
+            .bg(hex_to_color(&p.cursor_block_bg))
+            .add_modifier(Modifier::BOLD),
+        cursor_caret: Style::default()
+            .fg(hex_to_color(&p.cursor_caret_fg))
+            .add_modifier(Modifier::BOLD),
+        ref_link: Style::default()
+            .fg(hex_to_color(&p.ref_link_fg))
+            .add_modifier(Modifier::UNDERLINED),
+        tag_link: Style::default()
+            .fg(hex_to_color(&p.tag_link_fg))
+            .add_modifier(Modifier::UNDERLINED),
+        md_link: Style::default()
+            .fg(hex_to_color(&p.md_link_fg))
+            .add_modifier(Modifier::UNDERLINED),
+        bold: Style::default()
+            .fg(hex_to_color(&p.bold_fg))
+            .add_modifier(Modifier::BOLD),
+        italic: Style::default()
+            .fg(hex_to_color(&p.italic_fg))
+            .add_modifier(Modifier::ITALIC),
+        strike: Style::default()
+            .fg(hex_to_color(&p.strike_fg))
+            .add_modifier(Modifier::CROSSED_OUT),
+        code: Style::default().fg(hex_to_color(&p.code_fg)),
+        todo_open: Style::default()
+            .fg(hex_to_color(&p.todo_open_fg))
+            .add_modifier(Modifier::BOLD),
+        todo_done: Style::default()
+            .fg(hex_to_color(&p.todo_done_fg))
+            .add_modifier(Modifier::BOLD),
+        todo_done_body: Style::default()
+            .fg(hex_to_color(&p.todo_done_body_fg))
+            .add_modifier(Modifier::CROSSED_OUT),
+        property_key: Style::default().fg(hex_to_color(&p.property_key_fg)),
+        property_value: Style::default().fg(hex_to_color(&p.property_value_fg)),
+        heading: Style::default()
+            .fg(hex_to_color(&p.heading_fg))
+            .add_modifier(Modifier::BOLD),
+        dim: Style::default().fg(hex_to_color(&p.dim_fg)),
+        border: Style::default().fg(hex_to_color(&p.border)),
+        hint: Style::default().fg(hex_to_color(&p.hint)),
+        status_normal: Style::default()
+            .fg(hex_to_color(&p.status_normal_fg))
+            .bg(hex_to_color(&p.status_normal_bg))
+            .add_modifier(Modifier::BOLD),
+        status_insert: Style::default()
+            .fg(hex_to_color(&p.status_insert_fg))
+            .bg(hex_to_color(&p.status_insert_bg))
+            .add_modifier(Modifier::BOLD),
+        status_visual: Style::default()
+            .fg(hex_to_color(&p.status_visual_fg))
+            .bg(hex_to_color(&p.status_visual_bg))
+            .add_modifier(Modifier::BOLD),
+        status_message: Style::default().fg(hex_to_color(&p.status_message_fg)),
+        help_title: Style::default()
+            .fg(hex_to_color(&p.help_title_fg))
+            .add_modifier(Modifier::BOLD),
+        popup_bg: hex_to_color(&p.bg_elev),
+        list_selected: Style::default()
+            .fg(hex_to_color(&p.list_selected_fg))
+            .bg(hex_to_color(&p.list_selected_bg))
+            .add_modifier(Modifier::BOLD),
+    }
+}
 
 /// All styled surfaces the TUI knows how to paint.
 ///
@@ -140,81 +237,7 @@ pub fn default_theme() -> Theme {
 /// site (avelino.run). Deep-purple background with a lavender accent
 /// and lemon highlight; this is the default theme.
 pub fn outl() -> Theme {
-    let bg = Color::Rgb(12, 8, 20); // #0c0814
-    let bg_elev = Color::Rgb(21, 16, 31); // #15101f
-    let line_strong = Color::Rgb(56, 44, 84); // #382c54
-    let fg = Color::Rgb(244, 241, 250); // #f4f1fa
-    let fg_dim = Color::Rgb(180, 173, 199); // #b4adc7
-    let fg_dimmer = Color::Rgb(123, 115, 144); // #7b7390
-    let accent = Color::Rgb(167, 139, 250); // #a78bfa
-    let accent_soft = Color::Rgb(196, 181, 253); // #c4b5fd
-    let accent_2 = Color::Rgb(214, 255, 71); // #d6ff47
-    let warn = Color::Rgb(251, 191, 36); // #fbbf24
-    let blue = Color::Rgb(125, 211, 252); // #7dd3fc
-    let magenta = Color::Rgb(240, 171, 252); // #f0abfc
-    let red = Color::Rgb(251, 113, 133); // #fb7185
-    let _ = red;
-
-    Theme {
-        name: "outl",
-        background: bg,
-        bullet: Style::default().fg(fg_dimmer),
-        selected_bullet: Style::default()
-            .fg(bg)
-            .bg(accent)
-            .add_modifier(Modifier::BOLD),
-        cursor_block: Style::default().fg(bg).bg(fg).add_modifier(Modifier::BOLD),
-        cursor_caret: Style::default()
-            .fg(accent_soft)
-            .add_modifier(Modifier::BOLD),
-        ref_link: Style::default()
-            .fg(accent)
-            .add_modifier(Modifier::UNDERLINED),
-        tag_link: Style::default()
-            .fg(magenta)
-            .add_modifier(Modifier::UNDERLINED),
-        md_link: Style::default().fg(blue).add_modifier(Modifier::UNDERLINED),
-        bold: Style::default().fg(fg).add_modifier(Modifier::BOLD),
-        italic: Style::default()
-            .fg(accent_soft)
-            .add_modifier(Modifier::ITALIC),
-        strike: Style::default()
-            .fg(fg_dimmer)
-            .add_modifier(Modifier::CROSSED_OUT),
-        code: Style::default().fg(accent_2),
-        todo_open: Style::default().fg(warn).add_modifier(Modifier::BOLD),
-        todo_done: Style::default().fg(accent_2).add_modifier(Modifier::BOLD),
-        todo_done_body: Style::default()
-            .fg(fg_dimmer)
-            .add_modifier(Modifier::CROSSED_OUT),
-        property_key: Style::default().fg(fg_dimmer),
-        property_value: Style::default().fg(accent_soft),
-        heading: Style::default().fg(fg).add_modifier(Modifier::BOLD),
-        dim: Style::default().fg(fg_dimmer),
-        border: Style::default().fg(line_strong),
-        hint: Style::default().fg(fg_dim),
-        status_normal: Style::default()
-            .fg(bg)
-            .bg(accent)
-            .add_modifier(Modifier::BOLD),
-        status_insert: Style::default()
-            .fg(bg)
-            .bg(accent_2)
-            .add_modifier(Modifier::BOLD),
-        status_visual: Style::default()
-            .fg(bg)
-            .bg(magenta)
-            .add_modifier(Modifier::BOLD),
-        status_message: Style::default().fg(warn),
-        help_title: Style::default()
-            .fg(accent_soft)
-            .add_modifier(Modifier::BOLD),
-        popup_bg: bg_elev,
-        list_selected: Style::default()
-            .fg(bg)
-            .bg(accent)
-            .add_modifier(Modifier::BOLD),
-    }
+    theme_from_palette("outl", &outl_theme::presets::outl())
 }
 
 /// Default dark — the original outl-tui palette.
@@ -361,282 +384,22 @@ pub fn light() -> Theme {
 
 /// Dracula — popular dark palette.
 pub fn dracula() -> Theme {
-    let bg = Color::Rgb(40, 42, 54);
-    let fg = Color::Rgb(248, 248, 242);
-    let comment = Color::Rgb(98, 114, 164);
-    let cyan = Color::Rgb(139, 233, 253);
-    let green = Color::Rgb(80, 250, 123);
-    let orange = Color::Rgb(255, 184, 108);
-    let pink = Color::Rgb(255, 121, 198);
-    let purple = Color::Rgb(189, 147, 249);
-    let yellow = Color::Rgb(241, 250, 140);
-
-    Theme {
-        name: "dracula",
-        background: bg,
-        bullet: Style::default().fg(comment),
-        selected_bullet: Style::default()
-            .fg(bg)
-            .bg(cyan)
-            .add_modifier(Modifier::BOLD),
-        cursor_block: Style::default().fg(bg).bg(fg).add_modifier(Modifier::BOLD),
-        cursor_caret: Style::default().fg(fg).add_modifier(Modifier::BOLD),
-        ref_link: Style::default().fg(cyan).add_modifier(Modifier::UNDERLINED),
-        tag_link: Style::default().fg(pink).add_modifier(Modifier::UNDERLINED),
-        md_link: Style::default()
-            .fg(purple)
-            .add_modifier(Modifier::UNDERLINED),
-        bold: Style::default().fg(orange).add_modifier(Modifier::BOLD),
-        italic: Style::default().fg(yellow).add_modifier(Modifier::ITALIC),
-        strike: Style::default()
-            .fg(comment)
-            .add_modifier(Modifier::CROSSED_OUT),
-        code: Style::default().fg(green),
-        todo_open: Style::default().fg(yellow).add_modifier(Modifier::BOLD),
-        todo_done: Style::default().fg(green).add_modifier(Modifier::BOLD),
-        todo_done_body: Style::default()
-            .fg(comment)
-            .add_modifier(Modifier::CROSSED_OUT),
-        property_key: Style::default().fg(comment),
-        property_value: Style::default().fg(purple),
-        heading: Style::default().fg(pink).add_modifier(Modifier::BOLD),
-        dim: Style::default().fg(comment),
-        border: Style::default().fg(comment),
-        hint: Style::default().fg(comment),
-        status_normal: Style::default()
-            .fg(bg)
-            .bg(cyan)
-            .add_modifier(Modifier::BOLD),
-        status_insert: Style::default()
-            .fg(bg)
-            .bg(green)
-            .add_modifier(Modifier::BOLD),
-        status_visual: Style::default()
-            .fg(bg)
-            .bg(pink)
-            .add_modifier(Modifier::BOLD),
-        status_message: Style::default().fg(yellow),
-        help_title: Style::default().fg(yellow).add_modifier(Modifier::BOLD),
-        popup_bg: bg,
-        list_selected: Style::default()
-            .fg(bg)
-            .bg(purple)
-            .add_modifier(Modifier::BOLD),
-    }
+    theme_from_palette("dracula", &outl_theme::presets::dracula())
 }
 
 /// Solarized Dark — Ethan Schoonover's classic.
 pub fn solarized_dark() -> Theme {
-    let base03 = Color::Rgb(0, 43, 54);
-    let base01 = Color::Rgb(88, 110, 117);
-    let base0 = Color::Rgb(131, 148, 150);
-    let base1 = Color::Rgb(147, 161, 161);
-    let yellow = Color::Rgb(181, 137, 0);
-    let orange = Color::Rgb(203, 75, 22);
-    let red = Color::Rgb(220, 50, 47);
-    let magenta = Color::Rgb(211, 54, 130);
-    let violet = Color::Rgb(108, 113, 196);
-    let blue = Color::Rgb(38, 139, 210);
-    let cyan = Color::Rgb(42, 161, 152);
-    let green = Color::Rgb(133, 153, 0);
-    let _ = (orange, red, magenta);
-
-    Theme {
-        name: "solarized-dark",
-        background: base03,
-        bullet: Style::default().fg(base01),
-        selected_bullet: Style::default()
-            .fg(base03)
-            .bg(cyan)
-            .add_modifier(Modifier::BOLD),
-        cursor_block: Style::default()
-            .fg(base03)
-            .bg(base1)
-            .add_modifier(Modifier::BOLD),
-        cursor_caret: Style::default().fg(base1).add_modifier(Modifier::BOLD),
-        ref_link: Style::default().fg(cyan).add_modifier(Modifier::UNDERLINED),
-        tag_link: Style::default()
-            .fg(magenta)
-            .add_modifier(Modifier::UNDERLINED),
-        md_link: Style::default().fg(blue).add_modifier(Modifier::UNDERLINED),
-        bold: Style::default().fg(orange).add_modifier(Modifier::BOLD),
-        italic: Style::default().fg(yellow).add_modifier(Modifier::ITALIC),
-        strike: Style::default()
-            .fg(base01)
-            .add_modifier(Modifier::CROSSED_OUT),
-        code: Style::default().fg(green),
-        todo_open: Style::default().fg(yellow).add_modifier(Modifier::BOLD),
-        todo_done: Style::default().fg(green).add_modifier(Modifier::BOLD),
-        todo_done_body: Style::default()
-            .fg(base01)
-            .add_modifier(Modifier::CROSSED_OUT),
-        property_key: Style::default().fg(base01),
-        property_value: Style::default().fg(violet),
-        heading: Style::default().fg(blue).add_modifier(Modifier::BOLD),
-        dim: Style::default().fg(base01),
-        border: Style::default().fg(base01),
-        hint: Style::default().fg(base0),
-        status_normal: Style::default()
-            .fg(base03)
-            .bg(cyan)
-            .add_modifier(Modifier::BOLD),
-        status_insert: Style::default()
-            .fg(base03)
-            .bg(green)
-            .add_modifier(Modifier::BOLD),
-        status_visual: Style::default()
-            .fg(base03)
-            .bg(magenta)
-            .add_modifier(Modifier::BOLD),
-        status_message: Style::default().fg(yellow),
-        help_title: Style::default().fg(yellow).add_modifier(Modifier::BOLD),
-        popup_bg: base03,
-        list_selected: Style::default()
-            .fg(base03)
-            .bg(blue)
-            .add_modifier(Modifier::BOLD),
-    }
+    theme_from_palette("solarized-dark", &outl_theme::presets::solarized_dark())
 }
 
 /// Nord — Arctic palette.
 pub fn nord() -> Theme {
-    let nord0 = Color::Rgb(46, 52, 64);
-    let nord3 = Color::Rgb(76, 86, 106);
-    let nord4 = Color::Rgb(216, 222, 233);
-    let nord6 = Color::Rgb(236, 239, 244);
-    let nord7 = Color::Rgb(143, 188, 187);
-    let nord8 = Color::Rgb(136, 192, 208);
-    let nord11 = Color::Rgb(191, 97, 106);
-    let nord13 = Color::Rgb(235, 203, 139);
-    let nord14 = Color::Rgb(163, 190, 140);
-    let nord15 = Color::Rgb(180, 142, 173);
-    let _ = (nord4, nord11);
-
-    Theme {
-        name: "nord",
-        background: nord0,
-        bullet: Style::default().fg(nord3),
-        selected_bullet: Style::default()
-            .fg(nord0)
-            .bg(nord8)
-            .add_modifier(Modifier::BOLD),
-        cursor_block: Style::default()
-            .fg(nord0)
-            .bg(nord6)
-            .add_modifier(Modifier::BOLD),
-        cursor_caret: Style::default().fg(nord6).add_modifier(Modifier::BOLD),
-        ref_link: Style::default()
-            .fg(nord8)
-            .add_modifier(Modifier::UNDERLINED),
-        tag_link: Style::default()
-            .fg(nord15)
-            .add_modifier(Modifier::UNDERLINED),
-        md_link: Style::default()
-            .fg(nord7)
-            .add_modifier(Modifier::UNDERLINED),
-        bold: Style::default().fg(nord13).add_modifier(Modifier::BOLD),
-        italic: Style::default().fg(nord15).add_modifier(Modifier::ITALIC),
-        strike: Style::default()
-            .fg(nord3)
-            .add_modifier(Modifier::CROSSED_OUT),
-        code: Style::default().fg(nord14),
-        todo_open: Style::default().fg(nord13).add_modifier(Modifier::BOLD),
-        todo_done: Style::default().fg(nord14).add_modifier(Modifier::BOLD),
-        todo_done_body: Style::default()
-            .fg(nord3)
-            .add_modifier(Modifier::CROSSED_OUT),
-        property_key: Style::default().fg(nord3),
-        property_value: Style::default().fg(nord7),
-        heading: Style::default().fg(nord8).add_modifier(Modifier::BOLD),
-        dim: Style::default().fg(nord3),
-        border: Style::default().fg(nord3),
-        hint: Style::default().fg(nord3),
-        status_normal: Style::default()
-            .fg(nord0)
-            .bg(nord8)
-            .add_modifier(Modifier::BOLD),
-        status_insert: Style::default()
-            .fg(nord0)
-            .bg(nord14)
-            .add_modifier(Modifier::BOLD),
-        status_visual: Style::default()
-            .fg(nord0)
-            .bg(nord15)
-            .add_modifier(Modifier::BOLD),
-        status_message: Style::default().fg(nord13),
-        help_title: Style::default().fg(nord13).add_modifier(Modifier::BOLD),
-        popup_bg: nord0,
-        list_selected: Style::default()
-            .fg(nord0)
-            .bg(nord8)
-            .add_modifier(Modifier::BOLD),
-    }
+    theme_from_palette("nord", &outl_theme::presets::nord())
 }
 
 /// Monokai — Wimer Hazenberg's high-contrast palette.
 pub fn monokai() -> Theme {
-    let bg = Color::Rgb(39, 40, 34);
-    let comment = Color::Rgb(117, 113, 94);
-    let fg = Color::Rgb(248, 248, 242);
-    let pink = Color::Rgb(249, 38, 114);
-    let orange = Color::Rgb(253, 151, 31);
-    let yellow = Color::Rgb(230, 219, 116);
-    let green = Color::Rgb(166, 226, 46);
-    let blue = Color::Rgb(102, 217, 239);
-    let purple = Color::Rgb(174, 129, 255);
-
-    Theme {
-        name: "monokai",
-        background: bg,
-        bullet: Style::default().fg(comment),
-        selected_bullet: Style::default()
-            .fg(bg)
-            .bg(pink)
-            .add_modifier(Modifier::BOLD),
-        cursor_block: Style::default().fg(bg).bg(fg).add_modifier(Modifier::BOLD),
-        cursor_caret: Style::default().fg(fg).add_modifier(Modifier::BOLD),
-        ref_link: Style::default().fg(blue).add_modifier(Modifier::UNDERLINED),
-        tag_link: Style::default().fg(pink).add_modifier(Modifier::UNDERLINED),
-        md_link: Style::default()
-            .fg(purple)
-            .add_modifier(Modifier::UNDERLINED),
-        bold: Style::default().fg(orange).add_modifier(Modifier::BOLD),
-        italic: Style::default().fg(yellow).add_modifier(Modifier::ITALIC),
-        strike: Style::default()
-            .fg(comment)
-            .add_modifier(Modifier::CROSSED_OUT),
-        code: Style::default().fg(green),
-        todo_open: Style::default().fg(yellow).add_modifier(Modifier::BOLD),
-        todo_done: Style::default().fg(green).add_modifier(Modifier::BOLD),
-        todo_done_body: Style::default()
-            .fg(comment)
-            .add_modifier(Modifier::CROSSED_OUT),
-        property_key: Style::default().fg(comment),
-        property_value: Style::default().fg(purple),
-        heading: Style::default().fg(pink).add_modifier(Modifier::BOLD),
-        dim: Style::default().fg(comment),
-        border: Style::default().fg(comment),
-        hint: Style::default().fg(comment),
-        status_normal: Style::default()
-            .fg(bg)
-            .bg(blue)
-            .add_modifier(Modifier::BOLD),
-        status_insert: Style::default()
-            .fg(bg)
-            .bg(green)
-            .add_modifier(Modifier::BOLD),
-        status_visual: Style::default()
-            .fg(bg)
-            .bg(pink)
-            .add_modifier(Modifier::BOLD),
-        status_message: Style::default().fg(yellow),
-        help_title: Style::default().fg(yellow).add_modifier(Modifier::BOLD),
-        popup_bg: bg,
-        list_selected: Style::default()
-            .fg(bg)
-            .bg(blue)
-            .add_modifier(Modifier::BOLD),
-    }
+    theme_from_palette("monokai", &outl_theme::presets::monokai())
 }
 
 #[cfg(test)]

@@ -1,0 +1,20 @@
+[package]
+name = "outl-config"
+description = "Shared user-config (TOML at ~/.config/outl/config.toml) consumed by outl-tui and outl-desktop."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+toml = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+dirs = "5"
+
+[dev-dependencies]
+tempfile = { workspace = true }

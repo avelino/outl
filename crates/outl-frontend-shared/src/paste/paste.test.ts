@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { looksLikeOutline, utf16OffsetToCharOffset } from "./paste";
+
+import { looksLikeOutline, utf16OffsetToCharOffset } from "./index";
 
 describe("looksLikeOutline", () => {
   it("returns false for empty input", () => {
@@ -34,7 +35,6 @@ describe("looksLikeOutline", () => {
   });
 
   it("returns false for dash followed by non-space", () => {
-    // `-foo` is not a bullet — must be `- foo`.
     expect(looksLikeOutline("-foo")).toBe(false);
     expect(looksLikeOutline("hyphen-word")).toBe(false);
   });
@@ -62,11 +62,7 @@ describe("utf16OffsetToCharOffset", () => {
   it("collapses surrogate pairs to a single char", () => {
     // 😀 = U+1F600 — supplementary plane, takes 2 UTF-16 code units.
     const s = "hi 😀 you";
-    // Selection start right after the emoji: UTF-16 offset 5
-    // (`h` `i` ` ` `😀-high` `😀-low`), but only 4 chars.
     expect(utf16OffsetToCharOffset(s, 5)).toBe(4);
-    // End of string: 9 UTF-16 units (h, i, space, 2× emoji surrogate,
-    // space, y, o, u), 8 chars.
     expect(s.length).toBe(9);
     expect(utf16OffsetToCharOffset(s, s.length)).toBe(8);
   });

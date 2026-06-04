@@ -15,6 +15,8 @@
 
 * [TUI manual](tui.md)
 * [Theming](theming.md)
+* [Configuration](config.md)
+* [Shortcuts](shortcuts.md)
 
 ## Integrations
 

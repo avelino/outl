@@ -20,7 +20,7 @@
  * — UIKit isn't there to read it, but Solid keeps the visual editor
  * consistent.
  */
-import { PageMeta } from "./api";
+import type { PageMeta } from "@outl/shared/api/types";
 
 interface WindowWithBridge extends Window {
   __outlSuggesterState?: SuggesterMessage | null;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+
 import {
   applySuggestion,
   autoClosePair,
@@ -6,7 +7,7 @@ import {
   detectRefContext,
   insertPair,
   insertText,
-} from "./autocomplete";
+} from "./index";
 
 describe("autoClosePair", () => {
   it("closes a freshly-typed [[ with ]]", () => {

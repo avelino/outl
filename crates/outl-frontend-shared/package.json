@@ -1,0 +1,33 @@
+{
+  "name": "@outl/shared",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Shared TS+Solid library for outl frontend clients (mobile + desktop). Pure helpers, DTO types, Tauri command wrappers and the InlineToken renderer.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "peerDependencies": {
+    "@tauri-apps/api": "^2",
+    "solid-js": "^1.9.3"
+  },
+  "devDependencies": {
+    "@tauri-apps/api": "^2",
+    "@types/node": "^20",
+    "happy-dom": "^20.9.0",
+    "solid-js": "^1.9.3",
+    "typescript": "~5.6.2",
+    "vite-plugin-solid": "^2.11.0",
+    "vitest": "^4.1.7"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./api/types": "./src/api/types.ts",
+    "./api/commands": "./src/api/commands.ts",
+    "./markdown": "./src/markdown/index.ts",
+    "./paste": "./src/paste/index.ts",
+    "./autocomplete": "./src/autocomplete/index.ts"
+  }
+}

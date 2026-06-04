@@ -17,11 +17,11 @@
  *    if we're in that state.
  *
  * Both helpers are pure functions over the textarea string + caret
- * index, so they're trivial to unit-test (see `autocomplete.test.ts`)
- * and they make no assumption about the DOM.
+ * index, so they're trivial to unit-test and they make no assumption
+ * about the DOM.
  */
 
-/** Result of [`autoClosePair`]. */
+/** Result of {@link autoClosePair}. */
 export interface PairCompletion {
   /** Full textarea value after the completion. */
   value: string;
@@ -65,7 +65,7 @@ export function autoClosePair(
 }
 
 /**
- * Inverse of [`autoClosePair`]: when the caret sits in the empty
+ * Inverse of {@link autoClosePair}: when the caret sits in the empty
  * middle of `[[]]` or `(())` and the user presses Backspace, delete
  * the whole pair in one shot so they don't have to mash backspace
  * four times to undo an aborted ref. Returns `null` when the caret
@@ -129,7 +129,7 @@ export function insertText(
   };
 }
 
-/** Result of [`detectRefContext`]. */
+/** Result of {@link detectRefContext}. */
 export interface RefContext {
   /** What kind of reference the caret is sitting inside. */
   kind: "page" | "block";
@@ -158,12 +158,11 @@ export interface RefContext {
  *
  * **Cross-runtime mirror.** The TUI runs the same walk-back in Rust
  * at `outl_tui::actions::overlay::detect_trigger`, plus `#` and `/`
- * triggers the mobile doesn't surface yet. Mobile keeps a local TS
- * copy so the autocomplete popup never pays a Tauri round-trip per
- * keystroke. If you extend either side (a new opener, a different
- * closing rule), update both in the same commit — same convention
- * `looksLikeOutline` (`lib/paste.ts`) and `tokenize`
- * (`lib/markdown.tsx`) follow.
+ * triggers no GUI client surfaces yet. Frontend clients keep a local
+ * TS copy (here in `@outl/shared`) so the autocomplete popup never
+ * pays a Tauri round-trip per keystroke. If you extend either side
+ * (a new opener, a different closing rule), update both in the same
+ * commit.
  */
 export function detectRefContext(
   value: string,

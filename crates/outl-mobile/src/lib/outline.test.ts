@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BlockNode } from "./api";
+import type { BlockNode } from "@outl/shared/api/types";
 import {
   countDescendants,
   findBlock,

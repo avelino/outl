@@ -13,8 +13,27 @@ cd ~/notes && outl           # no args: opens TUI in cwd
 ```
 
 The TUI requires a real interactive terminal.
-If stdout isn't a TTY (e.g.
-CI), it exits with a clear error instead of hanging.
+If stdout isn't a TTY (e.g. CI), it exits with a clear error instead of hanging.
+
+## Config
+
+The TUI reads two layers of TOML before launching:
+
+1. **Global** — `~/.config/outl/config.toml` (the [`outl-config`](../crates/outl-config/) crate; XDG-style on every OS).
+   Same file the desktop app's Settings modal writes to, so changing your theme in the desktop reflects on the next TUI launch.
+   ```toml
+   [theme]
+   preset = "dracula"
+
+   [editor]
+   vim_mode = true
+   font_size = 15
+   ```
+2. **Per-workspace** — `<workspace>/.outl/config.toml`.
+   Workspace identity (`[workspace] actor_id = "..."`) lives here and can't move to global — it's per-device-per-workspace by design.
+   A `[theme] preset` here overrides the global setting for this workspace only.
+
+Theme precedence at startup (first hit wins): `--theme` CLI flag → per-workspace `[theme] preset` → global `[theme] preset` → built-in default (`outl`).
 
 ## Modes
 

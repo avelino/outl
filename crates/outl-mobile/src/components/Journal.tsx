@@ -8,8 +8,8 @@ import {
   onCleanup,
   onMount,
 } from "solid-js";
+import type { PageView } from "@outl/shared/api/types";
 import {
-  PageView,
   createBlock,
   dateTitle,
   deleteBlock,
@@ -31,7 +31,7 @@ import {
   todaySlug,
   toggleTodo,
   workspaceStats,
-} from "../lib/api";
+} from "@outl/shared/api/commands";
 import {
   countDescendants,
   findBlock,
@@ -39,7 +39,7 @@ import {
   flatten,
   rawTextWithTodo,
 } from "../lib/outline";
-import { applySuggestion, detectRefContext } from "../lib/autocomplete";
+import { applySuggestion, detectRefContext } from "@outl/shared/autocomplete";
 import { parkCaret, spliceText } from "../lib/textarea";
 import { withTimeout } from "../lib/async";
 

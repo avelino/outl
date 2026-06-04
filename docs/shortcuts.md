@@ -1,0 +1,176 @@
+# Shortcuts
+
+Every keyboard shortcut outl ships with, across every client, in one table per concern.
+
+## Source of truth
+
+The desktop and TUI both pull their chord catalog from **`crates/outl-shortcuts`** (`src/defaults.rs::default_bindings()`).
+The mobile app doesn't expose a keyboard surface (touch + on-screen keyboard); the rows below leave its column blank when there's nothing to bind.
+
+> **One catalog, two adapters.**
+> The TUI converts `crossterm::KeyEvent → Chord`, the desktop converts browser `KeyboardEvent → Chord`.
+> Both then call the same `outl_shortcuts::lookup(mode, chord) → Action`.
+> A chord change in `defaults.rs` lights up on both clients on the next build.
+
+If a row below disagrees with what you observe in the app, **the code is right and this doc is stale** — file an issue or fix the row.
+
+## How to read the tables
+
+- **Chrome / Global** chords fire in every mode.
+- **Normal / Insert / Visual / Overlay** mirror the vim modes.
+  The desktop subscribes to `Normal`/`Visual` only while `editor.vim_mode = true` (see [`docs/config.md`](config.md)); chrome and `Insert` chords are always live.
+- **`Cmd`** is the macOS modifier; **`Ctrl`** is the same chord on Linux / Windows / TUI. We list one form per row to keep the table readable.
+- A chord in the form `q q` is a vim-style two-key sequence: press the first, then the second within ~1 s.
+
+---
+
+## Chrome (Global) — works in any mode
+
+| Action | TUI | Desktop | Mobile |
+|---|---|---|---|
+| Quick switcher (fuzzy pages + journals) | `Ctrl+P` | `Cmd/Ctrl+P` | tap toolbar |
+| Open today's journal | `t` / `Home` | `Cmd/Ctrl+T` | toolbar |
+| Previous journal day | `[` | `Cmd/Ctrl+[` | swipe right |
+| Next journal day | `]` | `Cmd/Ctrl+]` | swipe left |
+| Toggle sidebar | `Ctrl+E` | `Cmd/Ctrl+Shift+E` | _(single pane)_ |
+| Toggle backlinks panel | `Ctrl+B` | `Cmd/Ctrl+Shift+B` | inline below outline |
+| Open settings | _via `:settings`_ | `Cmd/Ctrl+,` | gear icon |
+| Toggle help overlay | `?` | `Cmd/Ctrl+/` | help button |
+| Quit | `q q` (chord) / `Ctrl+C` | `Cmd/Ctrl+Q` (OS) | — |
+
+**Defaults the user often asks about.** Both clients ship with **sidebar and backlinks panel HIDDEN** (`show_sidebar: false`, `show_backlinks: false`). Editor-hero on first launch — the user opts the panels in with the chord. This matches Bear / Ulysses on the desktop and `outl-tui`'s historical behaviour.
+
+### Why the shifted variants for sidebar / backlinks
+
+| Chord | Why _not_ |
+|---|---|
+| `Cmd+B` | Reserved for **bold** in Insert mode — every popular markdown editor (Notion, Obsidian, Discord, Slack, Typora) treats it that way. Hijacking would be hostile. |
+| `Cmd+\` | macOS **1Password** global autofill. Stealing it breaks every 1Password user. |
+
+So `Cmd+Shift+E` (VS Code's "Show Explorer") and `Cmd+Shift+B` are the canonical chrome chords on the desktop, and the TUI mirrors the spirit with `Ctrl+E` / `Ctrl+B` (most terminals collapse `Ctrl+Shift+letter` into `Ctrl+letter`, so both forms work identically).
+
+---
+
+## Inline markdown — Insert mode (textarea focused)
+
+Wrap the current selection (or insert the delimiter pair around the caret).
+Mirrors the convention every markdown editor on the planet ships.
+
+| Action | TUI | Desktop | Mobile |
+|---|---|---|---|
+| Bold (`**…**`) | type `**` | `Cmd/Ctrl+B` | toolbar B |
+| Italic (`_…_`) | type `_` | `Cmd/Ctrl+I` | toolbar I |
+| Inline code (`` `…` ``) | type `` ` `` | `Cmd/Ctrl+E` | toolbar `<>` |
+| Strikethrough (`~~…~~`) | type `~~` | `Cmd/Ctrl+Shift+X` | toolbar S |
+| Link (`[label](url)`) | type `[` | `Cmd/Ctrl+K` | toolbar 🔗 |
+
+> outl ships `_…_` as the canonical italic. The parser still accepts `*…*` for compatibility, but `.md` projections emit underscores.
+
+---
+
+## Outline navigation — Normal mode
+
+The desktop honours `Normal`/`Visual` only while `editor.vim_mode = true`. The TUI is vim-style by definition.
+
+| Action | TUI | Desktop (vim on) | Mobile |
+|---|---|---|---|
+| Selection down | `j` / `↓` | `j` / `↓` | tap block |
+| Selection up | `k` / `↑` | `k` / `↑` | tap block |
+| Enter Insert at end of block | `i` | `i` | tap block |
+| Enter Insert at start of block | `I` | `I` | tap at start |
+| Open `[[ref]]` / `#tag` / `((blk-…))` under cursor | `Enter` | `Enter` | tap |
+| New block below + Insert | `o` | `o` | toolbar `+` |
+| New block above + Insert | `O` | `O` | — |
+| Indent block | `Tab` | `Tab` | drag right |
+| Outdent block | `Shift+Tab` | `Shift+Tab` | drag left |
+| Move block up | `K` | `K` | drag |
+| Move block down | `J` | `J` | drag |
+| Delete block (chord) | `d d` | `d d` | swipe left |
+| Fold / unfold (toggle collapsed) | `c` | `c` | tap bullet |
+| Last block (jump) | `G` | `G` | — |
+| First block (chord) | `g g` | `g g` | — |
+| Undo | `u` | `u` / `Cmd+Z` | toolbar |
+| Redo | `Ctrl+R` | `Ctrl+R` / `Cmd+Shift+Z` | toolbar |
+| Yank block ref → clipboard (chord) | `y r` | `y r` | — |
+| Enter Visual | `v` | `v` | — |
+| Open command palette | `:` | `:` | — |
+| Open slash menu | `/` | `/` | `/` |
+
+### Cursor inside a block (Normal)
+
+| Action | TUI | Desktop (vim on) |
+|---|---|---|
+| Char left / right | `h` / `l` (or arrows) | `h` / `l` |
+| Word right / left | `w` / `b` | `w` / `b` |
+| Start / end of block text | `0` / `$` (or Home/End) | `0` / `$` |
+
+---
+
+## Insert mode (text editing)
+
+| Action | TUI | Desktop | Mobile |
+|---|---|---|---|
+| Commit + exit Insert | `Esc` | `Esc` / blur | blur |
+| Commit + new block below | `Enter` | `Enter` | `Enter` |
+| Indent (stay in Insert) | `Tab` | `Tab` | drag |
+| Outdent (stay in Insert) | `Shift+Tab` | `Shift+Tab` | drag |
+| Delete block on empty | `Backspace` on empty | `Backspace` on empty | — |
+| Auto-pair `(` `[` `{` `[[` `((` | yes | yes | yes |
+| Ref autocomplete | `[[` triggers picker | `[[` triggers picker | `[[` triggers picker |
+| Tag autocomplete | `#` triggers picker | `#` triggers picker | — |
+| Block ref autocomplete | `((` triggers picker | `((` triggers picker | — |
+| Slash command autocomplete | `/` | `/` | — |
+| Toggle TODO/DONE on current | `Ctrl+T` / `Ctrl+Enter` | `Ctrl+T` | tap checkbox |
+
+---
+
+## Visual mode (range)
+
+TUI + desktop (vim on); mobile has no Visual equivalent yet.
+
+| Action | TUI | Desktop |
+|---|---|---|
+| Extend selection down | `j` / `↓` | `j` / `↓` |
+| Extend selection up | `k` / `↑` | `k` / `↑` |
+| Yank range | `y` | `y` |
+| Delete range | `d` | `d` |
+| Leave Visual | `Esc` | `Esc` |
+
+---
+
+## Overlays (picker, palette, settings, help)
+
+| Action | TUI | Desktop |
+|---|---|---|
+| Highlight next | `↓` / `Tab` / `Ctrl+J` | `↓` |
+| Highlight previous | `↑` / `Shift+Tab` / `Ctrl+K` | `↑` |
+| Confirm | `Enter` | `Enter` |
+| Close overlay | `Esc` | `Esc` |
+
+The picker (`Cmd+P` / `Ctrl+P`) fuzzy-matches pages and journals together; type a date in ISO (`2026-06-04`) or natural (`today`, `yesterday`) to jump.
+
+---
+
+## Where each chord lives in the code
+
+| Layer | File | What it owns |
+|---|---|---|
+| Canonical catalog | `crates/outl-shortcuts/src/defaults.rs` | Every `(mode, chord, action, description)` row. |
+| `Action` enum | `crates/outl-shortcuts/src/action.rs` | The named operation each chord resolves to. |
+| TUI input adapter | `crates/outl-tui/src/input/*.rs` | `crossterm::KeyEvent → Chord`. |
+| Desktop input adapter | `crates/outl-desktop/src/lib/shortcuts.ts` | `KeyboardEvent → Chord`. |
+| Desktop dispatcher | `crates/outl-desktop/src/lib/action-handlers.ts` | `Action → Tauri command`. |
+| Mobile toolbar / gestures | `crates/outl-mobile/src/components/` | Per-component on-screen handlers. |
+
+A chord change is a single line in `defaults.rs` plus, if the action is new, a row in `action.rs` and a handler in each client.
+See [`crates/outl-shortcuts/CLAUDE.md`](../crates/outl-shortcuts/CLAUDE.md) for the full add-a-binding checklist.
+
+---
+
+## Help overlay vs. this doc
+
+In the TUI, press `?` (Normal mode) to see the live chord table baked into the binary — it's generated from the same `default_bindings()` table this doc describes.
+In the desktop, `Cmd+/` opens the same overlay.
+If you need to look something up while typing, the in-app overlay is faster than this page.
+
+This doc exists so a contributor (or a user shopping for outl) can see every shortcut without launching the app.
