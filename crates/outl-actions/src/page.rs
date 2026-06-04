@@ -239,6 +239,34 @@ pub fn open_or_create(
     Ok(node)
 }
 
+/// Open (or create) a page identified by a user-typed **name** —
+/// the kind of string that arrives from a `[[ref]]`, a `#tag`, or a
+/// page-picker text field.
+///
+/// The name flows through [`outl_md::slug::slugify`] before reaching
+/// [`open_or_create`], so anything filesystem-hostile (`/`, `\`,
+/// spaces, accented letters, control chars) is normalised into a
+/// safe single path component. The **original** `name` is kept as the
+/// page's `title` so the user-facing rendering stays verbatim
+/// (`[[avelino/outl]]` displays as `avelino/outl` even though the
+/// disk slug is `avelino-outl`).
+///
+/// Use this whenever the caller has a human-typed string and wants
+/// "open it or create it on the fly" semantics — the [`open_or_create`]
+/// path requires a pre-validated slug and rejects raw user input. The
+/// TUI's `Enter`-on-ref handler and the mobile's `open_page_by_slug`
+/// command are both fed by this function so the two clients can't
+/// drift on what counts as a valid ref target.
+pub fn open_or_create_by_name(
+    workspace: &mut Workspace,
+    hlc: &HlcGenerator,
+    name: &str,
+    kind: PageKind,
+) -> Result<NodeId, ActionError> {
+    let slug = outl_md::slug::slugify(name);
+    open_or_create(workspace, hlc, &slug, name, kind)
+}
+
 fn set_prop(
     workspace: &mut Workspace,
     hlc: &HlcGenerator,
@@ -437,6 +465,24 @@ mod tests {
         assert_eq!(pages[0].slug, "ideas");
         assert_eq!(pages[0].title, "Ideas");
         assert_eq!(pages[0].kind, PageKind::Page);
+    }
+
+    #[test]
+    fn open_or_create_by_name_slugifies_filesystem_hostile_input() {
+        // Regression: clicking `[[avelino/outl]]` on mobile used to
+        // bubble the `/` straight into `is_valid_slug` and surface
+        // `invalid page slug` as a toast. The helper must normalise
+        // the disk slug while keeping the typed name as the title so
+        // the ref renders verbatim everywhere.
+        let (mut w, hlc) = ws();
+        let id = open_or_create_by_name(&mut w, &hlc, "avelino/outl", PageKind::Page).unwrap();
+        let meta = page_meta(&w, id).unwrap();
+        assert_eq!(meta.slug, "avelino-outl");
+        assert_eq!(meta.title, "avelino/outl");
+        // Calling again with the same human-typed name must return the
+        // same node (idempotent on the slugified form, not the raw input).
+        let second = open_or_create_by_name(&mut w, &hlc, "avelino/outl", PageKind::Page).unwrap();
+        assert_eq!(id, second);
     }
 
     #[test]

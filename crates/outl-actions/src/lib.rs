@@ -79,8 +79,8 @@ pub use outline::{
 pub use page::{
     date_from_slug, find_by_slug, is_valid_slug, journal_slug, journal_title,
     list_all as list_pages, migrate_legacy_into_today, next_journal_date, open_journal,
-    open_or_create as open_or_create_page, open_today, page_meta, previous_journal_date,
-    read_text_prop, set_property, today, PageKind, PageMeta,
+    open_or_create as open_or_create_page, open_or_create_by_name, open_today, page_meta,
+    previous_journal_date, read_text_prop, set_property, today, PageKind, PageMeta,
 };
 pub use paste::{
     looks_like_outline, normalize_external_syntax, paste_markdown, PasteAnchor, PasteOutcome,

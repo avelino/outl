@@ -52,6 +52,30 @@ What this crate **does** own:
 - Tauri command surface (argument parsing, error mapping).
 - Solid frontend that consumes the commands.
 
+## Opening a ref that may not exist yet
+
+`[[avelino/outl]]`, `#code-review`, the picker query field — every
+"go to this page" path on the frontend ends up calling the
+`open_page_by_slug` Tauri command. The command name is a historical
+artefact; the input is the raw string the user typed or clicked, not
+a pre-validated slug. The command must therefore:
+
+1. Try `find_by_slug` literally (covers a clean slug from the picker
+   or a programmatic caller).
+2. Fall through to `outl_actions::page::open_or_create_by_name`,
+   which slugifies the input for the disk path
+   (`avelino/outl → avelino-outl`) and keeps the original string as
+   the page's title. This is what turns a click on a non-existent
+   ref into "page opens in the same round-trip" instead of an
+   `invalid page slug` toast.
+
+`resolve_ref` (used by the click handler to pick the best target
+before navigating) follows the same shape: literal slug, then
+slugified slug, then case-insensitive title match. Skipping the
+slugified-slug step would mean a ref typed before its page existed
+never finds the page after creation, because the disk slug
+(`avelino-outl`) no longer equals the typed string (`avelino/outl`).
+
 ## Paste from external apps
 
 The textarea in `BlockRow.tsx` intercepts paste events whose payload

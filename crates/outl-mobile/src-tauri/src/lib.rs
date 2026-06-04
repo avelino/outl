@@ -36,7 +36,7 @@ use outl_actions::{
     append_block, apply_page_md_with_sidecar, backlinks_for_page, create_after, date_from_slug,
     delete, edit_text, find_by_slug, indent, journal_slug, journal_title, list_pages,
     migrate_legacy_into_today, move_down, move_up, next_journal_date, open_journal,
-    open_or_create_page, open_today, outdent, page_meta as page_meta_action,
+    open_or_create_by_name, open_today, outdent, page_meta as page_meta_action,
     paste_markdown as action_paste_markdown, previous_journal_date, read_page_view_with_workspace,
     set_block_collapsed as action_set_block_collapsed, today, toggle_todo as action_toggle_todo,
     ActionError, Backlink, OutlineNode, PageKind, PageMeta, PasteAnchor,
@@ -282,12 +282,21 @@ fn open_journal_for(slug: String, state: State<'_, AppState>) -> Result<PageView
 
 #[tauri::command]
 fn open_page_by_slug(slug: String, state: State<'_, AppState>) -> Result<PageView, String> {
+    // The command name says "slug" for backward-compat with the
+    // frontend, but the input is whatever the user typed / clicked —
+    // `[[avelino/outl]]` arrives verbatim. Try the literal first
+    // (covers programmatic callers that already passed a clean slug
+    // and the picker that selects an existing page), then fall
+    // through to `open_or_create_by_name`, which slugifies the input
+    // for the disk path and keeps the original as the page's title.
+    // That way clicking a ref to a page that doesn't exist still
+    // opens a fresh page in the same round-trip — the user never
+    // sees an "invalid page slug" toast.
     let existing = with_ws(&state, |ws| Ok(find_by_slug(ws, &slug)))?;
     let id = match existing {
         Some(id) => id,
         None => with_ws_mut(&state, |ws| {
-            open_or_create_page(ws, &state.hlc, &slug, &slug, PageKind::Page)
-                .map_err(|e| e.to_string())
+            open_or_create_by_name(ws, &state.hlc, &slug, PageKind::Page).map_err(|e| e.to_string())
         })?,
     };
     with_ws(&state, |ws| {
@@ -544,9 +553,24 @@ fn reload_workspace(state: State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 fn resolve_ref(target: String, state: State<'_, AppState>) -> Result<Option<PageMeta>, String> {
     with_ws(&state, |ws| {
+        // 1. Literal slug match (covers picker selections + clean refs).
         if let Some(id) = find_by_slug(ws, &target) {
             return Ok(page_meta_action(ws, id));
         }
+        // 2. Normalised slug match — `[[avelino/outl]]` should resolve
+        //    to the page stored as `avelino-outl` (same rule the
+        //    `open_or_create_by_name` path uses on creation, so refs
+        //    typed before the page existed still find it after).
+        //    Skip when slugify produced the same string we already
+        //    tried in step 1.
+        let normalised = outl_md::slug::slugify(&target);
+        if normalised != target {
+            if let Some(id) = find_by_slug(ws, &normalised) {
+                return Ok(page_meta_action(ws, id));
+            }
+        }
+        // 3. Title lookup (case-insensitive). Last resort so a user
+        //    who renamed the title but kept the slug still resolves.
         let lower = target.to_lowercase();
         Ok(list_pages(ws)
             .into_iter()
