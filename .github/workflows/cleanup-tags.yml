@@ -1,0 +1,64 @@
+name: Cleanup beta tags
+
+# Every push to `main` produces a beta tag + GitHub Release via
+# `release.yml`. Left alone, that bucket grows by one item per
+# merge — by v0.5.3 we already had 39 beta releases. This workflow
+# keeps only the two most recent betas per base version (e.g. for
+# `v0.5.3` it keeps `v0.5.3-beta.39` and `v0.5.3-beta.38`; everything
+# else in the `v0.5.3-beta.*` series is deleted).
+#
+# It runs automatically after `Release` succeeds on `main`, and is
+# also exposed as `workflow_dispatch` with an opt-in `dry_run` flag
+# so we can preview what would be pruned before letting it act.
+#
+# Scope (intentional):
+# - Touches ONLY `vX.Y.Z-beta.N` tags. GA tags like `v0.5.3`
+#   (no `-beta.` suffix) are never considered for deletion.
+# - Deletes both the GitHub Release (with its built binaries) and
+#   the git tag — `gh release delete --cleanup-tag` does both atomically.
+# - Orphan tags (tag exists but the release is already gone) get
+#   pushed as `:refs/tags/<tag>` to drop the ref alone.
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List what would be deleted, but don't delete"
+        type: boolean
+        default: false
+      keep:
+        description: "How many recent betas to keep per base version"
+        type: string
+        default: "2"
+
+permissions:
+  contents: write
+
+concurrency:
+  # Never run two cleanups at once; queue them instead of cancelling
+  # — we'd rather wait than skip a prune.
+  group: cleanup-tags
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Prune beta tags
+    # workflow_run fires on every conclusion (success/failure/cancelled).
+    # Only act when the upstream Release actually succeeded.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute prune list and delete
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          KEEP: ${{ github.event.inputs.keep || '2' }}
+        run: .github/scripts/cleanup_beta_tags.sh
