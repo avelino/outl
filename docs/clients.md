@@ -152,19 +152,34 @@ run before any read of a peer `ops-*.jsonl`.
 
 ## Opening a page from a user-typed ref
 
-When a click on `[[avelino/outl]]`, `#code-review`, or a picker
-field hands a client a name, the client must not pass that string to
-`open_or_create` directly — the slug-validation step rejects `/`,
-`\`, accents, and other filesystem-hostile characters as soon as the
-input could ever become a path. Instead, route the name through
-`outl_actions::page::open_or_create_by_name(name, kind)`. It
-slugifies the input (`avelino/outl` → `avelino-outl`) for the disk
-path while keeping the original string as the page's title, so the
-ref the user typed renders verbatim everywhere.
+When a click on `[[avelino/outl]]`, `#code-review`, `[[2026-06-04]]`
+or a picker field hands a client a string, the client must not split
+the "journal vs page" decision between a frontend regex and a
+backend parser. The two will drift. They already did:
+`[[2026-13-01]]` matched the mobile frontend's `^\d{4}-\d{2}-\d{2}$`
+shape regex, the command then fed `2026-13-01` into the strict date
+parser, and the user got an `invalid date slug` toast for what
+should have been a regular page.
 
-This is what makes "click a ref that doesn't exist yet → page opens
-instantly" work the same way in TUI, mobile, and any future client:
-the missing page is created in the same call that opens it.
+The canonical entry point is
+`outl_actions::page::open_or_create_by_ref(target)`. It runs the
+whole decision tree in one place:
+
+1. Date-shaped target → journal (semantic validator, not the regex
+   shape — `2026-13-01` falls through).
+2. Literal slug match → existing page (clean slug from the picker).
+3. Slugified slug match → existing page (`[[avelino/outl]]` finds
+   `pages/avelino-outl.md` even if the ref was typed before the
+   page existed).
+4. Case-insensitive title match → existing page.
+5. Fallback: create a fresh page via `open_or_create_by_name`
+   (slugifies disk path, keeps the typed string as title).
+
+Every client that turns a tap on a ref / tag / picker entry into a
+page view should wrap this single helper. There is no client-side
+discrimination to maintain. The
+`open_or_create_by_name(name, kind)` variant stays for callers that
+already know they want a regular page (no date branch).
 
 ## Adding a new client
 

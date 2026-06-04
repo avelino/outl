@@ -36,10 +36,11 @@ use outl_actions::{
     append_block, apply_page_md_with_sidecar, backlinks_for_page, create_after, date_from_slug,
     delete, edit_text, find_by_slug, indent, journal_slug, journal_title, list_pages,
     migrate_legacy_into_today, move_down, move_up, next_journal_date, open_journal,
-    open_or_create_by_name, open_today, outdent, page_meta as page_meta_action,
-    paste_markdown as action_paste_markdown, previous_journal_date, read_page_view_with_workspace,
-    set_block_collapsed as action_set_block_collapsed, today, toggle_todo as action_toggle_todo,
-    ActionError, Backlink, OutlineNode, PageKind, PageMeta, PasteAnchor,
+    open_or_create_by_name, open_or_create_by_ref, open_today, outdent,
+    page_meta as page_meta_action, paste_markdown as action_paste_markdown, previous_journal_date,
+    read_page_view_with_workspace, set_block_collapsed as action_set_block_collapsed, today,
+    toggle_todo as action_toggle_todo, ActionError, Backlink, OutlineNode, PageKind, PageMeta,
+    PasteAnchor,
 };
 use outl_core::hlc::HlcGenerator;
 use outl_core::id::{ActorId, NodeId};
@@ -299,6 +300,29 @@ fn open_page_by_slug(slug: String, state: State<'_, AppState>) -> Result<PageVie
             open_or_create_by_name(ws, &state.hlc, &slug, PageKind::Page).map_err(|e| e.to_string())
         })?,
     };
+    with_ws(&state, |ws| {
+        build_page_view(ws, &state.storage_root, id).map_err(|e| e.to_string())
+    })
+}
+
+/// Open whatever a user-typed ref / tag / picker entry points at,
+/// in one round-trip.
+///
+/// The frontend used to split the discrimination between a regex
+/// (`^\d{4}-\d{2}-\d{2}$`) and two separate commands (`open_journal_for`
+/// + `open_page_by_slug`), each of which validated strict. That meant
+/// `[[2026-13-01]]` matched the regex, hit `open_journal_for`, and
+/// surfaced an `invalid date slug` toast — even though falling through
+/// to "create a regular page named `2026-13-01`" was the obviously
+/// right behaviour. `open_or_create_by_ref` is the single decision
+/// tree (date → journal, else literal/slugified/title match → existing
+/// page, else create), so the command never bubbles `invalid …` back
+/// for normal user input and the frontend has no branching to drift.
+#[tauri::command]
+fn open_ref(target: String, state: State<'_, AppState>) -> Result<PageView, String> {
+    let id = with_ws_mut(&state, |ws| {
+        open_or_create_by_ref(ws, &state.hlc, &target).map_err(|e| e.to_string())
+    })?;
     with_ws(&state, |ws| {
         build_page_view(ws, &state.storage_root, id).map_err(|e| e.to_string())
     })
@@ -760,6 +784,7 @@ pub fn run() {
             open_today_journal,
             open_journal_for,
             open_page_by_slug,
+            open_ref,
             previous_day,
             next_day,
             today_slug_cmd,

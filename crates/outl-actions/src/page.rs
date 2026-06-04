@@ -267,6 +267,61 @@ pub fn open_or_create_by_name(
     open_or_create(workspace, hlc, &slug, name, kind)
 }
 
+/// Open (or create) whatever page a user-typed **ref target** points
+/// at — `[[avelino/outl]]`, `[[2026-06-04]]`, `[[São Paulo]]`,
+/// `[[Q4 plan]]`, a `#tag` body, a picker query. Routes through one
+/// of:
+///
+/// 1. **Date-shaped target → journal**. `date_from_slug` is the
+///    semantic validator (not the regex-shape one the mobile
+///    frontend used to use), so `2026-13-01` and `2026-02-30` fall
+///    through instead of erroring out.
+/// 2. **Literal slug match → existing page**. Covers picker-style
+///    callers that already passed a clean slug.
+/// 3. **Slugified match → existing page**. So `[[avelino/outl]]`
+///    finds the page stored as `avelino-outl` even when the user
+///    typed the ref before the page existed.
+/// 4. **Case-insensitive title match → existing page**. Last
+///    existing-page chance before we create.
+/// 5. **Create a fresh page via [`open_or_create_by_name`]** with
+///    the typed string as the title. Always succeeds for any ref a
+///    user could plausibly type — the surface should never bubble
+///    `invalid …` back to a tap.
+///
+/// One canonical decision tree, used by every client, so the
+/// "Journal vs Page" discrimination cannot drift between frontend
+/// regex and backend parser the way it did in the
+/// `[[2026-13-01]] → invalid date slug` toast bug.
+pub fn open_or_create_by_ref(
+    workspace: &mut Workspace,
+    hlc: &HlcGenerator,
+    target: &str,
+) -> Result<NodeId, ActionError> {
+    if let Some(date) = date_from_slug(target) {
+        return open_journal(workspace, hlc, date);
+    }
+    if let Some(id) = find_by_slug(workspace, target) {
+        return Ok(id);
+    }
+    let normalised = outl_md::slug::slugify(target);
+    if normalised != target {
+        if let Some(id) = find_by_slug(workspace, &normalised) {
+            return Ok(id);
+        }
+    }
+    let lower = target.to_lowercase();
+    if let Some(existing) = list_all(workspace)
+        .into_iter()
+        .find(|p| p.title.to_lowercase() == lower)
+    {
+        use std::str::FromStr;
+        if let Ok(id) = ulid::Ulid::from_str(&existing.id) {
+            return Ok(NodeId(id));
+        }
+    }
+    open_or_create_by_name(workspace, hlc, target, PageKind::Page)
+}
+
 fn set_prop(
     workspace: &mut Workspace,
     hlc: &HlcGenerator,
@@ -465,6 +520,52 @@ mod tests {
         assert_eq!(pages[0].slug, "ideas");
         assert_eq!(pages[0].title, "Ideas");
         assert_eq!(pages[0].kind, PageKind::Page);
+    }
+
+    #[test]
+    fn open_or_create_by_ref_routes_valid_date_to_journal() {
+        let (mut w, hlc) = ws();
+        let id = open_or_create_by_ref(&mut w, &hlc, "2026-06-04").unwrap();
+        let meta = page_meta(&w, id).unwrap();
+        assert_eq!(meta.kind, PageKind::Journal);
+        assert_eq!(meta.slug, "2026-06-04");
+    }
+
+    #[test]
+    fn open_or_create_by_ref_falls_through_invalid_date_to_page() {
+        // Regression: the mobile frontend used to gate this with the
+        // shape regex `/^\d{4}-\d{2}-\d{2}$/`. `2026-13-01` (month 13)
+        // and `2026-02-30` (day 30 in Feb) passed the shape, then
+        // `parse_date` rejected them and the user saw an
+        // `invalid date slug` toast. The shared helper has the only
+        // discrimination path, so an invalid date becomes a regular
+        // page just like any other ref.
+        let (mut w, hlc) = ws();
+        let bogus = "2026-13-01";
+        let id = open_or_create_by_ref(&mut w, &hlc, bogus).unwrap();
+        let meta = page_meta(&w, id).unwrap();
+        assert_eq!(meta.kind, PageKind::Page);
+        assert_eq!(meta.title, bogus);
+        assert_eq!(meta.slug, "2026-13-01");
+    }
+
+    #[test]
+    fn open_or_create_by_ref_resolves_existing_via_slugified_form() {
+        let (mut w, hlc) = ws();
+        // Create with the human name first.
+        let created = open_or_create_by_name(&mut w, &hlc, "avelino/outl", PageKind::Page).unwrap();
+        // Subsequent tap of `[[avelino/outl]]` finds the same node
+        // (not a fresh ULID under a different slug).
+        let resolved = open_or_create_by_ref(&mut w, &hlc, "avelino/outl").unwrap();
+        assert_eq!(created, resolved);
+    }
+
+    #[test]
+    fn open_or_create_by_ref_matches_title_case_insensitively() {
+        let (mut w, hlc) = ws();
+        let created = open_or_create_by_name(&mut w, &hlc, "Ideas", PageKind::Page).unwrap();
+        let resolved = open_or_create_by_ref(&mut w, &hlc, "ideas").unwrap();
+        assert_eq!(created, resolved);
     }
 
     #[test]
