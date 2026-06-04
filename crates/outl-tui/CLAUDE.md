@@ -1,27 +1,20 @@
 # CLAUDE.md — outl-tui
 
-The TUI. **Journal-first** — when you open `outl-tui`, you land on today's
-journal. That's the spec; don't change it.
+The TUI.
+**Journal-first** — when you open `outl-tui`, you land on today's journal.
+That's the spec; don't change it.
 
 ## Phase 1 scope
 
-- **Read + write** outline (text editing inside blocks, block create /
-  indent / outdent / delete).
-- Two modes: `Normal` (navigate, block ops) and `Insert` (edit a single
-  block's text).
+- **Read + write** outline (text editing inside blocks, block create / indent / outdent / delete).
+- Two modes: `Normal` (navigate, block ops) and `Insert` (edit a single block's text).
 - Quick switcher (`Ctrl+P`) for fuzzy page/journal jumping.
 - Outline panel for current page with inline visible cursor.
-- Inline backlinks rendered below the outline (`B` toggles, `j/k`
-  crosses the separator).
-- Block references and embeds: `((blk-XXXXXX))` resolves to the source
-  block's text + page icon. `!((blk-XXXXXX))` (when the block contains a
-  single embed token) expands the source block **and its children**
-  read-only below the carrying block. `Enter` on either form opens the
-  source page and lands the cursor on the referenced block. The `y r`
-  chord plus `/refer` and `/refer-embed` slash commands copy the
-  current block's handle to the **OS clipboard** (via `arboard`) and
-  stash it in `App::last_yanked_ref` for in-app paste; the `((`
-  autocomplete fuzzy-matches block text in Insert.
+- Inline backlinks rendered below the outline (`B` toggles, `j/k` crosses the separator).
+- Block references and embeds: `((blk-XXXXXX))` resolves to the source block's text + page icon.
+  `!((blk-XXXXXX))` (when the block contains a single embed token) expands the source block **and its children** read-only below the carrying block.
+  `Enter` on either form opens the source page and lands the cursor on the referenced block.
+  The `y r` chord plus `/refer` and `/refer-embed` slash commands copy the current block's handle to the **OS clipboard** (via `arboard`) and stash it in `App::last_yanked_ref` for in-app paste; the `((` autocomplete fuzzy-matches block text in Insert.
 - Help popup.
 
 ## Modes
@@ -31,9 +24,8 @@ journal. That's the spec; don't change it.
 | `Normal` | navigation + block-structure ops (no text typing) |
 | `Insert { block_path, buffer, original_text }` | text edits go to the buffer; commit writes back to AST + disk |
 
-`Esc` from Insert commits. The buffer carries the working text; on commit
-we replace the AST node's `.text` and call `save()`, which writes the
-`.md` and runs `outl_md::reconcile_md` to update the op log + sidecar.
+`Esc` from Insert commits.
+The buffer carries the working text; on commit we replace the AST node's `.text` and call `save()`, which writes the `.md` and runs `outl_md::reconcile_md` to update the op log + sidecar.
 
 ## Navigation (Normal)
 
@@ -80,40 +72,24 @@ we replace the AST node's `.text` and call `save()`, which writes the
 
 - Selected block is highlighted with a colored bullet.
 - In Insert mode, a `▏` caret marks cursor position inside the block.
-- In Normal mode on the selected block, a block cursor (white bg)
-  sits on the character under `cursor_col`.
-- Other (non-focused) blocks render markdown prettily: `**bold**`
-  shows as bold without asterisks, `*italic*` as italic, `~~strike~~`
-  struck through, `` `code` `` in green, `[text](url)` blue-underlined,
-  `[[ref]]` cyan-underlined (no brackets), `#tag` magenta-underlined,
-  `((blk-XXXXXX))` resolves to the source block's text + page icon
-  (orphan handles render dimmed).
-- `!((blk-XXXXXX))` — when a block contains a single embed token
-  (whitespace OK around it) — expands the source block **and its
-  children** read-only below the carrying block. Conventions:
-  - Every embed row carries a `↳ ` prefix (root + descendants) so the
-    expansion reads as one cohesive block.
-  - Descendants get `2 * (depth + 1)` spaces of padding before `↳ ` so
-    children align under the source root's *text*, not under its `↳ `.
-  - Outer indent (`│ ` guides) matches the carrying block's outline
-    depth.
-  - TODO/DONE checkboxes, page refs and tags render with their normal
-    styling inside the expansion (via `render_pretty_block_text`).
+- In Normal mode on the selected block, a block cursor (white bg) sits on the character under `cursor_col`.
+- Other (non-focused) blocks render markdown prettily: `**bold**` shows as bold without asterisks, `*italic*` as italic, `~~strike~~` struck through, `` `code` `` in green, `[text](url)` blue-underlined, `[[ref]]` cyan-underlined (no brackets), `#tag` magenta-underlined, `((blk-XXXXXX))` resolves to the source block's text + page icon (orphan handles render dimmed).
+- `!((blk-XXXXXX))` — when a block contains a single embed token (whitespace OK around it) — expands the source block **and its children** read-only below the carrying block.
+  Conventions:
+  - Every embed row carries a `↳ ` prefix (root + descendants) so the expansion reads as one cohesive block.
+  - Descendants get `2 * (depth + 1)` spaces of padding before `↳ ` so children align under the source root's *text*, not under its `↳ `.
+  - Outer indent (`│ ` guides) matches the carrying block's outline depth.
+  - TODO/DONE checkboxes, page refs and tags render with their normal styling inside the expansion (via `render_pretty_block_text`).
   - Recursion is capped at depth 4 to break embed cycles.
-  - Expansion runs in every render mode — but the carrying block's
-    first row keeps the raw `!((…))` literal under the cursor so
-    column-byte alignment holds.
-- The selected/editing block renders **raw** (delimiters visible, dimmed)
-  so cursor columns map 1:1 to source bytes — including the literal
-  `((blk-XXXXXX))` and `!((blk-XXXXXX))` forms.
+  - Expansion runs in every render mode — but the carrying block's first row keeps the raw `!((…))` literal under the cursor so column-byte alignment holds.
+- The selected/editing block renders **raw** (delimiters visible, dimmed) so cursor columns map 1:1 to source bytes — including the literal `((blk-XXXXXX))` and `!((blk-XXXXXX))` forms.
 - IDs are **never** shown.
 - Mode tag (`NORMAL`/`INSERT`) appears in the header.
 
 ## Reuse across UI surfaces (Tauri, mobile)
 
-The TUI is **the first UI surface**, not the only one. Every piece of
-logic that's not strictly about ratatui rendering lives in `outl-md`
-(or `outl-core`) so Tauri and the mobile apps can consume it later:
+The TUI is **the first UI surface**, not the only one.
+Every piece of logic that's not strictly about ratatui rendering lives in `outl-md` (or `outl-core`) so Tauri and the mobile apps can consume it later:
 
 | Layer | Owns |
 |-------|------|
@@ -126,41 +102,28 @@ logic that's not strictly about ratatui rendering lives in `outl-md`
 
 Pattern when adding a new feature:
 
-1. **Grep first.** Before writing a helper here, `rg "fn <name>"` /
-   `rg "struct <Name>"` across `crates/outl-core`,
-   `crates/outl-md`, `crates/outl-actions`. The thing you're about
-   to write probably exists upstream — wrap it instead of cloning
-   the logic.
+1. **Grep first.** Before writing a helper here, `rg "fn <name>"` / `rg "struct <Name>"` across `crates/outl-core`, `crates/outl-md`, `crates/outl-actions`.
+   The thing you're about to write probably exists upstream — wrap it instead of cloning the logic.
 2. If it's data or pure logic → put in `outl-md` (or `outl-core`).
-3. If it's a workspace mutation two clients would call the same way →
-   put it in `outl-actions`.
+3. If it's a workspace mutation two clients would call the same way → put it in `outl-actions`.
 4. If it's how it's drawn on a terminal → put in `outl-tui`.
-5. Never write a function in `outl-tui` that a Tauri/mobile client
-   would also need byte-for-byte. Extract upstream first.
+5. Never write a function in `outl-tui` that a Tauri/mobile client would also need byte-for-byte.
+   Extract upstream first.
 
-**Concrete example:** `EditBuffer::move_up` / `move_down` (cursor
-nav across `\n` inside a multi-line block) are TUI-specific
-primitives, but the `(line, col) ↔ char_idx` math underneath isn't
-— it's shared with how the renderer maps a cursor onto a
-[`outl_md::view::BlockRow`]. Both directions live in
-`outl_md::view::{char_to_line_col, line_col_to_char}` and the
-`EditBuffer` methods are thin wrappers. **Don't** add a
-`line_start_and_column` helper here; extract the inverse to
-`outl-md` if it's missing and wrap from here.
+**Concrete example:** `EditBuffer::move_up` / `move_down` (cursor nav across `\n` inside a multi-line block) are TUI-specific primitives, but the `(line, col) ↔ char_idx` math underneath isn't — it's shared with how the renderer maps a cursor onto a [`outl_md::view::BlockRow`].
+Both directions live in `outl_md::view::{char_to_line_col, line_col_to_char}` and the `EditBuffer` methods are thin wrappers.
+**Don't** add a `line_start_and_column` helper here; extract the inverse to `outl-md` if it's missing and wrap from here.
 
 ## Persistence model
 
-Editing is **AST-first**: edits mutate an in-memory `ParsedPage`. On
-commit boundaries (Esc, Enter, dd, Tab/Shift-Tab, structural ops), the
-TUI:
+Editing is **AST-first**: edits mutate an in-memory `ParsedPage`.
+On commit boundaries (Esc, Enter, dd, Tab/Shift-Tab, structural ops), the TUI:
 
 1. Renders the AST back to `.md` via `outl_md::render`.
 2. Writes the `.md` file.
-3. Calls `outl_md::reconcile_md` which runs matching → diff → applies
-   ops to the workspace → updates the sidecar.
+3. Calls `outl_md::reconcile_md` which runs matching → diff → applies ops to the workspace → updates the sidecar.
 
-This means concurrent `outl serve` is OK — both go through the same
-reconcile path; the sidecar `last_synced_hash` short-circuits no-ops.
+This means concurrent `outl serve` is OK — both go through the same reconcile path; the sidecar `last_synced_hash` short-circuits no-ops.
 
 ## Layout
 
@@ -202,8 +165,8 @@ src/
 
 ## Peer sync coordination
 
-The TUI is a peer in a multi-device workspace. Two threads' worth of
-sync logic live here on top of `outl_actions::SyncEngine`:
+The TUI is a peer in a multi-device workspace.
+Two threads' worth of sync logic live here on top of `outl_actions::SyncEngine`:
 
 | Thread / path | Responsibility |
 |---------------|----------------|
@@ -214,46 +177,34 @@ sync logic live here on top of `outl_actions::SyncEngine`:
 
 The two filters that make this safe:
 
-- `snapshot_peers` (not `snapshot`) — never react to your own jsonl
-  growing, or every save closes a reload-race loop.
-- `pending_reload` flag — never swap the workspace while an Insert
-  buffer has unsaved keystrokes; the unsaved buffer is not in any op
-  log yet and the CRDT can't help with state it doesn't know about.
+- `snapshot_peers` (not `snapshot`) — never react to your own jsonl growing, or every save closes a reload-race loop.
+- `pending_reload` flag — never swap the workspace while an Insert buffer has unsaved keystrokes; the unsaved buffer is not in any op log yet and the CRDT can't help with state it doesn't know about.
 
-Mobile shares the same `SyncEngine` but does not need the
-`pending_reload` flag: every mutation is one atomic Tauri command, so
-there's no multi-keystroke window. Different policy, same engine.
+Mobile shares the same `SyncEngine` but does not need the `pending_reload` flag: every mutation is one atomic Tauri command, so there's no multi-keystroke window.
+Different policy, same engine.
 
 ## What this crate does NOT do
 
-- ❌ Mutate the op log directly — every change goes through
-  `outl_md::reconcile_md`, which routes ops through `Workspace`.
+- ❌ Mutate the op log directly — every change goes through `outl_md::reconcile_md`, which routes ops through `Workspace`.
 - ❌ Parse markdown by hand — use `outl-md`.
-- ❌ Re-implement workspace operations that another client needs —
-  put them in `outl-actions` first.
-- ❌ Render outside the AST — the AST is the source of truth between
-  the TUI and disk.
+- ❌ Re-implement workspace operations that another client needs — put them in `outl-actions` first.
+- ❌ Render outside the AST — the AST is the source of truth between the TUI and disk.
 
 ## Things to be careful about
 
-- **Cursor accounting**: `EditBuffer.cursor` is a char index, not a
-  byte offset. When converting to ratatui spans for rendering, use
-  `byte_index_for_char` to slice the string correctly. Skipping this
-  step crashes on multi-byte UTF-8.
-- **Empty page**: `save()` always re-adds a single empty bullet when
-  the page would otherwise be empty, so the cursor never has nowhere
-  to go.
-- **Chord state**: `pending_chord` is cleared on every key press. Don't
-  let it persist past one event or `gj` becomes "g + (anything)".
+- **Cursor accounting**: `EditBuffer.cursor` is a char index, not a byte offset.
+  When converting to ratatui spans for rendering, use `byte_index_for_char` to slice the string correctly.
+  Skipping this step crashes on multi-byte UTF-8.
+- **Empty page**: `save()` always re-adds a single empty bullet when the page would otherwise be empty, so the cursor never has nowhere to go.
+- **Chord state**: `pending_chord` is cleared on every key press.
+  Don't let it persist past one event or `gj` becomes "g + (anything)".
 
 ## When you're done
 
 1. `cargo fmt`
 2. `cargo clippy -p outl-tui --all-targets -- -D warnings`
 3. `cargo test -p outl-tui` (lib + bin + e2e tests)
-4. **`RUSTDOCFLAGS="-D warnings" cargo doc -p outl-tui --no-deps`** —
-   CI runs this and it catches things `clippy` won't. Most common bite:
-   ``[`SomeType`]`` in a `//!` module doc where the type is `pub(crate)`
-   triggers `rustdoc::private_intra_doc_links`. Drop the brackets, keep
-   the backticks: `` `SomeType` ``.
+4. **`RUSTDOCFLAGS="-D warnings" cargo doc -p outl-tui --no-deps`** — CI runs this and it catches things `clippy` won't.
+   Most common bite: ``[`SomeType`]`` in a `//!` module doc where the type is `pub(crate)` triggers `rustdoc::private_intra_doc_links`.
+   Drop the brackets, keep the backticks: `` `SomeType` ``.
 5. Manual smoke in a real terminal: `outl init /tmp/x && outl --path /tmp/x`

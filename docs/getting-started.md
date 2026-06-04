@@ -12,8 +12,7 @@ brew install outl@beta   # latest beta — every push to main
 # brew install outl      # latest GA (when the first one ships)
 ```
 
-See [Homebrew tap](homebrew.md) for the channel rules and how
-switching between GA and beta works.
+See [Homebrew tap](homebrew.md) for the channel rules and how switching between GA and beta works.
 
 ### From source
 
@@ -23,8 +22,8 @@ cd outl
 cargo build --release
 ```
 
-You need Rust 1.88+. `rust-toolchain.toml` pins the version, so
-`rustup` will pick it up automatically.
+You need Rust 1.88+.
+`rust-toolchain.toml` pins the version, so `rustup` will pick it up automatically.
 
 Drop the binary anywhere on your `PATH`:
 
@@ -32,8 +31,7 @@ Drop the binary anywhere on your `PATH`:
 cp target/release/outl ~/.local/bin/
 ```
 
-(Or use `cargo install --path crates/outl-cli` if that's your
-flavor.)
+(Or use `cargo install --path crates/outl-cli` if that's your flavor.)
 
 ## iOS app (TestFlight beta)
 
@@ -41,24 +39,20 @@ The iOS client is shipping as a public TestFlight beta:
 
 > **<https://testflight.apple.com/join/P2GdWAMd>**
 
-Install TestFlight from the App Store, open the join link on the
-iPhone, accept the beta, and the **outl** app lands on the home
-screen. It writes its op log to its own iCloud Drive container
-(`iCloud.app.outl.mobile-app`). To share a workspace with the TUI,
-point `outl --workspace` at the same `Documents/` directory inside the
-container:
+Install TestFlight from the App Store, open the join link on the iPhone, accept the beta, and the **outl** app lands on the home screen.
+It writes its op log to its own iCloud Drive container (`iCloud.app.outl.mobile-app`).
+To share a workspace with the TUI, point `outl --workspace` at the same `Documents/` directory inside the container:
 
 ```bash
 outl --workspace ~/Library/Mobile\ Documents/iCloud~app~outl~mobile-app/Documents
 ```
 
-Each device writes only to its own `ops-<actor>.jsonl`, so iCloud
-never has to merge — the CRDT does that.
+Each device writes only to its own `ops-<actor>.jsonl`, so iCloud never has to merge — the CRDT does that.
 
 ## Create a workspace
 
-A workspace is just a directory. Pick a path, point `outl init` at
-it:
+A workspace is just a directory.
+Pick a path, point `outl init` at it:
 
 ```bash
 outl init ~/notes
@@ -86,10 +80,10 @@ You'll get:
 outl --workspace ~/notes
 ```
 
-It lands you on today's journal. Press `?` to see every keymap.
+It lands you on today's journal.
+Press `?` to see every keymap.
 
-Or, if you `cd ~/notes`, just `outl` works — no subcommand means
-"open the TUI here."
+Or, if you `cd ~/notes`, just `outl` works — no subcommand means "open the TUI here."
 
 ## First moves
 
@@ -105,9 +99,7 @@ Or, if you `cd ~/notes`, just `outl` works — no subcommand means
 | Insert today's date as `[[link]]` | `/date-today` (in Insert mode) |
 | Quit | `q` or `Ctrl+C` |
 
-Pages you reference but haven't created yet are *real* the moment you
-press `Enter` on the link — outl creates `pages/<slug>.md` with
-`title:: <Name>` automatically.
+Pages you reference but haven't created yet are *real* the moment you press `Enter` on the link — outl creates `pages/<slug>.md` with `title:: <Name>` automatically.
 
 ## Try a theme
 
@@ -129,13 +121,12 @@ To pin a theme per workspace, edit `~/notes/.outl/config.toml`:
 preset = "dracula"
 ```
 
-Or switch at runtime: open the command palette with `:`, type
-`theme nord`, hit Enter.
+Or switch at runtime: open the command palette with `:`, type `theme nord`, hit Enter.
 
 ## Edit `.md` externally
 
-Open any file in `~/notes/pages/` with VS Code, vim, Obsidian —
-whatever. The file is plain markdown:
+Open any file in `~/notes/pages/` with VS Code, vim, Obsidian — whatever.
+The file is plain markdown:
 
 ```markdown
 title:: Avelino
@@ -144,14 +135,12 @@ title:: Avelino
 - another block with [[ref]] and #tag
 ```
 
-There are no `id::` lines, no UUIDs, no HTML comments. When you save
-and reopen the TUI, outl matches each block back to its sidecar entry
-and rebuilds the op log.
+There are no `id::` lines, no UUIDs, no HTML comments.
+When you save and reopen the TUI, outl matches each block back to its sidecar entry and rebuilds the op log.
 
 ## Next steps
 
-- The [TUI manual](tui.md) — every key, every overlay, persistence
-  rules, gotchas.
+- The [TUI manual](tui.md) — every key, every overlay, persistence rules, gotchas.
 - [Why outl](why-outl.md) — the pitch vs. Roam and Logseq.
 - [Sync, done right](sync.md) — what makes the algorithm interesting.
 - The [Roadmap](roadmap.md) — what's coming.

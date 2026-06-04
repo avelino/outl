@@ -1,6 +1,7 @@
 # CLAUDE.md — outl
 
-Context for Claude Code sessions working on this repo. Read this before making any change.
+Context for Claude Code sessions working on this repo.
+Read this before making any change.
 
 ## What this project is
 
@@ -8,52 +9,42 @@ Context for Claude Code sessions working on this repo. Read this before making a
 
 - **Markdown as source of truth** — `.md` files are 100% clean, no visible IDs.
 - **Conflict-free sync** via a tree CRDT (Kleppmann et al. 2022).
-- **Trait-based storage** — JSONL (one file per actor) is the only
-  persistent backend; ChronDB on the roadmap.
+- **Trait-based storage** — JSONL (one file per actor) is the only persistent backend; ChronDB on the roadmap.
 - **TUI as a first-class citizen**, not an afterthought.
 - **Journal-first** — daily notes are the primary entry point.
 
-Full spec lives in the README and `docs/`. Don't skim — read.
+Full spec lives in the README and `docs/`.
+Don't skim — read.
 
 ## Critical invariants (NEVER violate)
 
-These are the non-negotiables. Violating any one breaks user trust irreversibly.
+These are the non-negotiables.
+Violating any one breaks user trust irreversibly.
 
 1. **Op log is source of truth.** All mutations go through `Op` → `apply_op` → log.
-   The materialized tree and `.md` files are projections. Never edit `.md` to "fix" state.
+   The materialized tree and `.md` files are projections.
+   Never edit `.md` to "fix" state.
 
 2. **Markdown stays 100% clean.** No `id::`, no UUID inline, no HTML comments, nothing.
    IDs live ONLY in the `.outl` sidecar (JSON file next to the `.md`, e.g. `pages/foo.outl`).
-   The sidecar is **not** a dotfile — iCloud Documents drops dotted paths during cross-device
-   sync, which silently breaks multi-device workspaces. Same rule applies to `ops/`.
+   The sidecar is **not** a dotfile — iCloud Documents drops dotted paths during cross-device sync, which silently breaks multi-device workspaces.
+   Same rule applies to `ops/`.
 
-3. **CRDT follows Kleppmann 2022 literally.** `do_op` / `undo_op` / `apply_op` /
-   `creates_cycle` must match the paper. 100% coverage on these four is non-negotiable.
+3. **CRDT follows Kleppmann 2022 literally.** `do_op` / `undo_op` / `apply_op` / `creates_cycle` must match the paper. 100% coverage on these four is non-negotiable.
 
-4. **Move that creates a cycle is a no-op on the materialized tree, but the op
-   still goes into the log.** Removing it breaks correctness of future reordering.
+4. **Move that creates a cycle is a no-op on the materialized tree, but the op still goes into the log.** Removing it breaks correctness of future reordering.
 
-5. **Storage is a trait, not a struct.** `JsonlStorage` is the only
-   persistent impl; tests use `MemoryStorage`. Anything that wants
-   to persist ops goes through `dyn Storage`. No second persistent
-   backend lands without an issue + RFC first — divergence between
-   storages is exactly what we paid to remove in 0.5.0.
+5. **Storage is a trait, not a struct.** `JsonlStorage` is the only persistent impl; tests use `MemoryStorage`.
+   Anything that wants to persist ops goes through `dyn Storage`.
+   No second persistent backend lands without an issue + RFC first — divergence between storages is exactly what we paid to remove in 0.5.0.
 
-6. **Delete is `Move(node, TRASH_ROOT)`, not physical removal.** Simplifies the
-   algorithm and preserves history.
+6. **Delete is `Move(node, TRASH_ROOT)`, not physical removal.** Simplifies the algorithm and preserves history.
 
-7. **Any state that must converge between devices goes through the op log.**
-   If two users (or one user on two devices) can disagree about a value
-   and you want them to reconcile, the state belongs in an `Op` — *never*
-   in a shared file with last-write-wins semantics. The op log gives each
-   actor its own `ops-<actor>.jsonl`, lets iCloud / Syncthing / shared FS
-   sync per-file (no merge conflicts), and replays through the CRDT with
-   HLC ordering for deterministic convergence. Writing the state into the
-   sidecar (or any single shared file) bypasses all of that and loses
-   concurrent writes silently. **Default position: model it as an Op.**
-   `Op::SetCollapsed` for the fold flag is the canonical example. The
-   sidecar carries only **structural matching metadata** (ids, position,
-   content hash, ref handle) — it is not a sync surface.
+7. **Any state that must converge between devices goes through the op log.** If two users (or one user on two devices) can disagree about a value and you want them to reconcile, the state belongs in an `Op` — *never* in a shared file with last-write-wins semantics.
+   The op log gives each actor its own `ops-<actor>.jsonl`, lets iCloud / Syncthing / shared FS sync per-file (no merge conflicts), and replays through the CRDT with HLC ordering for deterministic convergence.
+   Writing the state into the sidecar (or any single shared file) bypasses all of that and loses concurrent writes silently.
+   **Default position: model it as an Op.** `Op::SetCollapsed` for the fold flag is the canonical example.
+   The sidecar carries only **structural matching metadata** (ids, position, content hash, ref handle) — it is not a sync surface.
 
 ## Repo layout
 
@@ -84,30 +75,20 @@ outl/
 
 ## Shared logic: `outl-actions`
 
-Every workspace mutation a client needs to perform (edit a block,
-toggle TODO, indent / outdent, delete, render today's `.md`) lives in
-**`outl-actions`**, not in the client crate. The mobile app and the
-TUI must call the **same** functions for the same semantics; if a new
-operation needs more than one client, it goes in `outl-actions`
-before its first use.
+Every workspace mutation a client needs to perform (edit a block, toggle TODO, indent / outdent, delete, render today's `.md`) lives in **`outl-actions`**, not in the client crate.
+The mobile app and the TUI must call the **same** functions for the same semantics; if a new operation needs more than one client, it goes in `outl-actions` before its first use.
 
 The contract is short:
 
 - Functions take `&mut Workspace` and `&HlcGenerator`.
-- They route every mutation through `Workspace::apply` (op log
-  stays source of truth).
+- They route every mutation through `Workspace::apply` (op log stays source of truth).
 - They never hold UI state and never touch storage backends directly.
 
-See `crates/outl-actions/CLAUDE.md` for the full surface and the
-"what this crate does NOT own" list. **If you find yourself writing
-tree-walking or op-building helpers inside `outl-tui/`,
-`outl-mobile/`, or any future client, stop and put them in
-`outl-actions` first.** The TUI's `outline_ops.rs` is the one
-deliberate exception (it manipulates an in-flight AST that hasn't
-been parsed back to a workspace yet — see that file's module doc).
+See `crates/outl-actions/CLAUDE.md` for the full surface and the "what this crate does NOT own" list.
+**If you find yourself writing tree-walking or op-building helpers inside `outl-tui/`, `outl-mobile/`, or any future client, stop and put them in `outl-actions` first.** The TUI's `outline_ops.rs` is the one deliberate exception (it manipulates an in-flight AST that hasn't been parsed back to a workspace yet — see that file's module doc).
 
-Per-crate context lives in `crates/<name>/CLAUDE.md`. Read it before editing
-that crate.
+Per-crate context lives in `crates/<name>/CLAUDE.md`.
+Read it before editing that crate.
 
 User-facing docs in `docs/`:
 
@@ -134,26 +115,19 @@ cargo fmt --all -- --check
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
-Or just `/check`. The PostToolUse hook in `.claude/settings.json` runs fmt +
-clippy on the touched crate automatically after each `Edit`/`Write`.
+Or just `/check`.
+The PostToolUse hook in `.claude/settings.json` runs fmt + clippy on the touched crate automatically after each `Edit`/`Write`.
 
-**`cargo doc` is part of CI** (`.github/workflows/ci.yml` — `docs` job, with
-`RUSTDOCFLAGS=-D warnings`). It breaks the PR on:
+**`cargo doc` is part of CI** (`.github/workflows/ci.yml` — `docs` job, with `RUSTDOCFLAGS=-D warnings`).
+It breaks the PR on:
 
-- **Intra-doc links to private items.** A doc comment that writes
-  ``[`Foo`]`` or ``[`crate::path::Foo`]`` where `Foo` is `pub(crate)` /
-  `pub(super)` / `mod` (no `pub`) fails with
-  `rustdoc::private_intra_doc_links`. The workspace is mostly `pub(crate)`,
-  so **almost every internal type triggers this**. Mitigation: drop the
-  square brackets and use backticks only (`` `Foo` ``) — same readability,
-  no link, no warning.
+- **Intra-doc links to private items.** A doc comment that writes ``[`Foo`]`` or ``[`crate::path::Foo`]`` where `Foo` is `pub(crate)` / `pub(super)` / `mod` (no `pub`) fails with `rustdoc::private_intra_doc_links`.
+  The workspace is mostly `pub(crate)`, so **almost every internal type triggers this**.
+  Mitigation: drop the square brackets and use backticks only (`` `Foo` ``) — same readability, no link, no warning.
 - **Broken/missing doc references.** `[`Foo`]` where `Foo` doesn't exist.
-- **Code blocks in doc comments that don't compile** (rare for us; we
-  rarely put rust code in module docs).
+- **Code blocks in doc comments that don't compile** (rare for us; we rarely put rust code in module docs).
 
-Run `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` before
-reporting "done" on any patch that adds or changes module-level doc
-comments (`//!` blocks) — `/check` does not include this today.
+Run `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` before reporting "done" on any patch that adds or changes module-level doc comments (`//!` blocks) — `/check` does not include this today.
 
 ### Specialized agents
 
@@ -165,15 +139,11 @@ Invoke proactively when relevant:
   Compares Rust against paper pseudocode line by line.
 - **`markdown-roundtrip-tester`** — after any change in `outl-md/`.
   Validates roundtrip stability + matching invariants.
-- **`refactor-architect`** — after the file-size-guard hook fires
-  (stop at 900 lines, warn at 600). Proposes a split by responsibility.
-- **`doc-keeper`** — **invoke at the end of every feature** that
-  changes public API, markdown syntax, TUI shortcut, slash command,
-  sidecar/op-log format, or user-observable behavior. Walks
-  `docs/*.md`, root `CLAUDE.md`, and per-crate `CLAUDE.md`; updates
-  what drifted, creates only what was missing. **Rule of thumb:** if
-  you'd struggle to explain the change to a contributor reading only
-  the docs, this agent runs.
+- **`refactor-architect`** — after the file-size-guard hook fires (stop at 900 lines, warn at 600).
+  Proposes a split by responsibility.
+- **`doc-keeper`** — **invoke at the end of every feature** that changes public API, markdown syntax, TUI shortcut, slash command, sidecar/op-log format, or user-observable behavior.
+  Walks `docs/*.md`, root `CLAUDE.md`, and per-crate `CLAUDE.md`; updates what drifted, creates only what was missing.
+  **Rule of thumb:** if you'd struggle to explain the change to a contributor reading only the docs, this agent runs.
 
 ### Slash commands
 
@@ -186,8 +156,9 @@ Invoke proactively when relevant:
 
 ## Decisions you don't get to revisit
 
-These were settled before code was written. If you think one is wrong, **stop
-and ask the user** before changing. Don't unilaterally pivot.
+These were settled before code was written.
+If you think one is wrong, **stop and ask the user** before changing.
+Don't unilaterally pivot.
 
 | Decision | Why |
 |----------|-----|
@@ -221,35 +192,47 @@ Don't add code for these unless explicitly asked:
 
 - `rustfmt` default config, no overrides
 - `clippy -- -D warnings` blocks CI
-- No `unwrap()` in non-test code. Use `expect("explicit reason")` or propagate.
+- No `unwrap()` in non-test code.
+  Use `expect("explicit reason")` or propagate.
 - `thiserror` in libs (`outl-core`, `outl-md`), `anyhow` at boundaries (`outl-cli`, `outl-tui`)
 - No `unsafe` in `outl-core` without documented justification
 - Variable names, function names, doc comments: **English** (global audience)
 - User-facing strings (CLI help, TUI labels): English for now (i18n later)
-- **Conventional Commits are load-bearing.** Use `feat:`, `fix:`,
-  `perf:`, `docs:`, `refactor:`, `chore:`, `test:`, `build:`, `ci:`
-  on every commit (and on PR merge commits). The Mobile pipeline
-  generates TestFlight release notes by feeding the commit log
-  since the last tag into `conventional-changelog-cli` (preset
-  `conventionalcommits`); the rendered markdown lands as the
-  build's "What to Test" text via the App Store Connect API.
-  Commits without a prefix all fall into a single "Other changes"
-  bucket on TestFlight, so the user loses the per-build context.
+- **Conventional Commits are load-bearing.** Use `feat:`, `fix:`, `perf:`, `docs:`, `refactor:`, `chore:`, `test:`, `build:`, `ci:` on every commit (and on PR merge commits).
+  The Mobile pipeline generates TestFlight release notes by feeding the commit log since the last tag into `conventional-changelog-cli` (preset `conventionalcommits`); the rendered markdown lands as the build's "What to Test" text via the App Store Connect API.
+  Commits without a prefix all fall into a single "Other changes" bucket on TestFlight, so the user loses the per-build context.
   If a commit doesn't fit a type, prefer `chore:` over no prefix.
+
+### Markdown / documentation style
+
+**Never hard-wrap prose at an arbitrary column.** We use [semantic line breaks](https://sembr.org/): one sentence per line, breaking after sentence-ending punctuation (`.`, `!`, `?`) and sometimes after `:` when followed by a substantial clause.
+Lines stay as long as the sentence is — no 70/80/100-column reflow.
+
+Why: hard-wrapping at ~70 chars breaks lines mid-thought, makes diffs noisier on edits, and renders ugly in editors that already soft-wrap.
+Semantic line breaks keep diffs minimal (an edit touches one line, not a paragraph block) and read naturally on every surface (GitHub, mdBook, terminal pagers).
+
+Rules:
+
+- **Prose**: one sentence per line.
+  Don't break inside a sentence.
+- **Lists**: each list item on its own line; if a single item contains multiple sentences, break those sentences too.
+- **Code fences, tables, YAML frontmatter, ASCII tree diagrams**: preserve **exactly**.
+  Tables especially must stay one row per line, no matter how wide.
+- **Headings, HRs, link references**: one line, as always.
+- **Outline / `.md` content** (anything under `note-example/`, real workspace pages, fixtures): **do not touch**.
+  That markdown is data, not docs — it represents the outl dialect literally and indentation / line shape is structural.
+
+This rule applies to every `*.md` in the repo except outline content (see exception above): root `CLAUDE.md`, per-crate `CLAUDE.md`, `docs/*.md`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `.github/*.md`, `.claude/agents/*.md`, `.claude/commands/*.md`.
 
 ### Shared primitives catalog
 
-**Before writing any helper, scan these tables first.** Most "I need a
-small string transform / id helper / md coercion / tree walk" needs
-already have an owner here — the cost of finding the existing one is a
-`grep`; the cost of missing it shows up later as drift between two
-parallel implementations (the user is the one who hits the divergence).
+**Before writing any helper, scan these tables first.** Most "I need a small string transform / id helper / md coercion / tree walk" needs already have an owner here — the cost of finding the existing one is a `grep`; the cost of missing it shows up later as drift between two parallel implementations (the user is the one who hits the divergence).
 
 > This catalog is mirrored at `.github/copilot-instructions.md` §5.1.
-> When you edit either copy, sync both — a `PostToolUse` hook flags
-> drift, but the discipline starts before the hook fires.
+> When you edit either copy, sync both — a `PostToolUse` hook flags drift, but the discipline starts before the hook fires.
 
-The catalog is grouped by area. Skim the headings, then drill in.
+The catalog is grouped by area.
+Skim the headings, then drill in.
 
 #### 1. Workspace lifecycle, op log, and HLC (outl-core)
 
@@ -283,8 +266,7 @@ The catalog is grouped by area. Skim the headings, then drill in.
 
 #### 3. Block mutations (outl-actions::block + collapsed + todo)
 
-Every entry here routes through `Workspace::apply` — never build a
-`LogOp` from a client and apply it directly.
+Every entry here routes through `Workspace::apply` — never build a `LogOp` from a client and apply it directly.
 
 | Intent | Use this | File |
 |---|---|---|
@@ -365,9 +347,8 @@ Every entry here routes through `Workspace::apply` — never build a
 
 #### 9. In-flight outline AST helpers (outl-md::outline_ops)
 
-These operate on `Vec<OutlineNode>` **before** the tree is rebuilt
-from the op log — typing into a buffer that hasn't been parsed back
-yet. UI-agnostic; both TUI and mobile consume them.
+These operate on `Vec<OutlineNode>` **before** the tree is rebuilt from the op log — typing into a buffer that hasn't been parsed back yet.
+UI-agnostic; both TUI and mobile consume them.
 
 | Intent | Use this | File |
 |---|---|---|
@@ -422,66 +403,41 @@ yet. UI-agnostic; both TUI and mobile consume them.
 | Resolve which actor this process writes as | `outl_core::resolve_write_actor` | `crates/outl-core/src/lock.rs` |
 | The `Storage` trait every persistent backend implements (invariant #5) | `outl_core::Storage` / `StorageError` | `crates/outl-core/src/storage/mod.rs` |
 
-If your need is **not** in this catalog and you've grepped honestly,
-that's a fair sign the primitive doesn't exist yet — add it in the
-upstream crate that owns the concept (usually `outl-md` for parse /
-render / sidecar / inline, `outl-actions` for workspace mutations
-and ingest, `outl-core` for op-log / tree / HLC), then update this
-catalog in the same commit. The hook will remind you to sync
-`copilot-instructions.md`.
+If your need is **not** in this catalog and you've grepped honestly, that's a fair sign the primitive doesn't exist yet — add it in the upstream crate that owns the concept (usually `outl-md` for parse / render / sidecar / inline, `outl-actions` for workspace mutations and ingest, `outl-core` for op-log / tree / HLC), then update this catalog in the same commit.
+The hook will remind you to sync `copilot-instructions.md`.
 
 ### Reuse-first (no parallel implementations)
 
-Before adding a helper, struct, or constant, **scan the Shared
-primitives catalog above** and **grep the workspace** for what
-already does the same thing. Duplication here is a real hazard:
-two implementations of the same logic drift apart over time, and
-the user is the one who hits the divergence.
+Before adding a helper, struct, or constant, **scan the Shared primitives catalog above** and **grep the workspace** for what already does the same thing.
+Duplication here is a real hazard: two implementations of the same logic drift apart over time, and the user is the one who hits the divergence.
 
 Past incidents:
 
-- `outl_md::index::Backlink` and `outl_actions::Backlink` were two
-  parallel "backlinks" pipelines that started identical and ended up
-  disagreeing on self-references — a bug the user had to spot
-  because each surface looked fine in isolation. Collapsed into
-  `outl_actions::backlinks_for_page` in 0.5.3.
-- The Logseq importer's `crates/outl-cli/src/cmd/import/normalize.rs`
-  was opened reimplementing `\r\n` handling, `id::` stripping, and
-  long-form date rewriting — every one of which
-  `outl_actions::paste::normalize_external_syntax` already owned.
-  Caught in PR #47 review. Lesson: a "normalize markdown from
-  outside" need always starts at `paste::normalize_external_syntax`;
-  outline-level restructuring (headings → bullets, multi-paragraph
-  merge, fence dedent) is the only thing the importer adds on top.
+- `outl_md::index::Backlink` and `outl_actions::Backlink` were two parallel "backlinks" pipelines that started identical and ended up disagreeing on self-references — a bug the user had to spot because each surface looked fine in isolation.
+  Collapsed into `outl_actions::backlinks_for_page` in 0.5.3.
+- The Logseq importer's `crates/outl-cli/src/cmd/import/normalize.rs` was opened reimplementing `\r\n` handling, `id::` stripping, and long-form date rewriting — every one of which `outl_actions::paste::normalize_external_syntax` already owned.
+  Caught in PR #47 review.
+  Lesson: a "normalize markdown from outside" need always starts at `paste::normalize_external_syntax`; outline-level restructuring (headings → bullets, multi-paragraph merge, fence dedent) is the only thing the importer adds on top.
 
 The rule:
 
-1. **Grep before writing.** `rg "fn foo"` / `rg "struct Foo"` across
-   `crates/`. Look in **upstream crates first** — `outl-core`,
-   `outl-md`, `outl-actions` are where shared primitives live.
-2. **Prefer evolving the existing API** over duplicating, even if
-   that means a small refactor (rename, generalize a parameter,
-   move into a sibling module). One owner per concept; many callers.
-3. **Duplication is OK only when the platforms are genuinely
-   different.** `outl-tui::EditBuffer` and the mobile `<textarea>`
-   are both "cursor + text" — but one is a terminal widget Rust has
-   to render itself, the other is a browser primitive. Same role,
-   different runtime; not duplication. **Recalculating** `(line,
-   col)` from `cursor` in both places, though, would be — extract
-   to `outl_md::view::char_to_line_col` and let both wrap it.
-4. **Refactor *into* the shared crate, not *around* it.** If a TUI
-   helper feels like it could live in `outl-actions`, move it there
-   *now* (the mobile client will need it soon). The
-   `flatten_subtree_paths` migration is the canonical pattern.
+1. **Grep before writing.** `rg "fn foo"` / `rg "struct Foo"` across `crates/`.
+   Look in **upstream crates first** — `outl-core`, `outl-md`, `outl-actions` are where shared primitives live.
+2. **Prefer evolving the existing API** over duplicating, even if that means a small refactor (rename, generalize a parameter, move into a sibling module).
+   One owner per concept; many callers.
+3. **Duplication is OK only when the platforms are genuinely different.** `outl-tui::EditBuffer` and the mobile `<textarea>` are both "cursor + text" — but one is a terminal widget Rust has to render itself, the other is a browser primitive.
+   Same role, different runtime; not duplication.
+   **Recalculating** `(line, col)` from `cursor` in both places, though, would be — extract to `outl_md::view::char_to_line_col` and let both wrap it.
+4. **Refactor *into* the shared crate, not *around* it.** If a TUI helper feels like it could live in `outl-actions`, move it there *now* (the mobile client will need it soon).
+   The `flatten_subtree_paths` migration is the canonical pattern.
 
-When in doubt, name the would-be helper, search for it, then ask
-yourself: "is the existing thing one rename away?" If yes, rename.
+When in doubt, name the would-be helper, search for it, then ask yourself: "is the existing thing one rename away?
+If yes, rename.
 
 ### File size discipline
 
-A Rust `.md` that grows past a few hundred lines is almost always
-**multiple responsibilities sharing a module**. The `file-size-guard.sh`
-PostToolUse hook enforces this:
+A Rust `.md` that grows past a few hundred lines is almost always **multiple responsibilities sharing a module**.
+The `file-size-guard.sh` PostToolUse hook enforces this:
 
 | Lines | Status |
 |-------|--------|
@@ -490,13 +446,10 @@ PostToolUse hook enforces this:
 | 600–900 | Hook returns warning (exit 2). Plan an extraction. |
 | 900+ | Hook returns stop (exit 2). Refactor before the next non-trivial edit. |
 
-When the hook fires, **invoke the `refactor-architect` agent** to
-propose a split by responsibility. The agent's mandate is in
-`.claude/agents/refactor-architect.md`.
+When the hook fires, **invoke the `refactor-architect` agent** to propose a split by responsibility.
+The agent's mandate is in `.claude/agents/refactor-architect.md`.
 
-The point isn't a hard limit — it's keeping each module about one
-thing so the codebase stays easy to read, easy to test, and easy to
-evolve.
+The point isn't a hard limit — it's keeping each module about one thing so the codebase stays easy to read, easy to test, and easy to evolve.
 
 ## Anti-patterns (don't do)
 
@@ -506,18 +459,17 @@ evolve.
 - ❌ Comparing HLCs without actor tiebreak
 - ❌ Treating `Delete` as physical removal
 - ❌ Skipping tests because "the algorithm is the same as the paper"
-- ❌ Reintroducing SQLite / rusqlite / any binary log format —
-  cross-device sync depends on per-actor append-only files
+- ❌ Reintroducing SQLite / rusqlite / any binary log format — cross-device sync depends on per-actor append-only files
 - ❌ Using `id::` Logseq-style metadata anywhere
 - ❌ Marking work "done" without `/check` passing
 - ❌ Re-introducing `"version"` in `crates/outl-mobile/src-tauri/tauri.conf.json` — Tauri must keep falling back to `Cargo.toml` (see "Versioning + TestFlight release" in `crates/outl-mobile/CLAUDE.md`)
-- ❌ Adding a helper that re-implements something already in
-  `outl-core` / `outl-md` / `outl-actions` (see **Reuse-first**). The
-  fix is to wrap the upstream API, not to write a parallel one.
+- ❌ Adding a helper that re-implements something already in `outl-core` / `outl-md` / `outl-actions` (see **Reuse-first**).
+  The fix is to wrap the upstream API, not to write a parallel one.
 
 ## When in doubt
 
 1. Read the relevant `docs/*.md`.
 2. Read the per-crate `CLAUDE.md`.
 3. Read the paper for sync stuff: <https://martin.kleppmann.com/papers/move-op.pdf>
-4. Ask the user. The user is `Avelino`, comfortable in Rust/Clojure/Python/Go, prefers direct pt-BR communication.
+4. Ask the user.
+   The user is `Avelino`, comfortable in Rust/Clojure/Python/Go, prefers direct pt-BR communication.

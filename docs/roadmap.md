@@ -1,11 +1,13 @@
 # Roadmap
 
-Six phases. Each one ends with something **usable standalone**. If the
-next phase stalls, the previous one still delivers value.
+Six phases.
+Each one ends with something **usable standalone**.
+If the next phase stalls, the previous one still delivers value.
 
 ## Phase 0 — Setup
 
-Day zero. Foundation only.
+Day zero.
+Foundation only.
 
 - [x] Cargo workspace with all phase-1 crates linked.
 - [x] LICENSE (MIT, single-license).
@@ -14,15 +16,15 @@ Day zero. Foundation only.
 - [x] `.claude/` infrastructure (agents, hooks, commands, settings).
 - [x] CLAUDE.md root + per-crate.
 - [x] docs/: architecture, crdt, markdown-format, storage, roadmap.
-- [ ] Reserve `outl`, `outl-core`, `outl-md`, `outl-cli`, `outl-tui` on
-  crates.io as `0.0.1` placeholder.
+- [ ] Reserve `outl`, `outl-core`, `outl-md`, `outl-cli`, `outl-tui` on crates.io as `0.0.1` placeholder.
 - [ ] Reserve `outl` on npm to prevent typosquatting.
 - [ ] Issues #1–#4 opened.
 
 ## Phase 1 — Day-zero usable
 
-The goal: Avelino replaces part of his Roam usage with outl on a single
-device. Edit in VS Code or in the TUI, doesn't matter. Journal works.
+The goal: Avelino replaces part of his Roam usage with outl on a single device.
+Edit in VS Code or in the TUI, doesn't matter.
+Journal works.
 
 ### `outl-core`
 - `NodeId`, `ActorId`, `HLC`, fractional indexing types.
@@ -32,22 +34,16 @@ device. Edit in VS Code or in the TUI, doesn't matter. Journal works.
 - `Storage` trait + `JsonlStorage` (persistent) + `MemoryStorage` (test double).
 - Domain models: `Workspace`, `Page`, `Journal`, `Block`, `Property`, `Tag`.
 - **100% coverage on the four CRDT functions.**
-- **Test battery passing**:
-  `convergence`, `cycle`, `cycle_chain`, `concurrent_edit_move`,
-  `concurrent_delete_edit`, `late_op`, `idempotency`,
-  `fractional_index`, `large_log`, `property_based`.
+- **Test battery passing**: `convergence`, `cycle`, `cycle_chain`, `concurrent_edit_move`, `concurrent_delete_edit`, `late_op`, `idempotency`, `fractional_index`, `large_log`, `property_based`.
 
 ### `outl-md`
 - Parse `.md` (clean, no IDs) → AST.
 - Render AST → `.md` (clean).
 - Read/write `.outl` sidecar (JSON, version `2`, reads v1).
 - 3-level matching algorithm.
-- Diff (old AST + new AST + old sidecar blocks) → minimal `Op`
-  sequence; preserves `ref_handle` verbatim on level-1/2 matches.
-- Block-level index (`((blk-XXXXXX))` + reverse refs) under
-  `WorkspaceIndex` — O(1) resolve, linear `search_block_text`.
-- Tests: `roundtrip`, `external_edit`, `duplicate_block`,
-  `identical_blocks_swap`, `heavy_edit`.
+- Diff (old AST + new AST + old sidecar blocks) → minimal `Op` sequence; preserves `ref_handle` verbatim on level-1/2 matches.
+- Block-level index (`((blk-XXXXXX))` + reverse refs) under `WorkspaceIndex` — O(1) resolve, linear `search_block_text`.
+- Tests: `roundtrip`, `external_edit`, `duplicate_block`, `identical_blocks_swap`, `heavy_edit`.
 
 ### `outl-cli`
 - `outl init <path>` — scaffold workspace.
@@ -64,11 +60,7 @@ device. Edit in VS Code or in the TUI, doesn't matter. Journal works.
 - Outline panel (read/write — text editing, indent/outdent, move, delete).
 - Inline backlinks below the outline (`B` toggle).
 - Command palette + slash menu sharing one registry.
-- Block-reference workflow: inline render of `((blk-XXXXXX))`,
-  embed expansion (source block + children with `↳ ` prefix) for
-  `!((blk-XXXXXX))`, `Enter` jumps to source block, `((` autocomplete
-  in Insert, `y r` / `/refer` / `/refer-embed` copy handles to the OS
-  clipboard (via `arboard`).
+- Block-reference workflow: inline render of `((blk-XXXXXX))`, embed expansion (source block + children with `↳ ` prefix) for `!((blk-XXXXXX))`, `Enter` jumps to source block, `((` autocomplete in Insert, `y r` / `/refer` / `/refer-embed` copy handles to the OS clipboard (via `arboard`).
 - Page properties visible and editable.
 - Visual distinction page vs tag (different colors).
 
@@ -80,23 +72,19 @@ device. Edit in VS Code or in the TUI, doesn't matter. Journal works.
 - [ ] I can create a block with `[[refs]]`, `#tags`, `priority:: high`.
 - [ ] I can open the `.md` in VS Code — clean, no visible IDs.
 - [ ] I can edit, save, TUI reflects the change.
-- [ ] I can duplicate a block in VS Code — reconcile assigns a new ULID to
-  the duplicate.
+- [ ] I can duplicate a block in VS Code — reconcile assigns a new ULID to the duplicate.
 - [ ] I can navigate `[` / `]` between journals.
 - [ ] I can kill the process and reopen — state preserved.
 - [ ] `outl doctor` reports integrity OK.
 
 ## Phase 2 — P2P sync (1 → N devices)
 
-> Note: cross-device sync is already working today over iCloud Drive
-> (see Phase 6 below — the mobile client landed early). The phase 2
-> work below replaces iCloud with iroh so the project stops depending
-> on a third-party cloud and starts working across non-Apple devices.
+> Note: cross-device sync is already working today over iCloud Drive (see Phase 6 below — the mobile client landed early).
+> The phase 2 work below replaces iCloud with iroh so the project stops depending on a third-party cloud and starts working across non-Apple devices.
 > The `outl-actions::SyncEngine` interface stays the same.
 
 - `outl-sync` crate with iroh transport.
-- Discovery via shareable ticket (`outl share` generates,
-  `outl join <ticket>` adds a peer).
+- Discovery via shareable ticket (`outl share` generates, `outl join <ticket>` adds a peer).
 - Handshake and incremental op exchange using `last_ts_per_actor`.
 - E2E tests with 2–3 instances exchanging ops over loopback iroh.
 - Encryption enabled by default (iroh QUIC).
@@ -106,8 +94,7 @@ device. Edit in VS Code or in the TUI, doesn't matter. Journal works.
 
 - `{{query: ...}}` inline with an outl-specific DSL.
 - Built-in aggregations: count, group-by tag, filter by property.
-- Journal-specific queries: "blocks from the last 7 days",
-  "all tasks marked priority:: high".
+- Journal-specific queries: "blocks from the last 7 days", "all tasks marked priority:: high".
 - Backlinks page generated on-demand.
 - TUI commands to save and reuse queries.
 
@@ -130,18 +117,11 @@ device. Edit in VS Code or in the TUI, doesn't matter. Journal works.
 
 ## Phase 6 — Mobile (landed early as Tauri 2 + Solid)
 
-The mobile client shipped ahead of schedule and replaces the original
-`uniffi` + SwiftUI plan. `outl-mobile` is a Tauri 2 app with a
-SolidJS + Tailwind frontend; the Rust side is a thin command shell
-over `outl-actions`, plus an Objective-C iCloud watcher
-(`NSMetadataQuery` + `NSFileCoordinator`) in
-`gen/apple/Sources/outl-mobile/main.mm`. Sync today is iCloud Drive
-(per-actor `ops-<actor>.jsonl`); iroh becomes the wire transport when
-phase 2 lands. iOS is shipping; Android follows the same Tauri 2
-surface and needs an Android-side equivalent of the iCloud watcher.
+The mobile client shipped ahead of schedule and replaces the original `uniffi` + SwiftUI plan.
+`outl-mobile` is a Tauri 2 app with a SolidJS + Tailwind frontend; the Rust side is a thin command shell over `outl-actions`, plus an Objective-C iCloud watcher (`NSMetadataQuery` + `NSFileCoordinator`) in `gen/apple/Sources/outl-mobile/main.mm`.
+Sync today is iCloud Drive (per-actor `ops-<actor>.jsonl`); iroh becomes the wire transport when phase 2 lands. iOS is shipping; Android follows the same Tauri 2 surface and needs an Android-side equivalent of the iCloud watcher.
 
-**iOS public beta on TestFlight:**
-<https://testflight.apple.com/join/P2GdWAMd>.
+**iOS public beta on TestFlight:** <https://testflight.apple.com/join/P2GdWAMd>.
 
 ---
 
@@ -149,9 +129,6 @@ surface and needs an Android-side equivalent of the iCloud watcher.
 
 These are tracked publicly to signal intent and invite contributions:
 
-- **#1** — Add ChronDbStorage backend
-  (labels: `roadmap`, `storage`, `help wanted`)
-- **#2** — Tauri desktop app
-  (labels: `roadmap`, `phase-5`)
-- **#4** — Plugin system with rhai
-  (labels: `roadmap`, `phase-4`)
+- **#1** — Add ChronDbStorage backend (labels: `roadmap`, `storage`, `help wanted`)
+- **#2** — Tauri desktop app (labels: `roadmap`, `phase-5`)
+- **#4** — Plugin system with rhai (labels: `roadmap`, `phase-4`)

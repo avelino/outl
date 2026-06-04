@@ -162,8 +162,11 @@ export interface RefContext {
  * copy so the autocomplete popup never pays a Tauri round-trip per
  * keystroke. If you extend either side (a new opener, a different
  * closing rule), update both in the same commit — same convention
- * `looksLikeOutline` (`lib/paste.ts`) and `tokenize`
- * (`lib/markdown.tsx`) follow.
+ * `looksLikeOutline` (`lib/paste.ts`) follows. Inline tokenization
+ * was a third mirror in this family until it moved fully into Rust
+ * (`outl_md::tokenize_owned` ships pre-tokenized `BlockNode.tokens`);
+ * this comment used to reference that TS `tokenize`, kept here only
+ * as a precedent for the sync rule.
  */
 export function detectRefContext(
   value: string,

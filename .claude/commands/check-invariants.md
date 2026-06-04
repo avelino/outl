@@ -18,6 +18,7 @@ cargo test -p outl-core --test large_log
 cargo test -p outl-core --test property_based
 ```
 
-Stop on the first failure. Report the exact failure output.
+Stop on the first failure.
+Report the exact failure output.
 
 If they all pass, finish by invoking the `crdt-invariant-checker` agent for extra validation (coverage + static diff).

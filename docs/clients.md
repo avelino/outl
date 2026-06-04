@@ -1,9 +1,8 @@
 # Clients and shared logic
 
-outl has multiple clients today (TUI, mobile) and more coming
-(Tauri desktop, plugins). They all sit on top of the same workspace
-and the same op log. To keep them honest, we route every workspace
-operation through one shared crate: **`outl-actions`**.
+outl has multiple clients today (TUI, mobile) and more coming (Tauri desktop, plugins).
+They all sit on top of the same workspace and the same op log.
+To keep them honest, we route every workspace operation through one shared crate: **`outl-actions`**.
 
 ## The stack
 
@@ -50,23 +49,14 @@ operation through one shared crate: **`outl-actions`**.
 Yes if any of these are true:
 
 - Two or more clients (today or in the next quarter) need the same op.
-- The function takes only `Workspace + HlcGenerator` and returns
-  `Result<_, ActionError>`.
-- It produces ops by way of `Workspace::apply` — no direct storage
-  writes, no filesystem touches outside `journal::write_md_atomic`.
+- The function takes only `Workspace + HlcGenerator` and returns `Result<_, ActionError>`.
+- It produces ops by way of `Workspace::apply` — no direct storage writes, no filesystem touches outside `journal::write_md_atomic`.
 
 No if:
 
-- It manipulates client UI state (selection, modes, toasts, focus,
-  keymaps).
-- It manipulates an in-flight `Vec<OutlineNode>` that hasn't been
-  parsed back into a workspace yet (those helpers live in
-  `outl-md::outline_ops`, re-exported through a one-liner shim at
-  `outl-tui/src/outline_ops.rs` because the mobile client needs them
-  too — they're workspace-free pure AST manipulation, so they sit in
-  `outl-md` rather than `outl-actions`).
-- It's storage-backend-specific (iCloud watcher, future ChronDB) —
-  those implement `outl_core::Storage` in the binary that needs them.
+- It manipulates client UI state (selection, modes, toasts, focus, keymaps).
+- It manipulates an in-flight `Vec<OutlineNode>` that hasn't been parsed back into a workspace yet (those helpers live in `outl-md::outline_ops`, re-exported through a one-liner shim at `outl-tui/src/outline_ops.rs` because the mobile client needs them too — they're workspace-free pure AST manipulation, so they sit in `outl-md` rather than `outl-actions`).
+- It's storage-backend-specific (iCloud watcher, future ChronDB) — those implement `outl_core::Storage` in the binary that needs them.
 
 ## TODO/DONE convention
 
@@ -78,21 +68,17 @@ A block's TODO state is **a prefix on its text**, not a property:
 "DONE foo"        completed task
 ```
 
-This is the wire format the TUI already uses and what `.md` files
-contain when synced to other tools. `outl-actions::cycle_todo` walks
-`None → TODO → DONE → None`. UI surfaces parse the prefix out via
-`split_todo` so they can render a checkbox.
+This is the wire format the TUI already uses and what `.md` files contain when synced to other tools.
+`outl-actions::cycle_todo` walks `None → TODO → DONE → None`.
+UI surfaces parse the prefix out via `split_todo` so they can render a checkbox.
 
 ## iCloud sync (mobile + TUI, today)
 
-The iOS app is on a public TestFlight beta —
-<https://testflight.apple.com/join/P2GdWAMd>. Install it on the
-iPhone, then point the TUI at the same iCloud Drive container to
-share the workspace.
+The iOS app is on a public TestFlight beta — <https://testflight.apple.com/join/P2GdWAMd>.
+Install it on the iPhone, then point the TUI at the same iCloud Drive container to share the workspace.
 
-The mobile client persists the op log to the iCloud Ubiquity
-Container. The TUI reaches the same workspace by pointing
-`--workspace` at the container's `Documents/` directory:
+The mobile client persists the op log to the iCloud Ubiquity Container.
+The TUI reaches the same workspace by pointing `--workspace` at the container's `Documents/` directory:
 
 ```
 <container>/Documents/                ← TUI: outl --workspace "<container>/Documents"
@@ -107,24 +93,17 @@ Container. The TUI reaches the same workspace by pointing
     └── ...
 ```
 
-> The folder is **`ops/`**, not `.ops/`. iCloud Documents / Ubiquity
-> Containers do not sync paths starting with `.` across devices, so a
-> dotted name silently breaks multi-device sync. The same rule is why
-> the sidecar moved from `.foo.outl` to `foo.outl` in v0.
+> The folder is **`ops/`**, not `.ops/`. iCloud Documents / Ubiquity Containers do not sync paths starting with `.` across devices, so a dotted name silently breaks multi-device sync.
+> The same rule is why the sidecar moved from `.foo.outl` to `foo.outl` in v0.
 
-Each device only writes to its own `ops-<actor>.jsonl`, so iCloud
-never has to merge file contents — the CRDT does that work after
-reading every actor's ops. The `.md` projection is rewritten after
-every mutation; do **not** parse it back to reconstruct workspace
-state, the op log is authoritative.
+Each device only writes to its own `ops-<actor>.jsonl`, so iCloud never has to merge file contents — the CRDT does that work after reading every actor's ops.
+The `.md` projection is rewritten after every mutation; do **not** parse it back to reconstruct workspace state, the op log is authoritative.
 
 ### Shared sync engine
 
-Both clients use `outl_actions::SyncEngine` for the reload-workspace +
-reproject-page flow. Detection is client-specific (TUI runs a worker
-thread polling `snapshot_peers()` every ~2s; mobile registers
-`NSMetadataQuery` on the ubiquity container). Once detection fires,
-the call site is identical:
+Both clients use `outl_actions::SyncEngine` for the reload-workspace + reproject-page flow.
+Detection is client-specific (TUI runs a worker thread polling `snapshot_peers()` every ~2s; mobile registers `NSMetadataQuery` on the ubiquity container).
+Once detection fires, the call site is identical:
 
 ```rust
 let engine = SyncEngine::new(workspace_root, actor);
@@ -132,23 +111,15 @@ let fresh = engine.reload_workspace()?;
 engine.reproject_page(&fresh, focused_page_id)?;
 ```
 
-The TUI defers the reload while the user is in Insert mode (the
-in-flight `ParsedPage` would be clobbered) via a `pending_reload`
-flag drained on commit. Mobile applies immediately because every
-mutation is one atomic Tauri command. The policy diverges; the
-engine does not.
+The TUI defers the reload while the user is in Insert mode (the in-flight `ParsedPage` would be clobbered) via a `pending_reload` flag drained on commit.
+Mobile applies immediately because every mutation is one atomic Tauri command.
+The policy diverges; the engine does not.
 
-`engine.scan_for_orphans()` is the other shared piece: it walks
-`journals/` and `pages/` for `.md` files whose sidecar is missing or
-stale (fresh import from Roam/Logseq, peer-shipped projection
-without sidecar, external vim edit). The TUI runs the scan every 10s
-on a worker thread; mobile runs it once at boot. Both feed the same
-`outl_md::reconcile::reconcile_md`.
+`engine.scan_for_orphans()` is the other shared piece: it walks `journals/` and `pages/` for `.md` files whose sidecar is missing or stale (fresh import from Roam/Logseq, peer-shipped projection without sidecar, external vim edit).
+The TUI runs the scan every 10s on a worker thread; mobile runs it once at boot.
+Both feed the same `outl_md::reconcile::reconcile_md`.
 
-See `crates/outl-mobile/CLAUDE.md` for the full bundle ID, signing
-team, container ID set required to build it, and the
-`NSFileCoordinator`-based peer-file materialisation step that has to
-run before any read of a peer `ops-*.jsonl`.
+See `crates/outl-mobile/CLAUDE.md` for the full bundle ID, signing team, container ID set required to build it, and the `NSFileCoordinator`-based peer-file materialisation step that has to run before any read of a peer `ops-*.jsonl`.
 
 ## Opening a page from a user-typed ref
 
@@ -186,13 +157,10 @@ already know they want a regular page (no date branch).
 The pattern is small:
 
 1. Take a dependency on `outl-core`, `outl-md`, `outl-actions`.
-2. Open a `JsonlStorage` rooted at `<workspace>/ops/`, or bring
-   your own `Storage` impl.
-3. Open a `Workspace` with that storage; hold one `HlcGenerator` per
-   device.
+2. Open a `JsonlStorage` rooted at `<workspace>/ops/`, or bring your own `Storage` impl.
+3. Open a `Workspace` with that storage; hold one `HlcGenerator` per device.
 4. Call into `outl-actions` for every user-visible mutation.
-5. Call `outl_actions::apply_journal_md` (or the per-page equivalent
-   when we add it) if you want the `.md` projection on disk.
+5. Call `outl_actions::apply_journal_md` (or the per-page equivalent when we add it) if you want the `.md` projection on disk.
 
-What you write in your client crate: command surface (Tauri,
-keyboard, HTTP, …), UI state, navigation, animations. Nothing else.
+What you write in your client crate: command surface (Tauri, keyboard, HTTP, …), UI state, navigation, animations.
+Nothing else.

@@ -1,22 +1,16 @@
 # Tree CRDT walkthrough
 
-This is the deep-dive companion to [Sync, done right](sync.md). The
-sync page argues *why*; this one walks through *how*, with code.
+This is the deep-dive companion to [Sync, done right](sync.md).
+The sync page argues *why*; this one walks through *how*, with code.
 
-It specifies the tree CRDT used by `outl-core`: an op log of `Move` /
-`Edit` / `SetProp` / `Create` operations is replicated and converged
-across devices without coordination, without a server, and without
-ever corrupting the user's outline.
+It specifies the tree CRDT used by `outl-core`: an op log of `Move` / `Edit` / `SetProp` / `Create` operations is replicated and converged across devices without coordination, without a server, and without ever corrupting the user's outline.
 
 The algorithm is from:
 
-> **Martin Kleppmann, Dominic P. Mulligan, Victor B. F. Gomes, Alastair R.
-> Beresford.** *"A highly-available move operation for replicated trees."*
-> IEEE Transactions on Parallel and Distributed Systems, 2022.
+> **Martin Kleppmann, Dominic P. Mulligan, Victor B. F. Gomes, Alastair R. Beresford.** *"A highly-available move operation for replicated trees."* IEEE Transactions on Parallel and Distributed Systems, 2022.
 > <https://martin.kleppmann.com/papers/move-op.pdf>
 
-Block-level text editing rides on **Yjs/Yrs**, which is itself a CRDT and
-needs no orchestration beyond delivering its binary updates to the right node.
+Block-level text editing rides on **Yjs/Yrs**, which is itself a CRDT and needs no orchestration beyond delivering its binary updates to the right node.
 
 ---
 
@@ -24,23 +18,19 @@ needs no orchestration beyond delivering its binary updates to the right node.
 
 A naive replicated outline breaks in three ways:
 
-1. **Text-level CRDTs (RGA, LSEQ, Y) don't model parent-child.** Edit the
-   word "draft" inside a block: fine. Move the block to a different parent:
-   the text CRDT has no opinion. Two devices doing concurrent moves can end
-   up with the block having two parents, or zero parents, or in a cycle.
+1. **Text-level CRDTs (RGA, LSEQ, Y) don't model parent-child.** Edit the word "draft" inside a block: fine.
+   Move the block to a different parent: the text CRDT has no opinion.
+   Two devices doing concurrent moves can end up with the block having two parents, or zero parents, or in a cycle.
 
-2. **List CRDTs (`Y.Array`, RGA) don't handle reparenting.** They give you
-   convergence within a list, but the user's outline isn't one list — it's
-   nested lists.
+2. **List CRDTs (`Y.Array`, RGA) don't handle reparenting.** They give you convergence within a list, but the user's outline isn't one list — it's nested lists.
 
-3. **Git merge destroys outline structure.** Concurrent edits to the same
-   line collide. The user does a manual merge and the IDs are gone, the
-   structure is mangled, or both. We don't ship that to users.
+3. **Git merge destroys outline structure.** Concurrent edits to the same line collide.
+   The user does a manual merge and the IDs are gone, the structure is mangled, or both.
+   We don't ship that to users.
 
-A tree CRDT specifically tracks the **parent of each node** as part of the
-replicated state. Concurrent moves of the same node converge by op ordering.
-Concurrent moves that would create a cycle are detected and the loser
-becomes a no-op deterministically.
+A tree CRDT specifically tracks the **parent of each node** as part of the replicated state.
+Concurrent moves of the same node converge by op ordering.
+Concurrent moves that would create a cycle are detected and the loser becomes a no-op deterministically.
 
 ---
 
@@ -60,8 +50,9 @@ flowchart LR
     end
 ```
 
-The tree is **derivable** from the log. It exists for fast reads but is
-never authoritative. A corrupted tree is rebuilt by replaying the log.
+The tree is **derivable** from the log.
+It exists for fast reads but is never authoritative.
+A corrupted tree is rebuilt by replaying the log.
 
 ---
 
@@ -107,24 +98,16 @@ struct LogOp {
 }
 ```
 
-The `old_*` fields are **not** filled in by the producer. They are populated
-by `do_op` at the moment the op is applied, so `undo_op` can later revert
-exactly to the pre-op state.
+The `old_*` fields are **not** filled in by the producer.
+They are populated by `do_op` at the moment the op is applied, so `undo_op` can later revert exactly to the pre-op state.
 
 **`Delete` is intentionally not an op.** Deleting node `N` is `Move(N, TRASH_ROOT)`.
-This simplifies the algorithm — concurrent edit + delete becomes concurrent
-edit + move — and preserves the deleted subtree for history/undo.
+This simplifies the algorithm — concurrent edit + delete becomes concurrent edit + move — and preserves the deleted subtree for history/undo.
 
-**`SetCollapsed` carries UI fold state through the op log.** The flag controls
-whether a block renders with its children hidden in the outline view —
-presentation state, but globally meaningful across devices. Routing it
-through an `Op` (rather than a sidecar field) is what gives concurrent
-flips a real merge semantics: each device appends to its own
-`ops-<actor>.jsonl`, HLC + actor tiebreak resolves any timing collision
-deterministically, and idempotent re-apply of the same `LogOp` is a no-op.
-This is the canonical pattern for any future per-block UI state that
-must converge — pin status, custom colour, whatever. The sidecar carries
-only structural matching metadata; sync state belongs on the op log.
+**`SetCollapsed` carries UI fold state through the op log.** The flag controls whether a block renders with its children hidden in the outline view — presentation state, but globally meaningful across devices.
+Routing it through an `Op` (rather than a sidecar field) is what gives concurrent flips a real merge semantics: each device appends to its own `ops-<actor>.jsonl`, HLC + actor tiebreak resolves any timing collision deterministically, and idempotent re-apply of the same `LogOp` is a no-op.
+This is the canonical pattern for any future per-block UI state that must converge — pin status, custom colour, whatever.
+The sidecar carries only structural matching metadata; sync state belongs on the op log.
 
 ---
 
@@ -136,20 +119,17 @@ We use **Hybrid Logical Clocks** via the `uhlc` crate.
 HLC = (physical_ms: u64, logical_counter: u32, actor: ActorId)
 ```
 
-Comparison is lexicographic: physical first, then logical, then actor as
-final tiebreak. This gives a **total order** without coordination.
+Comparison is lexicographic: physical first, then logical, then actor as final tiebreak.
+This gives a **total order** without coordination.
 
-**Why actor is tiebreak, not random**: when two replicas pick the same
-`(physical, logical)` (clock skew, very busy moment), the actor ID — a ULID
-fixed per device — breaks the tie deterministically. Both replicas agree on
-the same winner without talking to each other.
+**Why actor is tiebreak, not random**: when two replicas pick the same `(physical, logical)` (clock skew, very busy moment), the actor ID — a ULID fixed per device — breaks the tie deterministically.
+Both replicas agree on the same winner without talking to each other.
 
 ---
 
 ## Fractional indexing
 
-Sibling order uses a **fractional index** — a lexicographically sortable
-string position.
+Sibling order uses a **fractional index** — a lexicographically sortable string position.
 
 ```
 inserting between "a1" and "a2" → "a1V"
@@ -157,9 +137,9 @@ inserting between "a1V" and "a2" → "a1k"
 inserting at the start → ""+key < "a1"
 ```
 
-`Move` only changes the position of the moved node. Siblings keep their
-fractional indices unchanged. Concurrent inserts at the same gap resolve by
-HLC tiebreak: both succeed, the one with the higher HLC sorts after.
+`Move` only changes the position of the moved node.
+Siblings keep their fractional indices unchanged.
+Concurrent inserts at the same gap resolve by HLC tiebreak: both succeed, the one with the higher HLC sorts after.
 
 Implementation: ~100 lines, or use the `fractional_index` crate.
 
@@ -199,8 +179,8 @@ do_op(op):
                 tree.create(node, parent, position)
 ```
 
-The materializing effect of `do_op` is **observable**. The `LogOp` mutation
-(filling in `old_*`) is bookkeeping that makes `undo_op` possible.
+The materializing effect of `do_op` is **observable**.
+The `LogOp` mutation (filling in `old_*`) is bookkeeping that makes `undo_op` possible.
 
 ### `creates_cycle`
 
@@ -217,8 +197,9 @@ creates_cycle(node, new_parent):
     return false
 ```
 
-The naive check `tree.parent(node) == new_parent` is **wrong**. A correct
-check is transitive. Failing this gives you the bug from `cycle_chain.rs`.
+The naive check `tree.parent(node) == new_parent` is **wrong**.
+A correct check is transitive.
+Failing this gives you the bug from `cycle_chain.rs`.
 
 ---
 
@@ -247,9 +228,8 @@ undo_op(log_op):
             tree.remove(node)
 ```
 
-Undo precondition: the op was previously applied via `do_op`. Calling
-`undo_op` on something that was never `do_op`'d is undefined — but
-`apply_op` is responsible for only undoing things that were applied.
+Undo precondition: the op was previously applied via `do_op`.
+Calling `undo_op` on something that was never `do_op`'d is undefined — but `apply_op` is responsible for only undoing things that were applied.
 
 ---
 
@@ -277,10 +257,8 @@ apply_op(new_op):
             log.append(op)
 ```
 
-Idempotency check is implicit: if `new_op.ts` already exists in the log with
-the same actor, the function is a no-op (or we check explicitly to skip).
-Implementation note: keeping the log sorted by `(ts, actor)` makes the lookup
-`O(log n)` via binary search.
+Idempotency check is implicit: if `new_op.ts` already exists in the log with the same actor, the function is a no-op (or we check explicitly to skip).
+Implementation note: keeping the log sorted by `(ts, actor)` makes the lookup `O(log n)` via binary search.
 
 ---
 
@@ -322,21 +300,31 @@ ROOT
 Now devices reconnect.
 
 **Device 1 receives** `Move(B, A)` with ts=12:
-- ts=12 > last ts in log (ts=10). Append.
+- ts=12 > last ts in log (ts=10).
+  Append.
 - `do_op(Move(B, A))`:
-  - `creates_cycle(B, A)`? Walk up from A: A → B → ROOT. Hit B. **Yes, cycle.**
-  - No-op on the tree. But `LogOp` still appended.
+  - `creates_cycle(B, A)`?
+    Walk up from A: A → B → ROOT.
+    Hit B. **Yes, cycle.**
+  - No-op on the tree.
+    But `LogOp` still appended.
 - Device 1 final tree: same as before.
 
 **Device 2 receives** `Move(A, B)` with ts=10:
-- ts=10 < last ts (ts=12). Reorder!
+- ts=10 < last ts (ts=12).
+  Reorder!
 - Pop `Move(B, A)` from log, `undo_op` → tree reverts to initial.
 - `do_op(Move(A, B))`:
-  - `creates_cycle(A, B)`? Walk up from B: B → Y → ROOT. No cycle.
-  - Apply. Tree: A is child of B, X is empty.
+  - `creates_cycle(A, B)`?
+    Walk up from B: B → Y → ROOT.
+    No cycle.
+  - Apply.
+    Tree: A is child of B, X is empty.
 - Push `Move(A, B)` to log.
 - Replay undone: `do_op(Move(B, A))`:
-  - `creates_cycle(B, A)`? Walk up from A: A → B → Y → ROOT. Hit B. **Yes, cycle.**
+  - `creates_cycle(B, A)`?
+    Walk up from A: A → B → Y → ROOT.
+    Hit B. **Yes, cycle.**
   - No-op on the tree.
 - Device 2 final tree:
 ```
@@ -347,9 +335,7 @@ ROOT
         └── A
 ```
 
-**Both devices converged to the same tree.** And `Move(B, A)` is still in
-the log on both devices, ready to become non-cyclic if some future op
-re-arranges B and A.
+**Both devices converged to the same tree.** And `Move(B, A)` is still in the log on both devices, ready to become non-cyclic if some future op re-arranges B and A.
 
 ---
 
@@ -361,19 +347,15 @@ Edits to a block produce binary update bytes via `Doc::encode_state_as_update_v1
 When a `Edit` op arrives:
 
 1. Decode the binary update.
-2. Find the block's `Doc` (creating one if it doesn't exist — content of a
-   never-seen block is replayed from the update).
+2. Find the block's `Doc` (creating one if it doesn't exist — content of a never-seen block is replayed from the update).
 3. `Doc::apply_update(update)`.
 
 Yrs is itself a CRDT, so block content convergence is guaranteed by Yrs.
 Our job is just to deliver the right update to the right node.
 
-**Note on undo for `Edit`**: Yrs has an `UndoManager`, but its semantics
-don't perfectly align with our tree-level undo. For phase 1 we accept that
-undoing an `Edit` may be partial (the materialized text on undo may include
-parts of the edit that interleave with concurrent edits). This is **safe**
-— Yrs guarantees convergence — but it's worth documenting that
-user-facing "undo" in the TUI cannot rely on `undo_op` for text.
+**Note on undo for `Edit`**: Yrs has an `UndoManager`, but its semantics don't perfectly align with our tree-level undo.
+For phase 1 we accept that undoing an `Edit` may be partial (the materialized text on undo may include parts of the edit that interleave with concurrent edits).
+This is **safe** — Yrs guarantees convergence — but it's worth documenting that user-facing "undo" in the TUI cannot rely on `undo_op` for text.
 
 ---
 
@@ -388,14 +370,12 @@ For any two replicas R₁, R₂ that have observed the same set of ops S:
 materialized_tree(R₁) == materialized_tree(R₂)
 ```
 
-Test: `tests/convergence.rs` — three replicas apply ops in different
-permutations, all materialize the same tree.
+Test: `tests/convergence.rs` — three replicas apply ops in different permutations, all materialize the same tree.
 
 ### 2. Commutativity after reordering
 
-`apply_op` is **commutative** in the sense that the final state depends
-only on the set of ops, not the order they were delivered. Reordering is
-handled internally via undo/replay.
+`apply_op` is **commutative** in the sense that the final state depends only on the set of ops, not the order they were delivered.
+Reordering is handled internally via undo/replay.
 
 Test: `tests/property_based.rs` with proptest.
 
@@ -409,15 +389,13 @@ Test: `tests/idempotency.rs`.
 
 ### 4. Tree invariant preservation
 
-After any number of `apply_op` calls, the materialized tree is a valid
-tree:
+After any number of `apply_op` calls, the materialized tree is a valid tree:
 
 - No node has two parents.
 - No cycle exists.
 - Every node is reachable from `ROOT` or `TRASH_ROOT`.
 
-Test: `tests/cycle.rs`, `tests/cycle_chain.rs`, plus invariant assertion in
-property tests.
+Test: `tests/cycle.rs`, `tests/cycle_chain.rs`, plus invariant assertion in property tests.
 
 ### 5. No silent loss
 
@@ -428,8 +406,7 @@ This includes:
 - Ops that arrived out of order (always appended after reorder)
 - Ops on nodes in `TRASH_ROOT` (still recorded)
 
-Test: assertions in every CRDT test that `log.len()` grows monotonically
-with applied unique ops.
+Test: assertions in every CRDT test that `log.len()` grows monotonically with applied unique ops.
 
 ---
 
@@ -461,24 +438,19 @@ Coverage target:
 
 Be honest about the limits:
 
-- **No fine-grained block-level merge of moves.** If both replicas move the
-  same node concurrently, one move wins (by HLC). The losing replica's user
-  may briefly see a different position, but after sync everyone agrees.
+- **No fine-grained block-level merge of moves.** If both replicas move the same node concurrently, one move wins (by HLC).
+  The losing replica's user may briefly see a different position, but after sync everyone agrees.
   This is *the right thing* — pretending both moves "succeed" loses information.
 
 - **No application-level conflict notification.** outl converges silently.
   A future feature could surface "concurrent edits to this block" in the UI.
   Not in phase 1.
 
-- **No causal delivery enforcement.** We rely on HLC ordering, not vector
-  clocks. The algorithm is correct under any delivery order (that's the
-  point of `apply_op` doing undo/replay), but it's worth noting we don't
-  need causal channels.
+- **No causal delivery enforcement.** We rely on HLC ordering, not vector clocks.
+  The algorithm is correct under any delivery order (that's the point of `apply_op` doing undo/replay), but it's worth noting we don't need causal channels.
 
-- **Yrs `Edit` undo is best-effort.** As noted above, undoing a text edit
-  via `undo_op` may not reverse the user-visible string exactly when there
-  are interleaved concurrent edits. The string state still converges; only
-  undo semantics weaken.
+- **Yrs `Edit` undo is best-effort.** As noted above, undoing a text edit via `undo_op` may not reverse the user-visible string exactly when there are interleaved concurrent edits.
+  The string state still converges; only undo semantics weaken.
 
 ---
 
@@ -490,9 +462,5 @@ Be honest about the limits:
 - Yrs: <https://github.com/y-crdt/y-crdt>
 - Yjs docs: <https://docs.yjs.dev/>
 - Author write-ups on the outl implementation:
-  - [From paper to outliner](https://avelino.run/from-paper-to-outliner/)
-    — the gap between the paper's convergence proof and a shipped
-    app (projections, reconciliation, transport edge cases).
-  - [File sync isn't trivial](https://avelino.run/file-sync-isnt-trivial/)
-    — why concurrent file moves are a distributed-systems problem,
-    framed for engineers who haven't read the paper yet.
+  - [From paper to outliner](https://avelino.run/from-paper-to-outliner/) — the gap between the paper's convergence proof and a shipped app (projections, reconciliation, transport edge cases).
+  - [File sync isn't trivial](https://avelino.run/file-sync-isnt-trivial/) — why concurrent file moves are a distributed-systems problem, framed for engineers who haven't read the paper yet.

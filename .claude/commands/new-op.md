@@ -3,7 +3,8 @@ description: Guide for adding a new variant to the Op enum (e.g. Op::Tag, Op::Li
 argument-hint: <VariantName>
 ---
 
-You want to add `Op::$1` to the outl tree CRDT. MANDATORY checklist:
+You want to add `Op::$1` to the outl tree CRDT.
+MANDATORY checklist:
 
 ## 1. Define the variant in `crates/outl-core/src/op.rs`
 
@@ -28,7 +29,8 @@ $1 {
 
 ## 4. Update serialization
 
-- Verify that serde derive already covers it. If there's a binary field, ensure base64 or bincode.
+- Verify that serde derive already covers it.
+  If there's a binary field, ensure base64 or bincode.
 - Add conversion to the SQLite schema in `storage/sqlite.rs` if the op has extra fields.
 
 ## 5. Mandatory tests (in `crates/outl-core/tests/`)

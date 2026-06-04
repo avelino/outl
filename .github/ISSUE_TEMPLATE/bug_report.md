@@ -6,8 +6,8 @@ labels: bug
 
 ## What happened
 
-A short description. What did you do, what did you expect, what
-happened instead.
+A short description.
+What did you do, what did you expect, what happened instead.
 
 ## Steps to reproduce
 
@@ -15,8 +15,8 @@ happened instead.
 2. ...
 3. ...
 
-If you can attach a minimal workspace that reproduces the bug, even
-better. Drop a `.zip` or paste relevant `.md` + sidecar JSON contents.
+If you can attach a minimal workspace that reproduces the bug, even better.
+Drop a `.zip` or paste relevant `.md` + sidecar JSON contents.
 
 ## Expected
 
@@ -24,8 +24,8 @@ What you thought would happen.
 
 ## Actual
 
-What did happen. Include the *exact* error message if there was one
-(or a screenshot of the TUI state if visual).
+What did happen.
+Include the *exact* error message if there was one (or a screenshot of the TUI state if visual).
 
 ## Environment
 

@@ -310,14 +310,19 @@ pub fn open_or_create_by_ref(
         }
     }
     let lower = target.to_lowercase();
-    if let Some(existing) = list_all(workspace)
+    let found = children_of(workspace, NodeId::root())
         .into_iter()
-        .find(|p| p.title.to_lowercase() == lower)
-    {
-        use std::str::FromStr;
-        if let Ok(id) = ulid::Ulid::from_str(&existing.id) {
-            return Ok(NodeId(id));
-        }
+        .find(|(id, _)| {
+            workspace.tree().property(*id, SLUG_KEY).is_some_and(|_| {
+                workspace
+                    .block_text(*id)
+                    .map(|t| t.to_lowercase() == lower)
+                    .unwrap_or(false)
+            })
+        })
+        .map(|(id, _)| id);
+    if let Some(id) = found {
+        return Ok(id);
     }
     open_or_create_by_name(workspace, hlc, target, PageKind::Page)
 }

@@ -1,9 +1,7 @@
 # TUI Manual
 
-The `outl` terminal UI is the primary way to interact with an outl
-workspace. It's journal-first, modal (Normal / Insert / Visual), and
-designed to feel familiar if you've used vim or any keyboard-driven
-outliner (Roam, Logseq, Obsidian).
+The `outl` terminal UI is the primary way to interact with an outl workspace.
+It's journal-first, modal (Normal / Insert / Visual), and designed to feel familiar if you've used vim or any keyboard-driven outliner (Roam, Logseq, Obsidian).
 
 ## Running
 
@@ -14,15 +12,17 @@ outl tui ~/notes             # explicit subcommand form
 cd ~/notes && outl           # no args: opens TUI in cwd
 ```
 
-The TUI requires a real interactive terminal. If stdout isn't a TTY
-(e.g. CI), it exits with a clear error instead of hanging.
+The TUI requires a real interactive terminal.
+If stdout isn't a TTY (e.g.
+CI), it exits with a clear error instead of hanging.
 
 ## Modes
 
 ### Normal
 
-The default. Move between blocks, open references, run commands. No
-characters insert themselves — every key is a command.
+The default.
+Move between blocks, open references, run commands.
+No characters insert themselves — every key is a command.
 
 | Key | Action |
 |-----|--------|
@@ -54,8 +54,8 @@ characters insert themselves — every key is a command.
 
 ### Insert
 
-Text input goes into the buffer. Esc commits (writes back to the
-`.md`), Enter commits + creates a new block.
+Text input goes into the buffer.
+Esc commits (writes back to the `.md`), Enter commits + creates a new block.
 
 | Key | Action |
 |-----|--------|
@@ -78,9 +78,8 @@ Text input goes into the buffer. Esc commits (writes back to the
 
 ### Multi-line blocks and fenced code
 
-A single block can hold multiple lines (`Alt+Enter` / `Ctrl+J` /
-`Shift+Enter` on kitty terminals). Used for paragraphs of prose
-inside one bullet and — most importantly — for fenced code blocks:
+A single block can hold multiple lines (`Alt+Enter` / `Ctrl+J` / `Shift+Enter` on kitty terminals).
+Used for paragraphs of prose inside one bullet and — most importantly — for fenced code blocks:
 
 ```
 - ```lisp
@@ -94,20 +93,17 @@ inside one bullet and — most importantly — for fenced code blocks:
 block naturally without remembering the soft-newline combo:
 
 ```
-- ```lisp        ← typed `- `` ```lisp `, then Enter
-  (+ 1 2)        ← typed body, Enter
+- ```lisp        ← typed `- `` ```lisp `, then Enter (+ 1 2)        ← typed body, Enter
   ```            ← typed closer, Enter
 - next bullet    ← Enter here is a sibling again
 ```
 
-The on-disk format is plain CommonMark — see
-[`docs/markdown-format.md`](markdown-format.md#multi-line-block-text-continuation-lines).
+The on-disk format is plain CommonMark — see [`docs/markdown-format.md`](markdown-format.md#multi-line-block-text-continuation-lines).
 
 ### Visual
 
-A range of blocks is highlighted. `j` / `k` extends the range; the
-common Normal-mode keys for editing aren't available — Visual is for
-batch operations.
+A range of blocks is highlighted.
+`j` / `k` extends the range; the common Normal-mode keys for editing aren't available — Visual is for batch operations.
 
 | Key | Action |
 |-----|--------|
@@ -118,28 +114,25 @@ batch operations.
 
 ## Overlays
 
-Three modal popups can appear over the main panes. They steal the
-keystream while open; `Esc` always closes them.
+Three modal popups can appear over the main panes.
+They steal the keystream while open; `Esc` always closes them.
 
 ### Quick Switcher (`Ctrl+P`)
 
-Fuzzy search across page titles, slugs, and journal dates. Today's
-date is always present even if the journal file doesn't exist yet.
+Fuzzy search across page titles, slugs, and journal dates.
+Today's date is always present even if the journal file doesn't exist yet.
 
 ### Slash menu (`/`) and Command palette (`:`)
 
-Two surfaces over the **same** command registry — pick whichever
-matches your muscle memory:
+Two surfaces over the **same** command registry — pick whichever matches your muscle memory:
 
-- **`/`** (Normal mode) opens a Notion-style filterable list. Each
-  entry shows its name + description. Inside Insert mode, typing `/`
-  triggers inline autocomplete with the same list — pick a command
-  with `Tab`/`Enter` without leaving the buffer.
-- **`:`** is the vim command line. Same registry, same args,
-  same aliases — `/q` and `:q` are interchangeable.
+- **`/`** (Normal mode) opens a Notion-style filterable list.
+  Each entry shows its name + description.
+  Inside Insert mode, typing `/` triggers inline autocomplete with the same list — pick a command with `Tab`/`Enter` without leaving the buffer.
+- **`:`** is the vim command line.
+  Same registry, same args, same aliases — `/q` and `:q` are interchangeable.
 
-Unknown commands surface in the status line as `unknown command:
-<name>`.
+Unknown commands surface in the status line as `unknown command: <name>`.
 
 #### Workspace / navigation
 
@@ -168,12 +161,8 @@ Unknown commands surface in the status line as `unknown command:
 | `refer` | — | Copy `((blk-XXXXXX))` of the current block to the OS clipboard + `last_yanked_ref`. Same as the `y r` chord. |
 | `refer-embed` | — | Copy the embed form `!((blk-XXXXXX))` of the current block to the OS clipboard + `last_yanked_ref`. |
 
-> **Clipboard fallback**: `y r` / `/refer` / `/refer-embed` use
-> [`arboard`](https://crates.io/crates/arboard) to talk to the OS
-> clipboard. The status line reads `copied … to clipboard` on success
-> and `yanked … (clipboard unavailable)` on terminals / SSH sessions
-> without a clipboard backend — the token still lives in
-> `last_yanked_ref` so the in-app paste path keeps working.
+> **Clipboard fallback**: `y r` / `/refer` / `/refer-embed` use [`arboard`](https://crates.io/crates/arboard) to talk to the OS clipboard.
+> The status line reads `copied … to clipboard` on success and `yanked … (clipboard unavailable)` on terminals / SSH sessions without a clipboard backend — the token still lives in `last_yanked_ref` so the in-app paste path keeps working.
 
 #### Code execution
 
@@ -183,9 +172,8 @@ Unknown commands surface in the status line as `unknown command:
 
 #### Date & time inserters
 
-These write text **at the cursor** (Insert mode only). They skip the
-auto-commit step the other commands do, so your in-flight edit stays
-alive while the text lands.
+These write text **at the cursor** (Insert mode only).
+They skip the auto-commit step the other commands do, so your in-flight edit stays alive while the text lands.
 
 | Command | Aliases | Inserts |
 |---------|---------|---------|
@@ -219,18 +207,12 @@ alive while the text lands.
 | `/date 5d` | bare `Nd`/`Nw`/`Nm` is treated as positive |
 | `/date 2026-06-15` | absolute ISO date |
 
-Garbage input (`/date nope`, `/date +3x`, invalid date) shows
-`usage: date +Nd | -Nw | +Nm | YYYY-MM-DD` on the status line.
+Garbage input (`/date nope`, `/date +3x`, invalid date) shows `usage: date +Nd | -Nw | +Nm | YYYY-MM-DD` on the status line.
 
-> **Weekday math:** `date-next-<weekday>` always jumps to the **next**
-> occurrence of that weekday, strictly in the future. Running it on
-> the same weekday adds 7 days, not 0 — `date-next-monday` on a Monday
-> means "next Monday."
->
+> **Weekday math:** `date-next-<weekday>` always jumps to the **next** occurrence of that weekday, strictly in the future.
+> Running it on the same weekday adds 7 days, not 0 — `date-next-monday` on a Monday means "next Monday.
 > **ISO week year:** `week-num` uses `%G-W%V` (ISO 8601), not `%Y-W%V`.
-> The ISO year can differ from the calendar year on a few days around
-> year boundaries — e.g. 2025-12-31 (Wednesday) belongs to ISO week
-> `2026-W01`, not `2025-W01`.
+> The ISO year can differ from the calendar year on a few days around year boundaries — e.g. 2025-12-31 (Wednesday) belongs to ISO week `2026-W01`, not `2025-W01`.
 
 ## Panels
 
@@ -255,66 +237,43 @@ Garbage input (`/date nope`, `/date +3x`, invalid date) shows
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Outline** — the current view (journal or named page). Markdown
-  renders inline (bold/italic/code/strike); the selected/editing block
-  is shown raw so cursor columns align with source bytes. Block
-  references (`((blk-XXXXXX))`) resolve to the source block's text
-  plus its page icon; orphaned handles render dimmed. Embeds
-  (`!((blk-XXXXXX))`) — when the block contains a single embed token
-  (whitespace OK) — render the source block **and its children**
-  expanded read-only below the carrying block. Every embed row carries
-  a `↳ ` prefix (root + descendants), so the expansion reads as one
-  cohesive block; descendants are indented by `2 * (depth + 1)` spaces
-  before their `↳ ` so children align under the source's *text*, not
-  under the parent's `↳ `. TODO/DONE checkboxes, page refs, and tags
-  render with their normal styling inside the expansion. Recursion is
-  capped at depth 4 to break embed cycles. The cursor-bearing block
-  always keeps the raw `((…))` / `!((…))` literal on its first row so
-  column counting stays exact.
-- **Backlinks (inline)** — rendered below the outline, separated by a
-  full-width `─` rule. Every block in any other page that contains
-  `[[this]]` or `#this` shows up with its children, grouped by source
-  page. `j`/`k` navigation crosses the separator transparently: from
-  the last outline block, `j` lands you on the first backlink; `k`
-  from the first backlink walks back into the outline. Toggle the
-  section with `B`. Self-references are excluded. Press `i` / `Enter`
-  on a backlink to jump to its source page positioned on the
-  referencing block (in-place editing lands in a follow-up).
-- **Status / hint** — mode badge, contextual key reminder, backlink
-  count, status messages.
+- **Outline** — the current view (journal or named page).
+  Markdown renders inline (bold/italic/code/strike); the selected/editing block is shown raw so cursor columns align with source bytes.
+  Block references (`((blk-XXXXXX))`) resolve to the source block's text plus its page icon; orphaned handles render dimmed.
+  Embeds (`!((blk-XXXXXX))`) — when the block contains a single embed token (whitespace OK) — render the source block **and its children** expanded read-only below the carrying block.
+  Every embed row carries a `↳ ` prefix (root + descendants), so the expansion reads as one cohesive block; descendants are indented by `2 * (depth + 1)` spaces before their `↳ ` so children align under the source's *text*, not under the parent's `↳ `.
+  TODO/DONE checkboxes, page refs, and tags render with their normal styling inside the expansion.
+  Recursion is capped at depth 4 to break embed cycles.
+  The cursor-bearing block always keeps the raw `((…))` / `!((…))` literal on its first row so column counting stays exact.
+- **Backlinks (inline)** — rendered below the outline, separated by a full-width `─` rule.
+  Every block in any other page that contains `[[this]]` or `#this` shows up with its children, grouped by source page.
+  `j`/`k` navigation crosses the separator transparently: from the last outline block, `j` lands you on the first backlink; `k` from the first backlink walks back into the outline.
+  Toggle the section with `B`.
+  Self-references are excluded.
+  Press `i` / `Enter` on a backlink to jump to its source page positioned on the referencing block (in-place editing lands in a follow-up).
+- **Status / hint** — mode badge, contextual key reminder, backlink count, status messages.
 
-There is *no* pages sidebar. Use `Ctrl+P` (quick switcher) to jump to
-any page or journal by fuzzy title — the sidebar was redundant with
-that and ate horizontal space on narrow terminals.
+There is *no* pages sidebar.
+Use `Ctrl+P` (quick switcher) to jump to any page or journal by fuzzy title — the sidebar was redundant with that and ate horizontal space on narrow terminals.
 
 ## Behavior worth knowing
 
-- **Autosave**: every commit (Esc from Insert, structural ops, history
-  navigation) writes the `.md` to disk and reconciles into the op log.
-  Concurrent `outl serve` is safe — both routes go through
-  `outl_md::reconcile_md`.
-- **No IDs on disk**: every block has a stable ULID, but it lives in
-  the `.outl` sidecar file, not in your markdown. `outl serve` /
-  `outl-tui` rebuild that sidecar after every change.
-- **External edits hot-reload**: when another editor writes the
-  currently-open `.md`, the TUI picks it up automatically within
-  about a second. If you're in Insert mode, it refuses to clobber
-  your in-flight edit and writes a warning on the status line —
-  finish typing, press `Esc` to commit, then `Ctrl+L` to reload.
-- **Undo bounded**: 200 most recent snapshots. Older edits drop off
-  the front. Each snapshot remembers selection + cursor so undo lands
-  you where you were.
-- **Empty pages keep a bullet**: deleting the last block silently
-  re-adds an empty `- ` so your cursor always has somewhere to go.
-- **Slugified filenames**: `[[Avelino]]` lives in
-  `pages/avelino.md` with `title:: Avelino` set automatically on
-  first open.
+- **Autosave**: every commit (Esc from Insert, structural ops, history navigation) writes the `.md` to disk and reconciles into the op log.
+  Concurrent `outl serve` is safe — both routes go through `outl_md::reconcile_md`.
+- **No IDs on disk**: every block has a stable ULID, but it lives in the `.outl` sidecar file, not in your markdown.
+  `outl serve` / `outl-tui` rebuild that sidecar after every change.
+- **External edits hot-reload**: when another editor writes the currently-open `.md`, the TUI picks it up automatically within about a second.
+  If you're in Insert mode, it refuses to clobber your in-flight edit and writes a warning on the status line — finish typing, press `Esc` to commit, then `Ctrl+L` to reload.
+- **Undo bounded**: 200 most recent snapshots.
+  Older edits drop off the front.
+  Each snapshot remembers selection + cursor so undo lands you where you were.
+- **Empty pages keep a bullet**: deleting the last block silently re-adds an empty `- ` so your cursor always has somewhere to go.
+- **Slugified filenames**: `[[Avelino]]` lives in `pages/avelino.md` with `title:: Avelino` set automatically on first open.
 
 ## Code-block execution
 
-Fenced code blocks can be run in place. The result lands as a
-`> **result:**` subblock right below the source, and re-running
-updates the same subblock idempotently.
+Fenced code blocks can be run in place.
+The result lands as a `> **result:**` subblock right below the source, and re-running updates the same subblock idempotently.
 
 | Key | Action |
 |-----|--------|

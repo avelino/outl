@@ -13,13 +13,16 @@ You own the most sensitive boundary in outl from the user's perspective: the int
 
 Two non-negotiable guarantees:
 
-1. **Stable roundtrip.** `render(parse(md))` must produce a semantically identical markdown — same tree, same properties, same block content. Whitespace may normalize, but structure, ordering and content **never**.
+1. **Stable roundtrip.** `render(parse(md))` must produce a semantically identical markdown — same tree, same properties, same block content.
+   Whitespace may normalize, but structure, ordering and content **never**.
 
-2. **No block disappears silently.** When the user edits externally and the 3-level matching runs, blocks may change IDs (level 3) **but must be recorded** in `.outl/orphans.log` before becoming a `Delete`. Silence = critical bug.
+2. **No block disappears silently.** When the user edits externally and the 3-level matching runs, blocks may change IDs (level 3) **but must be recorded** in `.outl/orphans.log` before becoming a `Delete`.
+   Silence = critical bug.
 
 ## Workflow
 
-1. **Identify scope.** Run `git diff HEAD -- crates/outl-md/`. If nothing changed, stop.
+1. **Identify scope.** Run `git diff HEAD -- crates/outl-md/`.
+   If nothing changed, stop.
 
 2. **Run the test battery.**
    ```bash
@@ -93,4 +96,5 @@ required action:
 
 - Do not change code outside `outl-md` (except a new regression test if P0).
 - Do not opine on the CRDT algorithm (that's `crdt-invariant-checker`).
-- Do not accept "matching failed but it's a rare edge case". A rare edge case for the user is everything.
+- Do not accept "matching failed but it's a rare edge case".
+  A rare edge case for the user is everything.
