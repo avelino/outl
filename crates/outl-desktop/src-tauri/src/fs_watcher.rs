@@ -239,10 +239,18 @@ mod tests {
         assert!(!path_is_interesting(&p, OWN));
     }
 
+    #[cfg(unix)]
     #[test]
     fn non_utf8_filename_is_ignored() {
         // `to_str()` returns `None` for non-UTF-8 names — bail
         // safely instead of crashing the watcher callback.
+        //
+        // The test is unix-gated because constructing a non-UTF-8
+        // path requires `OsStringExt::from_vec` (only available on
+        // Unix). On Windows `OsString` is WTF-16; UTF-8-invalid
+        // paths exist but need a different construction path and the
+        // policy under test (`name.to_str()? -> None -> false`)
+        // covers both targets identically.
         use std::ffi::OsString;
         use std::os::unix::ffi::OsStringExt;
         let raw = OsString::from_vec(vec![0xff, 0xfe, b'a']);

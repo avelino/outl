@@ -1,12 +1,15 @@
 # Homebrew tap
 
 outl ships pre-built binaries through the same `avelino/outl` repo — no separate `homebrew-outl` repo.
-The formulas live in [`/Formula`](../Formula/) on `main`:
+Two surfaces live on `main`:
 
-- **`outl`** — latest GA release (semver tag `vX.Y.Z`).
-- **`outl@beta`** — latest beta (rebuilt on every push to `main`).
+| Path | What it ships |
+|---|---|
+| [`/Formula/outl.rb`](../Formula/outl.rb) | GA CLI / TUI, semver tag `vX.Y.Z`. |
+| [`/Formula/outl@beta.rb`](../Formula/outl@beta.rb) | Beta CLI / TUI, rebuilt on every push to `main`. |
+| [`/Casks/outl-desktop@beta.rb`](../Casks/outl-desktop@beta.rb) | Beta **desktop app** (.dmg), rebuilt on every push to `main`. |
 
-## Install
+## Install the CLI / TUI
 
 ```bash
 brew tap avelino/outl https://github.com/avelino/outl
@@ -24,25 +27,64 @@ brew unlink outl@beta && brew install outl       # to GA
 brew unlink outl  && brew install outl@beta      # to beta
 ```
 
+## Install the desktop app
+
+```bash
+brew tap avelino/outl https://github.com/avelino/outl   # same tap as the CLI
+brew install --cask outl-desktop@beta
+```
+
+That drops `outl.app` into `/Applications` via the dmg the release workflow builds for macOS arm64 + x86_64.
+The cask sits in [`/Casks/outl-desktop@beta.rb`](../Casks/outl-desktop@beta.rb) and is bumped automatically alongside the CLI formula on every push to `main`.
+
+The CLI formula (`outl@beta`) and the desktop cask coexist without conflicts — the formula installs `/usr/local/bin/outl`, the cask installs `/Applications/outl.app`.
+Both point at the same workspace on disk if you configure the same path; the op log (`ops/ops-<actor>.jsonl`) reconciles edits made from either surface.
+
+### First-launch Gatekeeper warning
+
+The desktop dmg is **unsigned** today.
+On the first launch macOS Gatekeeper refuses the app.
+Two ways through:
+
+- **Right-click** `outl.app` in `/Applications` and choose **Open**.
+  Confirm once; subsequent launches work.
+- Or drop the quarantine attribute from the terminal:
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/outl.app
+  ```
+
+Signing + notarisation will land with the first GA release (the cask's `caveats` block reminds the user of this on every install until then).
+
+### Updating
+
+```bash
+brew update
+brew upgrade --cask outl-desktop@beta
+```
+
+The `livecheck` block in the cask points Homebrew at the GitHub releases feed, so `brew outdated` knows when a new beta dmg lands.
+
 ## How updates happen
 
 The release workflow ([`/.github/workflows/release.yml`](../.github/workflows/release.yml)) has an `update_tap` job that runs after `publish_release` succeeds on a prerelease.
 It does four things:
 
 1. Checks out `main`.
-2. Downloads the `.sha256` sidecars from the GitHub release.
-3. Uses `sed` to bump four lines of `Formula/outl@beta.rb` in place: the `version` and the three `sha256` lines (each tagged with a stable `# anchor: <arch>` comment).
-4. Commits the bumped formula back to `main` with `[skip ci]` in the message — that prevents the commit from re-triggering the release workflow itself.
+2. Downloads every `.sha256` sidecar from the GitHub release (CLI tarballs **and** desktop dmgs).
+3. Uses `sed` to bump the version + sha lines in both files in place:
+   - **`Formula/outl@beta.rb`** — `version` plus three `sha256` lines tagged `# anchor: macos-arm64`, `# anchor: macos-x64`, `# anchor: linux-x64`.
+   - **`Casks/outl-desktop@beta.rb`** — `version` plus two `sha256` lines tagged `# anchor: macos-arm64`, `# anchor: macos-x64`.
+4. Commits the bumped formula + cask back to `main` with `[skip ci]` in the message — that prevents the commit from re-triggering the release workflow itself.
 
 The version comes from the `prepare` job, which reads `workspace.package.version` out of `Cargo.toml` and appends `-beta.<run_number>`.
 So the only source of truth for the base version is `Cargo.toml`; nothing is hardcoded in the formula.
 
-`Formula/outl@beta.rb` is **committed with bootstrap placeholders** (`version "0.0.0"`, zeroed SHAs).
-The first beta release after this lands will bump it to real values.
-Until then, `brew install outl@beta` will fail with a 404 on the download URL.
+`Formula/outl@beta.rb` and `Casks/outl-desktop@beta.rb` are both **committed with bootstrap placeholders** (`version "0.0.0"`, zeroed SHAs).
+The first beta release after each lands bumps it to real values.
+Until then, `brew install outl@beta` and `brew install --cask outl-desktop@beta` both 404 on the download URL.
 
-`Formula/outl.rb` (the GA formula) doesn't exist yet.
-When the first non-prerelease tag (`vX.Y.Z` with no `-beta`) ships, bump it by hand the first time; after that we can add a GA-flavored `update_tap` job if it's worth automating.
+`Formula/outl.rb` and `Casks/outl-desktop.rb` (the GA channels) don't exist yet.
+When the first non-prerelease tag (`vX.Y.Z` with no `-beta`) ships, bump them by hand the first time; after that we can add a GA-flavored `update_tap` job if it's worth automating.
 
 ## Authentication
 

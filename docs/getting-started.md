@@ -8,11 +8,20 @@ A minute from clone to first journal entry.
 
 ```bash
 brew tap avelino/outl https://github.com/avelino/outl
-brew install outl@beta   # latest beta — every push to main
-# brew install outl      # latest GA (when the first one ships)
+
+# CLI + TUI (Linux + macOS)
+brew install outl@beta              # latest beta — every push to main
+# brew install outl                 # latest GA (when the first one ships)
+
+# Desktop app (macOS only, dmg)
+brew install --cask outl-desktop@beta
 ```
 
-See [Homebrew tap](homebrew.md) for the channel rules and how switching between GA and beta works.
+The desktop cask drops `outl.app` into `/Applications`.
+The dmg is unsigned today, so on first launch you'll need to right-click → Open (or `xattr -dr com.apple.quarantine /Applications/outl.app`).
+CLI and desktop coexist; they share the workspace on disk through the op log.
+
+See [Homebrew tap](homebrew.md) for the channel rules, how switching between GA and beta works, and the Gatekeeper details for the desktop cask.
 
 ### From source
 

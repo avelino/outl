@@ -67,10 +67,12 @@ jobs:
             ${{ runner.os }}-cargo-clippy-
             ${{ runner.os }}-cargo-
       - name: cargo clippy
-        # outl-mobile pulls Tauri deps (glib-sys, gobject-sys, webkit2gtk)
-        # that need system GTK libs we don't install here. The mobile
-        # crate is covered by .github/workflows/mobile.yml on macOS.
-        run: cargo clippy --workspace --exclude outl-mobile --all-targets -- -D warnings
+        # outl-mobile and outl-desktop pull Tauri deps (glib-sys,
+        # gobject-sys, webkit2gtk) that need system GTK libs we
+        # don't install here. Mobile is covered by `mobile.yml` on
+        # macOS; desktop has its own `desktop.yml` matrix (Linux runs
+        # with GTK installed there).
+        run: cargo clippy --workspace --exclude outl-mobile --exclude outl-desktop --all-targets -- -D warnings
 
   test:
     name: test (${{ matrix.os }})
@@ -95,11 +97,11 @@ jobs:
             ${{ runner.os }}-cargo-test-
             ${{ runner.os }}-cargo-
       - name: cargo test
-        # outl-mobile depends on Tauri's macOS/iOS-specific surface
-        # and on system GTK libs that we don't install on Linux. The
-        # mobile crate is covered by .github/workflows/mobile.yml on
-        # macOS together with outl-actions/core/md.
-        run: cargo test --workspace --exclude outl-mobile --all-targets
+        # outl-mobile and outl-desktop depend on Tauri's
+        # macOS/iOS-specific surface and on system GTK libs we don't
+        # install on Linux. Mobile is covered by `mobile.yml` on
+        # macOS; desktop has its own `desktop.yml` matrix.
+        run: cargo test --workspace --exclude outl-mobile --exclude outl-desktop --all-targets
 
   docs:
     name: cargo doc
@@ -111,7 +113,8 @@ jobs:
       - name: cargo doc
         env:
           RUSTDOCFLAGS: "-D warnings"
-        # See clippy / test jobs above: outl-mobile needs system GTK
-        # libs we don't install on Linux. Mobile docs build on macOS
-        # via mobile.yml.
-        run: cargo doc --workspace --exclude outl-mobile --no-deps
+        # See clippy / test jobs above: outl-mobile and outl-desktop
+        # need system GTK libs we don't install on Linux. Mobile docs
+        # build via `mobile.yml` on macOS; desktop docs build via the
+        # `desktop.yml` matrix.
+        run: cargo doc --workspace --exclude outl-mobile --exclude outl-desktop --no-deps
