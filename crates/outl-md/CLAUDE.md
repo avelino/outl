@@ -7,6 +7,13 @@ If this crate misroutes a block during matching, the user perceives "outl
 deleted my work" — even if the op log still has it. Treat matching with the
 same paranoia as the CRDT.
 
+> The **canonical reuse index** for the whole workspace is the
+> ["Shared primitives catalog" in the root `CLAUDE.md`](../../CLAUDE.md#shared-primitives-catalog)
+> (mirrored at [`.github/copilot-instructions.md`](../../.github/copilot-instructions.md)
+> §5.1). The detailed list below describes this crate's responsibilities;
+> the root catalog is the "intent → use this" cross-crate index you
+> should grep first when adding any helper.
+
 ## What this crate owns
 
 - Parse `.md` (clean, no IDs) → outline AST

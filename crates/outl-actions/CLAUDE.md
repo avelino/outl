@@ -21,6 +21,13 @@ outl-cli / outl-tui / outl-mobile / future clients
 
 ## Public surface
 
+> The **canonical reuse index** for the whole workspace is the
+> ["Shared primitives catalog" in the root `CLAUDE.md`](../../CLAUDE.md#shared-primitives-catalog)
+> (mirrored at [`.github/copilot-instructions.md`](../../.github/copilot-instructions.md)
+> §5.1). The table below describes this crate's surface in module-by-module
+> detail; the root catalog is the "intent → use this" cross-crate index
+> you should grep first when adding any helper.
+
 | Module      | What it owns                                                                 |
 |-------------|-------------------------------------------------------------------------------|
 | `block`     | `append_block`, `create_after`, `create_under`, `edit_text`, `toggle_todo`, `delete`, `indent`, `outdent`, `move_up`, `move_down` |
