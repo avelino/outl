@@ -9,7 +9,15 @@ import {
 } from "./outline";
 
 function block(id: string, text = "", children: BlockNode[] = []): BlockNode {
-  return { id, text, todo: null, collapsed: false, properties: [], children };
+  return {
+    id,
+    text,
+    todo: null,
+    collapsed: false,
+    properties: [],
+    tokens: [],
+    children,
+  };
 }
 
 describe("findBlock", () => {
@@ -82,6 +90,7 @@ describe("rawTextWithTodo", () => {
       todo: "TODO",
       collapsed: false,
       properties: [],
+      tokens: [],
       children: [],
     };
     expect(rawTextWithTodo(b)).toBe("TODO ship it");
@@ -94,6 +103,7 @@ describe("rawTextWithTodo", () => {
       todo: "DONE",
       collapsed: false,
       properties: [],
+      tokens: [],
       children: [],
     };
     expect(rawTextWithTodo(b)).toBe("DONE ship it");

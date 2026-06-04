@@ -3,10 +3,37 @@ import { invoke } from "@tauri-apps/api/core";
 export type TodoState = "TODO" | "DONE";
 export type PageKind = "page" | "journal";
 
+/**
+ * Pre-tokenized inline markdown coming from the Rust backend
+ * (`outl_md::tokenize_owned`). The mobile renderer maps each variant
+ * to JSX in `lib/markdown.tsx::MarkdownInline`. There is no parallel
+ * TS tokenizer — `outl_md::inline::tokenize` is the single source of
+ * truth for inline syntax across every client. Adding a token in
+ * Rust means extending this union and the renderer switch in the
+ * same change.
+ */
+export type InlineToken =
+  | { kind: "plain"; value: string }
+  | { kind: "bold"; value: string }
+  | { kind: "italic"; value: string }
+  | { kind: "strike"; value: string }
+  | { kind: "code"; value: string }
+  | { kind: "link"; value: string; href: string }
+  | { kind: "ref"; value: string }
+  | { kind: "tag"; value: string }
+  | { kind: "blockref"; value: string }
+  | { kind: "embed"; value: string };
+
 export interface BlockNode {
   id: string;
   text: string;
   todo: TodoState | null;
+  /**
+   * Inline markdown tokens for `text` (no TODO/DONE prefix). Backend
+   * pre-tokenizes via `outl_md::tokenize_owned` so the renderer
+   * doesn't run a second tokenizer in JS. See {@link InlineToken}.
+   */
+  tokens: InlineToken[];
   /**
    * UI fold state overlaid from the backend's op log. `true` means
    * the children are hidden in the outline. Mutated via

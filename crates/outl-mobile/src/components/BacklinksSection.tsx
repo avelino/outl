@@ -84,7 +84,7 @@ export function BacklinksSection(props: BacklinksSectionProps): JSX.Element {
                           link.todo === "DONE",
                       }}
                     >
-                      <MarkdownInline text={link.block_text} />
+                      <MarkdownInline tokens={link.source_block.tokens} />
                     </p>
                   </div>
                 </div>

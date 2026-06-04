@@ -1,22 +1,27 @@
 import { For, JSX } from "solid-js";
+import type { InlineToken } from "./api";
 
 /**
- * Render a block's text with the minimum set of inline markdown
- * conventions outl supports today:
+ * Render a block's pre-tokenized inline markdown.
  *
- * - `**bold**`
- * - `*italic*`
- * - `` `code` ``
- * - `[label](url)` links — non-clickable for now (we'd need to wire
- *   the Tauri opener plugin)
- * - `[[page name]]` wiki refs — rendered as accented pill
- * - `#tag` — rendered as small chip
+ * The Rust backend (`outl_md::tokenize_owned`) tokenizes every block
+ * before it leaves the workspace, so the renderer receives the
+ * tokens directly. No parallel TS tokenizer lives here — adding a
+ * new variant in `outl_md::InlineTok` plus its `InlineToken`
+ * counterpart and a render case below is the whole flow.
  *
- * Reuses the same lexicon `outl-md` uses so future migration to the
- * shared tokenizer is mechanical.
+ * Variants currently supported:
+ *
+ * - `**bold**`, `*italic*` / `_italic_`, `~~strike~~`, `` `code` ``
+ * - `[label](url)` links (non-clickable for now, would need the
+ *   Tauri opener plugin)
+ * - `[[page name]]` wiki refs (rendered as accented pill)
+ * - `#tag` (rendered as small chip)
+ * - `((blk-XXXXXX))` block refs and `!((blk-XXXXXX))` embeds
  */
 interface MarkdownInlineProps {
-  text: string;
+  /** Tokens produced by `outl_md::tokenize_owned` on the backend. */
+  tokens: InlineToken[];
   /** Invoked when the user taps a `[[ref]]`. The argument is the
    * target name (slug or page title) inside the brackets. Skip the
    * default tap handling (e.g. when this lives inside a textarea). */
@@ -26,9 +31,8 @@ interface MarkdownInlineProps {
 }
 
 export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
-  const tokens = tokenize(props.text);
   return (
-    <For each={tokens}>
+    <For each={props.tokens}>
       {(tok) => {
         switch (tok.kind) {
           case "plain":
@@ -37,6 +41,8 @@ export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
             return <span class="font-semibold">{tok.value}</span>;
           case "italic":
             return <span class="italic">{tok.value}</span>;
+          case "strike":
+            return <span class="line-through opacity-70">{tok.value}</span>;
           case "code":
             return (
               <code class="rounded bg-(--color-ios-divider)/30 px-1 py-0.5 font-mono text-[15px] dark:bg-(--color-iosd-divider)/30">
@@ -93,107 +99,4 @@ export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
       }}
     </For>
   );
-}
-
-export type Token =
-  | { kind: "plain"; value: string }
-  | { kind: "bold"; value: string }
-  | { kind: "italic"; value: string }
-  | { kind: "code"; value: string }
-  | { kind: "link"; value: string; href: string }
-  | { kind: "ref"; value: string }
-  | { kind: "tag"; value: string }
-  | { kind: "blockref"; value: string }
-  | { kind: "embed"; value: string };
-
-const PATTERNS: Array<{
-  regex: RegExp;
-  build: (m: RegExpExecArray) => Token;
-}> = [
-  {
-    regex: /\*\*([^*]+)\*\*/g,
-    build: (m) => ({ kind: "bold", value: m[1] }),
-  },
-  {
-    regex: /`([^`]+)`/g,
-    build: (m) => ({ kind: "code", value: m[1] }),
-  },
-  {
-    regex: /\*([^*\s][^*]*)\*/g,
-    build: (m) => ({ kind: "italic", value: m[1] }),
-  },
-  {
-    // Underscore italic. Require word boundary on both sides so we
-    // don't capture stray underscores in identifiers.
-    regex: /(?<![\w_])_([^_\s][^_]*)_(?![\w_])/g,
-    build: (m) => ({ kind: "italic", value: m[1] }),
-  },
-  {
-    // Block embed: `!((blk-XXXXXX))`. Matched before plain block ref
-    // so the leading `!` isn't lost.
-    regex: /!\(\((blk-[a-z0-9]+)\)\)/g,
-    build: (m) => ({ kind: "embed", value: m[1] }),
-  },
-  {
-    // Inline block reference: `((blk-XXXXXX))`.
-    regex: /\(\((blk-[a-z0-9]+)\)\)/g,
-    build: (m) => ({ kind: "blockref", value: m[1] }),
-  },
-  {
-    regex: /\[\[([^\]]+)\]\]/g,
-    build: (m) => ({ kind: "ref", value: m[1] }),
-  },
-  {
-    regex: /(?<![\w])#([\p{L}\p{N}_-]+)/gu,
-    build: (m) => ({ kind: "tag", value: `#${m[1]}` }),
-  },
-  {
-    regex: /\[([^\]]+)\]\(([^)]+)\)/g,
-    build: (m) => ({ kind: "link", value: m[1], href: m[2] }),
-  },
-];
-
-/**
- * Walk the string left-to-right, picking the earliest pattern match
- * at each position. Anything outside a match becomes a plain token.
- *
- * Exported for unit tests; not part of the public component surface.
- */
-export function tokenize(text: string): Token[] {
-  const tokens: Token[] = [];
-  let cursor = 0;
-
-  while (cursor < text.length) {
-    let bestStart = text.length;
-    let bestEnd = text.length;
-    let bestToken: Token | null = null;
-
-    for (const { regex, build } of PATTERNS) {
-      regex.lastIndex = cursor;
-      const m = regex.exec(text);
-      if (!m) continue;
-      if (m.index < bestStart) {
-        bestStart = m.index;
-        bestEnd = m.index + m[0].length;
-        bestToken = build(m);
-      }
-    }
-
-    if (!bestToken) {
-      // No more matches anywhere: everything from `cursor` to the
-      // end is plain text. Emit it once and stop.
-      if (cursor < text.length) {
-        tokens.push({ kind: "plain", value: text.slice(cursor) });
-      }
-      return tokens;
-    }
-
-    if (bestStart > cursor) {
-      tokens.push({ kind: "plain", value: text.slice(cursor, bestStart) });
-    }
-    tokens.push(bestToken);
-    cursor = bestEnd;
-  }
-
-  return tokens;
 }

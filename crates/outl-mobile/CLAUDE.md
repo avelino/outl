@@ -91,17 +91,34 @@ Tauri command. Plain text falls through to the browser's default
 splice so a one-off URL or code snippet still pastes the way the user
 expects.
 
-Two cross-runtime contracts live here. Both must stay in sync:
+Cross-runtime contracts live here. All TS copies of Rust logic must
+stay in sync with their Rust canonical source:
 
 1. **`looksLikeOutline`** mirrors `outl_actions::paste::looks_like_outline`.
    Extending the Rust detector (e.g. accept `*` bullets or ordered
    lists) requires the same change in `lib/paste.ts` plus a Vitest case.
-2. **Caret offset.** `textarea.selectionStart` is a UTF-16 code unit
+2. **Inline tokens.** No TS tokenizer. The backend runs
+   `outl_md::tokenize_owned` on every block before it leaves the
+   workspace and attaches the result as `BlockNode.tokens` /
+   `Backlink.source_block.tokens`. `lib/markdown.tsx::MarkdownInline`
+   consumes those tokens directly and renders each variant to JSX.
+   Adding a token variant means extending `outl_md::InlineTok` plus
+   `outl_md::InlineToken` plus the `InlineToken` TS union in `lib/api.ts`
+   plus the renderer switch — but there is no TS regex to keep in
+   sync, only a discriminant-to-render mapping.
+3. **`detectRefContext`** in `lib/autocomplete.ts` mirrors
+   `outl_tui::actions::overlay::detect_trigger` (the `[[` and `((`
+   triggers; TUI also covers `#` and `/`). Local copy keeps the
+   autocomplete popup off the Tauri round-trip per keystroke. Same
+   sync rule as `looksLikeOutline`.
+4. **Caret offset.** `textarea.selectionStart` is a UTF-16 code unit
    offset; the Rust backend expects a Unicode codepoint count.
    `lib/paste.ts::utf16OffsetToCharOffset` does the conversion before
    the Tauri call so pasting after an emoji lands the splice at the
    right place. Skip this and supplementary-plane characters shift
-   the splice by one per char.
+   the splice by one per char. (Not a mirror — runtime gap. Listed
+   alongside the mirrors because the cross-runtime concern is the
+   same: don't let the frontend drift from what the backend assumes.)
 
 ## iCloud layout
 

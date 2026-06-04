@@ -49,7 +49,15 @@ same paranoia as the CRDT.
   **UI-agnostic.** TUI, future Tauri GUI, and mobile clients all
   consume the same `InlineTok` / `RefTarget` types and map them to
   their own primitives (`Span`, HTML, `AttributedString`,
-  `AnnotatedString`).
+  `AnnotatedString`). Two forms:
+  - `InlineTok<'a>` + `tokenize` — borrowed, zero-copy. Use inside
+    Rust where the source string outlives the tokens.
+  - `InlineToken` (owned) + `tokenize_owned` — Serde-friendly,
+    suitable for wire payloads. `outl-actions` attaches the result
+    to `OutlineNode.tokens` so mobile renders without a TS
+    tokenizer. Adding a variant to `InlineTok` requires adding the
+    matching variant to `InlineToken` plus the conversion in
+    `InlineToken::from_borrowed` in the same change.
 - **Block index** (`block_index.rs`) — `NodeId → BlockEntry`,
   `ref_handle → NodeId`, `NodeId → [BlockReference]` (reverse refs),
   `(slug, dfs_path) → NodeId` for location lookup. Population is

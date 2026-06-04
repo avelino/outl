@@ -73,12 +73,14 @@ pub fn project_outline_node(workspace: &Workspace, node: NodeId) -> OutlineNode 
         .map(|(k, v)| (k.to_string(), prop_value_to_string(v)))
         .collect();
     properties.sort_by(|a, b| a.0.cmp(&b.0));
+    let tokens = outl_md::tokenize_owned(body);
     OutlineNode {
         id: node.to_string(),
         text: body.to_string(),
         todo,
         collapsed: workspace.tree().is_collapsed(node),
         properties,
+        tokens,
         children: project_outline(workspace, node),
     }
 }
@@ -137,6 +139,15 @@ pub struct OutlineNode {
     /// Populated from [`outl_core::tree::Tree::properties_of`] when
     /// the workspace is in scope, and from the parsed `.md` otherwise.
     pub properties: Vec<(String, String)>,
+    /// Pre-tokenized inline markdown for `text` (no TODO/DONE prefix).
+    ///
+    /// The backend runs `outl_md::tokenize_owned` here so every client
+    /// can render the block without keeping its own inline tokenizer
+    /// in sync with the Rust canonical one. Mobile renders these
+    /// straight into JSX; the TUI can ignore the field and keep using
+    /// borrowed [`outl_md::InlineTok`] on `text` directly when it
+    /// already has the string in scope.
+    pub tokens: Vec<outl_md::InlineToken>,
     /// Children, in their fractional-index order.
     pub children: Vec<OutlineNode>,
 }
@@ -165,12 +176,14 @@ pub fn project_outline(workspace: &Workspace, parent: NodeId) -> Vec<OutlineNode
                 .map(|(k, v)| (k.to_string(), prop_value_to_string(v)))
                 .collect();
             properties.sort_by(|a, b| a.0.cmp(&b.0));
+            let tokens = outl_md::tokenize_owned(body);
             OutlineNode {
                 id: id.to_string(),
                 text: body.to_string(),
                 todo,
                 collapsed: workspace.tree().is_collapsed(id),
                 properties,
+                tokens,
                 children: project_outline(workspace, id),
             }
         })
@@ -284,6 +297,7 @@ fn outline_from_parsed(
     // `OutlineNode.properties` doc-comment.
     let mut properties = block.properties.clone();
     properties.sort_by(|a, b| a.0.cmp(&b.0));
+    let tokens = outl_md::tokenize_owned(body);
     // `collapsed` is overlaid by the caller using the workspace as the
     // source of truth (`Op::SetCollapsed` lives in the op log). The
     // bare `read_page_view` path leaves it `false`; the workspace-
@@ -294,6 +308,7 @@ fn outline_from_parsed(
         todo,
         collapsed: false,
         properties,
+        tokens,
         children,
     }
 }
@@ -310,6 +325,7 @@ mod tests {
             todo: None,
             collapsed: false,
             properties: Vec::new(),
+            tokens: Vec::new(),
             children,
         }
     }
@@ -382,6 +398,7 @@ mod tests {
             todo: Some(TodoState::Done),
             collapsed: false,
             properties: vec![("priority".into(), "high".into())],
+            tokens: Vec::new(),
             children: vec![leaf("child")],
         };
         assert_eq!(n.text, "ship it");

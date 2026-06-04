@@ -22,6 +22,7 @@
 //! always advance by `ch.len_utf8()`, never by raw byte.
 
 use chrono::NaiveDate;
+use serde::{Deserialize, Serialize};
 
 /// A token recognized in inline block content.
 ///
@@ -106,6 +107,133 @@ pub enum RefTarget {
     /// `((blk-XXXXXX))` — block reference (lookup key into
     /// [`crate::index::WorkspaceIndex`]).
     Block(String),
+}
+
+/// Owned, serializable mirror of [`InlineTok`].
+///
+/// `InlineTok` borrows from the source string and is cheap to use
+/// inside Rust. Anything that has to cross a serialization boundary
+/// (a Tauri command's return value, a `BlockNode` DTO sent to a
+/// frontend, a `Backlink.block_tokens` payload) needs owned strings
+/// and a Serde-friendly shape. `InlineToken` is that shape.
+///
+/// The JSON form matches the schema mobile's TypeScript renderer
+/// consumes one-for-one. Adding a variant in `InlineTok` requires
+/// adding the same variant here plus the conversion in
+/// [`InlineToken::from_borrowed`] in the same change — otherwise the
+/// new variant silently degrades to `Plain` on the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum InlineToken {
+    /// Bare text with no formatting.
+    Plain {
+        /// Verbatim text.
+        value: String,
+    },
+    /// `**bold**`.
+    Bold {
+        /// Inner text between the markers.
+        value: String,
+    },
+    /// `*italic*` or `_italic_`. The TS renderer collapses both into
+    /// one variant since the marker is purely cosmetic to the
+    /// browser; Rust consumers that need the marker keep using
+    /// [`InlineTok`] directly.
+    Italic {
+        /// Inner text between the markers.
+        value: String,
+    },
+    /// `~~strike~~`.
+    Strike {
+        /// Inner text between the markers.
+        value: String,
+    },
+    /// `` `code` ``.
+    Code {
+        /// Inner text between the backticks.
+        value: String,
+    },
+    /// `[text](url)` link.
+    Link {
+        /// Anchor text shown to the user.
+        value: String,
+        /// URL target.
+        href: String,
+    },
+    /// `[[name]]` page reference.
+    Ref {
+        /// Page name (display form, kept verbatim).
+        value: String,
+    },
+    /// `#tag`. `value` includes the leading `#` so the frontend can
+    /// render it as a single token without re-prefixing.
+    Tag {
+        /// Tag string including the `#` prefix (e.g. `"#project"`).
+        value: String,
+    },
+    /// `((blk-XXXXXX))` block reference.
+    #[serde(rename = "blockref")]
+    BlockRef {
+        /// Full handle including the `blk-` prefix.
+        value: String,
+    },
+    /// `!((blk-XXXXXX))` block embed.
+    Embed {
+        /// Full handle including the `blk-` prefix.
+        value: String,
+    },
+}
+
+impl InlineToken {
+    /// Convert a borrowed [`InlineTok`] into the owned, serializable
+    /// form. The conversion is total — every variant maps 1:1.
+    pub fn from_borrowed(tok: &InlineTok<'_>) -> Self {
+        match tok {
+            InlineTok::Plain(s) => InlineToken::Plain {
+                value: (*s).to_owned(),
+            },
+            InlineTok::Bold { inner } => InlineToken::Bold {
+                value: (*inner).to_owned(),
+            },
+            InlineTok::Italic { inner, .. } => InlineToken::Italic {
+                value: (*inner).to_owned(),
+            },
+            InlineTok::Strike { inner } => InlineToken::Strike {
+                value: (*inner).to_owned(),
+            },
+            InlineTok::Code { inner } => InlineToken::Code {
+                value: (*inner).to_owned(),
+            },
+            InlineTok::Link { text, url } => InlineToken::Link {
+                value: (*text).to_owned(),
+                href: (*url).to_owned(),
+            },
+            InlineTok::PageRef { name } => InlineToken::Ref {
+                value: (*name).to_owned(),
+            },
+            InlineTok::Tag { name } => InlineToken::Tag {
+                value: format!("#{name}"),
+            },
+            InlineTok::BlockRef { handle } => InlineToken::BlockRef {
+                value: (*handle).to_owned(),
+            },
+            InlineTok::Embed { handle } => InlineToken::Embed {
+                value: (*handle).to_owned(),
+            },
+        }
+    }
+}
+
+/// Tokenize `text` directly into the owned, serializable form. This
+/// is the call backend DTOs use when they need to ship tokens to a
+/// frontend — single source of truth for inline markdown parsing
+/// across every client, no parallel TS / Swift / Kotlin tokenizer
+/// to keep in sync.
+pub fn tokenize_owned(text: &str) -> Vec<InlineToken> {
+    tokenize(text)
+        .iter()
+        .map(InlineToken::from_borrowed)
+        .collect()
 }
 
 /// Tokenize inline block content.
@@ -460,4 +588,71 @@ fn try_tag(s: &str) -> Option<(InlineTok<'_>, usize)> {
         },
         1 + tag_byte_end,
     ))
+}
+
+#[cfg(test)]
+mod tokenize_owned_tests {
+    use super::*;
+
+    #[test]
+    fn round_trips_every_variant_into_serializable_form() {
+        // Block-ref handles need `REF_HANDLE_TAIL_LEN` chars after
+        // `blk-` (6 today) to pass `is_valid_block_handle`; shorter
+        // handles correctly degrade to plain text.
+        let toks = tokenize_owned(
+            "**b** *i* ~~s~~ `c` [t](u) [[p]] #tag ((blk-aaaaaa)) !((blk-bbbbbb)) tail",
+        );
+        // Spot-check shape (kind discriminant) and the `tag` prefixing,
+        // since that's the one place `from_borrowed` does more than a
+        // string copy.
+        let kinds: Vec<&str> = toks
+            .iter()
+            .map(|t| match t {
+                InlineToken::Plain { .. } => "plain",
+                InlineToken::Bold { .. } => "bold",
+                InlineToken::Italic { .. } => "italic",
+                InlineToken::Strike { .. } => "strike",
+                InlineToken::Code { .. } => "code",
+                InlineToken::Link { .. } => "link",
+                InlineToken::Ref { .. } => "ref",
+                InlineToken::Tag { .. } => "tag",
+                InlineToken::BlockRef { .. } => "blockref",
+                InlineToken::Embed { .. } => "embed",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "bold", "plain", "italic", "plain", "strike", "plain", "code", "plain", "link",
+                "plain", "ref", "plain", "tag", "plain", "blockref", "plain", "embed", "plain",
+            ],
+        );
+        // Tag value carries the leading `#` so the mobile renderer
+        // doesn't have to re-prefix.
+        let tag = toks
+            .iter()
+            .find_map(|t| match t {
+                InlineToken::Tag { value } => Some(value.clone()),
+                _ => None,
+            })
+            .expect("tokenize_owned should emit one Tag");
+        assert_eq!(tag, "#tag");
+    }
+
+    #[test]
+    fn serde_json_kind_field_matches_mobile_dto() {
+        // Mobile reads `kind` lowercase via Serde's
+        // `rename_all = "lowercase"`. If we ever change the rename
+        // policy, the iOS client silently goes to plain — this test
+        // pins the wire shape.
+        let toks = vec![
+            InlineToken::Plain { value: "hi".into() },
+            InlineToken::BlockRef {
+                value: "blk-x1".into(),
+            },
+        ];
+        let json = serde_json::to_string(&toks).unwrap();
+        assert!(json.contains(r#""kind":"plain""#));
+        assert!(json.contains(r#""kind":"blockref""#));
+    }
 }

@@ -28,7 +28,9 @@ pub use atomic::write_atomic;
 pub use block_index::{BlockEntry, BlockIndex, BlockReference};
 pub use diff::{diff_to_ops, DiffPlan};
 pub use index::{PageEntry, WorkspaceIndex};
-pub use inline::{byte_index_for_char, ref_at_cursor, tokenize, InlineTok, RefTarget};
+pub use inline::{
+    byte_index_for_char, ref_at_cursor, tokenize, tokenize_owned, InlineTok, InlineToken, RefTarget,
+};
 pub use matching::{match_blocks, Match, MatchLevel};
 pub use parse::{parse, OutlineNode, ParsedPage};
 pub use reconcile::{reconcile_dir, reconcile_md, ReconcileError, ReconcileReport};

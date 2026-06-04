@@ -285,7 +285,7 @@ function BlockBody(props: {
                 }
               >
                 <MarkdownInline
-                  text={props.block.text}
+                  tokens={props.block.tokens}
                   onRefClick={props.onRefClick}
                   onTagClick={props.onTagClick}
                 />

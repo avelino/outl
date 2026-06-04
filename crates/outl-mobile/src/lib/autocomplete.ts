@@ -155,6 +155,15 @@ export interface RefContext {
  * `))` first, the caret isn't inside that ref. We also stop on
  * newlines so a stray `[[` on a previous line doesn't capture a
  * later caret.
+ *
+ * **Cross-runtime mirror.** The TUI runs the same walk-back in Rust
+ * at `outl_tui::actions::overlay::detect_trigger`, plus `#` and `/`
+ * triggers the mobile doesn't surface yet. Mobile keeps a local TS
+ * copy so the autocomplete popup never pays a Tauri round-trip per
+ * keystroke. If you extend either side (a new opener, a different
+ * closing rule), update both in the same commit — same convention
+ * `looksLikeOutline` (`lib/paste.ts`) and `tokenize`
+ * (`lib/markdown.tsx`) follow.
  */
 export function detectRefContext(
   value: string,

@@ -338,6 +338,7 @@ op log. UI-agnostic; TUI and mobile both consume them.
 | Char ↔ (line, col) on a buffer | `outl_md::view::char_to_line_col` / `line_col_to_char` | `crates/outl-md/src/view.rs` |
 | Project a block to renderable rows | `outl_md::view::block_to_rows` → `BlockRow` / `BlockRowKind` | `crates/outl-md/src/view.rs` |
 | Tokenize inline markdown | `outl_md::inline::tokenize` → `InlineTok` | `crates/outl-md/src/inline.rs` |
+| Tokenize inline markdown into an owned, Serde-friendly form for wire/DTO payloads | `outl_md::inline::tokenize_owned` → `InlineToken` | `crates/outl-md/src/inline.rs` |
 | Resolve the ref under a caret position | `outl_md::inline::ref_at_cursor` → `RefTarget` | `crates/outl-md/src/inline.rs` |
 | Validate a `((blk-XXXXXX))` handle | `outl_md::inline::is_valid_block_handle` | `crates/outl-md/src/inline.rs` |
 | Byte offset for a char index (UTF-8 safe) | `outl_md::inline::byte_index_for_char` | `crates/outl-md/src/inline.rs` |
