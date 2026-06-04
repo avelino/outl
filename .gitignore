@@ -3,6 +3,18 @@
 **/target
 debug
 
+# JS/TS frontend (bun workspaces — outl-frontend-shared, outl-mobile, outl-desktop)
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.vite/
+**/.vite/
+
+# Tauri auto-generated capability schemas (regenerated on every build by tauri-build).
+# `gen/apple/` (mobile) is manual config and intentionally committed.
+**/src-tauri/gen/schemas/
+
 # Backups from rustfmt
 **/*.rs.bk
 

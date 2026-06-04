@@ -5,7 +5,7 @@ import {
   getNativeSuggesterState,
   setNativeSuggesterState,
 } from "./native-suggester";
-import { PageMeta } from "./api";
+import type { PageMeta } from "@outl/shared/api/types";
 
 afterEach(() => {
   setNativeSuggesterState(null);

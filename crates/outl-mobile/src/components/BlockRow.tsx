@@ -1,10 +1,10 @@
 import { For, JSX, Show, onCleanup, onMount } from "solid-js";
-import { BlockNode } from "../lib/api";
-import { MarkdownInline } from "../lib/markdown";
-import { autoClosePair, autoDeletePair } from "../lib/autocomplete";
+import type { BlockNode } from "@outl/shared/api/types";
+import { MarkdownInline } from "@outl/shared/markdown";
+import { autoClosePair, autoDeletePair } from "@outl/shared/autocomplete";
+import { looksLikeOutline, utf16OffsetToCharOffset } from "@outl/shared/paste";
 import { haptic } from "../lib/haptics";
 import { rawTextWithTodo } from "../lib/outline";
-import { looksLikeOutline, utf16OffsetToCharOffset } from "../lib/paste";
 import { parkCaret } from "../lib/textarea";
 import { SwipeRow } from "./SwipeRow";
 

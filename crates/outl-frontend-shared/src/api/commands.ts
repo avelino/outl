@@ -1,117 +1,22 @@
+/**
+ * Typed wrappers around the Tauri commands every outl frontend
+ * client invokes. The Rust side (`outl-mobile/src-tauri/src/lib.rs`,
+ * `outl-desktop/src-tauri/src/lib.rs`) registers commands with the
+ * exact names below; this file is the single TS surface so both
+ * clients agree on shape, name and return type.
+ *
+ * Client-specific commands (mobile gestures, `pick_workspace_dir`
+ * and `run_code_block` on desktop, etc) live in the client's own
+ * `lib/api.ts` and never end up here.
+ */
+
 import { invoke } from "@tauri-apps/api/core";
 
-export type TodoState = "TODO" | "DONE";
-export type PageKind = "page" | "journal";
-
-/**
- * Pre-tokenized inline markdown coming from the Rust backend
- * (`outl_md::tokenize_owned`). The mobile renderer maps each variant
- * to JSX in `lib/markdown.tsx::MarkdownInline`. There is no parallel
- * TS tokenizer — `outl_md::inline::tokenize` is the single source of
- * truth for inline syntax across every client. Adding a token in
- * Rust means extending this union and the renderer switch in the
- * same change.
- */
-export type InlineToken =
-  | { kind: "plain"; value: string }
-  | { kind: "bold"; value: string }
-  | { kind: "italic"; value: string }
-  | { kind: "strike"; value: string }
-  | { kind: "code"; value: string }
-  | { kind: "link"; value: string; href: string }
-  | { kind: "ref"; value: string }
-  | { kind: "tag"; value: string }
-  | { kind: "blockref"; value: string }
-  | { kind: "embed"; value: string };
-
-export interface BlockNode {
-  id: string;
-  text: string;
-  todo: TodoState | null;
-  /**
-   * Inline markdown tokens for `text` (no TODO/DONE prefix). Backend
-   * pre-tokenizes via `outl_md::tokenize_owned` so the renderer
-   * doesn't run a second tokenizer in JS. See {@link InlineToken}.
-   */
-  tokens: InlineToken[];
-  /**
-   * UI fold state overlaid from the backend's op log. `true` means
-   * the children are hidden in the outline. Mutated via
-   * `setBlockCollapsed`, which generates `Op::SetCollapsed` and
-   * appends it to the device's `ops-<actor>.jsonl`; iCloud /
-   * Syncthing propagate the per-actor file and every peer's CRDT
-   * replays the op in HLC order. The sidecar is never written for
-   * this flag.
-   */
-  collapsed: boolean;
-  /**
-   * `(key, value)` block properties — the `key:: value` lines a user
-   * authored under the block in markdown. Empty when the block has
-   * none. Backend builds this from `Op::SetProp` entries so it
-   * survives the same way collapsed does (op log, not sidecar).
-   */
-  properties: Array<[string, string]>;
-  children: BlockNode[];
-}
-
-export interface PageMeta {
-  id: string;
-  slug: string;
-  title: string;
-  kind: PageKind;
-  /**
-   * Optional emoji / icon string the user set on the page via the
-   * `icon::` page property. Backend omits the field when unset; the
-   * frontend can fall back to `📄`/`📅` based on `kind`.
-   */
-  icon?: string;
-}
-
-export interface Backlink {
-  block_id: string;
-  todo: TodoState | null;
-  source_page: PageMeta | null;
-  /**
-   * Source block as a self-contained outline subtree (text, tokens,
-   * children, properties). Mirrors what `read_page_view_with_workspace`
-   * would return for the same block. The mobile renderer reads
-   * `source_block.tokens` for the inline markdown; the raw text
-   * lives at `source_block.text` if a caller ever needs it.
-   *
-   * Note: the Rust `Backlink` struct also carries `block_text` for
-   * the CLI/MCP JSON envelope (`outl page rename` returns it under
-   * `affected_refs`). It's intentionally omitted from this TS
-   * interface because mobile never reads it — Tauri still ships the
-   * field over the wire; JS just ignores it.
-   */
-  source_block: BlockNode;
-  /**
-   * DFS path of the source block inside `source_page`. Empty array
-   * means the block is a direct child of the page root. Mirrors
-   * `outl_actions::Backlink::source_block_path` — used by clients
-   * that navigate inside a backlink's subtree (the TUI today).
-   */
-  source_block_path: number[];
-  /**
-   * On-disk path of `source_page`'s `.md` (inside the iCloud
-   * container). Backend omits the field when the source block has
-   * no enclosing page (legacy data).
-   */
-  source_path?: string;
-}
-
-export interface PageView {
-  page: PageMeta;
-  outline: BlockNode[];
-  backlinks: Backlink[];
-}
-
-export interface WorkspaceSummary {
-  blocks: number;
-  ops: number;
-  actor: string;
-  storage_root: string;
-}
+import type {
+  PageMeta,
+  PageView,
+  WorkspaceSummary,
+} from "./types";
 
 // ---------------------------------------------------------------------------
 // Page / journal navigation
@@ -262,10 +167,12 @@ export function pasteMarkdown(
 }
 
 /**
- * Persist the collapsed flag on a single block. The backend writes
- * straight to the sidecar (no `Op` is generated — collapsed is UI
- * state). Returns the refreshed page view so the caller can re-render
- * in one round trip.
+ * Persist the collapsed flag on a single block. The backend generates
+ * `Op::SetCollapsed` and appends it to the device's per-actor
+ * `ops-<actor>.jsonl` so the flag converges across peers through the
+ * tree CRDT — never written to the sidecar (last-write-wins per file
+ * would lose concurrent flips). Returns the refreshed page view so
+ * the caller can re-render in one round trip.
  */
 export function setBlockCollapsed(
   pageId: string,

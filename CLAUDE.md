@@ -70,7 +70,9 @@ outl/
     ├── outl-exec/             # code-block runtime (desktop)
     ├── outl-cli/              # `outl` binary
     ├── outl-tui/              # `outl-tui` binary
-    └── outl-mobile/           # Tauri 2 mobile app (iOS first)
+    ├── outl-mobile/           # Tauri 2 mobile app (iOS first)
+    ├── outl-desktop/          # Tauri 2 desktop app (macOS/Linux/Windows)
+    └── outl-frontend-shared/  # TS+Solid lib (@outl/shared) consumed by mobile + desktop
 ```
 
 ## Shared logic: `outl-actions`
@@ -86,6 +88,23 @@ The contract is short:
 
 See `crates/outl-actions/CLAUDE.md` for the full surface and the "what this crate does NOT own" list.
 **If you find yourself writing tree-walking or op-building helpers inside `outl-tui/`, `outl-mobile/`, or any future client, stop and put them in `outl-actions` first.** The TUI's `outline_ops.rs` is the one deliberate exception (it manipulates an in-flight AST that hasn't been parsed back to a workspace yet — see that file's module doc).
+
+## Shared frontend: `@outl/shared` (`outl-frontend-shared`)
+
+The same "one owner, every client wraps" policy applies on the TS side.
+**`crates/outl-frontend-shared/`** is the Solid + TypeScript library every GUI client (`outl-mobile` today, `outl-desktop` next) consumes for the pieces that are pure, stateless, and identical between clients:
+
+- `<MarkdownInline />` (renderer for `InlineToken[]` produced by `outl_md::tokenize_owned`)
+- Pure helpers: `looksLikeOutline`, `utf16OffsetToCharOffset`, `detectRefContext`, `autoClose/DeletePair`, `insertPair/Text`, `applySuggestion`
+- DTO interfaces (`PageMeta`, `OutlineNode`, `BlockNode`, `Backlink`, `InlineToken`, `PageView`, `WorkspaceSummary`, …)
+- Typed `invoke<T>()` wrappers for the Tauri commands every client uses (`@outl/shared/api/commands`)
+
+Resolution: bun workspaces in the repo root `package.json` deduplicate `solid-js` / `@tauri-apps/api` across the lib + every client, and each client has `paths` + `resolve.alias` for `@outl/shared`.
+
+**Rule of thumb (TS):** before writing a helper in `outl-mobile/src/lib/` or `outl-desktop/src/lib/`, search `crates/outl-frontend-shared/src/`.
+If the other client already has an equivalent, promote it here in the same PR.
+**Chrome stays in the client** (Sidebar, Picker, BlockRow, mode-specific keybindings, OS-specific gestures).
+See `crates/outl-frontend-shared/CLAUDE.md` for the full policy.
 
 Per-crate context lives in `crates/<name>/CLAUDE.md`.
 Read it before editing that crate.

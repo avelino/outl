@@ -1,15 +1,15 @@
 # Clients and shared logic
 
-outl has multiple clients today (TUI, mobile) and more coming (Tauri desktop, plugins).
+outl has multiple clients today (TUI, mobile, desktop) and more coming (plugins).
 They all sit on top of the same workspace and the same op log.
-To keep them honest, we route every workspace operation through one shared crate: **`outl-actions`**.
+To keep them honest, we route every workspace operation through one shared crate: **`outl-actions`**, and the TS+Solid frontends share `@outl/shared` (`crates/outl-frontend-shared`) for everything pure (DTO types, `<MarkdownInline />`, paste helpers, autocomplete).
 
 ## The stack
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
 │ Clients                                                       │
-│   outl-cli  outl-tui  outl-mobile  …future desktop / plugins │
+│   outl-cli  outl-tui  outl-mobile  outl-desktop  …plugins    │
 └──────────────────────────────────────────────────────────────┘
                           │
                           ▼

@@ -286,13 +286,37 @@ fn main() -> Result<()> {
 
 /// Resolve which workspace path to operate on.
 ///
-/// Precedence: subcommand-positional > global `--workspace` > current dir.
+/// Precedence (first hit wins):
+///
+/// 1. **Subcommand-positional** path (`outl page get … <path>`).
+/// 2. **Global `--workspace <DIR>`** flag.
+/// 3. **`workspace.last`** from `~/.config/outl/config.toml`
+///    (the same file the desktop's Settings modal writes when the
+///    user picks a workspace — so `outl` with no args lands on the
+///    workspace the user last opened in the GUI, no `--workspace`
+///    flag needed).
+/// 4. **Current directory** — final fallback (matches the
+///    `cd ~/notes && outl` muscle memory).
+///
+/// A path stored in `config.toml` that no longer exists on disk is
+/// skipped silently rather than failing the launch — the user
+/// likely deleted / unmounted the folder and would be surprised by
+/// a crash. The cwd fallback picks up.
 fn resolve_path(global: Option<&PathBuf>, local: Option<&PathBuf>) -> Result<PathBuf> {
     if let Some(p) = local {
         return Ok(p.clone());
     }
     if let Some(p) = global {
         return Ok(p.clone());
+    }
+    if let Some(p) = outl_config::load().workspace.last {
+        if p.exists() {
+            return Ok(p);
+        }
+        tracing::warn!(
+            "config.toml workspace.last = {} is no longer on disk; falling back to cwd",
+            p.display()
+        );
     }
     std::env::current_dir().with_context(|| "reading current directory")
 }

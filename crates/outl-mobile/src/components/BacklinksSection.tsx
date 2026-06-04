@@ -1,6 +1,6 @@
 import { For, JSX, Show } from "solid-js";
-import { Backlink, TodoState } from "../lib/api";
-import { MarkdownInline } from "../lib/markdown";
+import type { Backlink, TodoState } from "@outl/shared/api/types";
+import { MarkdownInline } from "@outl/shared/markdown";
 
 interface BacklinksSectionProps {
   backlinks: Backlink[];

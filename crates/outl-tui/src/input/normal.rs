@@ -103,7 +103,11 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                 app.sidebar_blur();
                 return Ok(false);
             }
-            KeyCode::Char('\\') => {
+            KeyCode::Char('e' | 'E') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Ctrl+E (Ctrl+Shift+E too — most terminals collapse
+                // them) is the same toggle that opens the sidebar
+                // from Normal; pressing it while focused closes.
+                // Matches the desktop's `Cmd+Shift+E`.
                 app.sidebar_close();
                 return Ok(false);
             }
@@ -246,6 +250,42 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         KeyCode::Right | KeyCode::Char('l') => app.move_cursor_col(1),
         KeyCode::Char('0') | KeyCode::Home => app.cursor_to_home(),
         KeyCode::Char('$') | KeyCode::End => app.cursor_to_end(),
+        // Toggle backlinks panel. `Ctrl+B` (Ctrl+Shift+B too — most
+        // terminals collapse them). Mirrors the desktop's
+        // `Cmd+Shift+B`; both clients hide backlinks by default and
+        // open them on demand.
+        //
+        // Must come **before** the unconditional `Char('b')` (vim
+        // word-left) below — Rust matches arms top-to-bottom and a
+        // pattern guard can't recover the modifier branch once an
+        // earlier unguarded arm captures the bare char.
+        KeyCode::Char('b' | 'B') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.show_backlinks = !app.show_backlinks
+        }
+        // Toggle the left sidebar (mini-calendar, pinned, recent).
+        // Default off — `Ctrl+E` opts in. Matches the desktop's
+        // `Cmd+Shift+E` (VS Code's "show explorer" chord). Most
+        // terminals collapse `Ctrl+Shift+E` into `Ctrl+E`, so we
+        // match either letter case with the CONTROL modifier and
+        // both feel identical to the user.
+        //
+        // Why not `\`? It clashed with desktop standardisation —
+        // single source of truth for the chrome chord lives in
+        // `outl-shortcuts`, and the desktop's `Cmd+Shift+E` is the
+        // industry-standard "toggle sidebar" mapping (VS Code,
+        // Cursor).
+        //
+        // Opening jumps focus straight to the first non-empty
+        // section (Pinned by default), so the user can immediately
+        // `j/k` through items and `Enter` to open — no extra Tab
+        // to "enter" the sidebar.
+        KeyCode::Char('e' | 'E') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if app.show_sidebar {
+                app.sidebar_close();
+            } else {
+                app.sidebar_open_focused();
+            }
+        }
         KeyCode::Char('w') => app.cursor_word_right(),
         KeyCode::Char('b') => app.cursor_word_left(),
         // Block reordering (vim-ish: capital J/K drag the block).
@@ -272,20 +312,6 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         // the overlay. `n` next, `N` previous (vim convention).
         KeyCode::Char('n') => app.search_next()?,
         KeyCode::Char('N') => app.search_prev()?,
-        // Toggle backlinks panel.
-        KeyCode::Char('B') => app.show_backlinks = !app.show_backlinks,
-        // Toggle the left sidebar (mini-calendar, pinned, recent).
-        // Default off — `\` opts in. Opening jumps focus straight to
-        // the first non-empty section (Pinned by default), so the
-        // user can immediately `j/k` through items and `Enter` to
-        // open — no extra Tab to "enter" the sidebar.
-        KeyCode::Char('\\') => {
-            if app.show_sidebar {
-                app.sidebar_close();
-            } else {
-                app.sidebar_open_focused();
-            }
-        }
         // Enter Visual mode (vim-style: V selects entire blocks).
         KeyCode::Char('V') => app.enter_visual(),
         _ => {}

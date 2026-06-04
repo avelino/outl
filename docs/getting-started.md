@@ -114,14 +114,28 @@ outl --workspace ~/notes --theme light
 outl --workspace ~/notes --theme default-dark
 ```
 
-To pin a theme per workspace, edit `~/notes/.outl/config.toml`:
+To pin a theme **for every workspace** (shared between the TUI and the desktop app), edit the global config:
+
+```toml
+# ~/.config/outl/config.toml
+[theme]
+preset = "dracula"
+
+[editor]
+vim_mode = true
+font_size = 15
+```
+
+The path is the same on macOS, Linux and Windows — XDG-style — so a single file holds your personal defaults across every client. The desktop app's **Settings modal** writes here too; flipping the theme there updates the TUI on its next launch.
+
+To pin a theme **only for one workspace**, edit its `.outl/config.toml`:
 
 ```toml
 [theme]
-preset = "dracula"
+preset = "monokai"
 ```
 
-Or switch at runtime: open the command palette with `:`, type `theme nord`, hit Enter.
+Or switch at runtime in the TUI: open the command palette with `:`, type `theme nord`, hit Enter.
 
 ## Edit `.md` externally
 

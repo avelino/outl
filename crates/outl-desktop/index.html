@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0c0814" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <title>outl</title>
+    <style>
+      /*
+       * Boot frame painted before Vite's CSS bundle loads. Mirrors the
+       * `outl` brand defaults from styles.css so the user never sees
+       * a flash of white. styles.css then takes over with
+       * @layer base + theme tokens; applyPaletteToRoot() picks up the
+       * active preset on mount.
+       */
+      html,
+      body,
+      #root {
+        margin: 0;
+        height: 100%;
+        background-color: #0c0814;
+        color: #f4f1fa;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "SF Pro Text",
+          system-ui, sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+    <script src="/src/index.tsx" type="module"></script>
+  </body>
+</html>

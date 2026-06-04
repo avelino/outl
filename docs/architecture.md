@@ -136,6 +136,18 @@ Permissive enough for any downstream — including plugin authors who want to re
 QUIC, hole punching, no central servers, no STUN/TURN dependency in the common case, in Rust, BSD-licensed.
 The alternatives are heavier (libp2p) or non-Rust.
 
+### 11.5. Shared library crates
+
+A handful of pure-data, dep-light crates exist solely to keep the clients (`outl-tui`, `outl-desktop`, future Tauri shells) honest about agreeing on shape:
+
+- **`outl-actions`** — UI-agnostic workspace operations (block ops, journal render, sync engine). Anything two clients would otherwise re-implement lives here. See `crates/outl-actions/CLAUDE.md`.
+- **`outl-theme`** — palette (named hex colors) for seven presets (`outl`, `dracula`, `nord`, …). TUI converts hex → `ratatui::Color`; desktop converts hex → CSS custom properties. One source for the look of every renderer.
+- **`outl-shortcuts`** — `Action` enum + `Chord` + `Binding` catalog. TUI's key handler and desktop's `lib/shortcuts.ts` both consume the same `default_bindings()` so `j/k/i/o/dd/c/qq/⌘P/…` mean the same thing in both clients.
+- **`outl-config`** — TOML at `~/.config/outl/config.toml` (XDG-style on every OS, including macOS). Reads global theme preset, vim-mode toggle, last-opened workspace, font size. The desktop's Settings modal writes here; the TUI reads it on startup. Per-workspace `.outl/config.toml` (workspace identity) overrides on top.
+- **`outl-frontend-shared`** (`@outl/shared`) — TS/Solid library used by `outl-mobile` and `outl-desktop`. Pure helpers, DTO types, the `MarkdownInline` renderer, `invoke()` wrappers — anything the two frontends would duplicate.
+
+The rule: a new helper or constant only lands in a client crate when it's *genuinely* client-specific. Otherwise it belongs in one of the shared crates above. The root `CLAUDE.md` "Reuse-first" section is the policy.
+
 ### 12. Tauri for desktop (phase 5)
 
 Rust core reuse, smaller binary than Electron, native webview.
@@ -240,7 +252,7 @@ Insert mode in the TUI defers the reload via a `pending_reload` flag drained on 
 ## Future considerations (documented, not built)
 
 - **End-to-end encryption** of sync traffic — iroh supports it, we'll enable.
-- **Per-workspace identity** — each device gets a stable ActorId stored in `.outl/config.toml`.
+- **Per-workspace identity** — each device gets a stable ActorId stored in the workspace's `.outl/config.toml`. (Global preferences — theme, vim mode, font size, last workspace — live separately in `~/.config/outl/config.toml` via the `outl-config` crate.)
 - **Read-only export** — Hugo, static HTML, PDF.
 - **Plugin system** — `rhai` scripts that consume op stream, expose new query types, render hooks for TUI.
   Phase 4.

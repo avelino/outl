@@ -18,6 +18,7 @@ path = "src/main.rs"
 outl-core = { workspace = true }
 outl-md = { workspace = true }
 outl-actions = { workspace = true }
+outl-config = { workspace = true }
 outl-tui = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }

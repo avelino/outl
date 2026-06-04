@@ -12,6 +12,22 @@ This is the primary mode — Roam/Logseq users expect to launch the app and see 
 The TUI library is reused via `use outl_tui;` (the crate exposes both a library and a binary).
 Don't fork the TUI logic into the CLI.
 
+### Workspace path resolution (`resolve_path` in `main.rs`)
+
+Every subcommand that operates on a workspace runs through one helper.
+Precedence — first hit wins:
+
+1. **Subcommand-positional** path (e.g. `outl page get … <PATH>`).
+2. **Global `--workspace <DIR>`** flag.
+3. **`[workspace] last`** in `~/.config/outl/config.toml`, read via `outl_config::load()`.
+   Same file the desktop's Settings modal writes — opening a workspace in the GUI makes `outl` (no args) land on it from the terminal.
+4. **Current working directory** — final fallback (`cd ~/notes && outl`).
+
+A path stored in `config.toml` that no longer exists on disk is **skipped silently** (`tracing::warn!` only) so a deleted/unmounted workspace doesn't crash the launch — the chain falls through to cwd.
+
+> Full schema + per-OS path of `config.toml` is documented in [`docs/config.md`](../../docs/config.md).
+> The `outl-config` crate is the only reader; never re-parse the TOML by hand here.
+
 ## Commands
 
 ### Lifecycle / one-shot

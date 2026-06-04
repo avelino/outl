@@ -1,4 +1,4 @@
-import { BlockNode } from "./api";
+import type { BlockNode } from "@outl/shared/api/types";
 
 /**
  * Reconstruct the wire-format text of a block (TODO/DONE prefix

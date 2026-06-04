@@ -108,12 +108,38 @@ Journal works.
   - Can register render hooks for the TUI.
 - Plugin discovery from `.outl/plugins/`.
 
-## Phase 5 — Desktop (Tauri 2)
+## Phase 5 — Desktop (Tauri 2) — landed
 
-- Tauri shell over `outl-core` + `outl-md` + `outl-actions`.
-- Block-level rich editing with live preview.
+Shipped as `outl-desktop`. Tauri 2 shell with a SolidJS + Tailwind
+frontend, 3-pane layout (sidebar / outline / backlinks) and
+OS-standard shortcuts (`Cmd/Ctrl+P` picker, `Cmd/Ctrl+B/\\/,/T/[/]`).
+
+What's in:
+
+- Workspace picker (`tauri-plugin-dialog`) — open any directory,
+  persisted via `settings.json` so the next launch skips the picker.
+- The whole `outl-actions` block surface (create / edit / TODO /
+  indent / outdent / move / delete / paste / collapsed) as Tauri
+  commands.
+- Cross-client navigation (`open_ref`, journals, picker).
+- Code-block execution via `outl-exec` (Python / Lisp / JS / Lua /
+  Rust-wasm runtimes already shared with the TUI).
+- Cross-platform FS watcher (`notify` + debouncer) → `peer-ops-changed`
+  Tauri event → `reload_workspace`. Replaces the iOS-only
+  `NSMetadataQuery` dance on the mobile side.
+- Settings modal (vim mode toggle, theme, font size).
+- Frontend code that's identical to mobile (DTO types, `MarkdownInline`,
+  paste detection, autocomplete) lives in `@outl/shared` so the two
+  clients never duplicate.
+- CI: `.github/workflows/desktop.yml` builds the matrix
+  (macOS arm64/x86_64, Linux x86_64, Windows x86_64) on every PR.
+
+Future work (Phase 6 of the desktop roadmap, not the workspace
+phase):
+
+- Signed bundles + Homebrew cask.
 - Graph view (visual backlinks).
-- macOS + Linux + Windows builds.
+- Block-level rich editing with live preview.
 
 ## Phase 6 — Mobile (landed early as Tauri 2 + Solid)
 

@@ -27,10 +27,16 @@ If you find yourself writing a tree walk or an op-generating helper inside `lib.
 The TUI will need it too.
 
 The same rule extends to the **Solid frontend** (`src/`).
-Before adding a helper that walks blocks, normalises text, or maps a cursor across `\n`, check `outl-md`/`outl-actions` — the Rust side likely already exposes it through a Tauri command or could with a tiny addition.
-The two cross-runtime contracts already documented below (`looksLikeOutline` mirroring `outl_actions::paste::looks_like_outline`, and the UTF-16 caret conversion) are *examples of contracts we explicitly maintain*, not green-lights to keep cloning Rust logic into TS.
+Before adding a helper that walks blocks, normalises text, or maps a cursor across `\n`, check:
+
+1. **`@outl/shared`** (`crates/outl-frontend-shared/`) — the cross-client TS lib already owns `<MarkdownInline />`, `looksLikeOutline`, `utf16OffsetToCharOffset`, the autocomplete helpers (`detectRefContext`, `autoClose/DeletePair`, `insertPair/Text`, `applySuggestion`), every shared DTO (`@outl/shared/api/types`), and the `invoke()` wrappers for the Tauri commands every client calls (`@outl/shared/api/commands`).
+   If you find yourself reimplementing one of these in `src/lib/`, stop — the desktop client will need the identical behaviour, and a parallel TS copy is exactly the drift we paid to delete.
+2. **`outl-md` / `outl-actions` / `outl-core`** — the Rust side likely already exposes the data through a Tauri command (or could with a tiny addition).
+
+Only write a helper directly under `outl-mobile/src/lib/` when it's genuinely mobile-specific (touch gestures, iOS UIKit bridges, haptics, viewport math).
 
 Workspace-level policy: [`CLAUDE.md`](../../CLAUDE.md#reuse-first-no-parallel-implementations).
+Frontend-specific policy: [`outl-frontend-shared/CLAUDE.md`](../outl-frontend-shared/CLAUDE.md).
 
 What this crate **does** own:
 
@@ -71,25 +77,22 @@ that, always call `openRef`.
 
 ## Paste from external apps
 
-The textarea in `BlockRow.tsx` intercepts paste events whose payload looks like a bullet list (`lib/paste.ts::looksLikeOutline`) and routes the text to `outl_actions::paste_markdown` via the `paste_markdown_at` Tauri command.
+The textarea in `BlockRow.tsx` intercepts paste events whose payload looks like a bullet list (`@outl/shared/paste::looksLikeOutline`) and routes the text to `outl_actions::paste_markdown` via the `paste_markdown_at` Tauri command.
 Plain text falls through to the browser's default splice so a one-off URL or code snippet still pastes the way the user expects.
 
-Cross-runtime contracts live here.
-All TS copies of Rust logic must stay in sync with their Rust canonical source:
+## Cross-runtime contracts (now in `@outl/shared`)
 
-1. **`looksLikeOutline`** mirrors `outl_actions::paste::looks_like_outline`.
-   Extending the Rust detector (e.g. accept `*` bullets or ordered lists) requires the same change in `lib/paste.ts` plus a Vitest case.
-2. **Inline tokens.** No TS tokenizer.
-   The backend runs `outl_md::tokenize_owned` on every block before it leaves the workspace and attaches the result as `BlockNode.tokens` / `Backlink.source_block.tokens`.
-   `lib/markdown.tsx::MarkdownInline` consumes those tokens directly and renders each variant to JSX.
-   Adding a token variant means extending `outl_md::InlineTok` plus `outl_md::InlineToken` plus the `InlineToken` TS union in `lib/api.ts` plus the renderer switch — but there is no TS regex to keep in sync, only a discriminant-to-render mapping.
-3. **`detectRefContext`** in `lib/autocomplete.ts` mirrors `outl_tui::actions::overlay::detect_trigger` (the `[[` and `((` triggers; TUI also covers `#` and `/`).
-   Local copy keeps the autocomplete popup off the Tauri round-trip per keystroke.
-   Same sync rule as `looksLikeOutline`.
-4. **Caret offset.** `textarea.selectionStart` is a UTF-16 code unit offset; the Rust backend expects a Unicode codepoint count.
-   `lib/paste.ts::utf16OffsetToCharOffset` does the conversion before the Tauri call so pasting after an emoji lands the splice at the right place.
-   Skip this and supplementary-plane characters shift the splice by one per char.
-   (Not a mirror — runtime gap. Listed alongside the mirrors because the cross-runtime concern is the same: don't let the frontend drift from what the backend assumes.)
+The four TS pieces that mirror Rust canonical sources used to live as copies under `lib/`.
+They were extracted to **`crates/outl-frontend-shared/`** so mobile and desktop import the same file — drift between two TS implementations is geometrically impossible.
+
+| Contract | Path | Mirrors (Rust) |
+|---|---|---|
+| `looksLikeOutline` | `@outl/shared/paste` | `outl_actions::paste::looks_like_outline` |
+| `<MarkdownInline />` (renderer of `InlineToken[]`) | `@outl/shared/markdown` | `outl_md::tokenize_owned` (backend produces the tokens; the renderer is a discriminant-to-JSX switch) |
+| `detectRefContext` (+ `autoClose/DeletePair`, `insertPair/Text`, `applySuggestion`) | `@outl/shared/autocomplete` | `outl_tui::actions::overlay::detect_trigger` (the `[[` and `((` triggers; TUI also covers `#` and `/`) |
+| `utf16OffsetToCharOffset` | `@outl/shared/paste` | runtime gap, no Rust mirror — `textarea.selectionStart` is UTF-16; the backend expects codepoints. Skipping this conversion shifts the splice by one per supplementary-plane character |
+
+**Adding a new cross-runtime contract = add it in `@outl/shared` from day one.** Never add it under `outl-mobile/src/lib/` first — the next time desktop catches up to the feature, it has to consume from the same file.
 
 ## iCloud layout
 

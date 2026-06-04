@@ -5,7 +5,8 @@ import {
   createResource,
   createSignal,
 } from "solid-js";
-import { PageMeta, listPages } from "../lib/api";
+import type { PageMeta } from "@outl/shared/api/types";
+import { listPages } from "@outl/shared/api/commands";
 
 interface PageSwitcherProps {
   open: boolean;

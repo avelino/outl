@@ -78,6 +78,22 @@ pub struct PageMeta {
     /// and 📅; TUI uses `📄` for everything by default).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// `pinned:: true` page-level property. Surfaces that ship a
+    /// sidebar (TUI, desktop) list pinned pages prominently so the
+    /// user can pin their canonical workspace entry points (people,
+    /// "inbox", "weekly review", …). Default `false` and serialised
+    /// only when `true` so the wire stays small.
+    ///
+    /// Mirrors the `WorkspaceIndex::PageEntry.pinned` field already
+    /// owned by `outl-md` — but lifted onto `PageMeta` so every
+    /// client that lists pages (`list_all_pages`) sees the flag
+    /// without needing to also consult the index.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pinned: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Look up a page by slug. Returns the page root [`NodeId`] when found.
@@ -122,13 +138,29 @@ pub fn page_meta(workspace: &Workspace, id: NodeId) -> Option<PageMeta> {
         Some(PropValue::Text(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
         _ => None,
     };
+    // `pinned::` is a page-level boolean property. We accept the
+    // same set of truthy literals `outl-md` does (`true`, `yes`,
+    // `1`, `on`, `pinned`) so a hand-edited `.md` matches what the
+    // index would also pick up.
+    let pinned = match workspace.tree().property(id, "pinned") {
+        Some(PropValue::Text(s)) => is_truthy(s),
+        _ => false,
+    };
     Some(PageMeta {
         id: id.to_string(),
         slug,
         title,
         kind,
         icon,
+        pinned,
     })
+}
+
+fn is_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "true" | "yes" | "1" | "on" | "pinned"
+    )
 }
 
 /// Deterministic [`NodeId`] derived from a page slug.

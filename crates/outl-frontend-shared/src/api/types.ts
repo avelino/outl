@@ -1,0 +1,139 @@
+/**
+ * DTOs returned by the Rust backend over the Tauri bridge.
+ *
+ * Every shape here mirrors a `serde`-serialized Rust type. Adding a
+ * field on the Rust side means extending the interface here in the
+ * same change — backend and frontend share the wire format, never
+ * a generator.
+ */
+
+export type TodoState = "TODO" | "DONE";
+export type PageKind = "page" | "journal";
+
+/**
+ * Pre-tokenized inline markdown coming from the Rust backend
+ * (`outl_md::tokenize_owned`). The renderer at
+ * `@outl/shared/markdown::MarkdownInline` maps each variant to JSX.
+ * There is no parallel TS tokenizer — `outl_md::inline::tokenize` is
+ * the single source of truth for inline syntax across every client.
+ * Adding a token in Rust means extending this union and the renderer
+ * switch in the same change.
+ */
+export type InlineToken =
+  | { kind: "plain"; value: string }
+  | { kind: "bold"; value: string }
+  | { kind: "italic"; value: string }
+  | { kind: "strike"; value: string }
+  | { kind: "code"; value: string }
+  | { kind: "link"; value: string; href: string }
+  | { kind: "ref"; value: string }
+  | { kind: "tag"; value: string }
+  | { kind: "blockref"; value: string }
+  | { kind: "embed"; value: string };
+
+export interface BlockNode {
+  id: string;
+  text: string;
+  todo: TodoState | null;
+  /**
+   * Inline markdown tokens for `text` (no TODO/DONE prefix). Backend
+   * pre-tokenizes via `outl_md::tokenize_owned` so the renderer
+   * doesn't run a second tokenizer in JS. See {@link InlineToken}.
+   */
+  tokens: InlineToken[];
+  /**
+   * UI fold state overlaid from the backend's op log. `true` means
+   * the children are hidden in the outline. Mutated via
+   * {@link import("./commands").setBlockCollapsed}, which generates
+   * `Op::SetCollapsed` and appends it to the device's
+   * `ops-<actor>.jsonl`; iCloud / Syncthing propagate the per-actor
+   * file and every peer's CRDT replays the op in HLC order. The
+   * sidecar is never written for this flag.
+   */
+  collapsed: boolean;
+  /**
+   * `(key, value)` block properties — the `key:: value` lines a user
+   * authored under the block in markdown. Empty when the block has
+   * none. Backend builds this from `Op::SetProp` entries so it
+   * survives the same way collapsed does (op log, not sidecar).
+   */
+  properties: Array<[string, string]>;
+  children: BlockNode[];
+}
+
+export interface PageMeta {
+  id: string;
+  slug: string;
+  title: string;
+  kind: PageKind;
+  /**
+   * Optional emoji / icon string the user set on the page via the
+   * `icon::` page property. Backend omits the field when unset; the
+   * frontend can fall back to `📄`/`📅` based on `kind`.
+   */
+  icon?: string;
+  /**
+   * `pinned:: true` page-level property. Sidebars surface pinned
+   * pages prominently (canonical entry points like "inbox" or
+   * "weekly review"). Defaults to `false`; backend serialises the
+   * field only when `true` so an older binary reading a newer wire
+   * still parses cleanly.
+   */
+  pinned?: boolean;
+}
+
+export interface Backlink {
+  block_id: string;
+  todo: TodoState | null;
+  source_page: PageMeta | null;
+  /**
+   * Source block as a self-contained outline subtree (text, tokens,
+   * children, properties). Mirrors what `read_page_view_with_workspace`
+   * would return for the same block. Clients read
+   * `source_block.tokens` for the inline markdown; the raw text
+   * lives at `source_block.text` if a caller ever needs it.
+   *
+   * Note: the Rust `Backlink` struct also carries `block_text` for
+   * the CLI/MCP JSON envelope. It's intentionally omitted from this
+   * TS interface because no client reads it — Tauri still ships the
+   * field over the wire; JS just ignores it.
+   */
+  source_block: BlockNode;
+  /**
+   * DFS path of the source block inside `source_page`. Empty array
+   * means the block is a direct child of the page root. Mirrors
+   * `outl_actions::Backlink::source_block_path` — used by clients
+   * that navigate inside a backlink's subtree.
+   */
+  source_block_path: number[];
+  /**
+   * On-disk path of `source_page`'s `.md` (inside the workspace
+   * storage root — iCloud container on mobile, user-picked path on
+   * desktop). Backend omits the field when the source block has no
+   * enclosing page (legacy data).
+   */
+  source_path?: string;
+}
+
+export interface PageView {
+  page: PageMeta;
+  outline: BlockNode[];
+  backlinks: Backlink[];
+}
+
+export interface WorkspaceSummary {
+  blocks: number;
+  ops: number;
+  actor: string;
+  storage_root: string;
+  /**
+   * `true` when a workspace is currently loaded (mobile: iCloud
+   * container available; desktop: user picked a directory). `false`
+   * while the picker is still up (desktop) or the background opener
+   * is in flight (both). Older mobile builds always sent `true`; the
+   * field is `boolean | undefined` semantically — treat missing as
+   * `true` when targeting an old binary, or use `?? true` if you
+   * need a safe default.
+   */
+  ready: boolean;
+}

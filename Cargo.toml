@@ -4,10 +4,14 @@ members = [
     "crates/outl-core",
     "crates/outl-md",
     "crates/outl-actions",
+    "crates/outl-config",
     "crates/outl-exec",
+    "crates/outl-shortcuts",
+    "crates/outl-theme",
     "crates/outl-cli",
     "crates/outl-tui",
     "crates/outl-mobile/src-tauri",
+    "crates/outl-desktop/src-tauri",
     "xtask",
 ]
 
@@ -26,7 +30,10 @@ readme = "README.md"
 outl-core = { path = "crates/outl-core", version = "0.5.3" }
 outl-md = { path = "crates/outl-md", version = "0.5.3" }
 outl-actions = { path = "crates/outl-actions", version = "0.5.3" }
+outl-config = { path = "crates/outl-config", version = "0.5.3" }
 outl-exec = { path = "crates/outl-exec", version = "0.5.3" }
+outl-shortcuts = { path = "crates/outl-shortcuts", version = "0.5.3" }
+outl-theme = { path = "crates/outl-theme", version = "0.5.3" }
 outl-tui = { path = "crates/outl-tui", version = "0.5.3" }
 
 # IDs and time
