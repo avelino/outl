@@ -38,9 +38,24 @@ cask "outl-desktop@beta" do
   conflicts_with cask: "outl-desktop"
 
   caveats <<~EOS
-    The dmg is **unsigned**. macOS Gatekeeper will refuse the app on
-    first launch. Right-click the .app in /Applications and choose
-    "Open" once; subsequent launches work normally.
+    The dmg is **unsigned**. macOS Gatekeeper refuses the app on
+    first launch with:
+
+      "outl.app" could not be opened.
+      Apple could not verify "outl.app" is free of malware...
+
+    macOS Sequoia (15) tightened Gatekeeper: the old
+    "right-click → Open" trick no longer dismisses the warning
+    on its own. Two paths through:
+
+    1. Terminal (fastest):
+         xattr -dr com.apple.quarantine /Applications/outl.app
+
+    2. System Settings → Privacy & Security:
+         Try to open outl.app once. Then open System Settings,
+         scroll to Privacy & Security, find the "outl.app was
+         blocked..." entry, click "Open Anyway", and confirm
+         with Touch ID or your password.
 
     Signing + notarisation lands together with the first GA release.
   EOS

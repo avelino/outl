@@ -112,13 +112,29 @@ export function AppShell() {
   });
 
   function gridTemplate(): string {
-    const left = appState.sidebarOpen ? "220px" : "0";
-    return `${left} 1fr`;
+    // `minmax(0, …)` on every track is what lets the columns
+    // shrink below their content's natural width. With a bare
+    // `1fr`, a row in the outline carrying a long unbreakable
+    // token (`BUSER-DJANGO-KX9`, `((blk-XXXXXX))`) would push the
+    // column past the viewport and the `overflow: hidden` on body
+    // would clip it — outl rendered with cut-off text in narrow
+    // windows. Same pitfall flex has on `min-width: auto`; the
+    // grid analogue is here.
+    const left = appState.sidebarOpen ? "minmax(0, 220px)" : "0";
+    return `${left} minmax(0, 1fr)`;
   }
 
   return (
     <>
       <div
+        // `minmax(0, 1fr)` instead of `1fr` so the second grid
+        // column can shrink below its content's natural width.
+        // Without this, a row with a long unbreakable token pushes
+        // the column past the viewport and outl renders with a
+        // horizontal cut-off in narrow windows. CSS grid's
+        // `min-width: auto` default is the same pitfall flex hits
+        // (`min-w-0` on flex children); the grid analogue is
+        // baking `minmax(0, …)` into the template.
         class="grid h-full overflow-hidden"
         style={{ "grid-template-columns": gridTemplate() }}
       >

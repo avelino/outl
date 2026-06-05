@@ -254,7 +254,23 @@ export function OutlineView() {
   }
 
   return (
-    <main class="flex h-full flex-col">
+    // `min-w-0 min-h-0` is what makes the inner `overflow-y-auto`
+    // actually constrain to the viewport. Two defaults bite here:
+    //
+    //   * Grid items default to `min-width: auto`, which means
+    //     "as wide as my content's natural width". A row with
+    //     `BUSER-DJANGO-KX9` or `((blk-XXXXXX))` then pushes the
+    //     whole main column wider than the window and the body's
+    //     `overflow: hidden` clips it. `min-w-0` lifts that floor
+    //     so the grid cell can shrink to the viewport and the
+    //     inline tokens wrap inside their column.
+    //   * Flex children default to `min-height: auto`, which makes
+    //     the `flex-1 overflow-y-auto` block expand to fit instead
+    //     of scrolling. `min-h-0` is the matching unlock.
+    //
+    // Classic Tailwind/flexbox/grid pitfall on both axes; the two
+    // unlocks pair.
+    <main class="flex h-full min-h-0 min-w-0 flex-col">
       <header class="border-b border-(--color-outl-border)/30 px-12 pt-12 pb-8">
         <div class="mx-auto max-w-3xl">
           {/*
@@ -291,8 +307,8 @@ export function OutlineView() {
         </div>
       </header>
 
-      <div class="flex-1 overflow-y-auto px-12 py-6">
-        <div class="mx-auto max-w-3xl">
+      <div class="min-w-0 flex-1 overflow-y-auto px-12 py-6">
+        <div class="mx-auto w-full max-w-3xl">
         <Show
           when={appState.outline.length > 0}
           fallback={

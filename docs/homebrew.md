@@ -44,15 +44,29 @@ Both point at the same workspace on disk if you configure the same path; the op 
 ### First-launch Gatekeeper warning
 
 The desktop dmg is **unsigned** today.
-On the first launch macOS Gatekeeper refuses the app.
-Two ways through:
+On the first launch macOS Gatekeeper refuses the app with:
 
-- **Right-click** `outl.app` in `/Applications` and choose **Open**.
-  Confirm once; subsequent launches work.
-- Or drop the quarantine attribute from the terminal:
-  ```bash
-  xattr -dr com.apple.quarantine /Applications/outl.app
-  ```
+> "outl.app" Not Opened
+> Apple could not verify "outl.app" is free of malware that may harm your Mac or compromise your privacy.
+
+macOS Sequoia (15) tightened Gatekeeper — the old "right-click → Open" shortcut no longer dismisses the warning by itself.
+Two ways through that actually work on current macOS:
+
+**Terminal (fastest):**
+
+```bash
+xattr -dr com.apple.quarantine /Applications/outl.app
+```
+
+This drops the quarantine attribute that Gatekeeper checks against; subsequent launches work normally.
+
+**System Settings → Privacy & Security:**
+
+1. Try to open `outl.app` once and dismiss the warning.
+2. Open **System Settings → Privacy & Security**.
+3. Scroll to the bottom — there's an entry "*outl.app was blocked from use because it is not from an identified developer*".
+4. Click **Open Anyway**, then confirm with Touch ID or your password.
+5. Try opening `outl.app` again — Gatekeeper now prompts for a final confirmation; click **Open**.
 
 Signing + notarisation will land with the first GA release (the cask's `caveats` block reminds the user of this on every install until then).
 

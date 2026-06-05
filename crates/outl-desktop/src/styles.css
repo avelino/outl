@@ -89,6 +89,19 @@
  * before any JS runs.
  */
 @layer base {
+  /*
+   * Lock the height chain to the viewport. `height: 100%` (not
+   * `min-height: 100vh`) is load-bearing: with `min-height`, body
+   * and #root grow to fit the content, which makes every
+   * descendant `h-full` resolve against an unbounded parent. The
+   * outline's inner `overflow-y-auto` then thinks "I already fit"
+   * and the whole document scrolls instead. Pinning each level to
+   * a fixed `height: 100%` is what makes the outline scroll
+   * inside its column.
+   *
+   * `overflow: hidden` on body/#root keeps the outer scrollbar
+   * out (the grid cell that wants to scroll opts in explicitly).
+   */
   html {
     background-color: var(--color-outl-bg);
     color: var(--color-outl-fg);
@@ -96,12 +109,14 @@
   }
   body {
     margin: 0;
-    min-height: 100vh;
+    height: 100%;
+    overflow: hidden;
     background-color: var(--color-outl-bg);
     color: var(--color-outl-fg);
   }
   #root {
-    min-height: 100vh;
+    height: 100%;
+    overflow: hidden;
     background-color: var(--color-outl-bg);
     color: var(--color-outl-fg);
   }
