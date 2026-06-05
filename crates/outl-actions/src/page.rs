@@ -139,9 +139,12 @@ pub fn page_meta(workspace: &Workspace, id: NodeId) -> Option<PageMeta> {
         _ => None,
     };
     // `pinned::` is a page-level boolean property. We accept the
-    // same set of truthy literals `outl-md` does (`true`, `yes`,
-    // `1`, `on`, `pinned`) so a hand-edited `.md` matches what the
-    // index would also pick up.
+    // **exact** set of truthy literals `outl-md::index::is_truthy`
+    // does (`true`, `yes`, `1`, `on`) so a hand-edited `.md`
+    // matches what the workspace index would also pick up. Don't
+    // add new tokens here without updating outl-md in the same
+    // commit — drift breaks the "every list of pages agrees on
+    // pinned" invariant.
     let pinned = match workspace.tree().property(id, "pinned") {
         Some(PropValue::Text(s)) => is_truthy(s),
         _ => false,
@@ -159,7 +162,7 @@ pub fn page_meta(workspace: &Workspace, id: NodeId) -> Option<PageMeta> {
 fn is_truthy(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
-        "true" | "yes" | "1" | "on" | "pinned"
+        "true" | "yes" | "1" | "on"
     )
 }
 

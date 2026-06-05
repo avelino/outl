@@ -28,8 +28,9 @@ If a new client needs a different shape on the wire, do the same — adapt, don'
 ```
 
 - macOS / Linux: respects `$XDG_CONFIG_HOME` first, else `~/.config/outl/`.
-- Windows: `%APPDATA%\outl\config.toml`.
+- Windows: `$XDG_CONFIG_HOME\outl\` when set, else `%APPDATA%\outl\` (whatever `dirs::config_dir()` returns, typically `C:\Users\<user>\AppData\Roaming\outl`).
 - **Not** `~/Library/Application Support/…` on macOS — deliberate (see lib doc).
+- **Not** `%USERPROFILE%\.config\outl\` on Windows either. The `~/.config` layout is not a Windows convention, and dropping the config under `%USERPROFILE%` directly would surprise PowerShell users and tools that expect Roaming. The `cfg(windows)` branch in `config_dir()` routes through `dirs::config_dir()` to honour that.
 
 The `actor` file next to `config.toml` is **not** part of this crate's schema; it's the desktop's device identity (a ULID) and is read directly by `outl-desktop/src-tauri/src/lib.rs`. Don't add `actor` to `Config` — actors belong with the workspace they write to, not with user preferences.
 

@@ -1,23 +1,41 @@
-//! XDG-style path resolution for the shared config.
+//! Per-OS config path resolution.
 
 use std::path::PathBuf;
 
-/// `~/.config/outl/` (or `$XDG_CONFIG_HOME/outl/` when set).
+/// Resolve the directory where `config.toml` and `actor` live.
 ///
-/// XDG-style on every OS — including macOS — so a user dropping
-/// into a terminal sees the same path the desktop GUI is writing
-/// to. The conventional macOS location
-/// (`~/Library/Application Support/…`) feels wrong for a
-/// CLI-first tool and would split the TUI and desktop into two
-/// config files.
+/// - **macOS / Linux:** `~/.config/outl/` (or `$XDG_CONFIG_HOME/outl/`
+///   when set). XDG-style on macOS is deliberate — outl is
+///   CLI-first, and a Mac user dropping into a terminal sees the
+///   same path Linux uses. The conventional
+///   `~/Library/Application Support/…` would split TUI + desktop
+///   into two config files for no real benefit.
+/// - **Windows:** `%APPDATA%\outl\` (whatever
+///   `dirs::config_dir()` returns, typically
+///   `C:\Users\<user>\AppData\Roaming\outl`). The XDG layout is
+///   not a Windows convention — sticking it under `%USERPROFILE%`
+///   directly would surprise both PowerShell users and tools that
+///   expect Roaming.
+///
+/// All branches honour `$XDG_CONFIG_HOME` first so a power user
+/// can co-locate Windows + Linux profiles via the same env var.
 pub fn config_dir() -> PathBuf {
     if let Ok(custom) = std::env::var("XDG_CONFIG_HOME") {
         if !custom.is_empty() {
             return PathBuf::from(custom).join("outl");
         }
     }
-    if let Some(home) = dirs::home_dir() {
-        return home.join(".config").join("outl");
+    #[cfg(windows)]
+    {
+        if let Some(roaming) = dirs::config_dir() {
+            return roaming.join("outl");
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(".config").join("outl");
+        }
     }
     // Last resort — relative path. Almost never hit in practice
     // (every supported OS has a home dir), but keeps the function

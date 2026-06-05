@@ -122,17 +122,13 @@ What's in:
   indent / outdent / move / delete / paste / collapsed) as Tauri
   commands.
 - Cross-client navigation (`open_ref`, journals, picker).
-- Code-block execution via `outl-exec` (Python / Lisp / JS / Lua /
-  Rust-wasm runtimes already shared with the TUI).
-- Cross-platform FS watcher (`notify` + debouncer) → `peer-ops-changed`
-  Tauri event → `reload_workspace`. Replaces the iOS-only
-  `NSMetadataQuery` dance on the mobile side.
+- Code-block execution via `outl-exec` (Python / Lisp / JS / Lua / Rust-wasm runtimes already shared with the TUI).
+- Cross-platform FS watcher (`notify` + debouncer) emits `peer-ops-changed` on the Tauri side, which the frontend turns into `reload_workspace`.
+  Replaces the iOS-only `NSMetadataQuery` dance the mobile side carries.
 - Settings modal (vim mode toggle, theme, font size).
-- Frontend code that's identical to mobile (DTO types, `MarkdownInline`,
-  paste detection, autocomplete) lives in `@outl/shared` so the two
-  clients never duplicate.
-- CI: `.github/workflows/desktop.yml` builds the matrix
-  (macOS arm64/x86_64, Linux x86_64, Windows x86_64) on every PR.
+- Frontend code that's identical to mobile (DTO types, `MarkdownInline`, paste detection, autocomplete) lives in `@outl/shared` so the two clients never duplicate.
+- CI: `.github/workflows/desktop.yml` checks on every PR with a Linux job (clippy + tests + Vitest + tsc + tauri bundle) plus a build matrix on macOS arm64 and Windows.
+  The release dmg is universal (arm64 + x86_64 lipo'd) and built on a single `macos-latest` runner.
 
 Future work (Phase 6 of the desktop roadmap, not the workspace
 phase):

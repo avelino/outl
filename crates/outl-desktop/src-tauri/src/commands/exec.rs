@@ -1,11 +1,21 @@
 //! Code-block execution command (`run_code_block`).
 //!
-//! Wraps [`outl_exec::run_block_at_index`] in `spawn_blocking` so the
-//! Tauri runtime stays responsive while a runtime (Python, Lua, JS,
-//! Lisp, Rust/wasm, …) churns through the source. The result is
-//! persisted by `outl-exec` itself as a `> **result:**` sibling
-//! block, and the refreshed `PageView` flows back to the frontend in
-//! the same round-trip.
+//! Synchronous Tauri command. Tauri serves sync commands from its
+//! own multi-threaded worker pool, so a long-running runtime
+//! (Python, Lua, JS, Lisp, Rust/wasm, …) doesn't park the JS-side
+//! event loop, but it **does** hold the workspace mutex for the
+//! whole call. A second mutation lands behind it; the frontend's
+//! "run" button stays enabled while the command is in flight, so
+//! the user can keep navigating but not edit the running page.
+//!
+//! Making this `async fn` + `tokio::task::spawn_blocking` is the
+//! follow-up to release the mutex earlier (the runtime can outlive
+//! the workspace borrow, since `outl-exec` clones the registry
+//! Arc). Tracked in the desktop polish backlog.
+//!
+//! The result is persisted by `outl-exec` itself as a
+//! `> **result:**` sibling block, and the refreshed `PageView`
+//! flows back to the frontend in the same round-trip.
 //!
 //! `block_id` (not flat index) is what the frontend sends so the
 //! mapping between an outline node and `ParsedPage.blocks` stays a
