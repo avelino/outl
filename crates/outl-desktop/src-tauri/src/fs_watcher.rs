@@ -324,13 +324,21 @@ mod tests {
     // ── watched_root_label ──────────────────────────────────────────
 
     #[test]
-    fn watched_root_label_returns_absolute_form() {
-        let absolute = PathBuf::from("/tmp/ws");
-        assert_eq!(watched_root_label(&absolute), "/tmp/ws");
+    fn watched_root_label_preserves_absolute_paths() {
+        // The literal absolute path differs per platform (Windows
+        // needs a drive letter), so pick the cwd as a known-absolute
+        // anchor that always round-trips. Real-world callers feed
+        // `watched_root_label` an absolute workspace path; the
+        // function is just supposed to leave it alone.
+        let absolute = std::env::current_dir().unwrap();
+        let labelled = watched_root_label(&absolute);
+        assert_eq!(PathBuf::from(labelled), absolute);
+    }
 
-        // Relative paths get resolved against cwd — we don't assert
-        // the cwd content, just that the result is no longer
-        // relative.
+    #[test]
+    fn watched_root_label_promotes_relative_to_absolute() {
+        // Relative paths get resolved against cwd. We don't assert
+        // the cwd content, just that the result is absolute.
         let relative = PathBuf::from("rel/dir");
         let labelled = watched_root_label(&relative);
         assert!(

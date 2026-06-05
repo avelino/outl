@@ -34,7 +34,8 @@ brew tap avelino/outl https://github.com/avelino/outl   # same tap as the CLI
 brew install --cask outl-desktop@beta
 ```
 
-That drops `outl.app` into `/Applications` via the dmg the release workflow builds for macOS arm64 + x86_64.
+That drops `outl.app` into `/Applications` via the **universal** dmg the release workflow builds on a single arm64 runner (`--target universal-apple-darwin` → `lipo` merge of arm64 + x86_64 into one binary).
+Both Apple Silicon and Intel Macs install the same dmg.
 The cask sits in [`/Casks/outl-desktop@beta.rb`](../Casks/outl-desktop@beta.rb) and is bumped automatically alongside the CLI formula on every push to `main`.
 
 The CLI formula (`outl@beta`) and the desktop cask coexist without conflicts — the formula installs `/usr/local/bin/outl`, the cask installs `/Applications/outl.app`.
@@ -73,7 +74,7 @@ It does four things:
 2. Downloads every `.sha256` sidecar from the GitHub release (CLI tarballs **and** desktop dmgs).
 3. Uses `sed` to bump the version + sha lines in both files in place:
    - **`Formula/outl@beta.rb`** — `version` plus three `sha256` lines tagged `# anchor: macos-arm64`, `# anchor: macos-x64`, `# anchor: linux-x64`.
-   - **`Casks/outl-desktop@beta.rb`** — `version` plus two `sha256` lines tagged `# anchor: macos-arm64`, `# anchor: macos-x64`.
+   - **`Casks/outl-desktop@beta.rb`** — `version` plus one `sha256` line tagged `# anchor: macos` (universal dmg, both architectures in the same file).
 4. Commits the bumped formula + cask back to `main` with `[skip ci]` in the message — that prevents the commit from re-triggering the release workflow itself.
 
 The version comes from the `prepare` job, which reads `workspace.package.version` out of `Cargo.toml` and appends `-beta.<run_number>`.

@@ -143,15 +143,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-latest
             label: macOS arm64
             rust_target: aarch64-apple-darwin
-          - os: macos-13
-            label: macOS x86_64
-            rust_target: x86_64-apple-darwin
-          - os: windows-2022
+          - os: windows-latest
             label: Windows x86_64
             rust_target: x86_64-pc-windows-msvc
+          # macOS x86_64 is **not** in the PR matrix on purpose.
+          # GitHub's `macos-13` (Intel) runner pool is consistently
+          # depleted (jobs sit queued for hours, sometimes
+          # overnight), so we don't block PRs on a target we can't
+          # reliably schedule. `release.yml::build_desktop` still
+          # produces a working macOS x86_64 binary via
+          # `--target universal-apple-darwin`, which builds both
+          # arches on a single `macos-latest` (arm64) runner and
+          # lipo-merges them into one dmg.
+          #
+          # Both surfaces converged on `*-latest` instead of pinned
+          # versions: `macos-13` is intentionally absent from CI and
+          # `macos-14`/`windows-2022` were pinned needlessly. Using
+          # `macos-latest` / `windows-latest` lets GitHub follow its
+          # runner cadence without us re-pinning each cycle.
 
     steps:
       - uses: actions/checkout@v4

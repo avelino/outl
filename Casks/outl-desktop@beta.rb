@@ -1,23 +1,24 @@
 # This file is maintained by `.github/workflows/release.yml`.
 # Every push to `main` runs the release workflow, which bumps the
 # `version` line (computed from `Cargo.toml` + the workflow run
-# number) and the two `sha256` lines below in place. The
-# `# anchor:` comments are how the workflow finds the right lines —
-# do not remove them.
+# number) and the `sha256` line below in place. The `# anchor:`
+# comment is how the workflow finds the right line — do not remove
+# it.
 #
-# The dmg shipped here is **unsigned**. On first launch macOS
-# Gatekeeper will refuse the app; users can right-click → "Open"
-# (or run `xattr -dr com.apple.quarantine /Applications/outl.app`)
-# to dismiss the warning. Once we wire an Apple Developer ID +
-# notarisation (release.yml step pending), this caveat goes away.
+# The dmg shipped here is **universal** (arm64 + x86_64 lipo'd into
+# one binary, packaged on a single arm64 runner). Both Apple Silicon
+# and Intel Macs use the same `outl-desktop-macos.dmg`.
+#
+# The dmg is **unsigned**. On first launch macOS Gatekeeper will
+# refuse the app; users can right-click → "Open" (or run
+# `xattr -dr com.apple.quarantine /Applications/outl.app`) to dismiss
+# the warning. Once we wire an Apple Developer ID + notarisation
+# (release.yml step pending), this caveat goes away.
 cask "outl-desktop@beta" do
   version "0.0.0"
-  sha256 arm:   "0000000000000000000000000000000000000000000000000000000000000000", # anchor: macos-arm64
-         intel: "0000000000000000000000000000000000000000000000000000000000000000"  # anchor: macos-x64
+  sha256 "0000000000000000000000000000000000000000000000000000000000000000" # anchor: macos
 
-  arch arm: "arm64", intel: "x64"
-
-  url "https://github.com/avelino/outl/releases/download/v#{version}/outl-desktop-macos-#{arch}.dmg"
+  url "https://github.com/avelino/outl/releases/download/v#{version}/outl-desktop-macos.dmg"
   name "outl Desktop"
   desc "Local-first outliner with CRDT sync (desktop beta — every push to main)"
   homepage "https://outl.app"

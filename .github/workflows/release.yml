@@ -271,29 +271,32 @@ jobs:
             --clobber
 
   build_desktop:
-    name: build desktop ${{ matrix.label }}
+    name: build desktop macOS (universal)
     needs: [prepare, create_release]
     if: needs.create_release.result == 'success'
     runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: aarch64-apple-darwin
-            label: macos-arm64
-            tauri_arch: aarch64
-          - target: x86_64-apple-darwin
-            label: macos-x64
-            tauri_arch: x64
+    # Single universal dmg instead of a matrix split. Tauri 2's
+    # `--target universal-apple-darwin` builds both aarch64 and
+    # x86_64 binaries on the arm64 runner and `lipo`-merges them
+    # into one .app that runs on both architectures. Benefits:
+    #
+    #   * One runner instead of two. `macos-13` (Intel) runner pool
+    #     is consistently depleted — we previously had jobs queued
+    #     for ~14h. Universal sidesteps that entirely.
+    #   * One dmg, one sha, one cask URL. Cask file is much
+    #     simpler (no `arch arm:`/`intel:` split), `update_tap` has
+    #     one anchor to patch.
+    #   * The dmg is ~2× bigger (carries both archs), which for
+    #     outl-desktop's ~20MB binaries means ~40MB. Fine.
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.prepare.outputs.tag }}
 
-      - name: Install Rust toolchain
+      - name: Install Rust toolchain (arm64 + x86_64 targets)
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -312,33 +315,36 @@ jobs:
           sed -i.bak "s|version = \"${BASE}\"|version = \"${VERSION}\"|g" Cargo.toml
           rm Cargo.toml.bak
 
-      - name: Cache cargo (desktop ${{ matrix.label }})
+      - name: Cache cargo (desktop universal)
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ matrix.target }}-desktop-release-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-universal-apple-darwin-desktop-release-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install frontend dependencies
         run: bun install
 
-      - name: Build dmg
-        # `cargo tauri build --target <triple>` produces the bundle
-        # under `target/<triple>/release/bundle/dmg/`. The flag
+      - name: Build universal dmg
+        # `--target universal-apple-darwin` triggers Tauri's universal
+        # build path: compile arm64 + x86_64 → `lipo` merge → embed in
+        # `outl.app` → package as dmg.
+        #
         # `--bundles dmg` skips the .app-only export the macOS path
         # would otherwise also produce — we ship the dmg as the
-        # cask source, the bare .app is not useful on its own.
+        # cask source.
         working-directory: crates/outl-desktop
-        run: bun run tauri build --target ${{ matrix.target }} --bundles dmg
+        run: bun run tauri build --target universal-apple-darwin --bundles dmg
 
       - name: Stage dmg + sha256
         shell: bash
-        # Tauri 2's dmg name is `<productName>_<version>_<arch>.dmg`.
-        # We rename to the convention the Formula already uses
-        # (`outl-<artifact>.<ext>`) so a single sed-anchor scheme
-        # works for both Formula and Cask in the bump job.
+        # Tauri's universal output name is
+        # `<productName>_<version>_universal.dmg`. We rename to
+        # `outl-desktop-macos.dmg` (no `-arm64`/`-x64` suffix —
+        # there's only one dmg) so `update_tap` patches a single
+        # anchor in the cask.
         #
         # The dmg is unsigned. Adding a Developer ID + notarytool
         # step lands when we register the Apple Developer account;
@@ -347,11 +353,11 @@ jobs:
         run: |
           set -euo pipefail
           VERSION='${{ needs.prepare.outputs.version }}'
-          SRC="target/${{ matrix.target }}/release/bundle/dmg/outl_${VERSION}_${{ matrix.tauri_arch }}.dmg"
-          DST="outl-desktop-${{ matrix.label }}.dmg"
+          SRC="target/universal-apple-darwin/release/bundle/dmg/outl_${VERSION}_universal.dmg"
+          DST="outl-desktop-macos.dmg"
           if [[ ! -f "${SRC}" ]]; then
-            echo "::error::expected dmg at ${SRC} (run produced:)"
-            find target/${{ matrix.target }}/release/bundle -name '*.dmg' -print
+            echo "::error::expected universal dmg at ${SRC} (run produced:)"
+            find target/universal-apple-darwin/release/bundle -name '*.dmg' -print
             exit 1
           fi
           cp "${SRC}" "${DST}"
@@ -363,8 +369,8 @@ jobs:
         run: |
           TAG='${{ needs.prepare.outputs.tag }}'
           gh release upload "${TAG}" \
-            "outl-desktop-${{ matrix.label }}.dmg" \
-            "outl-desktop-${{ matrix.label }}.dmg.sha256" \
+            "outl-desktop-macos.dmg" \
+            "outl-desktop-macos.dmg.sha256" \
             --repo "${GITHUB_REPOSITORY}" \
             --clobber
 
@@ -428,11 +434,12 @@ jobs:
 
           C=Casks/outl-desktop@beta.rb
           sed -i "s|^  version .*|  version \"$VERSION\"|" "$C"
-          for arch in macos-arm64 macos-x64; do
-            sha=$(awk '{print $1}' "shas/outl-desktop-${arch}.dmg.sha256")
-            sed -i "s|\"[a-f0-9]\{64\}\", # anchor: ${arch}|\"${sha}\", # anchor: ${arch}|" "$C"
-            sed -i "s|\"[a-f0-9]\{64\}\"  # anchor: ${arch}|\"${sha}\"  # anchor: ${arch}|" "$C"
-          done
+          # Single universal dmg → one anchor (`# anchor: macos`).
+          # Previously we patched separate arm64/x64 anchors; the
+          # cask file collapsed when we moved to `--target
+          # universal-apple-darwin`.
+          sha=$(awk '{print $1}' "shas/outl-desktop-macos.dmg.sha256")
+          sed -i "s|sha256 \"[a-f0-9]\{64\}\" # anchor: macos|sha256 \"${sha}\" # anchor: macos|" "$C"
 
           if git diff --quiet "$F" "$C"; then
             echo "::notice::No formula or cask changes for $TAG"
