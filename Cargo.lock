@@ -4447,6 +4447,7 @@ version = "0.6.0"
 dependencies = [
  "chrono",
  "outl-core",
+ "outl-exec",
  "outl-md",
  "serde",
  "sha2 0.11.0",
@@ -4589,6 +4590,7 @@ dependencies = [
  "objc2-foundation",
  "outl-actions",
  "outl-core",
+ "outl-exec",
  "outl-md",
  "parking_lot",
  "serde",

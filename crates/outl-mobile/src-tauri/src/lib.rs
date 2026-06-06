@@ -24,6 +24,7 @@
 //! workspace lands, Tauri emits a `workspace-ready` event the frontend
 //! can listen for to refresh proactively.
 
+mod exec;
 mod icloud_path;
 
 use std::path::{Path, PathBuf};
@@ -46,6 +47,7 @@ use outl_core::hlc::HlcGenerator;
 use outl_core::id::{ActorId, NodeId};
 use outl_core::storage::JsonlStorage;
 use outl_core::workspace::Workspace;
+use outl_exec::RuntimeRegistry;
 
 use parking_lot::{Mutex, MutexGuard};
 use serde::Serialize;
@@ -87,11 +89,16 @@ const ICLOUD_CONTAINER_ID: &str = "iCloud.app.outl.mobile-app";
 const ERR_LOADING: &str = "workspace_loading";
 
 /// Shared mutable state held by Tauri.
-struct AppState {
+pub(crate) struct AppState {
     /// `None` until the background opener completes.
-    workspace: Arc<Mutex<Option<Workspace>>>,
-    hlc: HlcGenerator,
-    storage_root: PathBuf,
+    pub(crate) workspace: Arc<Mutex<Option<Workspace>>>,
+    pub(crate) hlc: HlcGenerator,
+    pub(crate) storage_root: PathBuf,
+    /// Code-block runtimes built once at startup. Shared between
+    /// every `run_code_block` invocation. Kept behind `Arc` so future
+    /// `spawn_blocking` callers can clone-and-move without holding
+    /// the workspace mutex.
+    pub(crate) registry: Arc<RuntimeRegistry>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -107,10 +114,10 @@ struct WorkspaceSummary {
 /// the page meta with the outline so the frontend gets everything in
 /// one trip.
 #[derive(Debug, Clone, Serialize)]
-struct PageView {
-    page: PageMeta,
-    outline: Vec<OutlineNode>,
-    backlinks: Vec<Backlink>,
+pub(crate) struct PageView {
+    pub(crate) page: PageMeta,
+    pub(crate) outline: Vec<OutlineNode>,
+    pub(crate) backlinks: Vec<Backlink>,
 }
 
 /// Reply for `create_block`. Pairs the refreshed [`PageView`] with the
@@ -130,7 +137,7 @@ struct CreateBlockReply {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn parse_node_id(s: &str) -> Result<NodeId, String> {
+pub(crate) fn parse_node_id(s: &str) -> Result<NodeId, String> {
     ulid::Ulid::from_str(s)
         .map(NodeId)
         .map_err(|e| format!("invalid node id {s}: {e}"))
@@ -155,7 +162,7 @@ where
 }
 
 /// Acquire a mutable handle to the workspace.
-fn with_ws_mut<F, T>(state: &State<'_, AppState>, f: F) -> Result<T, String>
+pub(crate) fn with_ws_mut<F, T>(state: &State<'_, AppState>, f: F) -> Result<T, String>
 where
     F: FnOnce(&mut Workspace) -> Result<T, String>,
 {
@@ -166,7 +173,7 @@ where
     }
 }
 
-fn build_page_view(
+pub(crate) fn build_page_view(
     workspace: &Workspace,
     storage_root: &Path,
     page_id: NodeId,
@@ -802,10 +809,13 @@ pub fn run() {
                 app.handle().clone(),
             );
 
+            let registry = Arc::new(RuntimeRegistry::with_builtins());
+
             app.manage(AppState {
                 workspace,
                 hlc,
                 storage_root,
+                registry,
             });
 
             Ok(())
@@ -836,6 +846,8 @@ pub fn run() {
             set_block_collapsed,
             paste_markdown_at,
             reload_workspace,
+            // Code execution
+            exec::run_code_block,
             // Legacy
             list_outline,
             add_block,

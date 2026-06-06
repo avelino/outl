@@ -6,8 +6,12 @@
  * clients agree on shape, name and return type.
  *
  * Client-specific commands (mobile gestures, `pick_workspace_dir`
- * and `run_code_block` on desktop, etc) live in the client's own
- * `lib/api.ts` and never end up here.
+ * on desktop, etc) live in the client's own `lib/api.ts` and never
+ * end up here.
+ *
+ * `run_code_block` used to be considered client-specific (desktop
+ * only). Mobile picked up the same command as of v0.6.x (long-press
+ * → "Run code"), and both clients now share the wrapper below.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -16,6 +20,7 @@ import type {
   CreateBlockReply,
   PageMeta,
   PageView,
+  RunCodeBlockReply,
   WorkspaceSummary,
 } from "./types";
 
@@ -190,4 +195,23 @@ export function setBlockCollapsed(
   collapsed: boolean,
 ): Promise<PageView> {
   return invoke<PageView>("set_block_collapsed", { pageId, id, collapsed });
+}
+
+/**
+ * Run the fenced code block identified by `blockId` inside the page
+ * identified by `pageId`. The Rust side resolves the flat-DFS index,
+ * runs `outl_exec::run_block_at_index` on a worker thread, and
+ * persists the result as a `> **result:**` sibling subblock.
+ *
+ * The reply bundles the refreshed `PageView` so the caller swaps the
+ * outline straight in — no follow-up navigation round-trip needed.
+ * `result_ok` is the runtime payload (stdout/stderr/exit/duration);
+ * `error` is an infrastructure failure message (unknown language,
+ * timeout, sandbox crash). They are mutually exclusive.
+ */
+export function runCodeBlock(
+  pageId: string,
+  blockId: string,
+): Promise<RunCodeBlockReply> {
+  return invoke<RunCodeBlockReply>("run_code_block", { pageId, blockId });
 }

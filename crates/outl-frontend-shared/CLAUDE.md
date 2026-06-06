@@ -86,14 +86,14 @@ When in doubt, ship in the client; promote later when the second client appears.
 | `utf16OffsetToCharOffset` | `@outl/shared/paste` | (runtime gap — UTF-16 ↔ codepoint, no Rust mirror) |
 | `detectRefContext`, `autoClose/DeletePair`, `insertPair/Text`, `applySuggestion` | `@outl/shared/autocomplete` | `outl_tui::actions::overlay::detect_trigger` |
 | DTOs (`PageMeta`, `OutlineNode`, `BlockNode`, `Backlink`, `InlineToken`, `PageView`, `CreateBlockReply`, `WorkspaceSummary`, …) | `@outl/shared/api/types` | the corresponding `serde`-serialised Rust structs |
-| `invoke<T>()` wrappers (navigation: `listPages`, `searchPages`, `openTodayJournal`, `openJournalFor`, `openPageBySlug`, `openRef`, `previousDay`, `nextDay`, `todaySlug`, `dateTitle`, `resolveRef`, `workspaceStats`; mutation: `createBlock` → `CreateBlockReply` (returns `{ view, new_id }` so the client puts the new block straight into edit mode without diffing the outline), `editBlock`, `toggleTodo`, `deleteBlock`, `indentBlock`, `outdentBlock`, `moveBlockUp`, `moveBlockDown`, `reloadWorkspace`, `pasteMarkdown`, `setBlockCollapsed`) | `@outl/shared/api/commands` | the matching Tauri command in each client's `src-tauri/src/lib.rs` |
+| `invoke<T>()` wrappers (navigation: `listPages`, `searchPages`, `openTodayJournal`, `openJournalFor`, `openPageBySlug`, `openRef`, `previousDay`, `nextDay`, `todaySlug`, `dateTitle`, `resolveRef`, `workspaceStats`; mutation: `createBlock` → `CreateBlockReply` (returns `{ view, new_id }` so the client puts the new block straight into edit mode without diffing the outline), `editBlock`, `toggleTodo`, `deleteBlock`, `indentBlock`, `outdentBlock`, `moveBlockUp`, `moveBlockDown`, `reloadWorkspace`, `pasteMarkdown`, `setBlockCollapsed`; execution: `runCodeBlock` → `RunCodeBlockReply` (refreshed `PageView` + stdout/stderr/exit so the caller swaps the outline in one round-trip)) | `@outl/shared/api/commands` | the matching Tauri command in each client's `src-tauri/src/lib.rs` |
 
 ## What does NOT enter the library
 
 - **Chrome.** `<Sidebar />`, `<Picker />`, `<BacklinksPanel />`, `<BlockRow />`, app shells — they diverge between mobile (single-pane, touch) and desktop (3-pane, mouse + vim mode).
 - **Stateful stores.** Each client's Solid `createStore()` carries client-specific shape (mobile has swipe state, desktop has panel collapse state).
 - **Keybindings.** Cmd-based on desktop, gesture-based on mobile.
-- **Client-specific Tauri commands.** `pick_workspace_dir` and `run_code_block` belong to `outl-desktop`; the iCloud peer-files watcher and gestures glue belong to `outl-mobile`. Wrap those in the client's own `lib/api.ts`.
+- **Client-specific Tauri commands.** `pick_workspace_dir` belongs to `outl-desktop`; the iCloud peer-files watcher and gestures glue belong to `outl-mobile`. Wrap those in the client's own `lib/api.ts`. (`run_code_block` *used* to live here too; mobile picked up the same command in v0.6.x — long-press → "Run code" — so the wrapper is now in `@outl/shared/api/commands`. Desktop's `lib/api.ts` re-exports it for backward-compatible imports.)
 - **Tailwind config.** Each client has its own theme; could be shared later if the palettes converge. Low priority.
 
 ## Theming note

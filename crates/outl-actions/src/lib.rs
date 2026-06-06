@@ -53,6 +53,7 @@ pub mod backlinks;
 pub mod block;
 pub mod collapsed;
 pub mod error;
+pub mod exec;
 pub mod journal;
 pub mod outline;
 pub mod page;
@@ -68,13 +69,14 @@ pub use block::{
 };
 pub use collapsed::{set_block_collapsed, toggle_block_collapsed};
 pub use error::ActionError;
+pub use exec::{run_code_block, ExecOutputDto, RunCodeBlockOutcome};
 pub use journal::{
     apply_all_pages_md, apply_page_md, apply_page_md_with_sidecar, journals_dir, mutate_page_md,
     page_md_path, pages_dir, render_page_md, write_md_atomic,
 };
 pub use outline::{
-    flatten_subtree_paths, project_outline, project_outline_node, read_page_view,
-    read_page_view_with_workspace, OutlineNode,
+    flat_index_for_block, flatten_subtree_paths, project_outline, project_outline_node,
+    read_page_view, read_page_view_with_workspace, OutlineNode,
 };
 pub use page::{
     date_from_slug, find_by_slug, is_valid_slug, journal_slug, journal_title,

@@ -31,7 +31,7 @@ What this crate **does** own:
 
 - Path discovery (file picker via `tauri-plugin-dialog`; persisted in settings JSON; cross-platform default).
 - Cross-platform FS watcher (`notify` crate) that signals the frontend when peer `ops-*.jsonl` files grow — replaces the `NSMetadataQuery`/`NSFileCoordinator` dance the mobile crate has to do for iOS.
-- Desktop-only Tauri command surface (workspace picker, code execution wrap, settings IO).
+- Desktop-only Tauri command surface (workspace picker, settings IO). The code-execution command (`run_code_block`) is a **thin adapter** — the orchestration (flat-DFS walk, `.md` path resolution, `outl-exec` invocation, DTO build) lives in `outl_actions::exec` so the mobile client shares the exact same flow. The desktop adapter only parses NodeIds, locks the workspace, calls the action, and wraps the outcome with a refreshed `PageView`. Adding behaviour to `commands/exec.rs` is almost always a smell — promote it to `outl-actions` instead.
 - Solid frontend with **3-pane layout** (Sidebar / OutlineView / BacklinksPanel) and **OS-standard keyboard shortcuts** (`Cmd+P`, `Cmd+J`, `Cmd+T`, `Cmd+Enter`, `Cmd+,`) plus optional vim mode.
 
 ## Layout
@@ -85,7 +85,7 @@ crates/outl-desktop/
             ├── workspace.rs   # set_workspace, current_workspace, reload, settings, stats
             ├── page.rs        # list / search / open / journal nav / resolve_ref
             ├── block.rs       # create / edit / todo / move / collapsed / paste
-            └── exec.rs        # run_code_block (outl-exec adapter)
+            └── exec.rs        # run_code_block — thin Tauri adapter over outl_actions::exec::run_code_block (shared with mobile)
 ```
 
 ## Theme tokens — temporary mirror of iOS names

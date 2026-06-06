@@ -57,6 +57,43 @@ fn walk_subtree(node: &OutlineNode, stack: &mut Vec<usize>, out: &mut Vec<Vec<us
     }
 }
 
+/// Resolve a block's [`NodeId`] to its flat DFS index inside an
+/// outline forest.
+///
+/// The ordering matches what `outl_exec::run_block_at_index` expects:
+/// it parses the page's `.md`, walks `ParsedPage.blocks` in DFS, and
+/// addresses the target block by its position in that walk. The
+/// outline projected from the workspace tree (via [`project_outline`])
+/// preserves the same order, so the two stay in sync as long as the
+/// `.md` and the op log are reconciled (they always are after a
+/// mutation through `outl-actions`).
+///
+/// Returns `None` when the id isn't in the outline (foreign page,
+/// stale call, deleted block). Callers should surface that as a soft
+/// error rather than panic — it's the canonical "outline drifted, try
+/// again" signal.
+///
+/// Used by `outl_actions::exec::run_code_block` and by the Tauri
+/// adapter shims in mobile + desktop that translate a block-id click
+/// into a runtime invocation.
+pub fn flat_index_for_block(outline: &[OutlineNode], target: NodeId) -> Option<usize> {
+    let target_str = target.to_string();
+    fn walk(nodes: &[OutlineNode], target: &str, counter: &mut usize) -> Option<usize> {
+        for n in nodes {
+            if n.id == target {
+                return Some(*counter);
+            }
+            *counter += 1;
+            if let Some(hit) = walk(&n.children, target, counter) {
+                return Some(hit);
+            }
+        }
+        None
+    }
+    let mut counter = 0usize;
+    walk(outline, &target_str, &mut counter)
+}
+
 /// Build a single [`OutlineNode`] for `node` straight from the
 /// workspace, including its subtree and properties.
 ///

@@ -439,7 +439,20 @@ UI-agnostic; both TUI and mobile consume them.
 | Backlink DTO returned by the queries below | `outl_actions::backlinks::Backlink` | `crates/outl-actions/src/backlinks.rs` |
 | Walk every backlink for a `[[ref]]` target / a `PageMeta` | `outl_actions::backlinks::backlinks_for_target` / `backlinks_for_page` | `crates/outl-actions/src/backlinks.rs` |
 
-#### 13. Sync engine, locks, storage trait
+#### 13. Code-block execution (outl-actions::exec)
+
+The **cross-client glue** every UI uses to wire a "run this fence" gesture (TUI `g x`, desktop `Cmd+X`, mobile long-press → "Run code") through to `outl-exec` and back. `outl_actions::exec::run_code_block` is the **only** entry point a Tauri command / TUI action should call — never re-implement the flat-DFS walk, the `.md` path lookup, or the DTO shape per client.
+
+| Intent | Use this | File |
+|---|---|---|
+| Resolve a `NodeId` to its flat DFS index inside an outline forest (the order `outl_exec::run_block_at_index` expects) | `outl_actions::flat_index_for_block` | `crates/outl-actions/src/outline.rs` |
+| Orchestrate execution: walk DFS, resolve `.md` path, call `outl_exec::run_block_at_index`, build DTO | `outl_actions::exec::run_code_block` | `crates/outl-actions/src/exec.rs` |
+| Serializable mirror of `outl_exec::ExecOutput` (stdout/stderr/duration_ms/exit) | `outl_actions::ExecOutputDto` | `crates/outl-actions/src/exec.rs` |
+| Outcome shipped to the client (`language` + `result_ok` xor `error`; client adds the refreshed `view`) | `outl_actions::RunCodeBlockOutcome` | `crates/outl-actions/src/exec.rs` |
+
+The runtime catalog (which languages are available) is selected by the **binary** that consumes this crate, via `outl-exec` features in its own `Cargo.toml`. `outl-actions` itself depends on `outl-exec` with `default-features = false` so it doesn't drag `wasmtime` (Rust runtime) into the mobile IPA via the back door.
+
+#### 14. Sync engine, locks, storage trait
 
 | Intent | Use this | File |
 |---|---|---|
@@ -465,6 +478,10 @@ Past incidents:
 
 - `outl_md::index::Backlink` and `outl_actions::Backlink` were two parallel "backlinks" pipelines that started identical and ended up disagreeing on self-references — a bug the user had to spot because each surface looked fine in isolation.
   Collapsed into `outl_actions::backlinks_for_page` in 0.5.3.
+- `outl-mobile`'s `run_code_block` Tauri shim was opened as a copy of `outl-desktop/src-tauri/src/commands/exec.rs` — same `flat_index_for` walk, same `journals/<slug>.md || pages/<slug>.md` probe (which already existed as `outl_actions::page_md_path`), same DTO shape.
+  The catalog table above did not list code execution as a cross-client primitive, and the desktop's per-crate `CLAUDE.md` filed `commands/exec.rs` under "owned by the desktop", so nothing pointed at the right home.
+  Caught by the user mid-PR: "do que fizemos de rodar code block no mobile, não conseguimos compartilhar?"
+  Collapsed into `outl_actions::exec::run_code_block` in 0.6.x — clients now own only the AppState lookup and the `view` wrapper. Lesson: if you're staring at a Tauri shim that's mostly `parse_node_id` → outline walk → `outl-exec` call → DTO, **the walk and the DTO belong in `outl-actions`** — every time.
 - The Logseq importer's `crates/outl-cli/src/cmd/import/normalize.rs` was opened reimplementing `\r\n` handling, `id::` stripping, and long-form date rewriting — every one of which `outl_actions::paste::normalize_external_syntax` already owned.
   Caught in PR #47 review.
   Lesson: a "normalize markdown from outside" need always starts at `paste::normalize_external_syntax`; outline-level restructuring (headings → bullets, multi-paragraph merge, fence dedent) is the only thing the importer adds on top.

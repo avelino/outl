@@ -6,30 +6,18 @@
 //! and mobile clients share the same flow. This file owns only:
 //!
 //! - argument parsing (`String` → `NodeId`)
-//! - the per-client `AppState` lookup (workspace + storage_root +
-//!   hlc + registry)
+//! - the per-client `AppState` lookup (workspace + hlc + registry)
 //! - composing the refreshed [`PageView`] into the wire reply
 //!
-//! Synchronous Tauri command — Tauri serves sync commands from its
-//! own multi-threaded worker pool, so a long-running runtime
-//! (Python, Lua, JS, Lisp, Rust/wasm, …) doesn't park the JS-side
-//! event loop, but it **does** hold the workspace mutex for the
-//! whole call. A second mutation lands behind it; the frontend's
-//! "run" button stays enabled while the command is in flight, so
-//! the user can keep navigating but not edit the running page.
-//!
-//! Making this `async fn` + `tokio::task::spawn_blocking` is the
-//! follow-up to release the mutex earlier (the runtime can outlive
-//! the workspace borrow, since `outl-exec` clones the registry
-//! `Arc`). Tracked in the desktop polish backlog.
+//! Adding behaviour here is almost always a smell; promote it to
+//! `outl_actions::exec` instead so the desktop picks it up for free.
 
 use outl_actions::{run_code_block as action_run_code_block, ExecOutputDto, RunCodeBlockOutcome};
 use serde::Serialize;
 use tauri::State;
 use tracing::warn;
 
-use crate::helpers::{build_page_view, parse_node_id, storage_root_or_err, with_ws_mut};
-use crate::state::{AppState, PageView};
+use crate::{build_page_view, parse_node_id, with_ws_mut, AppState, PageView};
 
 /// Wire reply for `run_code_block`. Adds the per-client [`PageView`]
 /// to the shared [`RunCodeBlockOutcome`] so the frontend re-renders
@@ -56,9 +44,9 @@ pub(crate) fn run_code_block(
     block_id: String,
     state: State<'_, AppState>,
 ) -> Result<RunCodeBlockReply, String> {
-    let root = storage_root_or_err(&state)?;
     let page = parse_node_id(&page_id)?;
     let block = parse_node_id(&block_id)?;
+    let root = state.storage_root.clone();
     let registry = state.registry.clone();
 
     with_ws_mut(&state, |ws| {

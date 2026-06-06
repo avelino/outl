@@ -144,6 +144,40 @@ export interface CreateBlockReply {
   new_id: string;
 }
 
+/**
+ * Successful execution payload of `runCodeBlock`. Mirrors the Rust
+ * `ExecOutputDto` (which itself is a serialisable view of
+ * `outl_exec::ExecOutput`). `duration_ms` is the wall-clock runtime
+ * across the runtime call; `exit` is the stringified Rust
+ * `ExitStatus` (`"Ok"`, `"NonZero(1)"`, `"Trap(\"…\")"`).
+ */
+export interface ExecOutputDto {
+  stdout: string;
+  stderr: string;
+  duration_ms: number;
+  exit: string;
+}
+
+/**
+ * Reply of {@link import("./commands").runCodeBlock}. `outl-exec`
+ * writes the `> **result:**` sibling subblock and reconciles with
+ * the op log before the command returns, so `view` is the refreshed
+ * outline the caller should swap straight in — no follow-up
+ * `openPage…` round-trip needed.
+ *
+ * - `result_ok` is populated when the runtime ran (stdout / stderr
+ *   captured, exit available).
+ * - `error` is populated on infrastructure failure (unknown
+ *   language, timeout, sandbox crash). Mutually exclusive with
+ *   `result_ok`.
+ */
+export interface RunCodeBlockReply {
+  language: string;
+  result_ok: ExecOutputDto | null;
+  error: string | null;
+  view: PageView;
+}
+
 export interface WorkspaceSummary {
   blocks: number;
   ops: number;

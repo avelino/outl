@@ -337,7 +337,20 @@ UI-agnostic; TUI and mobile both consume them.
 | Backlink DTO | `outl_actions::backlinks::Backlink` | `crates/outl-actions/src/backlinks.rs` |
 | Walk backlinks for a target / page | `outl_actions::backlinks::backlinks_for_target` / `backlinks_for_page` | `crates/outl-actions/src/backlinks.rs` |
 
-#### 13. Sync engine, locks, storage trait
+#### 13. Code-block execution (outl-actions::exec)
+
+Cross-client glue every UI uses to wire a "run this fence" gesture (TUI `g x`, desktop `Cmd+X`, mobile long-press) into `outl-exec` and back. `outl_actions::exec::run_code_block` is the **only** entry point a Tauri command / TUI action should call — never re-implement flat-DFS / `.md` path / DTO per client.
+
+| Intent | Use this | File |
+|---|---|---|
+| Flat DFS index of a `NodeId` inside an outline forest | `outl_actions::flat_index_for_block` | `crates/outl-actions/src/outline.rs` |
+| Orchestrate exec (walk → path → `outl_exec::run_block_at_index` → DTO) | `outl_actions::exec::run_code_block` | `crates/outl-actions/src/exec.rs` |
+| Serializable mirror of `outl_exec::ExecOutput` | `outl_actions::ExecOutputDto` | `crates/outl-actions/src/exec.rs` |
+| Outcome shipped to client (`language` + `result_ok` xor `error`) | `outl_actions::RunCodeBlockOutcome` | `crates/outl-actions/src/exec.rs` |
+
+Runtime selection (which languages ship) is per-binary via `outl-exec` features in the consumer's `Cargo.toml`. `outl-actions` pulls `outl-exec` with `default-features = false` so it never drags `wasmtime` into the mobile IPA.
+
+#### 14. Sync engine, locks, storage trait
 
 | Intent | Use this | File |
 |---|---|---|

@@ -39,7 +39,8 @@ To keep them honest, we route every workspace operation through one shared crate
 | Op log, tree CRDT, storage trait     | `outl-core`                     |
 | `.md` parse / render, sidecar        | `outl-md`                       |
 | Workspace mutations (edit, indent, todo, delete, journal render) | `outl-actions` |
-| Code-block execution                 | `outl-exec`                     |
+| Code-block execution (runtimes + orchestration) | `outl-exec`            |
+| Cross-client "run a fence" glue (`run_code_block`) | `outl-actions::exec` |
 | TUI: keymaps, modes, overlays, in-flight AST manipulation | `outl-tui`         |
 | Mobile: iCloud storage, Tauri commands, Solid frontend | `outl-mobile`         |
 | CLI subcommands                      | `outl-cli`                      |
@@ -57,6 +58,36 @@ No if:
 - It manipulates client UI state (selection, modes, toasts, focus, keymaps).
 - It manipulates an in-flight `Vec<OutlineNode>` that hasn't been parsed back into a workspace yet (those helpers live in `outl-md::outline_ops`, re-exported through a one-liner shim at `outl-tui/src/outline_ops.rs` because the mobile client needs them too — they're workspace-free pure AST manipulation, so they sit in `outl-md` rather than `outl-actions`).
 - It's storage-backend-specific (iCloud watcher, future ChronDB) — those implement `outl_core::Storage` in the binary that needs them.
+
+## Running code blocks
+
+Every client that lets the user execute a `` ```lang ``` `` block (TUI `g x`, desktop `Cmd+X` / Run button, mobile long-press → "Run code") goes through **one** shared entry point: `outl_actions::exec::run_code_block(ws, hlc, root, registry, page, block)`.
+
+```text
+client gesture (TUI chord / Cmd+X / long-press)
+        │
+        ▼
+outl_actions::exec::run_code_block
+   ├── outl_actions::flat_index_for_block   (DFS-locate the block)
+   ├── outl_actions::journal::page_md_path  (resolve .md path)
+   └── outl_exec::run_block_at_index        (execute + persist > **result:** sibling)
+        │
+        ▼
+RunCodeBlockOutcome { language, result_ok | error }
+        │
+        ▼
+client wraps with refreshed PageView and ships it down its Tauri/TUI surface
+```
+
+The DTO returned is intentionally *narrow* — `language`, `result_ok` (stdout/stderr/duration/exit), `error`.
+Clients add the refreshed page projection themselves because each client owns its own `PageView` shape (mobile's iCloud-backed variant differs from desktop's path-picker variant).
+The duplication that used to live in `outl-desktop/src-tauri/src/commands/exec.rs` and `outl-mobile/src-tauri/src/exec.rs` was collapsed into this single function — `flat_index_for_block` and the path lookup were the canonical "two parallel implementations" case the workspace-level Reuse-first policy exists to prevent.
+
+The runtime catalog is selected per-binary via `outl-exec` features:
+
+- `outl-cli`, `outl-tui`, `outl-desktop` — default features (Lisp + JS + Python + Lua + Rust via wasmtime).
+- `outl-mobile` — opts out of `lang-rust` (wasmtime is heavy and trips iOS code-signing restrictions on dynamic code generation).
+- `outl-actions` — `default-features = false` so it never drags `wasmtime` into the mobile IPA via the back door.
 
 ## TODO/DONE convention
 

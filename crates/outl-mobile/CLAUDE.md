@@ -80,6 +80,18 @@ that, always call `openRef`.
 The textarea in `BlockRow.tsx` intercepts paste events whose payload looks like a bullet list (`@outl/shared/paste::looksLikeOutline`) and routes the text to `outl_actions::paste_markdown` via the `paste_markdown_at` Tauri command.
 Plain text falls through to the browser's default splice so a one-off URL or code snippet still pastes the way the user expects.
 
+## Code execution (`run_code_block`)
+
+Long-press a `` ```lang …``` `` block → the contextual menu shows a `Run <lang>` action that fires `runCodeBlock` (`@outl/shared/api/commands`).
+The backend command is in `src-tauri/src/exec.rs` and is a **thin adapter** — the orchestration (flat-DFS walk, `.md` path resolution, `outl-exec` invocation, DTO build) lives in `outl_actions::exec::run_code_block` so the desktop client shares the exact same flow.
+The mobile adapter only parses NodeIds, locks the workspace, calls the action, and wraps the outcome with a refreshed `PageView`. Adding behaviour to `src-tauri/src/exec.rs` is almost always a smell — promote it to `outl-actions` instead.
+
+Runtimes shipped on iOS: **Lisp, JS, Python, Lua**.
+`lang-rust` is deliberately disabled in `outl-mobile/src-tauri/Cargo.toml` — the wasmtime + Cranelift stack adds tens of MB to the IPA and runs into iOS code-signing restrictions on dynamic code generation.
+The dependency is declared with `path = "../../outl-exec"` (not `workspace = true`) so we can opt out of the workspace dep's default features without changing them for every other consumer (CLI / TUI / desktop, which all keep Rust).
+
+The "Run code" action only shows up when `@outl/shared/highlight::detectFence` matches the block's raw text — same detector the read-mode renderer uses, and the backend re-validates inside `run_block_at_index`, so a false-positive surfaces as a runtime toast instead of doing damage.
+
 ## Cross-runtime contracts (now in `@outl/shared`)
 
 The four TS pieces that mirror Rust canonical sources used to live as copies under `lib/`.

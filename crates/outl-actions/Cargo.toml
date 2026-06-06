@@ -16,6 +16,13 @@ path = "src/lib.rs"
 [dependencies]
 outl-core = { workspace = true }
 outl-md = { workspace = true }
+# Used by `outl_actions::exec` (shared `run_code_block` glue). No
+# runtime features enabled here on purpose — the binary that consumes
+# this crate (CLI / TUI / desktop / mobile) selects the languages it
+# wants in its own Cargo.toml, and Cargo unions the feature set per
+# build target. Keeping this dep "feature-less" means `outl-actions`
+# doesn't pull `wasmtime` into the mobile IPA via the back door.
+outl-exec = { path = "../outl-exec", default-features = false }
 serde = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }

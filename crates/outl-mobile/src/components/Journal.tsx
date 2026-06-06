@@ -26,12 +26,14 @@ import {
   pasteMarkdown,
   previousDay,
   reloadWorkspace,
+  runCodeBlock,
   searchPages,
   setBlockCollapsed,
   todaySlug,
   toggleTodo,
   workspaceStats,
 } from "@outl/shared/api/commands";
+import { detectFence } from "@outl/shared/highlight";
 import {
   countDescendants,
   findBlock,
@@ -608,6 +610,27 @@ export function Journal() {
     if (next) applyView(next);
   }
 
+  /**
+   * Run a `\`\`\`lang …\`\`\`` block through `outl-exec`. Triggered
+   * from the long-press context menu (the only "Run code" surface on
+   * mobile — desktop has Cmd+X too). The backend persists the
+   * `> **result:**` subblock and returns the refreshed `PageView`,
+   * so a single round-trip swaps the outline in. Runtime errors
+   * (`unknown language`, `timeout`) surface via the toast so the
+   * user knows why nothing visibly happened.
+   */
+  async function handleRunCodeBlock(id: string) {
+    const pid = pageId();
+    if (!pid) return;
+    haptic("medium");
+    const reply = await withError(() => runCodeBlock(pid, id));
+    if (!reply) return;
+    applyView(reply.view);
+    if (reply.error) {
+      setError(`${reply.language}: ${reply.error}`);
+    }
+  }
+
   async function handleCreateAfter(id: string) {
     const pid = pageId();
     if (!pid) return;
@@ -1145,6 +1168,7 @@ export function Journal() {
             moveDown: handleMoveDown,
             toggleTodo: handleToggleTodo,
             delete: handleDelete,
+            runCode: handleRunCodeBlock,
             copy: async (id) => {
               const block = view() ? findBlock(view()!.outline, id) : null;
               if (!block) return;
@@ -1289,6 +1313,7 @@ function buildContextActions(
     moveDown: (id: string) => void;
     toggleTodo: (id: string) => void;
     delete: (id: string) => void;
+    runCode: (id: string) => void;
     copy: (id: string) => void;
   },
 ): BlockContextAction[] {
@@ -1302,7 +1327,27 @@ function buildContextActions(
     : -1;
   const canMoveUp = index > 0;
   const canMoveDown = siblings ? index < siblings.length - 1 : false;
+  // `Run code` only shows up when the long-pressed block is a fenced
+  // `` ```lang …``` ``. The same detector the read-mode renderer
+  // uses (`@outl/shared/highlight::detectFence`); the backend
+  // re-validates on `run_code_block`, so a false-positive here would
+  // just surface a runtime error in the toast instead of doing
+  // damage.
+  const block = findBlock(pageView.outline, blockId);
+  const fence = block ? detectFence(block.text) : null;
   return [
+    ...(fence
+      ? [
+          {
+            id: "runCode",
+            label: `Run ${fence.language}`,
+            // SF-Symbols-equivalent "play.fill" — filled right
+            // triangle, matches the desktop's `▶ Run` chip.
+            iconPath: "M8 5v14l11-7z",
+            onSelect: () => handlers.runCode(blockId),
+          } satisfies BlockContextAction,
+        ]
+      : []),
     {
       id: "toggleTodo",
       label: "Toggle TODO",

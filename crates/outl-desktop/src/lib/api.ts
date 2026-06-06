@@ -9,7 +9,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 
-import type { PageView, WorkspaceSummary } from "@outl/shared/api/types";
+import type { WorkspaceSummary } from "@outl/shared/api/types";
 
 // ---------------------------------------------------------------------------
 // Workspace lifecycle (desktop-only)
@@ -230,43 +230,9 @@ export function updateSettings(next: Settings): Promise<Settings> {
   return invoke<Settings>("update_settings", { next });
 }
 
-export interface ExecOutputDto {
-  stdout: string;
-  stderr: string;
-  duration_ms: number;
-  /** Stringified Rust `ExitStatus` enum (`"Ok"`, `"NonZero(1)"`, `"Trap(\"…\")"`). */
-  exit: string;
-}
-
-/**
- * Reply shape for `run_code_block`. Mirrors the Rust
- * `RunCodeBlockReply` struct.
- *
- * - `result_ok` is populated on a successful runtime call (the
- *   process ran, stdout/stderr captured).
- * - `error` is populated on infrastructure failure (unknown
- *   language, timeout, sandbox crash). Mutually exclusive with
- *   `result_ok`.
- * - `view` is the refreshed `PageView` — the `> **result:**`
- *   subblock has already been written and reconciled by
- *   `outl-exec`, so the frontend re-renders in one round-trip.
- */
-export interface RunCodeBlockReply {
-  language: string;
-  result_ok: ExecOutputDto | null;
-  error: string | null;
-  view: PageView;
-}
-
-/**
- * Run the code-fenced block identified by `blockId` inside the page
- * identified by `pageId`. The Rust side resolves the flat-DFS index,
- * runs `outl_exec::run_block_at_index` on a blocking thread, and
- * persists the result as a sibling subblock.
- */
-export function runCodeBlock(
-  pageId: string,
-  blockId: string,
-): Promise<RunCodeBlockReply> {
-  return invoke<RunCodeBlockReply>("run_code_block", { pageId, blockId });
-}
+// `runCodeBlock` + the `ExecOutputDto` / `RunCodeBlockReply` DTOs
+// moved to `@outl/shared/api/commands` once mobile picked up the same
+// command (v0.6.x — long-press → "Run code"). Re-exported here so
+// every desktop caller keeps importing from one place.
+export type { ExecOutputDto, RunCodeBlockReply } from "@outl/shared/api/types";
+export { runCodeBlock } from "@outl/shared/api/commands";

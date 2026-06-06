@@ -52,4 +52,12 @@ pub enum ActionError {
     /// with the rendered `.md` projection.
     #[error("sidecar: {0}")]
     Sidecar(#[from] outl_md::sidecar::SidecarError),
+
+    /// Code-block execution orchestration failed (sidecar IO, op log
+    /// apply, `.md` reconcile during the run). Runtime-level failures
+    /// (`unknown language`, timeout) come back through the success
+    /// payload's `error` field instead — they are user-visible
+    /// diagnostics, not bugs.
+    #[error("exec: {0}")]
+    Exec(String),
 }
