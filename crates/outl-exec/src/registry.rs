@@ -56,8 +56,19 @@ impl RuntimeRegistry {
 
     /// Look up a runtime by fence info-string. Returns `None` if no
     /// runtime is registered for that language.
+    ///
+    /// The input is run through [`outl_md::lang::canonical`] first
+    /// so user-written aliases (`javascript`, `node`, `rs`, `py3`,
+    /// …) resolve to the registry key the runtime registered with
+    /// (`js`, `rust`, `python`). The original lower-cased form is
+    /// the fallback when no alias matches — keeps the door open for
+    /// runtimes registered out-of-band that don't have an alias
+    /// entry yet.
     pub fn get(&self, lang: &str) -> Option<Arc<dyn Runtime>> {
-        self.by_lang.get(&lang.to_ascii_lowercase()).cloned()
+        let key = outl_md::lang::canonical(lang)
+            .map(str::to_owned)
+            .unwrap_or_else(|| lang.to_ascii_lowercase());
+        self.by_lang.get(&key).cloned()
     }
 
     /// Every registered language. Useful for `:run ?` style help.

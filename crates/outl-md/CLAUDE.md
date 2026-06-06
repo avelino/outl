@@ -142,6 +142,7 @@ src/
 ├── matching.rs     # 3-level matching algorithm
 ├── diff.rs         # AST diff → Op sequence (takes old_blocks to preserve ref_handle)
 ├── inline.rs       # InlineTok (Plain/Bold/.../BlockRef/Embed), RefTarget, ref_at_cursor
+├── lang.rs         # canonical(fence) — alias table shared by outl-exec + frontend syntax highlighter
 ├── index.rs        # WorkspaceIndex — page-level + block-level facade
 ├── block_index.rs  # BlockEntry, BlockReference, BlockIndex (id ↔ handle ↔ reverse refs)
 ├── reconcile.rs    # high-level reconcile_md (parse → match → diff → apply)

@@ -15,6 +15,7 @@ pub mod block_index;
 pub mod diff;
 pub mod index;
 pub mod inline;
+pub mod lang;
 pub mod matching;
 pub mod outline_ops;
 pub mod parse;
