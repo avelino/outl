@@ -1,4 +1,5 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
+import { createSheetDrag } from "../lib/sheet-drag";
 
 interface CalendarProps {
   open: boolean;
@@ -120,29 +121,9 @@ export function Calendar(props: CalendarProps) {
     setMonth(now.getMonth());
   }
 
-  // Sheet drag-to-dismiss state. Same gesture pattern as PageSwitcher.
-  const [dragY, setDragY] = createSignal(0);
-  let dragStartY = 0;
-  let dragActive = false;
-  function onHandleDown(e: PointerEvent) {
-    dragStartY = e.clientY;
-    dragActive = true;
-    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-  }
-  function onHandleMove(e: PointerEvent) {
-    if (!dragActive) return;
-    setDragY(Math.max(0, e.clientY - dragStartY));
-  }
-  function onHandleUp() {
-    if (!dragActive) return;
-    dragActive = false;
-    if (dragY() > 80) {
-      setDragY(0);
-      props.onClose();
-    } else {
-      setDragY(0);
-    }
-  }
+  // Sheet drag-to-dismiss — same hook the PageSwitcher uses so the
+  // gesture feels identical across every bottom sheet.
+  const drag = createSheetDrag(() => props.onClose());
 
   return (
     <Show when={props.open}>
@@ -151,13 +132,13 @@ export function Calendar(props: CalendarProps) {
         onClick={props.onClose}
       />
       <div
-        class="fixed inset-x-0 bottom-0 z-50 flex flex-col overflow-hidden rounded-t-2xl bg-(--color-ios-bg)/85 shadow-2xl outl-sheet-up backdrop-blur-2xl backdrop-saturate-150 dark:bg-(--color-iosd-bg)/85"
+        class="outl-sheet-up fixed inset-x-0 bottom-0 z-50 flex flex-col overflow-hidden rounded-t-2xl bg-(--color-ios-bg)/85 shadow-2xl backdrop-blur-2xl backdrop-saturate-150 dark:bg-(--color-iosd-bg)/85"
         style={{
           "padding-bottom": "env(safe-area-inset-bottom)",
-          transform: `translateY(${dragY()}px)`,
-          transition: dragActive
+          transform: `translateY(${drag.translateY()}px)`,
+          transition: drag.dragging()
             ? "none"
-            : "transform 200ms cubic-bezier(0.32, 0.72, 0, 1)",
+            : "transform 220ms var(--ease-spring-in)",
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -165,10 +146,10 @@ export function Calendar(props: CalendarProps) {
           <span
             class="mx-auto block h-3 w-16 cursor-grab py-1 active:cursor-grabbing"
             style={{ "touch-action": "none" }}
-            onPointerDown={onHandleDown}
-            onPointerMove={onHandleMove}
-            onPointerUp={onHandleUp}
-            onPointerCancel={onHandleUp}
+            onPointerDown={drag.onPointerDown}
+            onPointerMove={drag.onPointerMove}
+            onPointerUp={drag.onPointerUp}
+            onPointerCancel={drag.onPointerCancel}
             aria-label="Drag to close"
             role="button"
           >
@@ -243,7 +224,7 @@ export function Calendar(props: CalendarProps) {
                 <button
                   type="button"
                   onClick={() => props.onPick(cell.slug)}
-                  class="flex aspect-square items-center justify-center rounded-full text-[15px] tabular-nums active:opacity-50"
+                  class="relative flex aspect-square items-center justify-center rounded-full text-[15px] tabular-nums active:opacity-50"
                   classList={{
                     "bg-(--color-ios-accent) text-white font-semibold dark:bg-(--color-iosd-accent)":
                       isSelected,
@@ -252,6 +233,27 @@ export function Calendar(props: CalendarProps) {
                   }}
                 >
                   {cell.day}
+                  {/* Apple Calendar–style "today marker": a small dot
+                      under the number, always visible regardless of
+                      which day is currently selected. White on the
+                      selected pill, accent purple otherwise. The
+                      Calendar.tsx selected-pill state used to swallow
+                      the today highlight (accent text → white text on
+                      accent bg, indistinguishable from any other
+                      selected day); this dot keeps "today" findable in
+                      every state. */}
+                  <Show when={isToday}>
+                    <span
+                      aria-hidden="true"
+                      class="absolute h-1 w-1 rounded-full"
+                      classList={{
+                        "bg-white": isSelected,
+                        "bg-(--color-ios-accent) dark:bg-(--color-iosd-accent)":
+                          !isSelected,
+                      }}
+                      style="bottom: 4px;"
+                    />
+                  </Show>
                 </button>
               );
             }}

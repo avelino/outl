@@ -46,15 +46,48 @@ export function Toast(props: ToastProps): JSX.Element {
     if (timer !== undefined) clearTimeout(timer);
   });
 
+  // Swipe-up to dismiss — iOS in-app notification gesture. Track the
+  // first touch Y, compare with current; if user pulled up more than
+  // 24pt we treat it as a dismiss intent.
+  let touchStartY: number | null = null;
+
+  function onTouchStart(e: TouchEvent) {
+    touchStartY = e.touches[0]?.clientY ?? null;
+  }
+
+  function onTouchMove(e: TouchEvent) {
+    if (touchStartY === null) return;
+    const y = e.touches[0]?.clientY ?? touchStartY;
+    if (touchStartY - y > 24) {
+      touchStartY = null;
+      props.onDismiss();
+    }
+  }
+
+  function onTouchEnd() {
+    touchStartY = null;
+  }
+
   return (
     <Show when={props.message}>
       <div
         role="status"
         aria-live="polite"
-        class="pointer-events-none fixed inset-x-0 top-0 z-50 flex justify-center outl-toast-in"
+        class="pointer-events-none outl-toast-in fixed inset-x-0 top-0 z-50 flex justify-center"
         style="padding-top: max(env(safe-area-inset-top), 12px);"
       >
-        <div class="pointer-events-auto mx-4 flex max-w-md items-start gap-3 rounded-2xl bg-(--color-ios-destructive) px-4 py-3 text-white shadow-lg">
+        {/* Pill-shaped in-app notification, Apple/Bear style: capsule
+            rounded-full, blurred translucent bg, shadow elevation,
+            swipe-up to dismiss. Sits centered horizontally with a
+            small horizontal margin so on narrow screens it stays
+            inset from the edges. */}
+        <div
+          onTouchStart={onTouchStart}
+          onTouchMove={onTouchMove}
+          onTouchEnd={onTouchEnd}
+          onTouchCancel={onTouchEnd}
+          class="pointer-events-auto mx-4 flex max-w-md items-center gap-3 rounded-full bg-(--color-ios-destructive)/95 px-4 py-2.5 text-white shadow-[var(--shadow-capsule)] backdrop-blur-xl dark:shadow-[var(--shadow-capsule-dark)]"
+        >
           <svg
             width="18"
             height="18"
@@ -64,13 +97,15 @@ export function Toast(props: ToastProps): JSX.Element {
             stroke-width="2"
             stroke-linecap="round"
             stroke-linejoin="round"
-            class="mt-0.5 shrink-0"
+            class="shrink-0"
             aria-hidden="true"
           >
             <circle cx="12" cy="12" r="10" />
             <path d="M12 8v4M12 16h.01" />
           </svg>
-          <p class="flex-1 text-[14px] leading-snug">{props.message}</p>
+          <p class="flex-1 truncate text-[14px] leading-snug">
+            {props.message}
+          </p>
           <Show when={props.onRetry}>
             <button
               type="button"
@@ -90,8 +125,8 @@ export function Toast(props: ToastProps): JSX.Element {
             class="shrink-0 rounded-full p-1 active:bg-white/20"
           >
             <svg
-              width="16"
-              height="16"
+              width="14"
+              height="14"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"

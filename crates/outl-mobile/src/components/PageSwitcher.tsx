@@ -7,6 +7,7 @@ import {
 } from "solid-js";
 import type { PageMeta } from "@outl/shared/api/types";
 import { listPages } from "@outl/shared/api/commands";
+import { createSheetDrag } from "../lib/sheet-drag";
 
 interface PageSwitcherProps {
   open: boolean;
@@ -25,10 +26,17 @@ export function PageSwitcher(props: PageSwitcherProps) {
     props.open ? listPages() : Promise.resolve<PageMeta[]>([]),
   );
   const [query, setQuery] = createSignal("");
-  // Sheet drag-to-dismiss state. Tracks vertical translate while the
-  // user drags the grab handle (or the header above it); releases
-  // below a threshold call `onClose`, anything else snaps back.
-  const [dragY, setDragY] = createSignal(0);
+  // `searchFocused` drives the "Cancel" link that slides in to the
+  // right of the search input. Mirrors iOS UISearchController: the
+  // affordance only appears when the search has focus, and tapping
+  // it dismisses the sheet + clears the query.
+  const [searchFocused, setSearchFocused] = createSignal(false);
+  let searchInput: HTMLInputElement | undefined;
+  // Sheet drag-to-dismiss — shared `createSheetDrag` keeps the
+  // gesture identical across every bottom sheet (PageSwitcher,
+  // Calendar). Wire `drag.onPointer*` onto the grab handle only,
+  // never the whole header.
+  const drag = createSheetDrag(() => props.onClose());
 
   const filtered = createMemo(() => {
     const all = pages() ?? [];
@@ -47,45 +55,20 @@ export function PageSwitcher(props: PageSwitcherProps) {
     props.onPick(first.slug, first.kind);
   }
 
-  let dragStartY = 0;
-  let dragActive = false;
-  function onHandleDown(e: PointerEvent) {
-    dragStartY = e.clientY;
-    dragActive = true;
-    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-  }
-  function onHandleMove(e: PointerEvent) {
-    if (!dragActive) return;
-    const dy = e.clientY - dragStartY;
-    // Only react to downward drag — upward drag is meaningless for
-    // a sheet pinned to the bottom.
-    setDragY(Math.max(0, dy));
-  }
-  function onHandleUp() {
-    if (!dragActive) return;
-    dragActive = false;
-    // 80px of finger travel ≈ user committed to dismiss. Below that
-    // we snap back to zero so the gesture is forgiving.
-    if (dragY() > 80) {
-      setDragY(0);
-      props.onClose();
-    } else {
-      setDragY(0);
-    }
-  }
-
   return (
     <Show when={props.open}>
       <div
-        class="fixed inset-0 z-50 bg-black/40 backdrop-blur-md outl-fade-in"
+        class="outl-fade-in fixed inset-0 z-50 bg-black/40 backdrop-blur-md"
         onClick={props.onClose}
       />
       <div
-        class="fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col overflow-hidden rounded-t-2xl bg-(--color-ios-bg)/85 shadow-2xl outl-sheet-up backdrop-blur-2xl backdrop-saturate-150 dark:bg-(--color-iosd-bg)/85"
+        class="outl-sheet-up fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col overflow-hidden rounded-t-2xl bg-(--color-ios-bg)/85 shadow-2xl backdrop-blur-2xl backdrop-saturate-150 dark:bg-(--color-iosd-bg)/85"
         style={{
           "padding-bottom": "env(safe-area-inset-bottom)",
-          transform: `translateY(${dragY()}px)`,
-          transition: dragActive ? "none" : "transform 200ms cubic-bezier(0.32, 0.72, 0, 1)",
+          transform: `translateY(${drag.translateY()}px)`,
+          transition: drag.dragging()
+            ? "none"
+            : "transform 220ms var(--ease-spring-in)",
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -98,10 +81,10 @@ export function PageSwitcher(props: PageSwitcherProps) {
           <span
             class="mx-auto block h-3 w-16 cursor-grab py-1 active:cursor-grabbing"
             style={{ "touch-action": "none" }}
-            onPointerDown={onHandleDown}
-            onPointerMove={onHandleMove}
-            onPointerUp={onHandleUp}
-            onPointerCancel={onHandleUp}
+            onPointerDown={drag.onPointerDown}
+            onPointerMove={drag.onPointerMove}
+            onPointerUp={drag.onPointerUp}
+            onPointerCancel={drag.onPointerCancel}
             aria-label="Drag to close"
             role="button"
           >
@@ -111,8 +94,8 @@ export function PageSwitcher(props: PageSwitcherProps) {
             />
           </span>
         </header>
-        <div class="px-4 py-2">
-          <div class="flex items-center gap-2 rounded-xl bg-(--color-ios-card) px-3 py-2 dark:bg-(--color-iosd-card)">
+        <div class="flex items-center gap-2 px-4 py-2">
+          <div class="flex flex-1 items-center gap-2 rounded-xl bg-(--color-ios-card) px-3 py-2 dark:bg-(--color-iosd-card)">
             <svg
               width="16"
               height="16"
@@ -128,11 +111,14 @@ export function PageSwitcher(props: PageSwitcherProps) {
               <path d="M21 21l-4.3-4.3M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z" />
             </svg>
             <input
+              ref={searchInput}
               type="text"
               autofocus
               placeholder="Search pages…"
               value={query()}
               onInput={(e) => setQuery(e.currentTarget.value)}
+              onFocus={() => setSearchFocused(true)}
+              onBlur={() => setSearchFocused(false)}
               onKeyDown={(e) => {
                 // Enter opens the first match — same convention as
                 // Spotlight / Raycast / Alfred. Esc dismisses.
@@ -150,7 +136,10 @@ export function PageSwitcher(props: PageSwitcherProps) {
               <button
                 type="button"
                 aria-label="Clear"
-                onClick={() => setQuery("")}
+                onClick={() => {
+                  setQuery("");
+                  searchInput?.focus();
+                }}
                 class="text-(--color-ios-text-secondary) active:opacity-60 dark:text-(--color-iosd-text-secondary)"
               >
                 <svg
@@ -165,6 +154,24 @@ export function PageSwitcher(props: PageSwitcherProps) {
               </button>
             </Show>
           </div>
+          {/* iOS UISearchController convention: a "Cancel" link
+              appears flush right of the input *only while it has
+              focus*, and a tap clears the query + dismisses. The
+              outer flex sizing means the input shrinks to make room
+              without reflowing the rest of the sheet. */}
+          <Show when={searchFocused() || query().length > 0}>
+            <button
+              type="button"
+              onClick={() => {
+                setQuery("");
+                searchInput?.blur();
+                props.onClose();
+              }}
+              class="shrink-0 text-[15px] font-medium text-(--color-ios-accent) active:opacity-60 dark:text-(--color-iosd-accent)"
+            >
+              Cancel
+            </button>
+          </Show>
         </div>
         <div class="ios-scroll flex-1 px-2 pb-4">
           <Show

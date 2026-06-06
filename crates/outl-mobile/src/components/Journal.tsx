@@ -56,10 +56,10 @@ import { PageSwitcher } from "./PageSwitcher";
 import { PullToRefresh } from "./PullToRefresh";
 import { SyncDot } from "./SyncDot";
 import { BlockRow } from "./BlockRow";
-import { EditToolbar } from "./EditToolbar";
+import { SkeletonOutline } from "./Skeleton";
 import { haptic } from "../lib/haptics";
-import { useKeyboardInset } from "../lib/viewport";
 import { BacklinksSection } from "./BacklinksSection";
+import { BlockContextMenu, type BlockContextAction } from "./BlockContextMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Toast } from "./Toast";
 
@@ -68,10 +68,9 @@ export function Journal() {
   const [loaded, setLoaded] = createSignal(false);
   const [refreshing, setRefreshing] = createSignal(false);
   // Loading message + failure flag drive the initial-load placeholder.
-  // We progressively upgrade the message so the user knows we're
-  // still trying, and flip `loadFailed` only when we give up so the
-  // retry button has a clean condition to render against.
-  const [loadingMessage, setLoadingMessage] = createSignal("Loading…");
+  // The `SkeletonOutline` placeholder is the user-facing signal that
+  // we're still loading; `loadFailed` flips only when we give up so
+  // the retry button has a clean condition to render against.
   const [loadFailed, setLoadFailed] = createSignal(false);
   const [editingId, setEditingId] = createSignal<string | null>(null);
   const [draft, setDraft] = createSignal("");
@@ -90,6 +89,11 @@ export function Journal() {
   const [pendingDelete, setPendingDelete] = createSignal<
     { id: string; descendants: number } | null
   >(null);
+  // Block id whose contextual menu is currently open (long-press
+  // gesture target). `null` when no menu is showing.
+  const [contextMenuBlockId, setContextMenuBlockId] = createSignal<
+    string | null
+  >(null);
   const [syncing, setSyncing] = createSignal(false);
   // Network state — drives the `<SyncDot>` "offline" pill so the
   // user knows iCloud peer pushes are stalled. `navigator.onLine`
@@ -104,7 +108,6 @@ export function Journal() {
   // commit), and the loser overwrites the winner. We serialize so
   // the user's last keystroke always wins.
   let commitInFlight: Promise<unknown> | null = null;
-  const keyboardInset = useKeyboardInset();
   const [activeTextareaSignal, setActiveTextareaSignal] = createSignal<
     HTMLTextAreaElement | null
   >(null);
@@ -296,10 +299,9 @@ export function Journal() {
 
   async function loadTodayWithRetry() {
     // Show a generic "Loading…" first, then upgrade the message to
-    // "Connecting to iCloud…" after a few retries so the user knows
-    // we're not stuck — iCloud cold-start can legitimately take
-    // several seconds the first time the app opens.
-    setLoadingMessage("Loading…");
+    // The skeleton placeholder takes the place of the old progress
+    // message; we keep retrying the workspace open silently and only
+    // flip `loadFailed` if we exhaust the budget.
     setLoadFailed(false);
     for (let i = 0; i < 50; i += 1) {
       try {
@@ -311,8 +313,6 @@ export function Journal() {
       } catch (e) {
         const msg = String(e);
         if (msg.includes("workspace_loading")) {
-          if (i === 3) setLoadingMessage("Connecting to iCloud…");
-          if (i === 15) setLoadingMessage("Still waiting on iCloud…");
           // Workspace opener still in flight; back off briefly and
           // try again. Capped at ~10s of retries.
           await new Promise((r) => setTimeout(r, 200));
@@ -510,6 +510,7 @@ export function Journal() {
   async function handleToggleTodo(id: string) {
     const pid = pageId();
     if (!pid) return;
+    haptic("medium");
     const wasEditing = editingId() === id;
     if (wasEditing) {
       // Commit current draft text into the workspace so the cycle
@@ -543,9 +544,11 @@ export function Journal() {
     const block = findBlock(cur.outline, id);
     const descendants = block ? countDescendants(block) : 0;
     if (descendants > 0) {
+      haptic("warning");
       setPendingDelete({ id, descendants });
       return;
     }
+    haptic("heavy");
     void performDelete(id);
   }
 
@@ -568,6 +571,7 @@ export function Journal() {
   async function handleToggleCollapse(id: string, next: boolean) {
     const pid = pageId();
     if (!pid) return;
+    haptic("light");
     const updated = await withError(() => setBlockCollapsed(pid, id, next));
     if (updated) applyView(updated);
   }
@@ -607,6 +611,7 @@ export function Journal() {
   async function handleCreateAfter(id: string) {
     const pid = pageId();
     if (!pid) return;
+    haptic("light");
     // Keep keyboard up across the async create by parking focus on
     // the ghost textarea first.
     focusGhost();
@@ -773,21 +778,33 @@ export function Journal() {
 
   return (
     <div class="flex h-full flex-col">
+      {/* Bear-style chrome: header background stays as a soft blur over
+          the canvas, with no divider underneath. Actions sit inside
+          two floating capsules (left = back, right = grouped icons)
+          so the title can breathe in the middle. */}
       <header
-        class="z-30 shrink-0 border-b border-(--color-ios-divider)/30 bg-(--color-ios-bg)/95 px-4 pt-2 pb-3 backdrop-blur-xl dark:border-(--color-iosd-divider)/30 dark:bg-(--color-iosd-bg)/95"
+        class="z-30 shrink-0 bg-(--color-ios-bg)/80 px-3 pt-2 pb-3 backdrop-blur-xl dark:bg-(--color-iosd-bg)/80"
         style="padding-top: max(env(safe-area-inset-top), 12px);"
       >
-          <div class="flex items-center justify-between gap-2">
-            <Show when={view() && view()!.page.kind !== "journal"}>
+        <div class="grid grid-cols-[auto_1fr_auto] items-center gap-2">
+          {/* Left capsule — visible only when the user has navigated
+              away from today's journal. We always reserve a placeholder
+              of the same width so the title doesn't jump horizontally
+              when the back button appears / disappears. */}
+          <Show
+            when={view() && view()!.page.kind !== "journal"}
+            fallback={<span aria-hidden="true" class="block h-9 w-10" />}
+          >
+            <div class="inline-flex rounded-full bg-(--color-ios-card)/85 shadow-[var(--shadow-capsule)] backdrop-blur-xl dark:bg-(--color-iosd-card)/85 dark:shadow-[var(--shadow-capsule-dark)]">
               <button
                 type="button"
                 aria-label="Back to today's journal"
                 onClick={handleJumpToday}
-                class="-ml-1 shrink-0 rounded-full p-2 text-(--color-ios-accent) active:opacity-50 dark:text-(--color-iosd-accent)"
+                class="flex h-9 w-10 items-center justify-center rounded-full text-(--color-ios-accent) active:bg-(--color-ios-divider)/40 dark:text-(--color-iosd-accent) dark:active:bg-(--color-iosd-divider)/40"
               >
                 <svg
-                  width="22"
-                  height="22"
+                  width="20"
+                  height="20"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
@@ -800,11 +817,19 @@ export function Journal() {
                   <path d="M4 9h11a5 5 0 0 1 5 5v6" />
                 </svg>
               </button>
-            </Show>
+            </div>
+          </Show>
+
+          {/* Center — title region. `min-w-0` is what lets the inner
+              truncate work in PageHeader. */}
+          <div class="min-w-0">
             <Show
               when={view()?.page.kind === "journal"}
               fallback={
-                <PageHeader title={view()?.page.title ?? ""} kind={view()?.page.kind ?? null} />
+                <PageHeader
+                  title={view()?.page.title ?? ""}
+                  kind={view()?.page.kind ?? null}
+                />
               }
             >
               <JournalHeader
@@ -815,6 +840,12 @@ export function Journal() {
                 onToday={handleJumpToday}
               />
             </Show>
+          </div>
+
+          {/* Right capsule — grouped page actions. SyncDot lives inline
+              between pages-search and refresh so the user reads it as
+              "status of the data this capsule controls". */}
+          <div class="inline-flex items-center rounded-full bg-(--color-ios-card)/85 shadow-[var(--shadow-capsule)] backdrop-blur-xl dark:bg-(--color-iosd-card)/85 dark:shadow-[var(--shadow-capsule-dark)]">
             <button
               type="button"
               aria-label="Calendar"
@@ -822,11 +853,11 @@ export function Journal() {
                 haptic("light");
                 setCalendarOpen(true);
               }}
-              class="rounded-full p-2 active:opacity-50"
+              class="flex h-9 w-10 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
             >
               <svg
-                width="22"
-                height="22"
+                width="20"
+                height="20"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="var(--color-ios-accent)"
@@ -846,11 +877,11 @@ export function Journal() {
                 haptic("light");
                 setSwitcherOpen(true);
               }}
-              class="rounded-full p-2 active:opacity-50"
+              class="flex h-9 w-10 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
             >
               <svg
-                width="22"
-                height="22"
+                width="20"
+                height="20"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="var(--color-ios-accent)"
@@ -862,45 +893,40 @@ export function Journal() {
                 <path d="M21 21l-4.3-4.3M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z" />
               </svg>
             </button>
-            <div class="flex items-center gap-1">
+            <span class="px-1.5">
               <SyncDot
                 status={
-                  !online()
-                    ? "offline"
-                    : syncing()
-                      ? "syncing"
-                      : "synced"
+                  !online() ? "offline" : syncing() ? "syncing" : "synced"
                 }
               />
-              <button
-                type="button"
-                aria-label="Sync from iCloud"
-                onClick={handleRefresh}
-                class="rounded-full p-2 active:opacity-50"
+            </span>
+            <button
+              type="button"
+              aria-label="Sync from iCloud"
+              onClick={handleRefresh}
+              class="flex h-9 w-10 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
+            >
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="var(--color-ios-accent)"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style={{
+                  transform: refreshing() ? "rotate(360deg)" : "rotate(0deg)",
+                  transition: "transform 800ms ease-in-out",
+                }}
+                aria-hidden="true"
               >
-                <svg
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="var(--color-ios-accent)"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  style={{
-                    transform: refreshing()
-                      ? "rotate(360deg)"
-                      : "rotate(0deg)",
-                    transition: "transform 800ms ease-in-out",
-                  }}
-                  aria-hidden="true"
-                >
-                  <path d="M21 12a9 9 0 1 1-3-6.7L21 8" />
-                  <path d="M21 3v5h-5" />
-                </svg>
-              </button>
-            </div>
+                <path d="M21 12a9 9 0 1 1-3-6.7L21 8" />
+                <path d="M21 3v5h-5" />
+              </svg>
+            </button>
           </div>
+        </div>
       </header>
 
       <main class="ios-scroll flex-1 pb-32">
@@ -910,27 +936,33 @@ export function Journal() {
           <Show
             when={loaded() && view() && view()!.outline.length > 0}
             fallback={
-              <Show
-                when={loaded()}
-                fallback={
-                  <div class="flex flex-col items-center px-5 py-12 text-center text-(--color-ios-text-secondary) dark:text-(--color-iosd-text-secondary)">
-                    <span
-                      aria-hidden="true"
-                      class="mb-3 h-6 w-6 animate-spin rounded-full border-2 border-(--color-ios-accent) border-t-transparent"
-                    />
-                    <p class="text-[14px]">{loadingMessage()}</p>
-                  </div>
-                }
-              >
+              <Show when={loaded()} fallback={<SkeletonOutline />}>
                 <Show
                   when={loadFailed()}
                   fallback={
                     <button
                       type="button"
                       onClick={handleAppendBlock}
-                      class="block w-full px-5 py-12 text-center text-(--color-ios-text-secondary) active:opacity-50 dark:text-(--color-iosd-text-secondary)"
+                      class="flex w-full flex-col items-center px-5 py-16 text-center active:opacity-50"
                     >
-                      <p class="text-[15px]">Nothing here yet.</p>
+                      <svg
+                        width="44"
+                        height="44"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.5"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        class="mb-3 text-(--color-ios-text-tertiary) dark:text-(--color-iosd-text-tertiary)"
+                        aria-hidden="true"
+                      >
+                        <path d="M12 20h9" />
+                        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                      </svg>
+                      <p class="text-[15px] text-(--color-ios-text-secondary) dark:text-(--color-iosd-text-secondary)">
+                        Nothing here yet.
+                      </p>
                       <p class="mt-1 text-[13px] text-(--color-ios-accent) dark:text-(--color-iosd-accent)">
                         Tap to start writing
                       </p>
@@ -972,6 +1004,7 @@ export function Journal() {
                   onOutdent={handleOutdent}
                   onCreateAfter={handleCreateAfter}
                   onToggleCollapse={handleToggleCollapse}
+                  onContextMenu={(id) => setContextMenuBlockId(id)}
                   onRefClick={handleRefClick}
                   onTagClick={handleTagClick}
                   onPasteMarkdown={handlePasteMarkdown}
@@ -1099,43 +1132,33 @@ export function Journal() {
         }}
       />
 
-      {/* HTML toolbar kept only as a desktop / non-iOS fallback. On
-          iOS the native UIKit toolbar (see main.mm) takes over via
-          `window.__outlToolbar`. */}
-      <EditToolbar
-        visible={false}
-        keyboardInset={keyboardInset()}
-        onIndent={() => {
-          const id = editingId();
-          if (id) handleIndent(id);
-        }}
-        onOutdent={() => {
-          const id = editingId();
-          if (id) handleOutdent(id);
-        }}
-        onToggleTodo={() => {
-          const id = editingId();
-          if (id) handleToggleTodo(id);
-        }}
-        onDelete={() => {
-          const id = editingId();
-          if (id) handleDelete(id);
-        }}
-        onNewLine={() => {
-          const id = editingId();
-          if (id) handleCreateAfter(id);
-        }}
-        onDone={commitEdit}
-        onWrap={wrapSelection}
-        onMoveUp={() => {
-          const id = editingId();
-          if (id) handleMoveUp(id);
-        }}
-        onMoveDown={() => {
-          const id = editingId();
-          if (id) handleMoveDown(id);
-        }}
+      <BlockContextMenu
+        open={contextMenuBlockId() !== null}
+        onClose={() => setContextMenuBlockId(null)}
+        actions={buildContextActions(
+          contextMenuBlockId(),
+          view(),
+          {
+            indent: handleIndent,
+            outdent: handleOutdent,
+            moveUp: handleMoveUp,
+            moveDown: handleMoveDown,
+            toggleTodo: handleToggleTodo,
+            delete: handleDelete,
+            copy: async (id) => {
+              const block = view() ? findBlock(view()!.outline, id) : null;
+              if (!block) return;
+              try {
+                await navigator.clipboard?.writeText(rawTextWithTodo(block));
+              } catch {
+                // Some webviews refuse navigator.clipboard outside a
+                // user gesture chain; failing silently is acceptable.
+              }
+            },
+          },
+        )}
       />
+
     </div>
   );
 }
@@ -1164,7 +1187,7 @@ function JournalHeader(props: {
           <ChevronLeft />
         </button>
         <h1
-          class="cursor-pointer whitespace-nowrap text-[19px] font-bold leading-tight tracking-tight tabular-nums active:opacity-60"
+          class="cursor-pointer whitespace-nowrap text-[17px] font-semibold leading-tight tracking-tight tabular-nums active:opacity-60"
           onClick={props.onToday}
         >
           {props.slug}
@@ -1195,11 +1218,11 @@ function JournalHeader(props: {
 
 function PageHeader(props: { title: string; kind: "page" | "journal" | null }) {
   return (
-    <div class="flex-1">
-      <p class="text-[12px] font-medium uppercase tracking-wider text-(--color-ios-text-secondary) dark:text-(--color-iosd-text-secondary)">
+    <div class="min-w-0 text-center">
+      <p class="text-[11px] font-medium uppercase tracking-wider text-(--color-ios-text-tertiary) dark:text-(--color-iosd-text-tertiary)">
         {props.kind === "journal" ? "Journal" : "Page"}
       </p>
-      <h1 class="mt-0.5 text-[26px] font-bold leading-tight tracking-tight">
+      <h1 class="truncate text-[17px] font-semibold leading-tight tracking-tight">
         {props.title}
       </h1>
     </div>
@@ -1245,3 +1268,102 @@ function ChevronRight() {
 // Use referenced helper to silence unused-import false-positive.
 const _holdTitle = dateTitle;
 void _holdTitle;
+
+/**
+ * Wire the long-press block id into a typed action list for
+ * `<BlockContextMenu>`. Each action carries an SVG path, label, and
+ * a guard (`enabled`) so we hide "Move up" on the first sibling and
+ * "Move down" on the last — gestures iOS users expect to disappear
+ * when they don't apply.
+ *
+ * The handlers are passed in from `Journal()`'s scope so the menu
+ * doesn't have to import every Tauri command directly.
+ */
+function buildContextActions(
+  blockId: string | null,
+  pageView: import("@outl/shared/api/types").PageView | null,
+  handlers: {
+    indent: (id: string) => void;
+    outdent: (id: string) => void;
+    moveUp: (id: string) => void;
+    moveDown: (id: string) => void;
+    toggleTodo: (id: string) => void;
+    delete: (id: string) => void;
+    copy: (id: string) => void;
+  },
+): BlockContextAction[] {
+  if (!blockId || !pageView) return [];
+  // Resolve sibling position so we can hide move-up/down at the
+  // ends. Walking the outline is cheap (the user just long-pressed,
+  // there's no per-frame budget here).
+  const siblings = locateSiblings(pageView.outline, blockId);
+  const index = siblings
+    ? siblings.findIndex((b) => b.id === blockId)
+    : -1;
+  const canMoveUp = index > 0;
+  const canMoveDown = siblings ? index < siblings.length - 1 : false;
+  return [
+    {
+      id: "toggleTodo",
+      label: "Toggle TODO",
+      iconPath: "M5 12l4 4 10-10",
+      onSelect: () => handlers.toggleTodo(blockId),
+    },
+    {
+      id: "copy",
+      label: "Copy text",
+      iconPath:
+        "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2 M9 2h6a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z",
+      onSelect: () => handlers.copy(blockId),
+    },
+    {
+      id: "indent",
+      label: "Indent",
+      iconPath: "M3 5h12M3 12h8M3 19h12M15 9l3 3-3 3",
+      onSelect: () => handlers.indent(blockId),
+    },
+    {
+      id: "outdent",
+      label: "Outdent",
+      iconPath: "M3 5h12M3 12h8M3 19h12M21 9l-3 3 3 3",
+      onSelect: () => handlers.outdent(blockId),
+    },
+    {
+      id: "moveUp",
+      label: "Move up",
+      iconPath: "M12 19V5M5 12l7-7 7 7",
+      enabled: () => canMoveUp,
+      onSelect: () => handlers.moveUp(blockId),
+    },
+    {
+      id: "moveDown",
+      label: "Move down",
+      iconPath: "M12 5v14M19 12l-7 7-7-7",
+      enabled: () => canMoveDown,
+      onSelect: () => handlers.moveDown(blockId),
+    },
+    {
+      id: "delete",
+      label: "Delete",
+      iconPath:
+        "M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m-9 0v14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V6",
+      destructive: true,
+      onSelect: () => handlers.delete(blockId),
+    },
+  ];
+}
+
+/** DFS for the sibling list containing `targetId`. Returns the
+ *  block array (not the parent) so the caller can use `findIndex`
+ *  without an extra walk. */
+function locateSiblings(
+  forest: import("@outl/shared/api/types").BlockNode[],
+  targetId: string,
+): import("@outl/shared/api/types").BlockNode[] | null {
+  for (const node of forest) {
+    if (node.id === targetId) return forest;
+    const inner = locateSiblings(node.children ?? [], targetId);
+    if (inner) return inner;
+  }
+  return null;
+}
