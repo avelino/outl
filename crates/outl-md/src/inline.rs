@@ -43,22 +43,25 @@ pub enum InlineTok<'a> {
         /// Tag identifier without the leading `#`.
         name: &'a str,
     },
-    /// `**bold**`.
+    /// `**bold**`. The inner span is re-tokenized so refs / tags /
+    /// block-refs nested inside the markers render with their own
+    /// styling instead of falling through as plain text. Same for
+    /// `Italic` and `Strike` below.
     Bold {
-        /// Inner text between the markers.
-        inner: &'a str,
+        /// Recursively-tokenized contents between the markers.
+        inner: Vec<InlineTok<'a>>,
     },
     /// `*italic*` or `_italic_`. `marker` is the literal delimiter used.
     Italic {
-        /// Inner text between the markers.
-        inner: &'a str,
+        /// Recursively-tokenized contents between the markers.
+        inner: Vec<InlineTok<'a>>,
         /// Either `'*'` or `'_'`.
         marker: char,
     },
     /// `~~strike~~`.
     Strike {
-        /// Inner text between the markers.
-        inner: &'a str,
+        /// Recursively-tokenized contents between the markers.
+        inner: Vec<InlineTok<'a>>,
     },
     /// `` `code` ``.
     Code {
@@ -130,23 +133,27 @@ pub enum InlineToken {
         /// Verbatim text.
         value: String,
     },
-    /// `**bold**`.
+    /// `**bold**`. The inner span is re-tokenized so wiki-refs,
+    /// tags, and block-refs nested inside the markers stay
+    /// recognizable (e.g. `**[[avelino]]**` renders the bold `**` and
+    /// the ref `[[avelino]]` as separate styled tokens, not a single
+    /// flat string).
     Bold {
-        /// Inner text between the markers.
-        value: String,
+        /// Tokens of the inner span.
+        inner: Vec<InlineToken>,
     },
-    /// `*italic*` or `_italic_`. The TS renderer collapses both into
-    /// one variant since the marker is purely cosmetic to the
-    /// browser; Rust consumers that need the marker keep using
-    /// [`InlineTok`] directly.
+    /// `*italic*` or `_italic_`. The TS renderer collapses both
+    /// markers into one variant since the literal delimiter is
+    /// purely cosmetic on the browser side; Rust consumers that need
+    /// the marker keep using [`InlineTok`] directly.
     Italic {
-        /// Inner text between the markers.
-        value: String,
+        /// Tokens of the inner span.
+        inner: Vec<InlineToken>,
     },
     /// `~~strike~~`.
     Strike {
-        /// Inner text between the markers.
-        value: String,
+        /// Tokens of the inner span.
+        inner: Vec<InlineToken>,
     },
     /// `` `code` ``.
     Code {
@@ -193,13 +200,13 @@ impl InlineToken {
                 value: (*s).to_owned(),
             },
             InlineTok::Bold { inner } => InlineToken::Bold {
-                value: (*inner).to_owned(),
+                inner: inner.iter().map(InlineToken::from_borrowed).collect(),
             },
             InlineTok::Italic { inner, .. } => InlineToken::Italic {
-                value: (*inner).to_owned(),
+                inner: inner.iter().map(InlineToken::from_borrowed).collect(),
             },
             InlineTok::Strike { inner } => InlineToken::Strike {
-                value: (*inner).to_owned(),
+                inner: inner.iter().map(InlineToken::from_borrowed).collect(),
             },
             InlineTok::Code { inner } => InlineToken::Code {
                 value: (*inner).to_owned(),
@@ -473,14 +480,85 @@ pub fn is_valid_block_handle(handle: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() && !c.is_ascii_uppercase())
 }
 
+/// Re-emit a tokenized inline span back as the markdown source it
+/// came from.
+///
+/// Bold / italic / strike now carry recursively-tokenized inners
+/// (`Vec<InlineTok>`), so consumers that used to call
+/// `inner.to_string()` on a `&str` need a small helper to reconstruct
+/// the literal source. Renderers that already iterate
+/// `Vec<InlineTok>` to dispatch per-variant styling don't need this —
+/// it's specifically for surfaces that want the whole inner span as
+/// one styled string.
+pub fn inline_to_source(toks: &[InlineTok<'_>]) -> String {
+    let mut out = String::new();
+    for tok in toks {
+        match tok {
+            InlineTok::Plain(s) => out.push_str(s),
+            InlineTok::PageRef { name } => {
+                out.push_str("[[");
+                out.push_str(name);
+                out.push_str("]]");
+            }
+            InlineTok::Tag { name } => {
+                out.push('#');
+                out.push_str(name);
+            }
+            InlineTok::Bold { inner } => {
+                out.push_str("**");
+                out.push_str(&inline_to_source(inner));
+                out.push_str("**");
+            }
+            InlineTok::Italic { inner, marker } => {
+                out.push(*marker);
+                out.push_str(&inline_to_source(inner));
+                out.push(*marker);
+            }
+            InlineTok::Strike { inner } => {
+                out.push_str("~~");
+                out.push_str(&inline_to_source(inner));
+                out.push_str("~~");
+            }
+            InlineTok::Code { inner } => {
+                out.push('`');
+                out.push_str(inner);
+                out.push('`');
+            }
+            InlineTok::Link { text, url } => {
+                out.push('[');
+                out.push_str(text);
+                out.push_str("](");
+                out.push_str(url);
+                out.push(')');
+            }
+            InlineTok::BlockRef { handle } => {
+                out.push_str("((");
+                out.push_str(handle);
+                out.push_str("))");
+            }
+            InlineTok::Embed { handle } => {
+                out.push_str("!((");
+                out.push_str(handle);
+                out.push_str("))");
+            }
+        }
+    }
+    out
+}
+
 fn try_bold(s: &str) -> Option<(InlineTok<'_>, usize)> {
     let rest = s.strip_prefix("**")?;
     let close = rest.find("**")?;
-    let inner = &rest[..close];
-    if inner.is_empty() || inner.contains('\n') || inner.starts_with('*') {
+    let inner_str = &rest[..close];
+    if inner_str.is_empty() || inner_str.contains('\n') || inner_str.starts_with('*') {
         return None;
     }
-    Some((InlineTok::Bold { inner }, 2 + close + 2))
+    Some((
+        InlineTok::Bold {
+            inner: tokenize(inner_str),
+        },
+        2 + close + 2,
+    ))
 }
 
 /// `__bold__` — CommonMark treats double-underscore the same as `**`:
@@ -489,21 +567,31 @@ fn try_bold(s: &str) -> Option<(InlineTok<'_>, usize)> {
 fn try_bold_under(s: &str) -> Option<(InlineTok<'_>, usize)> {
     let rest = s.strip_prefix("__")?;
     let close = rest.find("__")?;
-    let inner = &rest[..close];
-    if inner.is_empty() || inner.contains('\n') || inner.starts_with('_') {
+    let inner_str = &rest[..close];
+    if inner_str.is_empty() || inner_str.contains('\n') || inner_str.starts_with('_') {
         return None;
     }
-    Some((InlineTok::Bold { inner }, 2 + close + 2))
+    Some((
+        InlineTok::Bold {
+            inner: tokenize(inner_str),
+        },
+        2 + close + 2,
+    ))
 }
 
 fn try_strike(s: &str) -> Option<(InlineTok<'_>, usize)> {
     let rest = s.strip_prefix("~~")?;
     let close = rest.find("~~")?;
-    let inner = &rest[..close];
-    if inner.is_empty() || inner.contains('\n') {
+    let inner_str = &rest[..close];
+    if inner_str.is_empty() || inner_str.contains('\n') {
         return None;
     }
-    Some((InlineTok::Strike { inner }, 2 + close + 2))
+    Some((
+        InlineTok::Strike {
+            inner: tokenize(inner_str),
+        },
+        2 + close + 2,
+    ))
 }
 
 fn try_italic_star(s: &str) -> Option<(InlineTok<'_>, usize)> {
@@ -521,21 +609,33 @@ fn try_italic_star(s: &str) -> Option<(InlineTok<'_>, usize)> {
             break i;
         }
     };
-    let inner = &rest[..close];
-    if inner.is_empty() || inner.contains('\n') {
+    let inner_str = &rest[..close];
+    if inner_str.is_empty() || inner_str.contains('\n') {
         return None;
     }
-    Some((InlineTok::Italic { inner, marker: '*' }, 1 + close + 1))
+    Some((
+        InlineTok::Italic {
+            inner: tokenize(inner_str),
+            marker: '*',
+        },
+        1 + close + 1,
+    ))
 }
 
 fn try_italic_under(s: &str) -> Option<(InlineTok<'_>, usize)> {
     let rest = s.strip_prefix('_')?;
     let close = rest.find('_')?;
-    let inner = &rest[..close];
-    if inner.is_empty() || inner.contains('\n') {
+    let inner_str = &rest[..close];
+    if inner_str.is_empty() || inner_str.contains('\n') {
         return None;
     }
-    Some((InlineTok::Italic { inner, marker: '_' }, 1 + close + 1))
+    Some((
+        InlineTok::Italic {
+            inner: tokenize(inner_str),
+            marker: '_',
+        },
+        1 + close + 1,
+    ))
 }
 
 fn try_code(s: &str) -> Option<(InlineTok<'_>, usize)> {

@@ -22,44 +22,91 @@ fn tag_is_recognized() {
     assert!(toks.contains(&InlineTok::Tag { name: "project" }));
 }
 
+/// Convenience for assertions: a Bold/Italic/Strike whose inner is a
+/// single plain-text token (the common case in these tests).
+fn plain_inner(s: &str) -> Vec<InlineTok<'_>> {
+    vec![InlineTok::Plain(s)]
+}
+
 #[test]
 fn bold_strips_inner() {
     let toks = tokenize("a **brave** soul");
-    assert!(toks.contains(&InlineTok::Bold { inner: "brave" }));
+    assert!(toks.contains(&InlineTok::Bold {
+        inner: plain_inner("brave"),
+    }));
 }
 
 #[test]
 fn bold_under_double_underscore() {
     let toks = tokenize("look __at__ this");
-    assert!(toks.contains(&InlineTok::Bold { inner: "at" }));
+    assert!(toks.contains(&InlineTok::Bold {
+        inner: plain_inner("at"),
+    }));
     assert!(!toks
         .iter()
-        .any(|t| matches!(t, InlineTok::Italic { inner: "at", .. })));
+        .any(|t| matches!(t, InlineTok::Italic { inner, .. } if inner == &plain_inner("at"))));
 }
 
 #[test]
 fn bold_under_alongside_bold_star() {
     let toks = tokenize("**abc** __123__");
-    assert!(toks.contains(&InlineTok::Bold { inner: "abc" }));
-    assert!(toks.contains(&InlineTok::Bold { inner: "123" }));
+    assert!(toks.contains(&InlineTok::Bold {
+        inner: plain_inner("abc"),
+    }));
+    assert!(toks.contains(&InlineTok::Bold {
+        inner: plain_inner("123"),
+    }));
 }
 
 #[test]
 fn italic_star_and_under() {
     assert!(tokenize("an *italic* word").contains(&InlineTok::Italic {
-        inner: "italic",
+        inner: plain_inner("italic"),
         marker: '*'
     }));
     assert!(tokenize("an _italic_ word").contains(&InlineTok::Italic {
-        inner: "italic",
+        inner: plain_inner("italic"),
         marker: '_'
     }));
 }
 
 #[test]
 fn strike_and_code() {
-    assert!(tokenize("old ~~news~~").contains(&InlineTok::Strike { inner: "news" }));
+    assert!(tokenize("old ~~news~~").contains(&InlineTok::Strike {
+        inner: plain_inner("news"),
+    }));
     assert!(tokenize("call `fn()`").contains(&InlineTok::Code { inner: "fn()" }));
+}
+
+#[test]
+fn bold_recurses_inner_refs() {
+    // The bug this whole change exists to fix: `**[[avelino]]**` used
+    // to surface as a single flat plain string inside Bold, which
+    // meant the mobile renderer drew it as `[[avelino]]` text — the
+    // ref styling was lost. With recursive inner tokenization the ref
+    // emerges as its own token nested under Bold.
+    let toks = tokenize("hi **[[avelino]]** there");
+    let bold = toks
+        .iter()
+        .find_map(|t| match t {
+            InlineTok::Bold { inner } => Some(inner.clone()),
+            _ => None,
+        })
+        .expect("bold token");
+    assert_eq!(bold, vec![InlineTok::PageRef { name: "avelino" }]);
+}
+
+#[test]
+fn italic_recurses_inner_refs() {
+    let toks = tokenize("hi *[[avelino]]* there");
+    let italic_inner = toks
+        .iter()
+        .find_map(|t| match t {
+            InlineTok::Italic { inner, .. } => Some(inner.clone()),
+            _ => None,
+        })
+        .expect("italic token");
+    assert_eq!(italic_inner, vec![InlineTok::PageRef { name: "avelino" }]);
 }
 
 #[test]

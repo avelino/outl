@@ -6,7 +6,7 @@
 //! so column-to-byte alignment stays 1:1).
 
 use crate::theme::Theme;
-use outl_md::inline::{tokenize, InlineTok};
+use outl_md::inline::{inline_to_source, tokenize, InlineTok};
 use ratatui::text::Span;
 
 /// Strip an optional `TODO`/`DONE` prefix off a block's text, returning
@@ -129,11 +129,15 @@ fn render_markdown_inline_impl(
                 }
                 out.push(Span::styled(format!("#{name}"), theme.tag_link));
             }
-            InlineTok::Bold { inner } => out.push(Span::styled(inner.to_string(), theme.bold)),
-            InlineTok::Italic { inner, .. } => {
-                out.push(Span::styled(inner.to_string(), theme.italic))
+            InlineTok::Bold { inner } => {
+                out.push(Span::styled(inline_to_source(&inner), theme.bold))
             }
-            InlineTok::Strike { inner } => out.push(Span::styled(inner.to_string(), theme.strike)),
+            InlineTok::Italic { inner, .. } => {
+                out.push(Span::styled(inline_to_source(&inner), theme.italic))
+            }
+            InlineTok::Strike { inner } => {
+                out.push(Span::styled(inline_to_source(&inner), theme.strike))
+            }
             InlineTok::Code { inner } => out.push(Span::styled(inner.to_string(), theme.code)),
             InlineTok::Link { text, .. } => out.push(Span::styled(text.to_string(), theme.md_link)),
             InlineTok::BlockRef { handle } => {
@@ -226,18 +230,18 @@ pub(crate) fn highlight_inline(text: &str, theme: &Theme) -> Vec<Span<'static>> 
             InlineTok::Tag { name } => out.push(Span::styled(format!("#{name}"), theme.tag_link)),
             InlineTok::Bold { inner } => {
                 out.push(Span::styled("**".to_string(), dim));
-                out.push(Span::styled(inner.to_string(), theme.bold));
+                out.push(Span::styled(inline_to_source(&inner), theme.bold));
                 out.push(Span::styled("**".to_string(), dim));
             }
             InlineTok::Italic { inner, marker } => {
                 let m = marker.to_string();
                 out.push(Span::styled(m.clone(), dim));
-                out.push(Span::styled(inner.to_string(), theme.italic));
+                out.push(Span::styled(inline_to_source(&inner), theme.italic));
                 out.push(Span::styled(m, dim));
             }
             InlineTok::Strike { inner } => {
                 out.push(Span::styled("~~".to_string(), dim));
-                out.push(Span::styled(inner.to_string(), theme.strike));
+                out.push(Span::styled(inline_to_source(&inner), theme.strike));
                 out.push(Span::styled("~~".to_string(), dim));
             }
             InlineTok::Code { inner } => {

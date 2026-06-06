@@ -60,12 +60,44 @@ export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
         switch (tok.kind) {
           case "plain":
             return <span>{tok.value}</span>;
+          // Bold / italic / strike recurse: their `inner` is a
+          // fully-tokenized list, so nested refs/tags/block-refs
+          // re-enter the renderer and pick up their own styling
+          // under the wrapping element. Without this recursion the
+          // pattern `**[[avelino]]**` rendered as literal text.
           case "bold":
-            return <span class="font-semibold">{tok.value}</span>;
+            return (
+              <span class="font-semibold">
+                <MarkdownInline
+                  tokens={tok.inner}
+                  variant={props.variant}
+                  onRefClick={props.onRefClick}
+                  onTagClick={props.onTagClick}
+                />
+              </span>
+            );
           case "italic":
-            return <span class="italic">{tok.value}</span>;
+            return (
+              <span class="italic">
+                <MarkdownInline
+                  tokens={tok.inner}
+                  variant={props.variant}
+                  onRefClick={props.onRefClick}
+                  onTagClick={props.onTagClick}
+                />
+              </span>
+            );
           case "strike":
-            return <span class="line-through opacity-70">{tok.value}</span>;
+            return (
+              <span class="line-through opacity-70">
+                <MarkdownInline
+                  tokens={tok.inner}
+                  variant={props.variant}
+                  onRefClick={props.onRefClick}
+                  onTagClick={props.onTagClick}
+                />
+              </span>
+            );
           case "code":
             return (
               <code class="rounded bg-(--color-ios-divider)/30 px-1 py-0.5 font-mono text-[14px] dark:bg-(--color-iosd-divider)/30">

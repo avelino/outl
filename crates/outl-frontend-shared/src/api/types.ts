@@ -21,9 +21,13 @@ export type PageKind = "page" | "journal";
  */
 export type InlineToken =
   | { kind: "plain"; value: string }
-  | { kind: "bold"; value: string }
-  | { kind: "italic"; value: string }
-  | { kind: "strike"; value: string }
+  // Bold / italic / strike carry their inner span as a re-tokenized
+  // list so nested refs, tags, and block-refs render with their own
+  // styling. `**[[avelino]]**` arrives as `Bold { inner: [Ref … ] }`
+  // — the renderer wraps the inner tokens in the bold style.
+  | { kind: "bold"; inner: InlineToken[] }
+  | { kind: "italic"; inner: InlineToken[] }
+  | { kind: "strike"; inner: InlineToken[] }
   | { kind: "code"; value: string }
   | { kind: "link"; value: string; href: string }
   | { kind: "ref"; value: string }
