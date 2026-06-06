@@ -16,6 +16,8 @@ Noise costs reviewer attention; a single sharp comment earns trust.
 - The `CLAUDE.md` inside the crate(s) the PR touches (e.g.
   `crates/outl-core/CLAUDE.md`).
 - `CONTRIBUTING.md` — the merge bar and "decisions you don't get to revisit".
+- `docs/contributing.md` — the review policy this file mirrors.
+- `docs/development.md` — the engineer onramp (build / run / test / debug / CI / release). Load it when the PR touches CI workflows, slash commands, hooks, agents, or anything else a contributor's first 30 minutes depend on.
 - `docs/architecture.md`, `docs/crdt.md`, `docs/markdown-format.md` — load the relevant one when the PR touches that area.
 - The PR description and any linked issue.
 
@@ -321,8 +323,10 @@ UI-agnostic; TUI and mobile both consume them.
 | Project a block to renderable rows | `outl_md::view::block_to_rows` → `BlockRow` / `BlockRowKind` | `crates/outl-md/src/view.rs` |
 | Tokenize inline markdown | `outl_md::inline::tokenize` → `InlineTok` | `crates/outl-md/src/inline.rs` |
 | Tokenize inline markdown into an owned, Serde-friendly form for wire/DTO payloads | `outl_md::inline::tokenize_owned` → `InlineToken` | `crates/outl-md/src/inline.rs` |
+| Reconstruct the source markdown from a `Vec<InlineTok>` (Bold/Italic/Strike carry recursively-tokenized inners) | `outl_md::inline::inline_to_source` | `crates/outl-md/src/inline.rs` |
 | Resolve the ref under a caret position | `outl_md::inline::ref_at_cursor` → `RefTarget` | `crates/outl-md/src/inline.rs` |
 | Validate a `((blk-XXXXXX))` handle | `outl_md::inline::is_valid_block_handle` | `crates/outl-md/src/inline.rs` |
+| Canonicalize a fence info-string (`rs` → `rust`, etc.) — used by `outl-exec` runtime dispatch + frontend syntax highlighter | `outl_md::lang::canonical`, `outl_md::lang::KNOWN_ALIASES` | `crates/outl-md/src/lang.rs` |
 | Byte offset for a char index (UTF-8 safe) | `outl_md::inline::byte_index_for_char` | `crates/outl-md/src/inline.rs` |
 
 #### 12. Backlinks (outl-actions::backlinks)
@@ -401,6 +405,33 @@ Anything else is a blocker.
   Past 900 lines, request a refactor before merge.
 - **Premature abstraction.** A new trait or generic with one impl and no second use case in sight.
   The Rule of Three applies — concrete first, abstract on the third caller.
+
+### 5.3 Documentation drift — block PRs that change behavior without updating the dev/contrib docs
+
+`docs/development.md` (engineer onramp) and `docs/contributing.md` (review policy) are the two pages a new contributor reads before opening their first PR.
+A stale onramp is **worse than no onramp** because it sends contributors confidently into a wall — they follow steps that no longer work and silently distrust the project the rest of the way.
+
+**Use this table to decide when the PR must update docs.** If you see a diff in the left column and no matching update in the right column, request the doc change before approving.
+
+| If the PR touches... | Require an update to |
+|---|---|
+| `.github/workflows/ci.yml` (jobs, matrix, excluded crates, `RUSTDOCFLAGS`, paths-ignore) | `docs/development.md` § 9 (CI walkthrough) |
+| `.github/workflows/release.yml`, `mobile.yml`, `desktop.yml`, `testflight.yml`, `bench.yml`, `cleanup-tags.yml` | `docs/development.md` § 9 (CI table) and § 10 (Release process) |
+| `.claude/settings.json` hooks, `.claude/agents/*.md`, `.claude/commands/*.md` (any slash command or hook behavior) | `docs/development.md` § 4 (Dev loop) |
+| `rust-toolchain.toml` version bump | `docs/development.md` § 1 and root `CONTRIBUTING.md` |
+| System deps for a crate (Tauri, GTK, Bun, Xcode, hyperfine, etc.) | `docs/development.md` § 1 ("Optional toolchains by area") |
+| New crate added to `crates/` | `docs/development.md` § 2, root `CLAUDE.md` repo layout, per-crate `CLAUDE.md` |
+| New native iOS surface (file added to `crates/outl-mobile/swift/OutlKit/Sources/`, `crates/outl-mobile/src-tauri/gen/apple/Sources/outl-mobile/`, or `main.mm`) | `docs/development.md` § 3 (the "Why the mobile crate has native Swift / ObjC code" table — does the new surface fit an existing row or is it a new reason?) + § 6 cookbook + `crates/outl-mobile/CLAUDE.md` |
+| New `Op` variant, sidecar field, or op-log format change | `docs/development.md` § 6 cookbook + `docs/crdt.md` + `outl-md/CLAUDE.md` |
+| `/check` / `/check-invariants` / `/roundtrip` / `/coverage` / `/new-op` / `/init-playground` semantics | `docs/development.md` § 4 (slash command table) |
+| Benchmark layout (new bench file, new size tier, hyperfine recipe) | `docs/development.md` § 8 (Performance) |
+| Version source-of-truth or release tooling (e.g. someone re-adds `version` to `tauri.conf.json`) | `docs/development.md` § 10 + `crates/outl-mobile/CLAUDE.md` (and reject re-adding the `version` field — it's an invariant) |
+| Conventional Commits enforcement or release-notes pipeline | `docs/development.md` § 10 + root `CLAUDE.md` "Coding conventions" |
+| Storage trait surface, `JsonlStorage` / `MemoryStorage` test contract | `docs/development.md` § 5 + `docs/storage.md` + `outl-core/CLAUDE.md` |
+| Public API of a shared primitive listed in `CLAUDE.md` § 5.1 catalog | The same catalog row, **plus** mirror the change in this file's § 5.1 |
+
+Phrase the comment so the author knows exactly which file and section to move.
+"Doc looks stale" is noise; "section 9 of `docs/development.md` still says `ci.yml` runs on the workspace including `outl-mobile` — this PR removes that exclusion" is review.
 
 ---
 

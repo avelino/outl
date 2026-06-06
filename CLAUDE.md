@@ -121,6 +121,8 @@ User-facing docs in `docs/`:
 - `docs/clients.md` — shared workspace operations and how each client (TUI, mobile) plugs into them.
 - `docs/cli.md` — `outl` binary surface (subcommands, JSON envelope).
 - `docs/mcp.md` — Claude Desktop / Cursor wiring + MCP resources/prompts.
+- `docs/development.md` — engineer onramp (clone, build, run, test, debug, ship). Pairs with `docs/contributing.md`.
+- `docs/contributing.md` — review policy, invariants enforced at PR time, the quality bar.
 
 ## How we work in this repo
 
@@ -160,9 +162,10 @@ Invoke proactively when relevant:
   Validates roundtrip stability + matching invariants.
 - **`refactor-architect`** — after the file-size-guard hook fires (stop at 900 lines, warn at 600).
   Proposes a split by responsibility.
-- **`doc-keeper`** — **invoke at the end of every feature** that changes public API, markdown syntax, TUI shortcut, slash command, sidecar/op-log format, or user-observable behavior.
-  Walks `docs/*.md`, root `CLAUDE.md`, and per-crate `CLAUDE.md`; updates what drifted, creates only what was missing.
+- **`doc-keeper`** — **invoke at the end of every feature** that changes public API, markdown syntax, TUI shortcut, slash command, sidecar/op-log format, CI workflow, dev loop, or user-observable behavior.
+  Walks `docs/*.md` (including `docs/development.md` and `docs/contributing.md`), root `CLAUDE.md`, and per-crate `CLAUDE.md`; updates what drifted, creates only what was missing.
   **Rule of thumb:** if you'd struggle to explain the change to a contributor reading only the docs, this agent runs.
+  See the **Documentation triggers** table below for the explicit "if you changed X, update Y" map.
 
 ### Slash commands
 
@@ -172,6 +175,32 @@ Invoke proactively when relevant:
 - `/coverage [crate]` — coverage report, flags uncovered critical branches
 - `/new-op <Variant>` — checklist for adding a new `Op` variant
 - `/init-playground` — creates a test workspace at `./playground` for manual smoke tests
+
+### Documentation triggers
+
+`docs/development.md` is the engineer onramp.
+It drifts the moment a CI workflow, a slash command, a hook, or a per-area toolchain step changes — and a stale onramp is **worse than no onramp** because a new contributor follows it confidently into a wall.
+
+**Treat the table below as a checklist.** If your PR touches any row on the left, update the doc on the right **in the same PR** — not "later", not "in a follow-up". The `doc-keeper` agent runs at the end of a feature to catch what slipped through; the discipline is to not let it slip in the first place.
+
+| If your PR changes... | Update |
+|---|---|
+| `.github/workflows/ci.yml` (jobs, matrix, excluded crates, `RUSTDOCFLAGS`, paths-ignore) | `docs/development.md` § 9 (CI walkthrough) |
+| `.github/workflows/release.yml`, `mobile.yml`, `desktop.yml`, `testflight.yml`, `bench.yml`, `cleanup-tags.yml` | `docs/development.md` § 9 (CI table) + § 10 (Release process) |
+| `.claude/settings.json` hooks, `.claude/agents/*.md`, `.claude/commands/*.md` (any slash command behavior) | `docs/development.md` § 4 (Dev loop) — slash command table + hooks list + agents list |
+| `rust-toolchain.toml` version bump | `docs/development.md` § 1 (Quick start) + `CONTRIBUTING.md` (Quick start) |
+| Required system deps for a crate (Tauri, GTK, Bun, Xcode, hyperfine, etc.) | `docs/development.md` § 1 ("Optional toolchains by area" table) |
+| New crate added to `crates/` | `docs/development.md` § 2 (Repository tour table) + root `CLAUDE.md` repo layout + per-crate `CLAUDE.md` |
+| New native iOS surface (file added to `crates/outl-mobile/swift/OutlKit/Sources/`, `crates/outl-mobile/src-tauri/gen/apple/Sources/outl-mobile/`, or `main.mm`) | `docs/development.md` § 3 ("Why the mobile crate has native Swift / ObjC code" table) + § 5 (Testing — Swift rows) + § 6 (Cookbook: Touch the iOS native bridge) + `crates/outl-mobile/CLAUDE.md` if the bridge contract changes |
+| New entry point pattern (e.g. new MCP tool family, new TUI overlay class, new theme registration path) | `docs/development.md` § 2 ("Entry points by intent" table) + § 6 (Cookbooks) if it's a recurring shape |
+| New `Op` variant, sidecar field, op-log format change | `docs/development.md` § 6 (Cookbook: Add a new `Op` variant) + `docs/crdt.md` + `outl-md/CLAUDE.md` |
+| `/check` / `/check-invariants` / `/roundtrip` / `/coverage` / `/new-op` / `/init-playground` semantics | `docs/development.md` § 4 (Dev loop slash command table) |
+| Benchmark layout (new bench file, new size tier, hyperfine recipe) | `docs/development.md` § 8 (Performance) |
+| Version source-of-truth or release tooling (e.g. someone proposes re-adding `version` to `tauri.conf.json`) | `docs/development.md` § 10 (Release process) + `crates/outl-mobile/CLAUDE.md` |
+| Conventional Commits enforcement / release-notes pipeline | `docs/development.md` § 10 + root `CLAUDE.md` "Coding conventions" |
+| Storage trait surface, `JsonlStorage` / `MemoryStorage` test contract | `docs/development.md` § 5 ("What to mock and what not to") + `docs/storage.md` + `outl-core/CLAUDE.md` |
+
+When in doubt: **if a contributor's first 30 minutes with the repo would land them on outdated guidance, update the doc.** That's the bar.
 
 ## Decisions you don't get to revisit
 
@@ -396,9 +425,11 @@ UI-agnostic; both TUI and mobile consume them.
 | Project a block to renderable rows (with `BlockRowKind` discrimination) | `outl_md::view::block_to_rows` → `BlockRow` / `BlockRowKind` | `crates/outl-md/src/view.rs` |
 | Tokenize inline markdown (`**bold**`, `[[refs]]`, `#tags`, `((blk-…))`, `!((blk-…))`) | `outl_md::inline::tokenize` → `InlineTok` | `crates/outl-md/src/inline.rs` |
 | Tokenize inline markdown into an **owned, Serde-friendly** form for wire / DTO payloads (mobile renders these straight; no parallel TS tokenizer) | `outl_md::inline::tokenize_owned` → `InlineToken` | `crates/outl-md/src/inline.rs` |
+| Reconstruct the source markdown from a `Vec<InlineTok>` (Bold / Italic / Strike now carry recursively-tokenized inners; use this when a surface wants the whole inner span as one styled string instead of dispatching per-variant) | `outl_md::inline::inline_to_source` | `crates/outl-md/src/inline.rs` |
 | Resolve the ref under a caret position (`Page` / `Journal` / `Tag` / `Block`) | `outl_md::inline::ref_at_cursor` → `RefTarget` | `crates/outl-md/src/inline.rs` |
 | Validate a `((blk-XXXXXX))` handle string | `outl_md::inline::is_valid_block_handle` | `crates/outl-md/src/inline.rs` |
 | Byte offset for a char index (UTF-8 safe) | `outl_md::inline::byte_index_for_char` | `crates/outl-md/src/inline.rs` |
+| Canonicalize a fence info-string (`rs` → `rust`, `js`/`javascript`/`node` → `js`, …) — single source of truth for both `outl-exec`'s runtime dispatch and the frontend syntax highlighter | `outl_md::lang::canonical`, `outl_md::lang::KNOWN_ALIASES` | `crates/outl-md/src/lang.rs` |
 
 #### 12. Backlinks (outl-actions::backlinks)
 
