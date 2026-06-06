@@ -41,7 +41,12 @@ event_json=$(cat)
 file_path=$(printf '%s' "$event_json" | sed -n 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
 
 [ -z "$file_path" ] && exit 0
-case "$file_path" in *.rs) ;; *) exit 0 ;; esac
+# Accept `.rs` (catalog + per-crate + high-level mappings all apply)
+# plus `.ts`/`.tsx` for the desktop/mobile frontend shortcut wiring
+# — keybinding changes can land entirely on the JS side (e.g. a new
+# handler in `action-handlers.ts`) and would still leave the desktop
+# CLAUDE.md shortcut table out of sync.
+case "$file_path" in *.rs|*.ts|*.tsx) ;; *) exit 0 ;; esac
 
 repo_root="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}"
 [ -z "$repo_root" ] && exit 0
@@ -220,14 +225,57 @@ case "$rel" in
     docs_to_check+=("docs/clients.md")
     ;;
 esac
+# Shortcut catalog: every binding edit lands on at least three
+# user-facing surfaces (the catalog crate's own doc, the desktop
+# client's help table, the TUI doc with its parallel keymap). We
+# bypass the ≥10-line threshold further down because a one-line
+# `Binding::new` swap is exactly the kind of change that ships
+# without doc updates if we let it slide.
+shortcut_change=0
+case "$rel" in
+  crates/outl-shortcuts/src/defaults.rs|crates/outl-shortcuts/src/action.rs)
+    docs_to_check+=("crates/outl-shortcuts/CLAUDE.md")
+    docs_to_check+=("crates/outl-desktop/CLAUDE.md")
+    docs_to_check+=("docs/tui.md")
+    shortcut_change=1
+    ;;
+esac
+case "$rel" in
+  crates/outl-tui/src/input/*)
+    docs_to_check+=("docs/tui.md")
+    docs_to_check+=("crates/outl-shortcuts/CLAUDE.md")
+    shortcut_change=1
+    ;;
+esac
+# Frontend wiring for the desktop shortcut dispatcher + action
+# handlers. Catches `Cmd+T` swaps that live entirely in JS or in
+# the per-block textarea `onKeyDown` (the `Cmd+Enter` race we just
+# undid is the canonical incident).
+case "$rel" in
+  crates/outl-desktop/src/lib/shortcuts.ts \
+  | crates/outl-desktop/src/lib/action-handlers.ts \
+  | crates/outl-desktop/src/components/BlockRow.tsx)
+    docs_to_check+=("crates/outl-desktop/CLAUDE.md")
+    docs_to_check+=("crates/outl-shortcuts/CLAUDE.md")
+    shortcut_change=1
+    ;;
+esac
 
 # Dedupe and filter to existing + untouched docs.
 if [ ${#docs_to_check[@]} -gt 0 ]; then
   uniq_docs=$(printf '%s\n' "${docs_to_check[@]}" | sort -u)
   stale=()
   added=$(added_line_count "$file_path")
-  # Only fire rule 3 on non-trivial edits (≥ 10 lines added).
-  if [ "${added:-0}" -ge 10 ]; then
+  # Rule 3 normally requires ≥10 added lines (avoid pestering on
+  # tiny refactors). Shortcut / binding edits bypass the gate: a
+  # single-line chord swap is the most likely change to ship without
+  # the user-facing tables being updated, which is exactly what we
+  # learned by missing the `Cmd+T` → `Cmd+J` swap in the last
+  # round-trip.
+  threshold_met=0
+  [ "${added:-0}" -ge 10 ] && threshold_met=1
+  [ "$shortcut_change" = "1" ] && threshold_met=1
+  if [ "$threshold_met" = "1" ]; then
     while IFS= read -r doc; do
       [ -z "$doc" ] && continue
       [ ! -f "$repo_root/$doc" ] && continue
