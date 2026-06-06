@@ -120,7 +120,7 @@ pub fn run_code_block(
     let md_path = page_md_path(storage_root, &meta);
 
     let report = run_block_at_index(workspace, hlc, &md_path, flat_idx, registry, None)
-        .map_err(|e| ActionError::Exec(format!("run_block_at_index: {e}")))?;
+        .map_err(|e| ActionError::Exec(e.to_string()))?;
 
     let (result_ok, error) = match &report.result {
         Ok(out) => (Some(ExecOutputDto::from(out)), None),
