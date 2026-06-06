@@ -103,6 +103,40 @@ What makes fences different from regular continuation:
 
 [`outl-exec`]: ../crates/outl-exec/
 
+#### Language tag aliases
+
+The opening fence's info-string (`` ```rs `` / `` ```javascript `` / `` ```py3 ``) gets canonicalised through a single shared alias table — [`outl_md::lang::canonical`] in Rust, [`@outl/shared/highlight::canonical`] in TypeScript.
+Both layers use the same canonical names so what runs at the backend, what gets syntax-highlighted in the desktop / mobile editor, and what the user types in the fence all line up.
+
+A handful of the common aliases:
+
+| You write | Resolves to | Notes |
+|---|---|---|
+| `js`, `javascript`, `node`, `nodejs` | `js` | Maps to the `js` runtime in `outl-exec`. Before the alias table, `` ```javascript `` failed with "no runtime registered". |
+| `rs`, `rust` | `rust` | |
+| `py`, `python`, `python3` | `python` | |
+| `sh`, `bash`, `zsh` | `shell` | Highlight only — no runtime yet. |
+| `yml` | `yaml` | |
+| `md` | `markdown` | |
+| `c++`, `cxx`, `cc`, `cpp` | `cpp` | |
+| `cs`, `c#` | `csharp` | |
+| `clj` | `clojure` | |
+
+The full table lives in `crates/outl-md/src/lang.rs::KNOWN_ALIASES`; the TS mirror is `crates/outl-frontend-shared/src/highlight/aliases.ts`.
+Add a row in both files in the same commit — the `doc-sync-guard` hook treats this as a shortcut-level change and refuses the edit otherwise.
+
+#### Syntax highlighting (desktop + mobile)
+
+`outl-desktop` and `outl-mobile` both render code fences in read mode through the shared `<HighlightedCode />` component, which lazy-loads [`highlight.js`'s "common" bundle][hljs-common] (~30 popular languages, ~80 KB) and applies the brand palette defined in `crates/outl-frontend-shared/src/highlight/styles.css`.
+
+Unknown / empty languages fall back to a plain `<pre>` with the brand-dark canvas — we never use highlight.js's `"auto"` detection because the misclassification cost (Bash highlighted as Perl) is worse than visual flatness.
+
+The TUI renders fences as monospace text without syntax colouring today; the planned approach when this lands is `syntect` keyed on the same canonical names from `outl_md::lang`.
+
+[`outl_md::lang::canonical`]: ../crates/outl-md/src/lang.rs
+[`@outl/shared/highlight::canonical`]: ../crates/outl-frontend-shared/src/highlight/aliases.ts
+[hljs-common]: https://github.com/highlightjs/highlight.js/blob/main/src/index.js
+
 ### Block properties
 
 A line in the form `key:: value` *as a child of an outline item* is a block property:

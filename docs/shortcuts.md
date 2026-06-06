@@ -29,7 +29,9 @@ If a row below disagrees with what you observe in the app, **the code is right a
 | Action | TUI | Desktop | Mobile |
 |---|---|---|---|
 | Quick switcher (fuzzy pages + journals) | `Ctrl+P` | `Cmd/Ctrl+P` | tap toolbar |
-| Open today's journal | `t` / `Home` | `Cmd/Ctrl+T` | toolbar |
+| Open today's **j**ournal | `t` / `Home` | `Cmd/Ctrl+J` | toolbar |
+| Toggle TODO / DONE on focused or selected block (T for **t**ask) | `Ctrl+T` / `Ctrl+Enter` | `Cmd/Ctrl+T` / `Cmd/Ctrl+Enter` | tap checkbox |
+| Run code block under cursor / inside focused block (X for e**x**ecute) | `g x` chord / `:run` | `Cmd/Ctrl+X` | tap "Run" button |
 | Previous journal day | `[` | `Cmd/Ctrl+[` | swipe right |
 | Next journal day | `]` | `Cmd/Ctrl+]` | swipe left |
 | Toggle sidebar | `Ctrl+E` | `Cmd/Ctrl+Shift+E` | _(single pane)_ |
@@ -37,6 +39,8 @@ If a row below disagrees with what you observe in the app, **the code is right a
 | Open settings | _via `:settings`_ | `Cmd/Ctrl+,` | gear icon |
 | Toggle help overlay | `?` | `Cmd/Ctrl+/` | help button |
 | Quit | `q q` (chord) / `Ctrl+C` | `Cmd/Ctrl+Q` (OS) | — |
+
+> **Why `Cmd+J` and not `Cmd+T` for today's journal?** Every outliner ecosystem uses `T` for *task* / TODO — TUI's `Ctrl+T`, Logseq's `Cmd+T`, the universal Markdown checkbox shortcut. Re-training that muscle memory would be hostile. `J` for **journal** is unambiguous and lines up with the TUI's `g j` chord.
 
 **Defaults the user often asks about.** Both clients ship with **sidebar and backlinks panel HIDDEN** (`show_sidebar: false`, `show_backlinks: false`). Editor-hero on first launch — the user opts the panels in with the chord. This matches Bear / Ulysses on the desktop and `outl-tui`'s historical behaviour.
 
@@ -111,7 +115,8 @@ The desktop honours `Normal`/`Visual` only while `editor.vim_mode = true`. The T
 | Action | TUI | Desktop | Mobile |
 |---|---|---|---|
 | Commit + exit Insert | `Esc` | `Esc` / blur | blur |
-| Commit + new block below | `Enter` | `Enter` | `Enter` |
+| Newline inside the block (multi-line text) | `Shift+Enter` | `Enter` | `Enter` |
+| Commit + new block below | `Enter` | `Cmd/Ctrl+Shift+Enter` | `Enter` |
 | Indent (stay in Insert) | `Tab` | `Tab` | drag |
 | Outdent (stay in Insert) | `Shift+Tab` | `Shift+Tab` | drag |
 | Delete block on empty | `Backspace` on empty | `Backspace` on empty | — |
@@ -120,7 +125,8 @@ The desktop honours `Normal`/`Visual` only while `editor.vim_mode = true`. The T
 | Tag autocomplete | `#` triggers picker | `#` triggers picker | — |
 | Block ref autocomplete | `((` triggers picker | `((` triggers picker | — |
 | Slash command autocomplete | `/` | `/` | — |
-| Toggle TODO/DONE on current | `Ctrl+T` / `Ctrl+Enter` | `Ctrl+T` | tap checkbox |
+| Toggle TODO/DONE on current | `Ctrl+T` / `Ctrl+Enter` | `Cmd/Ctrl+T` / `Cmd/Ctrl+Enter` | tap checkbox / long-press menu |
+| Run code block | `g x` chord | `Cmd/Ctrl+X` | tap "Run" |
 
 ---
 

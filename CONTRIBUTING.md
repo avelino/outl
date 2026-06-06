@@ -2,12 +2,13 @@
 
 Thanks for wanting to help.
 The short version of how we work is on this page.
-The full rules of the game — what reviewers look at, the non-negotiable invariants, the quality bar, what we *won't* block your PR for — live in the docs:
+Two long-form pages back this up — read both before a non-trivial PR:
 
-> **[outl.app/docs/contributing](https://outl.app/docs/contributing)**
+> **[outl.app/docs/development](https://outl.app/docs/development)** — the engineer onramp: how to set up, run, test, debug, and ship the project.
+>
+> **[outl.app/docs/contributing](https://outl.app/docs/contributing)** — the rules of the game: invariants, what reviewers look at, what we won't block your PR for.
 
-Read that once before sending a non-trivial PR.
-It's the same content the [Copilot reviewer](.github/copilot-instructions.md) runs against, so you won't be surprised by anything in review.
+The contributing page is the same content the [Copilot reviewer](.github/copilot-instructions.md) runs against, so you won't be surprised by anything in review.
 
 ## Quick start
 

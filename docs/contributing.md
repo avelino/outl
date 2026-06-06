@@ -1,10 +1,12 @@
 # Contributing & code review
 
-This is the canonical guide for contributing to outl.
-It spells out **the rules of the game** — what every PR is measured against during review, why each rule exists, and what is explicitly *not* a reason to block your PR.
+This is the canonical guide for **what review measures your PR against** — the rules of the game, why each rule exists, and what is explicitly *not* a reason to block your PR.
 
-The [root `CONTRIBUTING.md`](https://github.com/avelino/outl/blob/main/CONTRIBUTING.md) on GitHub is a short pointer (clone, build, commit format, license) that links back here.
-Everything substantive lives on this page.
+If you're looking for **how to set up, run, test, and debug the project**, that's the [Development guide](development.md).
+The two pages are deliberately split: that one is workflow, this one is policy.
+
+The [root `CONTRIBUTING.md`](https://github.com/avelino/outl/blob/main/CONTRIBUTING.md) on GitHub is a short pointer (clone, build, commit format, license) that links into both.
+Everything substantive lives across these two pages.
 
 We want outl to be a project where you can show up, read this page, and know exactly what you're walking into.
 No tribal knowledge, no hidden quality bar.
@@ -311,6 +313,7 @@ If not, they run in CI on the PR.
 
 ## Where to look next
 
+- [Development guide](development.md) — how to clone, build, run, test, and debug. Pairs with this page.
 - Root [`CLAUDE.md`](https://github.com/avelino/outl/blob/main/CLAUDE.md) — project-wide invariants and conventions.
 - Per-crate `CLAUDE.md` (e.g.
   [`crates/outl-core/CLAUDE.md`](https://github.com/avelino/outl/blob/main/crates/outl-core/CLAUDE.md)) — invariants specific to that crate.
