@@ -424,6 +424,101 @@ mod tests {
         );
     }
 
+    fn with_id(text: &str, id: NodeId, children: Vec<OutlineNode>) -> OutlineNode {
+        OutlineNode {
+            id: id.to_string(),
+            text: text.into(),
+            todo: None,
+            collapsed: false,
+            properties: Vec::new(),
+            tokens: Vec::new(),
+            children,
+        }
+    }
+
+    #[test]
+    fn flat_index_for_block_walks_dfs_preorder() {
+        // Layout (DFS pre-order indices in parens):
+        //   a (0)
+        //     a1 (1)
+        //     a2 (2)
+        //   b (3)
+        // Every node id is exercised so an off-by-one in either the
+        // `*counter += 1` or the recursive descent would flip at least
+        // one expected index.
+        let a = NodeId::new();
+        let a1 = NodeId::new();
+        let a2 = NodeId::new();
+        let b = NodeId::new();
+        let outline = vec![
+            with_id(
+                "a",
+                a,
+                vec![with_id("a1", a1, vec![]), with_id("a2", a2, vec![])],
+            ),
+            with_id("b", b, vec![]),
+        ];
+
+        assert_eq!(flat_index_for_block(&outline, a), Some(0));
+        assert_eq!(flat_index_for_block(&outline, a1), Some(1));
+        assert_eq!(flat_index_for_block(&outline, a2), Some(2));
+        assert_eq!(flat_index_for_block(&outline, b), Some(3));
+    }
+
+    #[test]
+    fn flat_index_for_block_traverses_deep_nesting() {
+        // Single chain four levels deep: catches a counter that resets
+        // when recursing (would make `d` land on 0 instead of 3).
+        let a = NodeId::new();
+        let b = NodeId::new();
+        let c = NodeId::new();
+        let d = NodeId::new();
+        let outline = vec![with_id(
+            "a",
+            a,
+            vec![with_id(
+                "b",
+                b,
+                vec![with_id("c", c, vec![with_id("d", d, vec![])])],
+            )],
+        )];
+
+        assert_eq!(flat_index_for_block(&outline, a), Some(0));
+        assert_eq!(flat_index_for_block(&outline, b), Some(1));
+        assert_eq!(flat_index_for_block(&outline, c), Some(2));
+        assert_eq!(flat_index_for_block(&outline, d), Some(3));
+    }
+
+    #[test]
+    fn flat_index_for_block_returns_none_for_unknown_id() {
+        // The block was never in this forest. Caller surfaces as a
+        // soft "outline drifted" error; we must not return a stale
+        // index from a sibling.
+        let known = NodeId::new();
+        let outline = vec![with_id("only", known, vec![])];
+        let stranger = NodeId::new();
+        assert_eq!(flat_index_for_block(&outline, stranger), None);
+    }
+
+    #[test]
+    fn flat_index_for_block_returns_none_for_empty_forest() {
+        let stranger = NodeId::new();
+        assert_eq!(flat_index_for_block(&[], stranger), None);
+    }
+
+    #[test]
+    fn flat_index_for_block_finds_first_match_only() {
+        // Same NodeId planted twice (impossible in a real workspace,
+        // but the function should not panic and should pick the first
+        // DFS hit). Locks in the contract.
+        let dup = NodeId::new();
+        let outline = vec![
+            with_id("first", dup, vec![]),
+            with_id("second-with-same-id", dup, vec![]),
+        ];
+        assert_eq!(flat_index_for_block(&outline, dup), Some(0));
+    }
+
     #[test]
     fn outline_node_carries_todo_text_and_properties() {
         // Smoke that the DTO surface a backlink hands the renderer
