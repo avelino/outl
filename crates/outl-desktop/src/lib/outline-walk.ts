@@ -1,13 +1,19 @@
 /**
- * Outline traversal helpers — selection navigation, ID lookup,
- * sibling discovery. Pure functions over `BlockNode[]` so they're
- * cheap to call from action handlers without any reactive setup.
+ * Outline traversal helpers — selection navigation. Pure functions
+ * over `BlockNode[]` so they're cheap to call from action handlers
+ * without any reactive setup.
  *
  * `flattenVisible` honours each block's `collapsed` flag (folded
- * children are invisible to vim-style `j/k` movement; the user
- * pops them open with `c`/`Enter` first). `flattenAll` walks every
- * id, used by `findNewIdAfter` to identify a freshly-created
- * block in the refreshed view.
+ * children are invisible to vim-style `j/k` movement; the user pops
+ * them open with `c`/`Enter` first).
+ *
+ * There used to be a `flattenAll` + `findNewId` pair here that
+ * diff'd outline snapshots to recover the id of a freshly-created
+ * block. They were removed once `createBlock` started returning
+ * `{ view, new_id }` on the wire — the diff path mis-identified the
+ * new block whenever the anchor had children (`flat[idx+1]` landed
+ * on `children[0]` instead of the new sibling) and surfaced
+ * `block <ULID> is not in the tree` toasts.
  */
 
 import type { BlockNode } from "@outl/shared/api/types";
@@ -24,19 +30,6 @@ export function flattenVisible(blocks: BlockNode[]): string[] {
     for (const b of bs) {
       out.push(b.id);
       if (!b.collapsed && b.children.length > 0) walk(b.children);
-    }
-  };
-  walk(blocks);
-  return out;
-}
-
-/** IDs of every block in the outline, ignoring `collapsed`. */
-export function flattenAll(blocks: BlockNode[]): string[] {
-  const out: string[] = [];
-  const walk = (bs: BlockNode[]) => {
-    for (const b of bs) {
-      out.push(b.id);
-      if (b.children.length > 0) walk(b.children);
     }
   };
   walk(blocks);
@@ -71,18 +64,4 @@ export function previousVisibleId(
   const idx = ids.indexOf(current);
   if (idx === -1) return ids[0];
   return ids[Math.max(idx - 1, 0)];
-}
-
-/**
- * After `createBlock` returns a refreshed outline, identify which
- * block is new by diffing against the `before` snapshot of ids.
- * Returns the first novel id in DFS order, or `null` when nothing
- * changed (should never happen on a successful insert).
- */
-export function findNewId(
-  before: Set<string>,
-  outline: BlockNode[],
-): string | null {
-  const all = flattenAll(outline);
-  return all.find((id) => !before.has(id)) ?? null;
 }

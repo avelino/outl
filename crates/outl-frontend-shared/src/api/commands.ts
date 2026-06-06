@@ -13,6 +13,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  CreateBlockReply,
   PageMeta,
   PageView,
   WorkspaceSummary,
@@ -95,11 +96,20 @@ export function workspaceStats(): Promise<WorkspaceSummary> {
 // Block mutations (all scoped to a page)
 // ---------------------------------------------------------------------------
 
+/**
+ * Insert a new block under `pageId`, either as a sibling after
+ * `afterId` or as the last child of `parentId` (defaults to the page
+ * itself when both are null). Returns the refreshed {@link PageView}
+ * paired with `new_id` — the id of the freshly-inserted block —
+ * so the caller can put it into edit mode without diffing the
+ * outline. See {@link CreateBlockReply} for why the id is on the
+ * wire.
+ */
 export function createBlock(
   pageId: string,
   opts: { afterId?: string | null; parentId?: string | null; text?: string | null },
-): Promise<PageView> {
-  return invoke<PageView>("create_block", {
+): Promise<CreateBlockReply> {
+  return invoke<CreateBlockReply>("create_block", {
     pageId,
     afterId: opts.afterId ?? null,
     parentId: opts.parentId ?? null,

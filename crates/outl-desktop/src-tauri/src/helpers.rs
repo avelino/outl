@@ -92,12 +92,28 @@ pub(crate) fn finish_in_page<F>(
 where
     F: FnOnce(&mut Workspace) -> Result<(), ActionError>,
 {
+    finish_in_page_with(state, page_id, f).map(|(_, view)| view)
+}
+
+/// Variant of [`finish_in_page`] that also returns whatever value the
+/// mutation produced (the new `NodeId` for `create_block`, etc.) so
+/// the frontend never has to re-discover it from a DFS diff of the
+/// outline.
+pub(crate) fn finish_in_page_with<F, T>(
+    state: &State<'_, AppState>,
+    page_id: NodeId,
+    f: F,
+) -> Result<(T, PageView), String>
+where
+    F: FnOnce(&mut Workspace) -> Result<T, ActionError>,
+{
     let root = storage_root_or_err(state)?;
     with_ws_mut(state, |ws| {
-        f(ws).map_err(|e| e.to_string())?;
+        let value = f(ws).map_err(|e| e.to_string())?;
         if let Err(e) = apply_page_md_with_sidecar(ws, &root, page_id) {
             warn!("page md+sidecar sync failed: {e}");
         }
-        build_page_view(ws, &root, page_id).map_err(|e| e.to_string())
+        let view = build_page_view(ws, &root, page_id).map_err(|e| e.to_string())?;
+        Ok((value, view))
     })
 }

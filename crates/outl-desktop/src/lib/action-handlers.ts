@@ -38,8 +38,6 @@ import type { BlockNode, PageView } from "@outl/shared/api/types";
 
 import { insertLink, wrapSelection } from "./markdown-wrap";
 import {
-  findNewId,
-  flattenAll,
   flattenVisible,
   nextVisibleId,
   previousVisibleId,
@@ -287,42 +285,36 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
       const pageId = appState.page?.id;
       const after = appState.selectedBlockId;
       if (!pageId) return;
-      const before = new Set(flattenAll(appState.outline));
-      const view = await safeCall(
+      const reply = await safeCall(
         createBlock(pageId, {
           afterId: after,
           parentId: null,
           text: "",
         }),
       );
-      if (!view) return;
-      deps.applyView(view);
-      const newId = findNewId(before, view.outline);
-      if (newId) {
-        setAppState("selectedBlockId", newId);
-        setAppState("editingBlockId", newId);
-      }
+      if (!reply) return;
+      deps.applyView(reply.view);
+      setAppState("selectedBlockId", reply.new_id);
+      setAppState("editingBlockId", reply.new_id);
     },
     NewBlockAbove: async () => {
       const pageId = appState.page?.id;
       const anchor = appState.selectedBlockId;
       if (!pageId) return;
-      const before = new Set(flattenAll(appState.outline));
-      const view = await safeCall(
+      const reply = await safeCall(
         createBlock(pageId, {
           afterId: null,
           parentId: null,
           text: "",
         }),
       );
-      if (!view) return;
-      deps.applyView(view);
-      const newId = findNewId(before, view.outline);
-      if (!newId) return;
+      if (!reply) return;
+      deps.applyView(reply.view);
+      const newId = reply.new_id;
       // Walk it up until it sits immediately before the anchor.
-      let cursor = view;
-      while (anchor && cursor) {
-        const visible = flattenVisible(cursor.outline);
+      let cursorOutline = reply.view.outline;
+      while (anchor) {
+        const visible = flattenVisible(cursorOutline);
         const newIdx = visible.indexOf(newId);
         const anchorIdx = visible.indexOf(anchor);
         if (newIdx < 0 || anchorIdx < 0) break;
@@ -330,7 +322,7 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
         const stepped = await safeCall(moveBlockDown(pageId, newId));
         if (!stepped) break;
         deps.applyView(stepped);
-        cursor = stepped;
+        cursorOutline = stepped.outline;
       }
       setAppState("selectedBlockId", newId);
       setAppState("editingBlockId", newId);

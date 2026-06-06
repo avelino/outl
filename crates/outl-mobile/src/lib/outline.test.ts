@@ -3,7 +3,6 @@ import type { BlockNode } from "@outl/shared/api/types";
 import {
   countDescendants,
   findBlock,
-  findInsertedAfter,
   flatten,
   rawTextWithTodo,
 } from "./outline";
@@ -53,28 +52,6 @@ describe("flatten", () => {
 
   it("returns an empty list for an empty tree", () => {
     expect(flatten([])).toEqual([]);
-  });
-});
-
-describe("findInsertedAfter", () => {
-  it("returns the next block in DFS order", () => {
-    const tree = [block("a"), block("b"), block("c")];
-    expect(findInsertedAfter(tree, "a")?.id).toBe("b");
-    expect(findInsertedAfter(tree, "b")?.id).toBe("c");
-  });
-
-  it("returns null when there is no follower", () => {
-    const tree = [block("a")];
-    expect(findInsertedAfter(tree, "a")).toBeNull();
-  });
-
-  it("returns null when the seed id is unknown", () => {
-    expect(findInsertedAfter([block("a")], "ghost")).toBeNull();
-  });
-
-  it("crosses subtree boundaries", () => {
-    const tree = [block("a", "", [block("a1")]), block("b")];
-    expect(findInsertedAfter(tree, "a1")?.id).toBe("b");
   });
 });
 

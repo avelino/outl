@@ -3,8 +3,6 @@ import { describe, expect, it } from "vitest";
 import type { BlockNode } from "@outl/shared/api/types";
 
 import {
-  findNewId,
-  flattenAll,
   flattenVisible,
   nextVisibleId,
   previousVisibleId,
@@ -63,16 +61,6 @@ describe("flattenVisible", () => {
   });
 });
 
-describe("flattenAll", () => {
-  it("ignores collapsed and reveals hidden subtrees", () => {
-    const tree: BlockNode[] = [
-      block("a", { collapsed: true, children: [block("a1")] }),
-      block("b"),
-    ];
-    expect(flattenAll(tree)).toEqual(["a", "a1", "b"]);
-  });
-});
-
 describe("nextVisibleId", () => {
   const tree: BlockNode[] = [
     block("a"),
@@ -126,30 +114,3 @@ describe("previousVisibleId", () => {
   });
 });
 
-describe("findNewId", () => {
-  it("returns the first id that did not exist in the snapshot", () => {
-    const before = new Set(["a", "b"]);
-    const after: BlockNode[] = [block("a"), block("b"), block("c")];
-    expect(findNewId(before, after)).toBe("c");
-  });
-
-  it("returns the new id inside a freshly-revealed subtree", () => {
-    const before = new Set(["a"]);
-    const after: BlockNode[] = [block("a", { children: [block("a1")] })];
-    expect(findNewId(before, after)).toBe("a1");
-  });
-
-  it("returns null when nothing is new", () => {
-    const before = new Set(["a", "b"]);
-    const after: BlockNode[] = [block("a"), block("b")];
-    expect(findNewId(before, after)).toBeNull();
-  });
-
-  it("ignores collapsed when looking for the new id", () => {
-    const before = new Set(["a"]);
-    const after: BlockNode[] = [
-      block("a", { collapsed: true, children: [block("a1")] }),
-    ];
-    expect(findNewId(before, after)).toBe("a1");
-  });
-});

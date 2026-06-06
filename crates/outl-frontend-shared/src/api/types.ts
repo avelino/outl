@@ -121,6 +121,25 @@ export interface PageView {
   backlinks: Backlink[];
 }
 
+/**
+ * Reply of {@link import("./commands").createBlock}. Pairs the
+ * refreshed {@link PageView} with the id of the freshly-inserted
+ * block so the client can focus / put the new row into edit mode
+ * without re-discovering the id by diffing the outline.
+ *
+ * Why the new id is on the wire: the previous design returned only
+ * the `PageView` and let the frontend find the new block via a DFS
+ * walk (`flat[idx+1]` after the anchor). That walk lands on the
+ * anchor's *first child* whenever the anchor has children, not on
+ * the new sibling. The eventual `editBlock(stale_id, ...)` then
+ * targeted an id that may have been moved or already replaced, and
+ * the backend surfaced `block <ULID> is not in the tree` as a toast.
+ */
+export interface CreateBlockReply {
+  view: PageView;
+  new_id: string;
+}
+
 export interface WorkspaceSummary {
   blocks: number;
   ops: number;

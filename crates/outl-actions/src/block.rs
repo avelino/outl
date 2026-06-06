@@ -484,6 +484,36 @@ mod tests {
         assert_eq!(ws.block_text(n).as_deref(), Some("ship the feature"));
     }
 
+    /// Regression: when the anchor has children, `create_after` must
+    /// return the id of the brand-new sibling — not a descendant.
+    ///
+    /// Why: clients used to skip this return value and recover the new
+    /// id by walking the refreshed outline (`flat[idx + 1]` after the
+    /// anchor). That walk lands on `anchor.children[0]` instead of the
+    /// new sibling whenever the anchor has expanded children, and the
+    /// next `edit_text` would target a stale id and surface
+    /// `block <ULID> is not in the tree` toasts on blur. The fix is
+    /// to make every Tauri `create_block` command propagate
+    /// `create_after`'s `NodeId` to the frontend; this test pins the
+    /// contract on the `outl-actions` side so the regression cannot
+    /// silently reappear.
+    #[test]
+    fn create_after_returns_new_sibling_not_a_child_of_anchor() {
+        let (mut ws, hlc) = new_workspace();
+        let anchor = append_block(&mut ws, &hlc, None, Some("anchor")).unwrap();
+        let child = append_block(&mut ws, &hlc, Some(anchor), Some("child")).unwrap();
+
+        let new_id = create_after(&mut ws, &hlc, anchor, Some("sibling")).unwrap();
+
+        assert_ne!(new_id, child, "must not return the existing child");
+        assert_eq!(
+            ws.tree().parent(new_id),
+            ws.tree().parent(anchor),
+            "new block must be a sibling of the anchor (same parent)"
+        );
+        assert_eq!(ws.block_text(new_id).as_deref(), Some("sibling"));
+    }
+
     #[test]
     fn indent_makes_block_child_of_previous_sibling() {
         let (mut ws, hlc) = new_workspace();

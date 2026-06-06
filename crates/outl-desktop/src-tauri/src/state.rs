@@ -72,3 +72,16 @@ pub(crate) struct PageView {
     pub outline: Vec<OutlineNode>,
     pub backlinks: Vec<Backlink>,
 }
+
+/// Reply for `create_block`. Pairs the refreshed [`PageView`] with the
+/// id of the freshly-inserted block so the frontend can focus / start
+/// editing it without re-discovering the id via a DFS diff (the diff
+/// path mis-identified the new block when the anchor had children
+/// — `flat[idx+1]` would land on `children[0]` instead of the new
+/// sibling, and the eventual `edit_block` would target a stale id and
+/// surface the `block <ULID> is not in the tree` toast).
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct CreateBlockReply {
+    pub view: PageView,
+    pub new_id: String,
+}

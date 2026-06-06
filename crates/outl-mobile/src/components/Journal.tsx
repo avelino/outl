@@ -35,8 +35,6 @@ import {
 import {
   countDescendants,
   findBlock,
-  findInsertedAfter,
-  flatten,
   rawTextWithTodo,
 } from "../lib/outline";
 import { applySuggestion, detectRefContext } from "@outl/shared/autocomplete";
@@ -636,13 +634,12 @@ export function Journal() {
     // the ghost textarea first.
     focusGhost();
     if (editingId()) await commitEdit();
-    const next = await withError(() =>
+    const reply = await withError(() =>
       createBlock(pid, { afterId: id, text: null }),
     );
-    if (next) {
-      applyView(next);
-      const last = findInsertedAfter(next.outline, id);
-      if (last) startEdit(last.id, "");
+    if (reply) {
+      applyView(reply.view);
+      startEdit(reply.new_id, "");
     }
   }
 
@@ -652,13 +649,12 @@ export function Journal() {
     focusGhost();
     if (editingId()) await commitEdit();
     haptic("medium");
-    const next = await withError(() =>
+    const reply = await withError(() =>
       createBlock(pid, { afterId: null, parentId: null, text: null }),
     );
-    if (next) {
-      applyView(next);
-      const last = flatten(next.outline).at(-1);
-      if (last) startEdit(last.id, "");
+    if (reply) {
+      applyView(reply.view);
+      startEdit(reply.new_id, "");
     }
   }
 

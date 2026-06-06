@@ -113,6 +113,19 @@ struct PageView {
     backlinks: Vec<Backlink>,
 }
 
+/// Reply for `create_block`. Pairs the refreshed [`PageView`] with the
+/// id of the freshly-inserted block so the frontend can focus / start
+/// editing it without re-discovering the id via a DFS diff (the diff
+/// path mis-identified the new block when the anchor had children
+/// — `flat[idx+1]` would land on `children[0]` instead of the new
+/// sibling, and the eventual `edit_block` would target a stale id and
+/// surface the `block <ULID> is not in the tree` toast).
+#[derive(Debug, Clone, Serialize)]
+struct CreateBlockReply {
+    view: PageView,
+    new_id: String,
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -201,12 +214,28 @@ fn finish_in_page<F>(state: &State<'_, AppState>, page_id: NodeId, f: F) -> Resu
 where
     F: FnOnce(&mut Workspace) -> Result<(), ActionError>,
 {
+    finish_in_page_with(state, page_id, f).map(|(_, view)| view)
+}
+
+/// Variant of [`finish_in_page`] that also returns whatever value the
+/// mutation produced (the new `NodeId` for `create_block`, etc.) so
+/// the frontend never has to re-discover it from a DFS diff of the
+/// outline.
+fn finish_in_page_with<F, T>(
+    state: &State<'_, AppState>,
+    page_id: NodeId,
+    f: F,
+) -> Result<(T, PageView), String>
+where
+    F: FnOnce(&mut Workspace) -> Result<T, ActionError>,
+{
     with_ws_mut(state, |ws| {
-        f(ws).map_err(|e| e.to_string())?;
+        let value = f(ws).map_err(|e| e.to_string())?;
         if let Err(e) = apply_page_md_with_sidecar(ws, &state.storage_root, page_id) {
             warn!("page md+sidecar sync failed: {e}");
         }
-        build_page_view(ws, &state.storage_root, page_id).map_err(|e| e.to_string())
+        let view = build_page_view(ws, &state.storage_root, page_id).map_err(|e| e.to_string())?;
+        Ok((value, view))
     })
 }
 
@@ -384,21 +413,25 @@ fn create_block(
     parent_id: Option<String>,
     text: Option<String>,
     state: State<'_, AppState>,
-) -> Result<PageView, String> {
+) -> Result<CreateBlockReply, String> {
     let page = parse_node_id(&page_id)?;
     let text_owned = text.clone();
-    finish_in_page(&state, page, |ws| match after_id {
+    let (new_id, view) = finish_in_page_with(&state, page, |ws| match after_id {
         Some(id) => {
             let node = parse_node_id(&id).map_err(ActionError::NotInTree)?;
-            create_after(ws, &state.hlc, node, text_owned.as_deref()).map(|_| ())
+            create_after(ws, &state.hlc, node, text_owned.as_deref())
         }
         None => {
             let parent = match parent_id {
                 Some(id) => parse_node_id(&id).map_err(ActionError::NotInTree)?,
                 None => page,
             };
-            append_block(ws, &state.hlc, Some(parent), text_owned.as_deref()).map(|_| ())
+            append_block(ws, &state.hlc, Some(parent), text_owned.as_deref())
         }
+    })?;
+    Ok(CreateBlockReply {
+        view,
+        new_id: new_id.to_string(),
     })
 }
 
@@ -631,7 +664,7 @@ fn add_block(text: String, state: State<'_, AppState>) -> Result<PageView, Strin
     let today_id = with_ws_mut(&state, |ws| {
         open_today(ws, &state.hlc).map_err(|e| e.to_string())
     })?;
-    create_block(today_id.to_string(), None, None, Some(trimmed), state)
+    create_block(today_id.to_string(), None, None, Some(trimmed), state).map(|r| r.view)
 }
 
 // ---------------------------------------------------------------------------

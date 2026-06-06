@@ -12,7 +12,7 @@ import {
   toggleTodo,
 } from "@outl/shared/api/commands";
 
-import type { BlockNode, PageView } from "@outl/shared/api/types";
+import type { PageView } from "@outl/shared/api/types";
 
 import { runCodeBlock } from "../lib/api";
 import { appState, setAppState } from "../lib/store";
@@ -139,42 +139,20 @@ export function OutlineView() {
     onEnter: async (id, text) => {
       const pageId = appState.page?.id;
       if (!pageId) return;
-      // Snapshot the existing block ids so we can identify the
-      // freshly-created sibling in the refreshed view returned by
-      // `createBlock`. Without this the new block stays read-only
-      // and the user has to click it before typing — bad UX.
-      const before = new Set<string>();
-      const walkIds = (blocks: BlockNode[]) => {
-        for (const b of blocks) {
-          before.add(b.id);
-          if (b.children.length > 0) walkIds(b.children);
-        }
-      };
-      walkIds(appState.outline);
-
+      // Commit the in-flight edit first, then create the sibling.
+      // The backend returns the freshly-inserted id so we put it
+      // straight into edit mode — `<BlockRow />`'s `createEffect`
+      // focuses its textarea on the next tick. We used to find the
+      // new block by diffing against a snapshot of the old outline,
+      // which mis-fired when the host block had children (the diff
+      // could pick up an existing descendant).
       await handleError(editBlock(pageId, id, text));
-      const view = await handleError(
+      const reply = await handleError(
         createBlock(pageId, { afterId: id, parentId: null, text: "" }),
       );
-      if (!view) return;
-      applyView(view);
-
-      // Find the new block (the one not in `before`) and put it in
-      // edit mode so `<BlockRow />`'s `createEffect` focuses its
-      // textarea automatically.
-      let newId: string | null = null;
-      const findNew = (blocks: BlockNode[]) => {
-        for (const b of blocks) {
-          if (newId) return;
-          if (!before.has(b.id)) {
-            newId = b.id;
-            return;
-          }
-          if (b.children.length > 0) findNew(b.children);
-        }
-      };
-      findNew(view.outline);
-      setEditingId(newId);
+      if (!reply) return;
+      applyView(reply.view);
+      setEditingId(reply.new_id);
     },
     onIndent: async (id) => {
       const pageId = appState.page?.id;
@@ -230,10 +208,10 @@ export function OutlineView() {
   async function addFirstBlock() {
     const pageId = appState.page?.id;
     if (!pageId) return;
-    const view = await handleError(
+    const reply = await handleError(
       createBlock(pageId, { afterId: null, parentId: null, text: "" }),
     );
-    if (view) applyView(view);
+    if (reply) applyView(reply.view);
   }
 
   /**

@@ -46,14 +46,3 @@ export function countDescendants(block: BlockNode): number {
   return n;
 }
 
-/** Block that the backend inserted right after `afterId` in a fresh
- * outline, or `null` if `afterId` is the very last node. */
-export function findInsertedAfter(
-  blocks: BlockNode[],
-  afterId: string,
-): BlockNode | null {
-  const flat = flatten(blocks);
-  const idx = flat.findIndex((b) => b.id === afterId);
-  if (idx === -1) return null;
-  return flat[idx + 1] ?? null;
-}

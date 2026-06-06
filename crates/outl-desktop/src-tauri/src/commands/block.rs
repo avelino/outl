@@ -14,9 +14,10 @@ use outl_actions::{
 use tauri::State;
 
 use crate::helpers::{
-    build_page_view, finish_in_page, parse_node_id, storage_root_or_err, with_ws_mut,
+    build_page_view, finish_in_page, finish_in_page_with, parse_node_id, storage_root_or_err,
+    with_ws_mut,
 };
-use crate::state::{AppState, PageView};
+use crate::state::{AppState, CreateBlockReply, PageView};
 
 #[tauri::command]
 pub(crate) fn create_block(
@@ -25,21 +26,25 @@ pub(crate) fn create_block(
     parent_id: Option<String>,
     text: Option<String>,
     state: State<'_, AppState>,
-) -> Result<PageView, String> {
+) -> Result<CreateBlockReply, String> {
     let page = parse_node_id(&page_id)?;
     let text_owned = text.clone();
-    finish_in_page(&state, page, |ws| match after_id {
+    let (new_id, view) = finish_in_page_with(&state, page, |ws| match after_id {
         Some(id) => {
             let node = parse_node_id(&id).map_err(ActionError::NotInTree)?;
-            create_after(ws, &state.hlc, node, text_owned.as_deref()).map(|_| ())
+            create_after(ws, &state.hlc, node, text_owned.as_deref())
         }
         None => {
             let parent = match parent_id {
                 Some(id) => parse_node_id(&id).map_err(ActionError::NotInTree)?,
                 None => page,
             };
-            append_block(ws, &state.hlc, Some(parent), text_owned.as_deref()).map(|_| ())
+            append_block(ws, &state.hlc, Some(parent), text_owned.as_deref())
         }
+    })?;
+    Ok(CreateBlockReply {
+        view,
+        new_id: new_id.to_string(),
     })
 }
 

@@ -85,8 +85,8 @@ When in doubt, ship in the client; promote later when the second client appears.
 | `looksLikeOutline` | `@outl/shared/paste` | `outl_actions::paste::looks_like_outline` |
 | `utf16OffsetToCharOffset` | `@outl/shared/paste` | (runtime gap — UTF-16 ↔ codepoint, no Rust mirror) |
 | `detectRefContext`, `autoClose/DeletePair`, `insertPair/Text`, `applySuggestion` | `@outl/shared/autocomplete` | `outl_tui::actions::overlay::detect_trigger` |
-| DTOs (`PageMeta`, `OutlineNode`, `BlockNode`, `Backlink`, `InlineToken`, `PageView`, `WorkspaceSummary`, …) | `@outl/shared/api/types` | the corresponding `serde`-serialised Rust structs |
-| `invoke<T>()` wrappers (navigation: `listPages`, `searchPages`, `openTodayJournal`, `openJournalFor`, `openPageBySlug`, `openRef`, `previousDay`, `nextDay`, `todaySlug`, `dateTitle`, `resolveRef`, `workspaceStats`; mutation: `createBlock`, `editBlock`, `toggleTodo`, `deleteBlock`, `indentBlock`, `outdentBlock`, `moveBlockUp`, `moveBlockDown`, `reloadWorkspace`, `pasteMarkdown`, `setBlockCollapsed`) | `@outl/shared/api/commands` | the matching Tauri command in each client's `src-tauri/src/lib.rs` |
+| DTOs (`PageMeta`, `OutlineNode`, `BlockNode`, `Backlink`, `InlineToken`, `PageView`, `CreateBlockReply`, `WorkspaceSummary`, …) | `@outl/shared/api/types` | the corresponding `serde`-serialised Rust structs |
+| `invoke<T>()` wrappers (navigation: `listPages`, `searchPages`, `openTodayJournal`, `openJournalFor`, `openPageBySlug`, `openRef`, `previousDay`, `nextDay`, `todaySlug`, `dateTitle`, `resolveRef`, `workspaceStats`; mutation: `createBlock` → `CreateBlockReply` (returns `{ view, new_id }` so the client puts the new block straight into edit mode without diffing the outline), `editBlock`, `toggleTodo`, `deleteBlock`, `indentBlock`, `outdentBlock`, `moveBlockUp`, `moveBlockDown`, `reloadWorkspace`, `pasteMarkdown`, `setBlockCollapsed`) | `@outl/shared/api/commands` | the matching Tauri command in each client's `src-tauri/src/lib.rs` |
 
 ## What does NOT enter the library
 
