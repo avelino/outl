@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "@outl/shared/highlight/styles";
 
 /*
  * Tailwind v4 content scanning. By default the plugin walks the

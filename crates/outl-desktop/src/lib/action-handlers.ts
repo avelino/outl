@@ -21,6 +21,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   createBlock,
   deleteBlock,
+  editBlock,
   indentBlock,
   moveBlockDown,
   moveBlockUp,
@@ -36,6 +37,7 @@ import {
 } from "@outl/shared/api/commands";
 import type { BlockNode, PageView } from "@outl/shared/api/types";
 
+import { runCodeBlock } from "./api";
 import { insertLink, wrapSelection } from "./markdown-wrap";
 import {
   flattenVisible,
@@ -427,14 +429,62 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
     WrapStrike: () => wrapSelection("~~"),
     InsertLink: () => insertLink(),
 
+    // ── run code block (Cmd+X) ───────────────────────────────────
+    //
+    // Targets the focused textarea (Insert) or the selected block
+    // (Normal). Resolves the block, asks the backend to execute the
+    // `\`\`\`lang … \`\`\`` fence via `outl-exec`, and surfaces the
+    // resulting stdout/stderr through `applyView`.
+    RunCodeBlock: async () => {
+      const pageId = appState.page?.id;
+      if (!pageId) return;
+      const id = targetBlockId();
+      if (!id) {
+        deps.setError(
+          "Select or focus a code block first, then ⌘X runs it",
+        );
+        return;
+      }
+      const reply = await safeCall(runCodeBlock(pageId, id));
+      if (reply) deps.applyView(reply.view);
+    },
+
+    // ── commit + new sibling ─────────────────────────────────────
+    //
+    // Fires on `Cmd+Shift+Enter` inside a textarea (Insert mode).
+    // Reads the live draft straight off the focused textarea and
+    // commits, then asks the backend for a fresh sibling and parks
+    // edit mode on the new id so the user keeps typing without a
+    // click. Mirrors the old `<BlockRow />` intercept that used to
+    // own this chord before it moved to the catalog.
+    CommitAndContinue: async () => {
+      const pageId = appState.page?.id;
+      if (!pageId) return;
+      const el = document.activeElement;
+      if (!(el instanceof HTMLTextAreaElement) || !el.dataset.blockId) {
+        return;
+      }
+      const id = el.dataset.blockId;
+      const text = el.value;
+      const editedView = await safeCall(editBlock(pageId, id, text));
+      if (editedView) deps.applyView(editedView);
+      const reply = await safeCall(
+        createBlock(pageId, { afterId: id, parentId: null, text: "" }),
+      );
+      if (!reply) return;
+      deps.applyView(reply.view);
+      setAppState("editingBlockId", reply.new_id);
+      setAppState("selectedBlockId", reply.new_id);
+    },
+
     // ── catalog-only (no JS handler today) ───────────────────────
     //
     // Intentionally absent so the dispatcher falls through (no
     // preventDefault) and the textarea / OS handles the chord:
     //
-    //   CommitAndContinue, EditBlock chord buffer (CopyBlockRef),
-    //   EnterVisual, YankRange, DeleteRange, Undo, Redo,
-    //   OpenCommandPalette, RunCodeBlock (per-block button).
+    //   EditBlock chord buffer (CopyBlockRef), EnterVisual,
+    //   YankRange, DeleteRange, Undo, Redo, OpenCommandPalette,
+    //   RunCodeBlock (per-block button).
     //
     // Each shows up as `[shortcuts] … no JS handler` in DevTools so
     // a debugging session can see what's still on the to-do list.

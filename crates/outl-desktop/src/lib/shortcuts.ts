@@ -244,11 +244,18 @@ export async function installShortcuts(
 
     const sequence = [...pending, chord];
 
-    // Exact match first.
-    const hit = bindings.find(
-      (b) =>
-        (b.mode === "global" || b.mode === mode) && seqEq(b.chord, sequence),
-    );
+    // Mode-specific match wins over Global. Without this the catalog
+    // declaration order would silently shadow per-mode overrides —
+    // e.g. `Cmd+T` is `OpenToday` (Global) but also `ToggleTodo`
+    // (Insert), and inside a textarea the Insert binding has to win
+    // even though Global is declared first in `defaults.rs`.
+    const hit =
+      bindings.find(
+        (b) => b.mode === mode && seqEq(b.chord, sequence),
+      ) ??
+      bindings.find(
+        (b) => b.mode === "global" && seqEq(b.chord, sequence),
+      );
     if (hit) {
       // Only preventDefault when we actually have a handler ready —
       // otherwise we'd swallow legitimate keystrokes (e.g. `Enter`

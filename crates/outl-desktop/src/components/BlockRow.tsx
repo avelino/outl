@@ -3,9 +3,10 @@ import { For, Show, createEffect, createSignal } from "solid-js";
 import type { BlockNode, TodoState } from "@outl/shared/api/types";
 import { MarkdownInline } from "@outl/shared/markdown";
 import { autoClosePair, autoDeletePair } from "@outl/shared/autocomplete";
+import { HighlightedCode } from "@outl/shared/highlight";
 import { looksLikeOutline, utf16OffsetToCharOffset } from "@outl/shared/paste";
 
-import { detectFence } from "../lib/code-block";
+import { detectFence } from "@outl/shared/highlight";
 import { appState, setAppState } from "../lib/store";
 
 export interface BlockCallbacks {
@@ -34,17 +35,16 @@ export interface BlockCallbacks {
   onTagClick: (tag: string) => void;
 }
 
-function stripTodoPrefix(text: string, todo: TodoState | null): string {
-  if (!todo) return text;
-  const prefix = `${todo} `;
-  return text.startsWith(prefix) ? text.slice(prefix.length) : text;
+/** Wire format the block was stored as — TODO/DONE prefix included.
+ *  We hand this verbatim to the textarea on edit so the user can
+ *  *erase* the prefix to drop the TODO state and *type* `TODO ` /
+ *  `DONE ` to add it. Mirrors how TUI and mobile show the raw text
+ *  in their editors. */
+function rawTextWithTodo(block: BlockNode): string {
+  if (!block.todo) return block.text;
+  return `${block.todo} ${block.text}`;
 }
 
-function reattachTodo(text: string, todo: TodoState | null): string {
-  if (!todo) return text;
-  const prefix = `${todo} `;
-  return text.startsWith(prefix) ? text : prefix + text;
-}
 
 /**
  * One outline block. Renders read-only by default; flips to a
@@ -59,9 +59,10 @@ export function BlockRow(props: {
   cb: BlockCallbacks;
 }) {
   const isEditing = () => props.editingId === props.block.id;
-  const [draft, setDraft] = createSignal<string>(
-    stripTodoPrefix(props.block.text, props.block.todo),
-  );
+  // Draft mirrors the wire format (with TODO/DONE prefix). Same
+  // shape the TUI buffer and the mobile editor use, so users can
+  // type / erase the prefix to flip state.
+  const [draft, setDraft] = createSignal<string>(rawTextWithTodo(props.block));
 
   let textareaRef: HTMLTextAreaElement | undefined;
 
@@ -111,8 +112,12 @@ export function BlockRow(props: {
   });
 
   async function commit() {
-    const raw = reattachTodo(draft(), props.block.todo);
-    if (raw !== props.block.text) {
+    // Draft is already wire format (prefix included if any). The
+    // backend re-runs `split_todo` on it and re-projects the block
+    // with the right `todo` state.
+    const raw = draft();
+    const wire = rawTextWithTodo(props.block);
+    if (raw !== wire) {
       // `onCommit` flips `editingBlockId` to null after the Tauri
       // round-trip, so the row will re-render in read-only mode.
       await props.cb.onCommit(props.block.id, raw);
@@ -132,17 +137,13 @@ export function BlockRow(props: {
       await commit();
       return;
     }
-    // `Cmd+Enter` commits the current block and creates a fresh
-    // sibling below — the "next item" gesture. Plain `Enter` is
-    // intentionally **not** intercepted so the textarea inserts a
-    // real `\n` and the block grows multi-line (auto-resize takes
-    // care of the visual). Mirrors Notion / Linear / Slack threads.
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      const raw = reattachTodo(draft(), props.block.todo);
-      await props.cb.onEnter(props.block.id, raw);
-      return;
-    }
+    // `Cmd+Enter` / `Cmd+Shift+Enter` / `Cmd+T` are all owned by the
+    // global shortcut catalog (`outl-shortcuts::defaults`). We
+    // deliberately do NOT intercept Enter+modifier here — otherwise
+    // we'd race the catalog dispatcher and fire two actions at once
+    // (commit-and-continue AND toggle-todo, the "Cmd+Shift+Enter
+    // breaks the line" bug). Plain `Enter` still passes through to
+    // the textarea so it inserts a real `\n` (multi-line blocks).
     if (e.key === "Tab") {
       e.preventDefault();
       await commit();
@@ -195,22 +196,29 @@ export function BlockRow(props: {
     await props.cb.onPasteMarkdown(props.block.id, caretChars, text);
   }
 
-  function displayText(): string {
-    return stripTodoPrefix(props.block.text, props.block.todo);
+  /** TODO/DONE state to render the bullet by. Edit mode is the
+   *  **raw markdown view** — the `TODO `/`DONE ` prefix is literally
+   *  visible in the textarea, so the bullet collapses to the neutral
+   *  `•` to avoid showing the same state twice. Read mode is where
+   *  the prefix is replaced by `▢` / `▣`. */
+  function effectiveTodo(): TodoState | null {
+    return isEditing() ? null : props.block.todo;
   }
 
   /** Bullet glyph + click action — folds TODO/DONE/none into a
    *  single visual primitive (TUI parity, `▢` / `▣` / `•`). */
   function bulletGlyph(): string {
-    if (props.block.todo === "DONE") return "▣";
-    if (props.block.todo === "TODO") return "▢";
+    const t = effectiveTodo();
+    if (t === "DONE") return "▣";
+    if (t === "TODO") return "▢";
     return "•";
   }
   function bulletClass(): string {
-    if (props.block.todo === "DONE") {
+    const t = effectiveTodo();
+    if (t === "DONE") {
       return "text-(--color-outl-todo-done-fg)";
     }
-    if (props.block.todo === "TODO") {
+    if (t === "TODO") {
       return "text-(--color-outl-todo-open-fg)";
     }
     return "text-(--color-outl-fg-dimmer)";
@@ -349,7 +357,7 @@ export function BlockRow(props: {
                       language={fence.language}
                       body={fence.body}
                       onEdit={() => {
-                        setDraft(displayText());
+                        setDraft(rawTextWithTodo(props.block));
                         props.cb.onStartEdit(props.block.id);
                         focusTextarea();
                       }}
@@ -359,7 +367,7 @@ export function BlockRow(props: {
                     <div
                       class="cursor-text whitespace-pre-wrap break-words"
                       onClick={() => {
-                        setDraft(displayText());
+                        setDraft(rawTextWithTodo(props.block));
                         props.cb.onStartEdit(props.block.id);
                         focusTextarea();
                       }}
@@ -367,8 +375,8 @@ export function BlockRow(props: {
                       <Show
                         when={props.block.tokens && props.block.tokens.length > 0}
                         fallback={
-                          <span class={!displayText() ? "opacity-30" : ""}>
-                            {displayText() || "Click to add text…"}
+                          <span class={!props.block.text ? "opacity-30" : ""}>
+                            {props.block.text || "Click to add text…"}
                           </span>
                         }
                       >
@@ -457,12 +465,9 @@ function CodeFenceView(props: {
           {busy() ? "Running…" : "▶ Run"}
         </button>
       </div>
-      <pre
-        class="cursor-text overflow-x-auto whitespace-pre px-3 py-2 font-mono text-[13px]"
-        onClick={props.onEdit}
-      >
-        {props.body || " "}
-      </pre>
+      <div onClick={props.onEdit} class="cursor-text">
+        <HighlightedCode language={props.language} code={props.body || " "} />
+      </div>
     </div>
   );
 }

@@ -32,7 +32,7 @@ What this crate **does** own:
 - Path discovery (file picker via `tauri-plugin-dialog`; persisted in settings JSON; cross-platform default).
 - Cross-platform FS watcher (`notify` crate) that signals the frontend when peer `ops-*.jsonl` files grow — replaces the `NSMetadataQuery`/`NSFileCoordinator` dance the mobile crate has to do for iOS.
 - Desktop-only Tauri command surface (workspace picker, code execution wrap, settings IO).
-- Solid frontend with **3-pane layout** (Sidebar / OutlineView / BacklinksPanel) and **OS-standard keyboard shortcuts** (`Cmd+P`, `Cmd+S`, `Cmd+T`, `Cmd+B`, `Cmd+\`, `Cmd+,`) plus optional vim mode.
+- Solid frontend with **3-pane layout** (Sidebar / OutlineView / BacklinksPanel) and **OS-standard keyboard shortcuts** (`Cmd+P`, `Cmd+J`, `Cmd+T`, `Cmd+Enter`, `Cmd+,`) plus optional vim mode.
 
 ## Layout
 
@@ -128,12 +128,17 @@ The full catalog lives in **`crates/outl-shortcuts`** (single source of truth, a
 | Chord | Action |
 |---|---|
 | `Cmd/Ctrl+P` | Quick switcher (pages + journals, fuzzy) |
-| `Cmd/Ctrl+T` | Open today's journal |
+| `Cmd/Ctrl+J` | Open today's **j**ournal |
+| `Cmd/Ctrl+T` | Toggle TODO / DONE on the focused / selected block (T for **t**ask) |
+| `Cmd/Ctrl+Enter` | Toggle TODO / DONE on the focused / selected block (alt) |
+| `Cmd/Ctrl+Shift+Enter` | Commit + create a sibling block below |
+| `Cmd/Ctrl+X` | E**x**ecute the focused / selected code block (mirrors the TUI's `g x` chord) |
 | `Cmd/Ctrl+[` / `]` | Previous / next journal day |
 | `Cmd/Ctrl+Shift+E` | Toggle sidebar (mirrors VS Code's explorer chord) |
 | `Cmd/Ctrl+Shift+B` | Toggle backlinks panel |
 | `Cmd/Ctrl+,` | Open settings |
 
+> **Why `Cmd+J` for the journal and not `Cmd+T`?** `T` is universally "task" in outliners (TUI's `Ctrl+T`, Logseq's `Cmd+T`, every Markdown task list shortcut). We don't make the user re-learn that. `J` for **journal** is unambiguous and lines up with the `g j` chord the TUI uses.
 > **Why not `Cmd+B` / `Cmd+\`?** `Cmd+B` is **reserved for bold** in every popular markdown editor (Notion, Obsidian, Discord, Slack) — retraining users on a non-standard meaning is hostile. `Cmd+\` is **1Password's** global autofill chord on macOS; hijacking it breaks every user with 1Password installed.
 
 ### Inline markdown (Insert mode — fire when a textarea is focused)
@@ -154,7 +159,10 @@ Implementation lives in `lib/markdown-wrap.ts`: each handler reads `document.act
 
 | Chord | Action |
 |---|---|
-| `Enter` | Commit + create a sibling below + edit it |
+| `Enter` | Insert a `\n` inside the current block (multi-line text) |
+| `Cmd/Ctrl+Shift+Enter` | Commit + create a sibling below + edit it |
+| `Cmd/Ctrl+T` / `Cmd/Ctrl+Enter` | Toggle TODO / DONE on this block |
+| `Cmd/Ctrl+X` | Run the code block (mirrors TUI's `g x`) |
 | `Tab` / `Shift-Tab` | Indent / outdent |
 | `Esc` / blur | Commit |
 | `Backspace` on empty | Delete the block |
