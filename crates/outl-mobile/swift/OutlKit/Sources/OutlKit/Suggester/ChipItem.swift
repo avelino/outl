@@ -1,0 +1,38 @@
+import Foundation
+
+/// One entry in the ref-autocomplete chip strip.
+///
+/// `title` is what the user sees; `slug` is the canonical id sent
+/// back to JS via `window.__outlSuggesterPicked(slug, kind)`; `kind`
+/// distinguishes pages from journals so the frontend can route
+/// correctly.
+public struct ChipItem: Equatable, Sendable {
+    public let title: String
+    public let slug: String
+    public let kind: Kind
+
+    /// Mirrors the JS side: `"page"` / `"journal"`. Anything else (or
+    /// missing) falls back to `.page` to keep ingestion lenient — the
+    /// parser is the boundary, so we don't want a typo to drop the
+    /// whole chip.
+    public enum Kind: String, Sendable, Equatable {
+        case page
+        case journal
+
+        public static let fallback: Kind = .page
+
+        /// Resolve a Kind from a raw string (case-insensitive,
+        /// trimmed). Returns `.fallback` for missing / unknown values.
+        public static func from(_ raw: String?) -> Kind {
+            guard let raw else { return .fallback }
+            let normalized = raw.trimmingCharacters(in: .whitespaces).lowercased()
+            return Kind(rawValue: normalized) ?? .fallback
+        }
+    }
+
+    public init(title: String, slug: String, kind: Kind) {
+        self.title = title
+        self.slug = slug
+        self.kind = kind
+    }
+}

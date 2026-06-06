@@ -100,6 +100,26 @@ jobs:
       - name: bun run build
         run: bun run build
 
+  # OutlKit hosts every piece of pure Foundation logic the iOS side
+  # needs (toolbar MFU ordering, suggester chip / state parsers,
+  # iCloud ops file predicate, JS string escape, brand color). It's a
+  # Foundation-only Swift Package so `swift test` runs standalone on
+  # any macOS runner — no simulator, no signing, no Xcode workspace.
+  # The iOS app target consumes OutlKit as a local SPM dependency
+  # (see project.pbxproj → XCLocalSwiftPackageReference).
+  swift-tests:
+    name: swift (OutlKit unit tests)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: crates/outl-mobile/swift/OutlKit
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show toolchain
+        run: swift --version
+      - name: swift test
+        run: swift test --parallel
+
   ios-build:
     name: iOS Simulator build (opt-in)
     runs-on: macos-latest
@@ -109,7 +129,7 @@ jobs:
       github.event.inputs.ios_build == 'true' ||
       (github.event_name == 'pull_request' &&
        contains(github.event.pull_request.labels.*.name, 'ios-build'))
-    needs: [rust-check, frontend]
+    needs: [rust-check, frontend, swift-tests]
     steps:
       - uses: actions/checkout@v4
       - name: Show Xcode version
@@ -175,7 +195,7 @@ jobs:
   ios-release:
     name: iOS device build (signed IPA artifact)
     runs-on: macos-latest
-    needs: [rust-check, frontend]
+    needs: [rust-check, frontend, swift-tests]
     if: |
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' &&
