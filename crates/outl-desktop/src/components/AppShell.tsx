@@ -18,6 +18,7 @@ import { OutlineView } from "./OutlineView";
 import { Picker } from "./Picker";
 import { SettingsModal } from "./SettingsModal";
 import { HelpOverlay } from "./HelpOverlay";
+import { ChromeToggleBar } from "./ChromeToggleBar";
 
 /**
  * 2-pane shell rendered once a workspace is loaded.
@@ -145,6 +146,7 @@ export function AppShell() {
         <OutlineView />
       </div>
 
+      <ChromeToggleBar />
       <Picker onPicked={applyView} />
       <SettingsModal />
       <HelpOverlay />
