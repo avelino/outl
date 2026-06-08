@@ -120,6 +120,7 @@ fn ast_indent_and_outdent_preserves_subtree() {
 
     let mut page = ParsedPage {
         properties: vec![],
+        warnings: vec![],
         blocks: vec![
             OutlineNode {
                 text: "a".into(),

@@ -140,6 +140,10 @@ pub fn descendants_count_at_path(blocks: &[OutlineNode], path: &[usize]) -> usiz
 }
 
 /// Insert a fresh empty block as a sibling immediately *after* `path`.
+///
+/// If `path` points past the actual sibling list (e.g. caller passed
+/// `[0]` against an empty outline because the page had no parseable
+/// blocks), the new node is appended at the end instead of panicking.
 pub fn insert_sibling_after(blocks: &mut Vec<OutlineNode>, path: &[usize]) {
     if path.is_empty() {
         blocks.push(OutlineNode::default());
@@ -147,11 +151,15 @@ pub fn insert_sibling_after(blocks: &mut Vec<OutlineNode>, path: &[usize]) {
     }
     let (last, parent_path) = path.split_last().unwrap();
     let siblings = siblings_mut(blocks, parent_path);
-    let pos = last + 1;
+    let pos = (last + 1).min(siblings.len());
     siblings.insert(pos, OutlineNode::default());
 }
 
 /// Insert a fresh empty block as a sibling immediately *before* `path`.
+///
+/// Clamp behavior mirrors [`insert_sibling_after`]: a path that
+/// overshoots the live sibling list falls back to appending so an
+/// empty outline + stale selection cursor never panics.
 pub fn insert_sibling_before(blocks: &mut Vec<OutlineNode>, path: &[usize]) {
     if path.is_empty() {
         blocks.insert(0, OutlineNode::default());
@@ -159,7 +167,8 @@ pub fn insert_sibling_before(blocks: &mut Vec<OutlineNode>, path: &[usize]) {
     }
     let (last, parent_path) = path.split_last().unwrap();
     let siblings = siblings_mut(blocks, parent_path);
-    siblings.insert(*last, OutlineNode::default());
+    let pos = (*last).min(siblings.len());
+    siblings.insert(pos, OutlineNode::default());
 }
 
 /// Borrow the sibling list of a path (i.e. the parent's children).
@@ -338,6 +347,28 @@ mod tests {
         assert_eq!(blocks[0].text, "a");
         assert_eq!(blocks[1].text, "");
         assert_eq!(blocks[2].text, "b");
+    }
+
+    /// Regression for issue #55: the TUI falls back to `vec![0]` when
+    /// `path_for_index` returns `None` (typical when the page parses to
+    /// zero blocks — e.g. the seeded journal starts with `# heading`,
+    /// which is not a block marker). The previous implementation
+    /// computed `pos = last + 1 = 1` against an empty Vec and panicked
+    /// with "insertion index (is 1) should be <= len (is 0)".
+    #[test]
+    fn insert_sibling_after_clamps_when_blocks_empty() {
+        let mut blocks: Vec<OutlineNode> = Vec::new();
+        insert_sibling_after(&mut blocks, &[0]);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].text, "");
+    }
+
+    #[test]
+    fn insert_sibling_before_clamps_when_blocks_empty() {
+        let mut blocks: Vec<OutlineNode> = Vec::new();
+        insert_sibling_before(&mut blocks, &[0]);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].text, "");
     }
 
     #[test]

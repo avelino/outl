@@ -95,6 +95,7 @@ The same "one owner, every client wraps" policy applies on the TS side.
 **`crates/outl-frontend-shared/`** is the Solid + TypeScript library every GUI client (`outl-mobile` today, `outl-desktop` next) consumes for the pieces that are pure, stateless, and identical between clients:
 
 - `<MarkdownInline />` (renderer for `InlineToken[]` produced by `outl_md::tokenize_owned`)
+- `<ParseWarningsBanner />` (renders `PageView.warnings`; mirrors the TUI's `warnings_banner` chrome)
 - Pure helpers: `looksLikeOutline`, `utf16OffsetToCharOffset`, `detectRefContext`, `autoClose/DeletePair`, `insertPair/Text`, `applySuggestion`
 - DTO interfaces (`PageMeta`, `OutlineNode`, `BlockNode`, `Backlink`, `InlineToken`, `PageView`, `WorkspaceSummary`, …)
 - Typed `invoke<T>()` wrappers for the Tauri commands every client uses (`@outl/shared/api/commands`)
@@ -354,12 +355,14 @@ Every entry here routes through `Workspace::apply` — never build a `LogOp` fro
 
 | Intent | Use this | File |
 |---|---|---|
-| Parse `.md` → outline AST (no IDs) | `outl_md::parse::parse` → `ParsedPage` | `crates/outl-md/src/parse.rs` |
+| Parse `.md` → outline AST (no IDs) | `outl_md::parse::parse` → `ParsedPage` (includes `warnings: Vec<ParseWarning>`) | `crates/outl-md/src/parse.rs` |
 | Render outline AST → `.md` (clean, no IDs) | `outl_md::render::render` | `crates/outl-md/src/render.rs` |
+| Non-fatal parser recovery records (heading instead of bullet, etc.) | `outl_md::ParseWarning` + `outl_md::ParseWarningKind` (re-exported from `parse`) | `crates/outl-md/src/parse.rs` |
 | The outline AST node DTO (UI-friendly, no `Workspace` coupling) | `outl_md::OutlineNode` / `outl_actions::outline::OutlineNode` | `crates/outl-md/src/parse.rs` + `crates/outl-actions/src/outline.rs` |
 | Project the workspace tree under a node into the UI DTO | `outl_actions::outline::project_outline` / `project_outline_node` | `crates/outl-actions/src/outline.rs` |
 | Flatten an `OutlineNode` subtree to DFS paths (for selection / navigation) | `outl_actions::outline::flatten_subtree_paths` | `crates/outl-actions/src/outline.rs` |
 | Read a page from disk + project to outline view in one call | `outl_actions::outline::read_page_view` / `read_page_view_with_workspace` | `crates/outl-actions/src/outline.rs` |
+| Read a page **and** surface parser warnings (banner, doctor, status line) | `outl_actions::outline::read_page_outline` / `read_page_outline_with_workspace` → `PageOutline { nodes, warnings }` | `crates/outl-actions/src/outline.rs` |
 
 #### 6. External markdown coercion & ingest (outl-actions::paste + ingest)
 

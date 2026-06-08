@@ -14,6 +14,7 @@ import {
 
 import type { PageView } from "@outl/shared/api/types";
 
+import { ParseWarningsBanner } from "@outl/shared/warnings";
 import { runCodeBlock } from "../lib/api";
 import { appState, setAppState } from "../lib/store";
 import { BlockRow, type BlockCallbacks } from "./BlockRow";
@@ -100,6 +101,7 @@ export function OutlineView() {
       page: view.page,
       outline: view.outline,
       backlinks: view.backlinks,
+      parseWarnings: view.warnings ?? [],
     });
   }
 
@@ -287,6 +289,7 @@ export function OutlineView() {
 
       <div class="min-w-0 flex-1 overflow-y-auto px-12 py-6">
         <div class="mx-auto w-full max-w-3xl">
+        <ParseWarningsBanner warnings={appState.parseWarnings} />
         <Show
           when={appState.outline.length > 0}
           fallback={

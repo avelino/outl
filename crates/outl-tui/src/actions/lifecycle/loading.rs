@@ -86,6 +86,17 @@ impl App {
         let path = self.current_path();
         let text = fs::read_to_string(&path).unwrap_or_default();
         self.page = parse(&text);
+        self.parse_warnings = self.page.warnings.clone();
+        // Surface a brief chip in the status line so the user notices
+        // even if they're not looking at the outline (and so the
+        // banner above the outline isn't the only signal — terminals
+        // with `show_warning_banner=false` still see this).
+        if !self.parse_warnings.is_empty() {
+            self.status = format!(
+                "⚠ {} line(s) outside outl dialect — preserved (open :warnings to see)",
+                self.parse_warnings.len()
+            );
+        }
         self.flat_len = flat_count(&self.page.blocks);
         if self.selected >= self.flat_len {
             self.selected = self.flat_len.saturating_sub(1);

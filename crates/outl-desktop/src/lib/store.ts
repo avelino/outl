@@ -13,6 +13,7 @@ import { createStore } from "solid-js/store";
 import type {
   Backlink,
   BlockNode,
+  ParseWarning,
   PageMeta,
   WorkspaceSummary,
 } from "@outl/shared/api/types";
@@ -28,6 +29,14 @@ export interface AppStateShape {
   outline: BlockNode[];
   /** Backlinks targeting the current page. */
   backlinks: Backlink[];
+  /**
+   * Parser recovery records emitted while reading the current page's
+   * `.md`. Drives the `<ParseWarningsBanner />` above the outline so
+   * the user knows outl had to preserve lines that don't match the
+   * dialect (a leading `# heading`, free paragraph, etc.). Empty on
+   * a clean file.
+   */
+  parseWarnings: ParseWarning[];
   /** DFS path of the selected block, or `null` for no selection. */
   selectedPath: number[] | null;
   /**
@@ -98,6 +107,7 @@ const [state, setState] = createStore<AppStateShape>({
   page: null,
   outline: [],
   backlinks: [],
+  parseWarnings: [],
   selectedPath: null,
   selectedBlockId: null,
   selectedBacklinkBlockId: null,

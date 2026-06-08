@@ -33,6 +33,8 @@
     "./paste": "./src/paste/index.ts",
     "./autocomplete": "./src/autocomplete/index.ts",
     "./highlight": "./src/highlight/index.ts",
-    "./highlight/styles": "./src/highlight/styles.css"
+    "./highlight/styles": "./src/highlight/styles.css",
+    "./warnings": "./src/warnings/index.ts",
+    "./warnings/styles": "./src/warnings/styles.css"
   }
 }

@@ -226,6 +226,7 @@ fn collect_internal(path: &Path, probe_lock: bool) -> Result<DoctorReport, ApiEr
         }
         check_md_files(&mut b, &md_files, &known_node_ids);
         check_orphan_sidecars(&mut b, &sidecar_files, &md_files);
+        check_parse_warnings(&mut b, &md_files, &paths.orphans);
     }
 
     // 4. Block ref integrity — every `((blk-XXXXXX))` mentioned must
@@ -408,6 +409,93 @@ fn check_orphan_block_refs(b: &mut Builder, idx: &WorkspaceIndex) {
     }
 }
 
+/// For every `.md` in `md_files`, parse it and emit a warning per
+/// `ParseWarning` the parser had to recover from. Also appends a
+/// structured row to `orphans_log` so the entries persist across
+/// runs (the file is the same `.outl/orphans.log` used by reconcile;
+/// the rows are tagged `parse-warning` to keep them distinguishable
+/// from level-3 matching orphans).
+fn check_parse_warnings(b: &mut Builder, md_files: &[std::path::PathBuf], orphans_log: &Path) {
+    use std::fmt::Write as _;
+    use std::io::Write as _;
+
+    let mut total = 0usize;
+    let mut log_buf = String::new();
+    for md in md_files {
+        let text = match std::fs::read_to_string(md) {
+            Ok(t) => t,
+            Err(e) => {
+                b.warn(format!("{}: unreadable for parse check: {e}", md.display()));
+                continue;
+            }
+        };
+        let parsed = outl_md::parse::parse(&text);
+        if parsed.warnings.is_empty() {
+            continue;
+        }
+        total += parsed.warnings.len();
+        let summary = match parsed.warnings.len() {
+            1 => format!(
+                "{}: 1 line outside outl dialect — preserved (line {})",
+                md.display(),
+                parsed.warnings[0].line
+            ),
+            n => {
+                let lines: Vec<String> =
+                    parsed.warnings.iter().map(|w| w.line.to_string()).collect();
+                format!(
+                    "{}: {n} line(s) outside outl dialect — preserved (lines {})",
+                    md.display(),
+                    lines.join(", ")
+                )
+            }
+        };
+        b.warn(summary);
+
+        // One row per warning into the orphans log so the user can
+        // grep later. Format: `parse-warning <iso> <path>:<line> <kind> <raw>`.
+        // Truncate `raw` so a pathological line doesn't blow the log
+        // up.
+        for w in &parsed.warnings {
+            let mut raw_preview: String = w.raw.chars().take(120).collect();
+            if w.raw.chars().count() > 120 {
+                raw_preview.push('…');
+            }
+            let kind = match w.kind {
+                outl_md::ParseWarningKind::UnrecognizedBlockMarker => "unrecognized_block_marker",
+            };
+            let _ = writeln!(
+                log_buf,
+                "parse-warning {} {}:{} {} {}",
+                chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%z"),
+                md.display(),
+                w.line,
+                kind,
+                raw_preview,
+            );
+        }
+    }
+
+    if total == 0 {
+        b.ok("no parser warnings — every `.md` parses cleanly in the outl dialect");
+        return;
+    }
+
+    // Append best-effort. Failure here is non-fatal — the warnings
+    // already showed up in the doctor report itself; the log is just
+    // a persisted breadcrumb trail.
+    if let Some(parent) = orphans_log.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(orphans_log)
+    {
+        let _ = f.write_all(log_buf.as_bytes());
+    }
+}
+
 fn check_orphan_sidecars(
     b: &mut Builder,
     sidecar_files: &[std::path::PathBuf],
@@ -431,5 +519,87 @@ fn check_orphan_sidecars(
                 stripped
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace_layout::{init, Paths};
+    use tempfile::TempDir;
+
+    /// A journal whose content steps outside the outl dialect
+    /// (heading + paragraph + bullet) must surface a parser warning
+    /// in the doctor report AND drop a tagged row into
+    /// `.outl/orphans.log` so the trail persists.
+    #[test]
+    fn doctor_surfaces_parse_warnings_and_logs_them() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("notes");
+        let paths = Paths::at(&root);
+        init(&paths).unwrap();
+
+        let journal = paths
+            .journals
+            .join(format!("{}.md", crate::workspace_layout::today()));
+        std::fs::write(
+            &journal,
+            "# 2026-06-08\n\nfree paragraph\n\n- real bullet\n",
+        )
+        .unwrap();
+
+        let report = collect(&root).expect("doctor must run on a dirty workspace");
+        let dirty = report
+            .findings
+            .iter()
+            .filter(|f| f.message.contains("outside outl dialect"))
+            .count();
+        assert!(
+            dirty >= 1,
+            "expected at least one parser-warning finding, got: {:#?}",
+            report.findings
+        );
+
+        let log = std::fs::read_to_string(&paths.orphans).unwrap_or_default();
+        assert!(
+            log.contains("parse-warning"),
+            "orphans.log should carry a `parse-warning` row, got: {log:?}"
+        );
+        assert!(
+            log.contains("unrecognized_block_marker"),
+            "kind tag missing in orphans.log: {log:?}"
+        );
+    }
+
+    /// A clean dialect file must NOT pollute orphans.log with
+    /// `parse-warning` rows and the doctor report should call out
+    /// the absence so the user knows the check ran.
+    #[test]
+    fn doctor_is_silent_on_clean_files() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("notes");
+        let paths = Paths::at(&root);
+        init(&paths).unwrap();
+
+        let journal = paths
+            .journals
+            .join(format!("{}.md", crate::workspace_layout::today()));
+        std::fs::write(&journal, "- one bullet\n- another\n").unwrap();
+
+        let report = collect(&root).unwrap();
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.message.contains("every `.md` parses cleanly")),
+            "expected the clean-parse OK finding, got: {:#?}",
+            report.findings
+        );
+
+        let log = std::fs::read_to_string(&paths.orphans).unwrap_or_default();
+        assert!(
+            !log.contains("parse-warning"),
+            "orphans.log must stay clean of parse-warning rows for a tidy workspace"
+        );
     }
 }

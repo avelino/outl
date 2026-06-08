@@ -252,12 +252,14 @@ Reject PRs that build a `LogOp` from a client and call `apply` directly.
 
 | Intent | Use this | File |
 |---|---|---|
-| Parse `.md` → outline AST (no IDs) | `outl_md::parse::parse` → `ParsedPage` | `crates/outl-md/src/parse.rs` |
+| Parse `.md` → outline AST (no IDs) | `outl_md::parse::parse` → `ParsedPage` (includes `warnings: Vec<ParseWarning>`) | `crates/outl-md/src/parse.rs` |
 | Render outline AST → `.md` (clean, no IDs) | `outl_md::render::render` | `crates/outl-md/src/render.rs` |
+| Non-fatal parser recovery records (heading instead of bullet, etc.) | `outl_md::ParseWarning` + `outl_md::ParseWarningKind` | `crates/outl-md/src/parse.rs` |
 | The outline AST node DTO | `outl_md::OutlineNode` / `outl_actions::outline::OutlineNode` | `crates/outl-md/src/parse.rs` + `crates/outl-actions/src/outline.rs` |
 | Project the workspace tree into the UI DTO | `outl_actions::outline::project_outline` / `project_outline_node` | `crates/outl-actions/src/outline.rs` |
 | Flatten an `OutlineNode` subtree to DFS paths | `outl_actions::outline::flatten_subtree_paths` | `crates/outl-actions/src/outline.rs` |
 | Read page from disk + project to outline view | `outl_actions::outline::read_page_view` / `read_page_view_with_workspace` | `crates/outl-actions/src/outline.rs` |
+| Read page + parser warnings (for banner / doctor / status line) | `outl_actions::outline::read_page_outline` / `read_page_outline_with_workspace` → `PageOutline { nodes, warnings }` | `crates/outl-actions/src/outline.rs` |
 
 #### 6. External markdown coercion & ingest (outl-actions::paste + ingest)
 

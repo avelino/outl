@@ -71,6 +71,12 @@ pub(crate) struct PageView {
     pub page: PageMeta,
     pub outline: Vec<OutlineNode>,
     pub backlinks: Vec<Backlink>,
+    /// Parser recoveries for the page's `.md`. Mirrors the mobile
+    /// `PageView.warnings` exactly; `<ParseWarningsBanner />` from
+    /// `@outl/shared` consumes it. Empty (or absent) on a clean
+    /// file — `skip_serializing_if` keeps the JSON quiet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<outl_md::ParseWarning>,
 }
 
 /// Reply for `create_block`. Pairs the refreshed [`PageView`] with the

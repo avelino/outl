@@ -76,6 +76,7 @@ pub fn render_page_md(workspace: &Workspace, page_root: NodeId) -> String {
     let page = ParsedPage {
         properties: Vec::new(),
         blocks: build_outline(workspace, page_root),
+        warnings: Vec::new(),
     };
     render(&page)
 }

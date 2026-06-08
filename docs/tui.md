@@ -275,6 +275,24 @@ Garbage input (`/date nope`, `/date +3x`, invalid date) shows `usage: date +Nd |
 There is *no* pages sidebar.
 Use `Ctrl+P` (quick switcher) to jump to any page or journal by fuzzy title — the sidebar was redundant with that and ate horizontal space on narrow terminals.
 
+## Parser-warning banner
+
+When you open a `.md` that the outl parser had to recover from (a leading `# heading`, a free paragraph between bullets, imported markdown that doesn't fit the dialect), the TUI shows a yellow banner above the outline:
+
+```
+┌─ ⚠ 3 line(s) outside outl dialect — preserved as blocks ─┐
+│ line 1: # 2026-06-08 (+2 more)                           │
+└──────────────────────────────────────────────────────────┘
+```
+
+- Every offending line is preserved as a regular block — nothing is dropped on parse, and the next save normalises the file to the dialect (`- <raw>`).
+- The status line also carries a short `⚠ N line(s) outside outl dialect — preserved` hint for terminals where the banner is not visible.
+- On a clean file the banner collapses to zero height; the layout looks identical to before the feature landed.
+- Source of truth: `ParsedPage.warnings` (`outl_md::ParseWarning`).
+  Mobile + desktop render the same data via `<ParseWarningsBanner>` from `@outl/shared`, and `outl doctor` lists every page with active warnings.
+- The behaviour is intentionally non-blocking: you can keep editing, save, navigate away.
+  Use the warning as a hint to clean the file at your pace — outl never deletes content on your behalf.
+
 ## Behavior worth knowing
 
 - **Autosave**: every commit (Esc from Insert, structural ops, history navigation) writes the `.md` to disk and reconciles into the op log.

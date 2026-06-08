@@ -136,7 +136,12 @@ pub fn init(paths: &Paths) -> Result<()> {
     }
 
     if !paths.journal_template.exists() {
-        fs::write(&paths.journal_template, "# {{date}}\n\n- \n")
+        // Seed with a single empty bullet — outl's parser only
+        // recognizes `- ` as a block marker, so a leading `# {{date}}`
+        // heading would silently make the page parse to zero blocks
+        // (see issue #55). Journals are slug-keyed by date already; no
+        // heading needed.
+        fs::write(&paths.journal_template, "- \n")
             .with_context(|| format!("writing {}", paths.journal_template.display()))?;
     }
 

@@ -9,7 +9,7 @@ use std::str::FromStr;
 use chrono::NaiveDate;
 use outl_actions::{
     apply_page_md_with_sidecar, backlinks_for_page, date_from_slug, page_meta as page_meta_action,
-    read_page_view_with_workspace, ActionError,
+    read_page_outline_with_workspace, ActionError, PageOutline,
 };
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
@@ -70,13 +70,17 @@ pub(crate) fn build_page_view(
 ) -> Result<PageView, ActionError> {
     let meta = page_meta_action(workspace, page_id)
         .ok_or_else(|| ActionError::NotInTree(page_id.to_string()))?;
-    let outline = read_page_view_with_workspace(storage_root, &meta, workspace)
-        .unwrap_or_else(|_| Vec::new());
+    let page_outline = read_page_outline_with_workspace(storage_root, &meta, workspace)
+        .unwrap_or_else(|_| PageOutline {
+            nodes: Vec::new(),
+            warnings: Vec::new(),
+        });
     let backlinks = backlinks_for_page(workspace, storage_root, &meta);
     Ok(PageView {
         page: meta,
-        outline,
+        outline: page_outline.nodes,
         backlinks,
+        warnings: page_outline.warnings,
     })
 }
 

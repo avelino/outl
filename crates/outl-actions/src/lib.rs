@@ -74,9 +74,11 @@ pub use journal::{
     apply_all_pages_md, apply_page_md, apply_page_md_with_sidecar, journals_dir, mutate_page_md,
     page_md_path, pages_dir, render_page_md, write_md_atomic,
 };
+pub use outl_md::parse::{ParseWarning, ParseWarningKind};
 pub use outline::{
     flat_index_for_block, flatten_subtree_paths, project_outline, project_outline_node,
-    read_page_view, read_page_view_with_workspace, OutlineNode,
+    read_page_outline, read_page_outline_with_workspace, read_page_view,
+    read_page_view_with_workspace, OutlineNode, PageOutline,
 };
 pub use page::{
     date_from_slug, find_by_slug, is_valid_slug, journal_slug, journal_title,

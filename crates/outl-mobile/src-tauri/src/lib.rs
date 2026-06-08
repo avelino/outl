@@ -39,7 +39,7 @@ use outl_actions::{
     migrate_legacy_into_today, move_down, move_up, next_journal_date, open_journal,
     open_or_create_by_name, open_or_create_by_ref, open_today, outdent,
     page_meta as page_meta_action, paste_markdown as action_paste_markdown, previous_journal_date,
-    read_page_view_with_workspace, set_block_collapsed as action_set_block_collapsed, today,
+    read_page_outline_with_workspace, set_block_collapsed as action_set_block_collapsed, today,
     toggle_todo as action_toggle_todo, ActionError, Backlink, OutlineNode, PageKind, PageMeta,
     PasteAnchor,
 };
@@ -113,11 +113,18 @@ struct WorkspaceSummary {
 /// Reply shape for every "open page / open journal" command. Bundles
 /// the page meta with the outline so the frontend gets everything in
 /// one trip.
+///
+/// `warnings` is the verbatim `outl_md::ParseWarning` list surfaced
+/// by `outl_actions::read_page_outline_with_workspace`. The
+/// `<ParseWarningsBanner />` from `@outl/shared` reads it; clients
+/// don't have to touch the field directly.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct PageView {
     pub(crate) page: PageMeta,
     pub(crate) outline: Vec<OutlineNode>,
     pub(crate) backlinks: Vec<Backlink>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) warnings: Vec<outl_md::ParseWarning>,
 }
 
 /// Reply for `create_block`. Pairs the refreshed [`PageView`] with the
@@ -191,13 +198,17 @@ pub(crate) fn build_page_view(
     // returned `OutlineNode.collapsed` reflects the op log (the only
     // place that state legitimately lives — sidecars LWW under iCloud
     // and would lose flips).
-    let outline = read_page_view_with_workspace(storage_root, &meta, workspace)
-        .unwrap_or_else(|_| Vec::new());
+    let page_outline = read_page_outline_with_workspace(storage_root, &meta, workspace)
+        .unwrap_or_else(|_| outl_actions::PageOutline {
+            nodes: Vec::new(),
+            warnings: Vec::new(),
+        });
     let backlinks = backlinks_for_page(workspace, storage_root, &meta);
     Ok(PageView {
         page: meta,
-        outline,
+        outline: page_outline.nodes,
         backlinks,
+        warnings: page_outline.warnings,
     })
 }
 
@@ -657,7 +668,9 @@ fn list_outline(state: State<'_, AppState>) -> Result<Vec<OutlineNode>, String> 
         let meta = page_meta_action(ws, today_id)
             .ok_or_else(|| ActionError::NotInTree(today_id.to_string()))
             .map_err(|e| e.to_string())?;
-        read_page_view_with_workspace(&state.storage_root, &meta, ws).map_err(|e| e.to_string())
+        read_page_outline_with_workspace(&state.storage_root, &meta, ws)
+            .map(|po| po.nodes)
+            .map_err(|e| e.to_string())
     })
 }
 

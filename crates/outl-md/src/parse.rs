@@ -31,12 +31,57 @@ pub struct OutlineNode {
 }
 
 /// Parsed page: top-level properties plus the outline tree.
+///
+/// `warnings` accumulates non-fatal grammar deviations the parser
+/// recovered from — e.g. a markdown heading (`# title`) where outl
+/// expects a `- bullet`, or an indent that isn't a multiple of two.
+/// The parser **never** drops content: every offending line is
+/// preserved as a regular block with its raw text (see
+/// [`ParseWarningKind`] for the catalog of recoveries).
+/// Surfaces (`outl-tui`, `outl-mobile`, `outl-desktop`, `outl doctor`)
+/// render the warning list so the user can choose to clean the file
+/// up — outl keeps working in the meantime.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedPage {
     /// Page-level properties (the lines above the first outline item).
     pub properties: Vec<(String, String)>,
     /// Root-level outline blocks.
     pub blocks: Vec<OutlineNode>,
+    /// Lines the parser preserved verbatim because they didn't match
+    /// the outl dialect. Empty on a clean file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ParseWarning>,
+}
+
+/// A non-fatal recovery the parser performed while reading a `.md`.
+///
+/// Every warning carries the **1-based** source line number and the
+/// raw line text, so a surface can highlight the exact offending row
+/// without re-scanning the file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParseWarning {
+    /// 1-based line number in the source `.md`.
+    pub line: usize,
+    /// The offending line, verbatim (no trim).
+    pub raw: String,
+    /// Why the parser had to recover.
+    pub kind: ParseWarningKind,
+}
+
+/// Catalog of recoveries the parser may perform.
+///
+/// Add a variant here when a new shape of "user wrote something the
+/// dialect doesn't natively support" is detected. Keep the variant
+/// name descriptive — UIs render it verbatim as a tag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParseWarningKind {
+    /// A line at the top level (or at a block's expected child slot)
+    /// that doesn't start with `- ` and isn't a recognized property
+    /// — typically a markdown heading (`# title`), a paragraph, an
+    /// HTML snippet, or a table. The parser preserves it as a block
+    /// with the raw text so a later edit + save doesn't drop content.
+    UnrecognizedBlockMarker,
 }
 
 /// Parse a `.md` string into a [`ParsedPage`].
@@ -67,15 +112,22 @@ pub fn parse(md: &str) -> ParsedPage {
     }
 
     let mut cursor = i;
-    let blocks = parse_block_list(&lines, &mut cursor, 0);
+    let mut warnings: Vec<ParseWarning> = Vec::new();
+    let blocks = parse_block_list(&lines, &mut cursor, 0, &mut warnings);
 
     ParsedPage {
         properties: page_props,
         blocks,
+        warnings,
     }
 }
 
-fn parse_block_list(lines: &[&str], i: &mut usize, indent: usize) -> Vec<OutlineNode> {
+fn parse_block_list(
+    lines: &[&str],
+    i: &mut usize,
+    indent: usize,
+    warnings: &mut Vec<ParseWarning>,
+) -> Vec<OutlineNode> {
     let mut blocks: Vec<OutlineNode> = Vec::new();
 
     while *i < lines.len() {
@@ -97,8 +149,28 @@ fn parse_block_list(lines: &[&str], i: &mut usize, indent: usize) -> Vec<Outline
             continue;
         }
         if !is_block_marker(stripped) {
-            // Non-outline line at our indent — exit.
-            return blocks;
+            // Non-outline line at our indent. At depth 0 we recover by
+            // turning it into a verbatim block (and emit a warning) so
+            // a hand-written `.md` with a leading `# title`, a stray
+            // paragraph, or imported markdown doesn't silently lose
+            // content on the next save. At deeper levels we bail back
+            // to the caller (it knows the context) — the caller's loop
+            // ultimately funnels every line through this path.
+            if indent != 0 {
+                return blocks;
+            }
+            warnings.push(ParseWarning {
+                line: *i + 1,
+                raw: raw.to_string(),
+                kind: ParseWarningKind::UnrecognizedBlockMarker,
+            });
+            blocks.push(OutlineNode {
+                text: stripped.to_string(),
+                properties: Vec::new(),
+                children: Vec::new(),
+            });
+            *i += 1;
+            continue;
         }
 
         // Consume a block marker line.
@@ -157,7 +229,7 @@ fn parse_block_list(lines: &[&str], i: &mut usize, indent: usize) -> Vec<Outline
                 if is_block_marker(next_stripped) {
                     // Child block — recurse for the full sub-list.
                     accepting_continuation = false;
-                    let children = parse_block_list(lines, i, indent + 1);
+                    let children = parse_block_list(lines, i, indent + 1, warnings);
                     node.children.extend(children);
                 } else if accepting_continuation && next_stripped.starts_with("```") {
                     // Fenced code block — consume literally until the
@@ -183,7 +255,7 @@ fn parse_block_list(lines: &[&str], i: &mut usize, indent: usize) -> Vec<Outline
             } else {
                 // Over-indented; recurse so the deeper level can claim it.
                 accepting_continuation = false;
-                let extra = parse_block_list(lines, i, indent + 1);
+                let extra = parse_block_list(lines, i, indent + 1, warnings);
                 node.children.extend(extra);
             }
         }
@@ -356,6 +428,47 @@ mod tests {
             ]
         );
         assert!(p.blocks.is_empty());
+    }
+
+    /// A `.md` that starts with a markdown heading (the seeded
+    /// journal template was `# {{date}}\n\n- \n` before issue #55).
+    /// The parser must NOT drop content — every line becomes a
+    /// block — and the recovery is logged as a warning so a UI can
+    /// surface it.
+    #[test]
+    fn permissive_recovers_top_level_heading() {
+        let md = "# 2026-06-08\n\n- real bullet\n";
+        let p = parse(md);
+        assert_eq!(p.blocks.len(), 2, "heading + bullet, neither dropped");
+        assert_eq!(p.blocks[0].text, "# 2026-06-08");
+        assert_eq!(p.blocks[1].text, "real bullet");
+        assert_eq!(p.warnings.len(), 1);
+        assert_eq!(p.warnings[0].line, 1);
+        assert_eq!(p.warnings[0].raw, "# 2026-06-08");
+        assert_eq!(
+            p.warnings[0].kind,
+            ParseWarningKind::UnrecognizedBlockMarker
+        );
+    }
+
+    #[test]
+    fn permissive_recovers_paragraph_at_top_level() {
+        // A paragraph between bullets is preserved as a block too.
+        // (At depth 0 — deeper levels still belong to their owning
+        // bullet via the continuation / property machinery.)
+        let md = "- first\nfree paragraph\n- second\n";
+        let p = parse(md);
+        assert_eq!(p.blocks.len(), 3);
+        assert_eq!(p.blocks[1].text, "free paragraph");
+        assert_eq!(p.warnings.len(), 1);
+        assert_eq!(p.warnings[0].line, 2);
+    }
+
+    #[test]
+    fn clean_file_has_no_warnings() {
+        let md = "title:: foo\n\n- a\n  - b\n- c\n";
+        let p = parse(md);
+        assert!(p.warnings.is_empty(), "clean dialect emits zero warnings");
     }
 
     #[test]

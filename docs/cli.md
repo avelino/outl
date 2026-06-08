@@ -234,6 +234,10 @@ CLI exit code is `1` in that case; MCP returns the payload via the normal envelo
 
 `init`, `serve`, `reconcile`, `import`, and `mcp serve` are CLI-only on purpose — they're either interactive, long-running, or bootstrap commands that don't fit a tool-call shape.
 
+`outl doctor` also reports **parser warnings** — every `.md` whose content stepped outside the outl dialect and got recovered by the permissive parser (typical case: a leading `# heading`, a free paragraph, imported markdown).
+A warning row goes into the doctor report (one per affected file), and one entry per warning is appended to `.outl/orphans.log` tagged `parse-warning <iso> <path>:<line> <kind> <raw>` so the breadcrumb persists across runs.
+Cleaning the offending lines (or saving the file from outl, which normalises to `- <raw>` on render) makes the warning disappear on the next `outl doctor`.
+
 ## MCP
 
 Every machine-shaped command above is also exposed as an MCP tool through `outl mcp serve` — same binary, same handler, same JSON shape.

@@ -59,6 +59,25 @@ No if:
 - It manipulates an in-flight `Vec<OutlineNode>` that hasn't been parsed back into a workspace yet (those helpers live in `outl-md::outline_ops`, re-exported through a one-liner shim at `outl-tui/src/outline_ops.rs` because the mobile client needs them too — they're workspace-free pure AST manipulation, so they sit in `outl-md` rather than `outl-actions`).
 - It's storage-backend-specific (iCloud watcher, future ChronDB) — those implement `outl_core::Storage` in the binary that needs them.
 
+## Surfacing parser warnings on every client
+
+A user can drop a `.md` into the workspace by hand, paste an exported Roam/Logseq tree, or edit a file in vim before outl ever saw it.
+When that file doesn't match the outl dialect (e.g. starts with `# heading`, contains a free paragraph, or imports a markdown table), the parser **does not** drop content — it preserves the line as a regular block and records the recovery in `ParsedPage.warnings: Vec<outl_md::ParseWarning>`.
+
+Every client surfaces these warnings to the user instead of pretending the file is clean:
+
+| Client | Surface |
+|--------|---------|
+| TUI | Banner at the top of the outline + chip in the status line; `?` opens the help overlay with the full list (line number + first 60 chars of `raw`). |
+| Mobile / Desktop | `<ParseWarningsBanner>` from `@outl/shared` renders above the outline. Tap a row to scroll to the offending line in the raw view. |
+| CLI | `outl doctor` lists every page with warnings and writes a structured row per warning to `.outl/orphans.log`. |
+
+The shared entry point that bundles outline + warnings in one trip is `outl_actions::outline::read_page_outline` (and the workspace-aware variant `read_page_outline_with_workspace`) returning `PageOutline { nodes, warnings }`.
+Tauri commands on mobile + desktop expose this directly; the TUI calls it via `lifecycle::load_current`.
+
+The contract is intentionally non-blocking: a file with warnings is still editable, still saves cleanly (render normalises it to `- <raw>` on the next write), and never refuses to load.
+Users decide when to clean up; outl never deletes content on their behalf.
+
 ## Running code blocks
 
 Every client that lets the user execute a `` ```lang ``` `` block (TUI `g x`, desktop `Cmd+X` / Run button, mobile long-press → "Run code") goes through **one** shared entry point: `outl_actions::exec::run_code_block(ws, hlc, root, registry, page, block)`.

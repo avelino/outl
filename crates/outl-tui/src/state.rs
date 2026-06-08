@@ -366,6 +366,21 @@ pub(crate) struct App {
     pub(crate) pending_chord: Option<char>,
     pub(crate) status: String,
 
+    /// Non-fatal parser recoveries for the currently-loaded `.md`.
+    ///
+    /// Populated by [`App::load_current_no_autorun`] from
+    /// `ParsedPage.warnings`. Drives the inline banner above the
+    /// outline + the chip in the status line so the user knows
+    /// outl had to recover lines from a file that doesn't fully
+    /// match the dialect (typical case: leading `# heading`,
+    /// free paragraph, imported markdown).
+    ///
+    /// The view is **non-destructive**: blocks built from a
+    /// recovered line render normally; the next save normalises
+    /// the file to `- <raw>`. Nothing is deleted on the user's
+    /// behalf — they decide when to clean up.
+    pub(crate) parse_warnings: Vec<outl_md::ParseWarning>,
+
     /// Modal overlay (quick switcher, search, command palette). `None`
     /// in regular Normal/Insert mode.
     pub(crate) overlay: Option<Overlay>,

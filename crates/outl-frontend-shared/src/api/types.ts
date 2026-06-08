@@ -123,6 +123,39 @@ export interface PageView {
   page: PageMeta;
   outline: BlockNode[];
   backlinks: Backlink[];
+  /**
+   * Parser recovery records for the page's `.md`. Empty (or
+   * absent) when the file is fully in the outl dialect. Drives
+   * the `<ParseWarningsBanner />` above the outline so the user
+   * knows outl had to keep lines that don't match the dialect
+   * (e.g. a leading `# heading`, a stray paragraph, imported
+   * markdown). Mirrors `outl_md::ParseWarning` exactly.
+   */
+  warnings?: ParseWarning[];
+}
+
+/**
+ * Reason a parser warning was emitted.
+ *
+ * Mirrors `outl_md::ParseWarningKind`. The enum is serialised as
+ * snake_case strings (`"unrecognized_block_marker"`), so the union
+ * stays narrow and future variants land here in lockstep.
+ */
+export type ParseWarningKind = "unrecognized_block_marker";
+
+/**
+ * One non-fatal parser recovery. Carries the **1-based** source
+ * line number and the raw line text, so a UI can highlight the
+ * offending row without re-scanning the file.
+ *
+ * Mirrors `outl_md::ParseWarning` (`crates/outl-md/src/parse.rs`).
+ * See `docs/markdown-format.md` § "Permissive parsing & warnings"
+ * for the user-facing contract.
+ */
+export interface ParseWarning {
+  line: number;
+  raw: string;
+  kind: ParseWarningKind;
 }
 
 /**

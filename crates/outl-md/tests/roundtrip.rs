@@ -156,7 +156,11 @@ fn arb_page() -> impl Strategy<Value = ParsedPage> {
         proptest::collection::vec(arb_property(), 0..3),
         proptest::collection::vec(arb_node(2), 1..4),
     )
-        .prop_map(|(properties, blocks)| ParsedPage { properties, blocks })
+        .prop_map(|(properties, blocks)| ParsedPage {
+            properties,
+            blocks,
+            warnings: Vec::new(),
+        })
 }
 
 proptest! {

@@ -35,8 +35,9 @@ A path stored in `config.toml` that no longer exists on disk is **skipped silent
 - `outl` — open TUI in current directory (also `outl tui [<path>]`).
 - `outl init <path>` — scaffold a workspace (pages/, journals/, templates/, .outl/).
 - `outl serve [<path>] [--once]` — run file watcher; `--once` reconciles every `.md` and exits (smoke tests, scripting).
-- `outl doctor [<path>]` — integrity check (SQLite, sidecars, orphan block refs).
+- `outl doctor [<path>]` — integrity check (sidecars, orphan block refs, **parser warnings** from non-dialect `.md` content).
   Read-only.
+  Parser warnings are appended to `.outl/orphans.log` tagged `parse-warning <iso> <path>:<line> <kind> <raw>` so the trail persists across runs.
 - `outl reconcile [<path>]` — list orphans pending manual resolution.
 - `outl migrate-to-shared [<path>]` — copy local sqlite log into shared `ops/` JSONL for cross-device sync.
 - `outl import logseq|roam <src> <dst>` — graph import.
