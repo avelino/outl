@@ -79,8 +79,11 @@ export interface AppStateShape {
    * shifted variant on the desktop to keep `Cmd+B` reserved for the
    * universal markdown "bold" chord).
    *
-   * Defaults to `false`: outline first, references on demand —
-   * matches the TUI's `show_backlinks: false` default.
+   * Defaults to `true`: references stay visible below the outline so
+   * a page's incoming links are discoverable without a chord. The
+   * inline section only renders when the page actually has backlinks
+   * (`<InlineBacklinks />` guards on `appState.backlinks.length`), so
+   * an open default costs nothing on pages with no references.
    */
   backlinksOpen: boolean;
   /** Picker overlay open state. `Cmd/Ctrl+P` toggles. */
@@ -104,7 +107,7 @@ const [state, setState] = createStore<AppStateShape>({
   editingBlockId: null,
   mode: "normal",
   sidebarOpen: false,
-  backlinksOpen: false,
+  backlinksOpen: true,
   pickerOpen: false,
   settingsOpen: false,
   helpOpen: false,
