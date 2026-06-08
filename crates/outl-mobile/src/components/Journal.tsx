@@ -40,6 +40,7 @@ import {
   rawTextWithTodo,
 } from "../lib/outline";
 import { applySuggestion, detectRefContext } from "@outl/shared/autocomplete";
+import { ParseWarningsBanner } from "@outl/shared/warnings";
 import { parkCaret, spliceText } from "../lib/textarea";
 import { withTimeout } from "../lib/async";
 
@@ -1011,6 +1012,7 @@ export function Journal() {
               </Show>
             }
           >
+            <ParseWarningsBanner warnings={view()!.warnings ?? []} />
             <For each={view()!.outline}>
               {(block) => (
                 <BlockRow

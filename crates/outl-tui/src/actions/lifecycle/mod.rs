@@ -65,6 +65,7 @@ impl App {
             help_scroll: 0,
             pending_chord: None,
             status: String::new(),
+            parse_warnings: Vec::new(),
             overlay: None,
             autocomplete: None,
             last_search: None,

@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "@outl/shared/highlight/styles";
+@import "@outl/shared/warnings/styles";
 
 /* Spring-ish ease curves used across the app. Apple's UIKit defaults
    land somewhere between these two — `--ease-spring-out` is for sheets

@@ -149,6 +149,7 @@ src/
 │   ├── inline.rs        # span-level markdown (highlight + pretty)
 │   ├── outline.rs       # outline rendering (render_outline, render_block, …)
 │   ├── overlays.rs      # every modal popup
+│   ├── warnings_banner.rs # yellow banner above the outline when the current page has ParseWarnings
 │   └── backlinks.rs     # inline backlinks section (below outline, ─ rule)
 ├── outline_ops.rs       # one-line re-export shim — helpers moved to outl_md::outline_ops so the mobile client can share them
 ├── edit_buffer.rs       # cursor + chars; isolated, well-tested

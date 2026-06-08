@@ -10,7 +10,9 @@ Treat matching with the same paranoia as the CRDT.
 
 ## What this crate owns
 
-- Parse `.md` (clean, no IDs) → outline AST
+- Parse `.md` (clean, no IDs) → outline AST.
+  Parser is **permissive**: lines that don't match the outl dialect (e.g. a leading `# heading`, a stray paragraph, an HTML snippet at depth 0) are preserved verbatim as regular blocks and recorded in `ParsedPage.warnings: Vec<ParseWarning>` (kind `UnrecognizedBlockMarker`).
+  Nothing is silently dropped; surfaces surface the warning list so the user can clean the file at their pace.
 - Render outline AST → `.md` (clean, no IDs)
 - Read/write `.outl` sidecar (JSON, dotfile) — current version `2`, reads v1 transparently (handles backfilled on load).
   The sidecar is **structural metadata only** (id, line, indent, content hash, ref handle).
@@ -23,6 +25,8 @@ Treat matching with the same paranoia as the CRDT.
 - **`outline_ops`** — pure `Vec<OutlineNode>` AST helpers (`flat_count`, `path_for_index`, `insert_sibling_after/before`, `indent_at_path`, `outdent_at_path`, `delete_at_path`, `move_up_at_path`, `move_down_at_path`, …).
   They operate on an in-flight AST that hasn't been parsed back into a workspace yet, so they sit in `outl-md` (UI-agnostic, no `Workspace`) rather than in `outl-actions`.
   The TUI re-exports them through a one-line shim at `outl-tui/src/outline_ops.rs`; the mobile client consumes them directly.
+  **Insert helpers clamp**: `insert_sibling_after/before` clamp the computed position to `siblings.len()` instead of panicking when a caller passes a path the live tree no longer satisfies (typical case: page parsed to zero blocks because its content didn't start with a `- ` marker, but the TUI's `selected` cursor defaulted to `[0]`).
+  Falling back to "append at the end" is the right shape — the user's intent ("create a new block") is satisfied, no data is lost.
 - **Inline tokenization** (`inline.rs`) — `**bold**`, `[[refs]]`, `#tags`, `((blk-XXXXXX))`, `!((blk-XXXXXX))` — and `ref_at_cursor` (resolves to `RefTarget::Page`, `Journal`, `Tag`, or `Block`).
   **UI-agnostic.** TUI, future Tauri GUI, and mobile clients all consume the same `InlineTok` / `RefTarget` types and map them to their own primitives (`Span`, HTML, `AttributedString`, `AnnotatedString`). Two forms:
   - `InlineTok<'a>` + `tokenize` — borrowed, zero-copy. Use inside Rust where the source string outlives the tokens.

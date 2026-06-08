@@ -1,0 +1,126 @@
+/*
+ * <ParseWarningsBanner /> styles.
+ *
+ * Imported by `outl-mobile/src/styles.css` and `outl-desktop/src/styles.css`
+ * via `@import "@outl/shared/warnings/styles"`. The component renders
+ * neutral class names; this file paints them. Lives in `@outl/shared`
+ * so mobile and desktop never drift on the chrome.
+ *
+ * Yellow theme follows the universal "heads up, not fatal" convention
+ * (same as the TUI's `view::warnings_banner` ratatui banner).
+ */
+
+.outl-parse-warnings-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.75rem 0 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid rgb(202 138 4 / 0.5); /* amber-600 @ 50% */
+  border-left-width: 4px;
+  border-radius: 0.5rem;
+  background: rgb(254 252 232); /* amber-50 */
+  color: rgb(120 53 15); /* amber-900 */
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+@media (prefers-color-scheme: dark) {
+  .outl-parse-warnings-banner {
+    background: rgb(69 26 3 / 0.4); /* dark amber tint */
+    color: rgb(254 215 170); /* amber-200 */
+    border-color: rgb(217 119 6 / 0.6); /* amber-600 */
+  }
+}
+
+.outl-parse-warnings-banner__header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+.outl-parse-warnings-banner__icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.outl-parse-warnings-banner__title {
+  flex: 1;
+  min-width: 0;
+}
+
+.outl-parse-warnings-banner__dismiss {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  opacity: 0.7;
+}
+
+.outl-parse-warnings-banner__dismiss:hover,
+.outl-parse-warnings-banner__dismiss:focus-visible {
+  opacity: 1;
+  background: rgb(0 0 0 / 0.05);
+}
+
+.outl-parse-warnings-banner__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.outl-parse-warnings-banner__item {
+  margin: 0;
+  padding: 0;
+}
+
+.outl-parse-warnings-banner__row {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  width: 100%;
+  padding: 0.125rem 0;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.outl-parse-warnings-banner__row:disabled {
+  cursor: default;
+}
+
+.outl-parse-warnings-banner__row:not(:disabled):hover,
+.outl-parse-warnings-banner__row:not(:disabled):focus-visible {
+  background: rgb(0 0 0 / 0.05);
+  border-radius: 0.25rem;
+}
+
+.outl-parse-warnings-banner__line {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+  font-size: 0.8125rem;
+}
+
+.outl-parse-warnings-banner__raw {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

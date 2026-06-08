@@ -241,6 +241,16 @@ pub fn project_outline(workspace: &Workspace, parent: NodeId) -> Vec<OutlineNode
 /// position so the UI can still render, but those ids are not stable
 /// across processes and callers should run a reconcile before mutating.
 pub fn read_page_view(root: &Path, meta: &PageMeta) -> Result<Vec<OutlineNode>, ActionError> {
+    read_page_outline(root, meta).map(|po| po.nodes)
+}
+
+/// Same as [`read_page_view`] but also surfaces the parser warnings
+/// emitted while reading the page's `.md` (see `outl_md::ParseWarning`).
+///
+/// Use this when a UI surface is going to render a banner /
+/// status-line hint for "this file has lines that don't match the
+/// outl dialect". The bare [`read_page_view`] discards them.
+pub fn read_page_outline(root: &Path, meta: &PageMeta) -> Result<PageOutline, ActionError> {
     let md_path = page_md_path(root, meta);
     let md_text = std::fs::read_to_string(&md_path).unwrap_or_default();
     let parsed = outl_md::parse::parse(&md_text);
@@ -255,7 +265,10 @@ pub fn read_page_view(root: &Path, meta: &PageMeta) -> Result<Vec<OutlineNode>, 
     for block in &parsed.blocks {
         nodes.push(outline_from_parsed(block, &mut iter));
     }
-    Ok(nodes)
+    Ok(PageOutline {
+        nodes,
+        warnings: parsed.warnings,
+    })
 }
 
 /// Same as [`read_page_view`] but overlays the workspace's
@@ -268,9 +281,38 @@ pub fn read_page_view_with_workspace(
     meta: &PageMeta,
     workspace: &Workspace,
 ) -> Result<Vec<OutlineNode>, ActionError> {
-    let mut nodes = read_page_view(root, meta)?;
-    overlay_collapsed(&mut nodes, workspace);
-    Ok(nodes)
+    read_page_outline_with_workspace(root, meta, workspace).map(|po| po.nodes)
+}
+
+/// Workspace-aware variant of [`read_page_outline`]. Use this when a
+/// client needs both the authoritative collapsed flags **and** the
+/// parser warnings (every modern client does — mobile, desktop, TUI).
+pub fn read_page_outline_with_workspace(
+    root: &Path,
+    meta: &PageMeta,
+    workspace: &Workspace,
+) -> Result<PageOutline, ActionError> {
+    let mut outline = read_page_outline(root, meta)?;
+    overlay_collapsed(&mut outline.nodes, workspace);
+    Ok(outline)
+}
+
+/// Outline of a page bundled with the parser warnings produced while
+/// reading its `.md`.
+///
+/// `warnings` is empty for a clean file in the outl dialect. When
+/// non-empty, the UI is expected to render an actionable hint per
+/// entry (line number + first chars of the raw text). Surfaces that
+/// don't care can ignore the field; the legacy
+/// [`read_page_view`] / [`read_page_view_with_workspace`] paths
+/// return `Vec<OutlineNode>` and silently drop them for back-compat.
+#[derive(Debug, Clone, Serialize)]
+pub struct PageOutline {
+    /// Outline nodes (same shape as the legacy `Vec<OutlineNode>`).
+    pub nodes: Vec<OutlineNode>,
+    /// Non-fatal parser recoveries — empty when the `.md` is clean.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<outl_md::parse::ParseWarning>,
 }
 
 /// Walk `nodes` in place, setting `collapsed` from

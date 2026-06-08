@@ -260,6 +260,7 @@ mod tests {
         ParsedPage {
             properties: Vec::new(),
             blocks,
+            warnings: Vec::new(),
         }
     }
 

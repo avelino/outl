@@ -20,6 +20,7 @@ mod outline;
 mod overlays;
 mod sidebar;
 mod toasts;
+mod warnings_banner;
 
 use crate::state::{App, Focus, Overlay, View};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -80,16 +81,25 @@ pub(crate) fn render_app(f: &mut ratatui::Frame<'_>, app: &mut App) {
 }
 
 fn render_main(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
+    let banner_h = warnings_banner::banner_height(app);
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
+            Constraint::Length(banner_h),
             Constraint::Min(5),
             Constraint::Length(3),
         ])
         .split(area);
 
     chrome::render_header(f, outer[0], app);
+
+    // Warning banner — collapses to zero height when `parse_warnings`
+    // is empty (clean files), so this slot is invisible most of the
+    // time.
+    warnings_banner::render_banner(f, outer[1], app);
+
+    let middle = outer[2];
 
     // Optional left sidebar: splits the middle row horizontally when
     // toggled on (`\` in Normal mode). Default off keeps the classic
@@ -101,11 +111,11 @@ fn render_main(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
                 Constraint::Length(sidebar::SIDEBAR_WIDTH),
                 Constraint::Min(20),
             ])
-            .split(outer[1]);
+            .split(middle);
         sidebar::render_sidebar(f, cols[0], app);
         cols[1]
     } else {
-        outer[1]
+        middle
     };
 
     // Build the single scrollable region: outline lines, then the
@@ -190,5 +200,5 @@ fn render_main(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
         f.render_stateful_widget(scrollbar, body_area, &mut sb_state);
     }
 
-    chrome::render_footer(f, outer[2], app);
+    chrome::render_footer(f, outer[3], app);
 }

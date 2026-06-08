@@ -194,6 +194,24 @@ Workspaces that ever expanded a handle to 7+ characters keep working forever bec
 - ❌ YAML frontmatter (`---`) — page properties use `::` syntax instead
 - ❌ `\`\`\`outl` fenced metadata blocks
 
+### Permissive parsing & warnings
+
+A hand-written or imported `.md` may contain lines that don't fit the dialect — typically a leading `# heading`, a paragraph, an HTML snippet, or a table.
+The parser is **permissive**: every such line at depth 0 is preserved verbatim as a regular outline block, and the recovery is recorded in `ParsedPage.warnings: Vec<ParseWarning>`.
+
+Each warning carries:
+
+- `line` — 1-based source line number.
+- `raw` — the offending line, verbatim (no trim).
+- `kind` — currently `UnrecognizedBlockMarker` (line didn't start with `- ` and isn't a recognized property).
+
+Two consequences worth knowing:
+
+- **No silent data loss.** Open a file, save it, the content survives.
+  Render is still clean: blocks created from recovered lines render as `- <raw>\n`, so the next save normalizes the file to the dialect.
+- **Surfaces show the warnings.** The TUI banner, the mobile / desktop overlay, and `outl doctor` all read `ParsedPage.warnings` and present them as actionable hints (line number + first 60 chars of the raw text).
+  Users can edit the file at their pace; outl never blocks on a "dirty" page.
+
 ---
 
 ## The .outl sidecar

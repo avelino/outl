@@ -33,7 +33,7 @@ pub use inline::{
     byte_index_for_char, ref_at_cursor, tokenize, tokenize_owned, InlineTok, InlineToken, RefTarget,
 };
 pub use matching::{match_blocks, Match, MatchLevel};
-pub use parse::{parse, OutlineNode, ParsedPage};
+pub use parse::{parse, OutlineNode, ParseWarning, ParseWarningKind, ParsedPage};
 pub use reconcile::{reconcile_dir, reconcile_md, ReconcileError, ReconcileReport};
 pub use render::render;
 pub use sidecar::{
