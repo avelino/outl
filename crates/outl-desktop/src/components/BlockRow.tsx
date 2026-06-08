@@ -1,8 +1,14 @@
 import { For, Show, createEffect, createSignal } from "solid-js";
 
-import type { BlockNode, TodoState } from "@outl/shared/api/types";
+import type { BlockNode, PageMeta, TodoState } from "@outl/shared/api/types";
 import { MarkdownInline } from "@outl/shared/markdown";
-import { autoClosePair, autoDeletePair } from "@outl/shared/autocomplete";
+import {
+  applySuggestion,
+  autoClosePair,
+  autoDeletePair,
+  detectRefContext,
+} from "@outl/shared/autocomplete";
+import { searchPages } from "@outl/shared/api/commands";
 import { HighlightedCode } from "@outl/shared/highlight";
 import { looksLikeOutline, utf16OffsetToCharOffset } from "@outl/shared/paste";
 
@@ -64,7 +70,81 @@ export function BlockRow(props: {
   // type / erase the prefix to flip state.
   const [draft, setDraft] = createSignal<string>(rawTextWithTodo(props.block));
 
+  // ── `[[page]]` ref autocomplete ──────────────────────────────────
+  // While the caret sits inside an open `[[…]]`, we offer a popup of
+  // matching pages. Detection + span replacement reuse the shared
+  // `@outl/shared/autocomplete` helpers (same logic the TUI and mobile
+  // run); page lookup reuses the `search_pages` command the Cmd+P
+  // picker already calls. The popup is "open" iff `suggestions` is
+  // non-empty.
+  const [suggestions, setSuggestions] = createSignal<PageMeta[]>([]);
+  const [suggestIndex, setSuggestIndex] = createSignal(0);
+  // `query` last sent to the backend — skip redundant round-trips when
+  // the caret moves without changing the in-ref text (mirrors mobile's
+  // `lastQuery` guard). `null` means "not in a ref right now".
+  let lastQuery: string | null = null;
+  let searchToken = 0;
+
   let textareaRef: HTMLTextAreaElement | undefined;
+
+  /** The page name we splice into `[[…]]`. Journals are anchored on
+   *  their ISO slug (`2026-06-08`), regular pages on their title —
+   *  same choice mobile's native chip strip makes. */
+  function refReplacement(page: PageMeta): string {
+    return page.kind === "journal" ? page.slug : page.title;
+  }
+
+  function closeSuggest() {
+    lastQuery = null;
+    if (suggestions().length > 0) setSuggestions([]);
+    setSuggestIndex(0);
+  }
+
+  /**
+   * Recompute the suggestion popup from the live textarea state.
+   * Called after every keystroke / caret move while editing. When the
+   * caret is inside an open `[[…]]` it (debounce-free, but de-duped on
+   * `lastQuery`) fetches matching pages; otherwise it closes the popup.
+   * Block refs (`((…))`) are intentionally ignored here — that's a
+   * separate feature.
+   */
+  function refreshSuggest() {
+    const ta = textareaRef;
+    if (!ta) return closeSuggest();
+    const ctx = detectRefContext(ta.value, ta.selectionStart ?? 0);
+    if (!ctx || ctx.kind !== "page") return closeSuggest();
+    if (ctx.query === lastQuery) return;
+    lastQuery = ctx.query;
+    const token = ++searchToken;
+    void searchPages(ctx.query)
+      .then((list) => {
+        // Drop stale responses: the user kept typing (newer token) or
+        // moved the caret out of the ref while we were waiting.
+        if (token !== searchToken) return;
+        const cur = textareaRef
+          ? detectRefContext(textareaRef.value, textareaRef.selectionStart ?? 0)
+          : null;
+        if (!cur || cur.kind !== "page" || cur.query !== ctx.query) return;
+        setSuggestions(list);
+        setSuggestIndex(0);
+      })
+      .catch(() => closeSuggest());
+  }
+
+  /** Accept `page`: replace the `[[…]]` span with the page name, sync
+   *  the draft signal + textarea, and park the caret after the closer. */
+  function acceptSuggestion(page: PageMeta) {
+    const ta = textareaRef;
+    if (!ta) return;
+    const ctx = detectRefContext(ta.value, ta.selectionStart ?? 0);
+    if (!ctx || ctx.kind !== "page") return closeSuggest();
+    const completion = applySuggestion(ta.value, ctx, refReplacement(page));
+    setDraft(completion.value);
+    ta.value = completion.value;
+    ta.setSelectionRange(completion.caret, completion.caret);
+    closeSuggest();
+    ta.focus();
+  }
 
   function focusTextarea() {
     queueMicrotask(() => {
@@ -132,6 +212,49 @@ export function BlockRow(props: {
   }
 
   async function handleKeydown(e: KeyboardEvent) {
+    // Ref-suggester navigation takes precedence while the popup is up:
+    // arrows move the highlight, Enter/Tab accept, Esc closes the popup
+    // (a *second* Esc then commits the block). stopPropagation keeps the
+    // global shortcut dispatcher from also acting on these keys.
+    const items = suggestions();
+    if (items.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSuggestIndex((i) => (i + 1) % items.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSuggestIndex((i) => (i - 1 + items.length) % items.length);
+        return;
+      }
+      if (
+        e.key === "Enter" &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.shiftKey &&
+        !e.altKey
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        acceptSuggestion(items[suggestIndex()]);
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        e.stopPropagation();
+        acceptSuggestion(items[suggestIndex()]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeSuggest();
+        return;
+      }
+    }
     if (e.key === "Escape") {
       e.preventDefault();
       await commit();
@@ -167,6 +290,10 @@ export function BlockRow(props: {
           textareaRef.value = completion.value;
           textareaRef.setSelectionRange(completion.caret, completion.caret);
         }
+        // Whether or not the pair auto-closed, the caret may now be
+        // inside a `[[…]]` — refresh the suggester (setting the value
+        // programmatically above doesn't fire `onInput`).
+        refreshSuggest();
       });
       return;
     }
@@ -391,19 +518,31 @@ export function BlockRow(props: {
                   )
                 }
               >
-            <textarea
-              ref={textareaRef}
-              value={draft()}
-              autofocus
-              rows={1}
-              spellcheck={false}
-              data-block-id={props.block.id}
-              class="w-full resize-none overflow-hidden bg-transparent text-current outline-none"
-              onInput={(e) => setDraft(e.currentTarget.value)}
-              onBlur={() => void commit()}
-              onKeyDown={handleKeydown}
-              onPaste={handlePaste}
-            />
+            <div class="relative">
+              <textarea
+                ref={textareaRef}
+                value={draft()}
+                autofocus
+                rows={1}
+                spellcheck={false}
+                data-block-id={props.block.id}
+                class="w-full resize-none overflow-hidden bg-transparent text-current outline-none"
+                onInput={(e) => {
+                  setDraft(e.currentTarget.value);
+                  refreshSuggest();
+                }}
+                onSelect={() => refreshSuggest()}
+                onBlur={() => void commit()}
+                onKeyDown={handleKeydown}
+                onPaste={handlePaste}
+              />
+              <RefSuggestPopup
+                items={suggestions()}
+                activeIndex={suggestIndex()}
+                onHover={setSuggestIndex}
+                onPick={acceptSuggestion}
+              />
+            </div>
           </Show>
             );
           })()}
@@ -423,6 +562,59 @@ export function BlockRow(props: {
         </For>
       </Show>
     </div>
+  );
+}
+
+/**
+ * Floating page-suggestion list shown while the caret is inside an
+ * open `[[…]]`. Anchored just below the block's textarea.
+ *
+ * Selection uses `onMouseDown` + `preventDefault` (not `onClick`): a
+ * plain click would blur the textarea first, firing its `onBlur`
+ * commit and tearing down edit mode before the pick registered.
+ * Preventing the default on mousedown keeps focus in the textarea so
+ * `acceptSuggestion` can splice the value and re-park the caret.
+ */
+function RefSuggestPopup(props: {
+  items: PageMeta[];
+  activeIndex: number;
+  onHover: (i: number) => void;
+  onPick: (page: PageMeta) => void;
+}) {
+  return (
+    <Show when={props.items.length > 0}>
+      <ul
+        class="absolute top-full left-0 z-30 mt-1 max-h-56 w-72 overflow-y-auto rounded-md border border-(--color-outl-border) bg-(--color-outl-bg-elev) py-1 text-[13px] shadow-lg"
+        role="listbox"
+      >
+        <For each={props.items}>
+          {(page, i) => (
+            <li role="option" aria-selected={i() === props.activeIndex}>
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  props.onPick(page);
+                }}
+                onMouseEnter={() => props.onHover(i())}
+                class={`flex w-full items-center gap-1.5 px-2 py-1 text-left ${
+                  i() === props.activeIndex
+                    ? "bg-(--color-outl-accent) text-(--color-outl-bg)"
+                    : "hover:bg-(--color-outl-bg)/50"
+                }`}
+              >
+                <span aria-hidden="true" class="shrink-0 opacity-70">
+                  {page.icon || (page.kind === "journal" ? "📅" : "📄")}
+                </span>
+                <span class="truncate">
+                  {page.kind === "journal" ? page.slug : page.title}
+                </span>
+              </button>
+            </li>
+          )}
+        </For>
+      </ul>
+    </Show>
   );
 }
 

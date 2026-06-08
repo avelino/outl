@@ -168,6 +168,10 @@ Implementation lives in `lib/markdown-wrap.ts`: each handler reads `document.act
 | `Backspace` on empty | Delete the block |
 | `[[` / `((` | Auto-close pair (`@outl/shared/autocomplete`) |
 
+### `[[page]]` ref autocomplete
+
+While the caret sits inside an open `[[…]]`, `BlockRow` shows a floating page-suggestion popup (`RefSuggestPopup`, anchored under the textarea). It reuses the shared `detectRefContext` / `applySuggestion` helpers (`@outl/shared/autocomplete`) and the `search_pages` command the `Cmd+P` picker already calls — no parallel implementation. `↑`/`↓` move the highlight, `Enter`/`Tab` accept (inserting the page title, or the ISO slug for journals), `Esc` closes the popup (a second `Esc` then commits the block), and clicking a row picks it (via `onMouseDown` + `preventDefault` so the textarea's blur-commit doesn't fire first). Block refs (`((…))`) are intentionally not suggested yet — separate feature.
+
 ## Settings
 
 Stored at `<app_config_dir>/settings.json`:
