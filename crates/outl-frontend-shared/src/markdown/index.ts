@@ -5,3 +5,4 @@ export {
   splitQuote,
   stripQuoteFromTokens,
 } from "./quote";
+export { QuoteWrap, isBlockQuoted, type QuoteWrapProps } from "./QuoteWrap";
