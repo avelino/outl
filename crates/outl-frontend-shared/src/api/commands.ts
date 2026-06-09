@@ -130,6 +130,16 @@ export function toggleTodo(pageId: string, id: string): Promise<PageView> {
   return invoke<PageView>("toggle_todo", { pageId, id });
 }
 
+/**
+ * Flip the block's blockquote marker on or off. Mirrors
+ * `outl_actions::block::toggle_quote`. Both mobile and desktop expose
+ * the same `toggle_quote` Tauri command so this wrapper works on
+ * every client.
+ */
+export function toggleQuote(pageId: string, id: string): Promise<PageView> {
+  return invoke<PageView>("toggle_quote", { pageId, id });
+}
+
 export function deleteBlock(pageId: string, id: string): Promise<PageView> {
   return invoke<PageView>("delete_block", { pageId, id });
 }

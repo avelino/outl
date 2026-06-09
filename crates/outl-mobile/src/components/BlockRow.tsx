@@ -1,6 +1,10 @@
 import { For, JSX, Show, onCleanup, onMount } from "solid-js";
 import type { BlockNode } from "@outl/shared/api/types";
-import { MarkdownInline } from "@outl/shared/markdown";
+import {
+  MarkdownInline,
+  splitQuote,
+  stripQuoteFromTokens,
+} from "@outl/shared/markdown";
 import { HighlightedCode, detectFence } from "@outl/shared/highlight";
 
 function detectFenceText(text: string) {
@@ -265,52 +269,71 @@ function BlockBody(props: {
         }}
       />
 
-      <BulletOrCheckbox
-        todo={props.editing ? null : props.block.todo}
-        onToggle={() => {
-          props.onToggleTodo();
-        }}
-      />
-
-      <div class="min-w-0 flex-1">
-        <Show
-          when={props.editing}
-          fallback={(() => {
-            const fence = detectFenceText(props.block.text);
-            if (fence) {
-              return (
-                <HighlightedCode
-                  language={fence.language}
-                  code={fence.body || " "}
-                />
-              );
-            }
-            return (
-              <p
-                class="break-words text-[17px] leading-[1.42]"
-                classList={{
-                  "text-(--color-ios-text-tertiary) line-through dark:text-(--color-iosd-text-tertiary)":
-                    props.block.todo === "DONE",
-                }}
-              >
-                <Show
-                  when={props.block.text.length > 0}
-                  fallback={
-                    <span class="italic text-(--color-ios-text-tertiary) dark:text-(--color-iosd-text-tertiary)">
-                      Empty block
-                    </span>
-                  }
-                >
-                  <MarkdownInline
-                    tokens={props.block.tokens}
-                    onRefClick={props.onRefClick}
-                    onTagClick={props.onTagClick}
-                  />
-                </Show>
-              </p>
-            );
-          })()}
-        >
+      {(() => {
+        // Quote chrome wraps **bullet + body** so the left border lands
+        // *before* the checkbox — TUI parity, where `│ ☐ body` reads
+        // as "this is a quoted task" instead of "a task whose body
+        // happens to be a quote". The CollapseTriangle stays outside so
+        // the gutter chrome isn't double-boxed.
+        const { quoted } = splitQuote(props.block.text);
+        const bullet = (
+          <BulletOrCheckbox
+            todo={props.editing ? null : props.block.todo}
+            onToggle={() => {
+              props.onToggleTodo();
+            }}
+          />
+        );
+        const bodyDiv = (
+          <div class="min-w-0 flex-1">
+            <Show
+              when={props.editing}
+              fallback={(() => {
+                const fence = detectFenceText(props.block.text);
+                if (fence) {
+                  return (
+                    <HighlightedCode
+                      language={fence.language}
+                      code={fence.body || " "}
+                    />
+                  );
+                }
+                // Chrome lives on the wrapper one level up; here we
+                // only strip `> ` from the first Plain token so the
+                // marker doesn't double-paint.
+                const split = splitQuote(props.block.text);
+                const tokens = split.quoted
+                  ? stripQuoteFromTokens(props.block.tokens)
+                  : props.block.tokens;
+                const bodyLength = split.quoted
+                  ? split.body.length
+                  : props.block.text.length;
+                return (
+                  <p
+                    class="break-words text-[17px] leading-[1.42]"
+                    classList={{
+                      "text-(--color-ios-text-tertiary) line-through dark:text-(--color-iosd-text-tertiary)":
+                        props.block.todo === "DONE",
+                    }}
+                  >
+                    <Show
+                      when={bodyLength > 0}
+                      fallback={
+                        <span class="italic text-(--color-ios-text-tertiary) dark:text-(--color-iosd-text-tertiary)">
+                          Empty block
+                        </span>
+                      }
+                    >
+                      <MarkdownInline
+                        tokens={tokens}
+                        onRefClick={props.onRefClick}
+                        onTagClick={props.onTagClick}
+                      />
+                    </Show>
+                  </p>
+                );
+              })()}
+            >
           <EditableTextarea
             value={props.draftText()}
             onInput={props.onDraftChange}
@@ -320,6 +343,26 @@ function BlockBody(props: {
           />
         </Show>
       </div>
+        );
+        // Left border + faint tint behind both bullet and body so the
+        // chrome reads as one cohesive quoted unit (TUI's `│ ☐ body`
+        // policy). When the block isn't quoted, the wrapper is a plain
+        // flex container so the row layout is byte-identical.
+        if (!quoted) {
+          return (
+            <div class="flex min-w-0 flex-1 items-start gap-2.5">
+              {bullet}
+              {bodyDiv}
+            </div>
+          );
+        }
+        return (
+          <div class="flex min-w-0 flex-1 items-start gap-2.5 rounded-r-md border-l-2 border-(--color-ios-text-secondary)/40 bg-(--color-ios-text-secondary)/[0.05] pl-2 dark:border-(--color-iosd-text-secondary)/40 dark:bg-(--color-iosd-text-secondary)/[0.07]">
+            {bullet}
+            {bodyDiv}
+          </div>
+        );
+      })()}
     </div>
   );
 }

@@ -24,6 +24,55 @@ pub(crate) fn split_todo_prefix(text: &str) -> (Option<bool>, &str) {
     }
 }
 
+/// Strip an optional `"> "` blockquote prefix off a block's text.
+/// Returns `(quoted, body)` — same shape as [`outl_actions::split_quote`].
+/// The wrapper exists so other modules in this crate stay decoupled
+/// from `outl-actions` and so a future render-time tweak (e.g. handling
+/// `">> "` later) lands in one place.
+pub(crate) fn split_quote_prefix(text: &str) -> (bool, &str) {
+    outl_actions::quote::split_quote(text)
+}
+
+/// Strip TODO/DONE and `"> "` blockquote prefixes off a block's text
+/// in **either order**. Returns `(todo_state, quoted, body)`.
+///
+/// Why both orders: the TUI works on the raw text from disk where the
+/// user can type `"TODO > foo"` or `"> TODO foo"` — same intent, two
+/// authoring shapes. The mobile / desktop frontends don't need this
+/// because the backend (`outline.rs::project_outline`) already calls
+/// `split_todo` before serialising, so the DTO's `block.text` only
+/// ever carries the quote marker. The TUI sees the raw form.
+///
+/// At most one TODO/DONE and one quote marker are recognised — a
+/// nested `">> "` keeps the inner `> ` inside the body, matching the
+/// "no nested quotes in v1" policy from the canonical helper.
+pub(crate) fn split_block_prefixes(text: &str) -> (Option<bool>, bool, &str) {
+    let mut todo: Option<bool> = None;
+    let mut quoted = false;
+    let mut current = text;
+    // Two passes are enough — at most one of each marker is recognised.
+    for _ in 0..2 {
+        if !quoted {
+            let (q, rest) = split_quote_prefix(current);
+            if q {
+                quoted = true;
+                current = rest;
+                continue;
+            }
+        }
+        if todo.is_none() {
+            let (t, rest) = split_todo_prefix(current);
+            if t.is_some() {
+                todo = t;
+                current = rest;
+                continue;
+            }
+        }
+        break;
+    }
+    (todo, quoted, current)
+}
+
 /// Render a block's body the way the outline renders it in read-only
 /// mode: strip and visualize a `TODO`/`DONE` prefix, then pass the
 /// remainder through [`render_markdown_inline`].
@@ -51,8 +100,20 @@ fn render_pretty_block_text_impl(
     index: &outl_md::index::WorkspaceIndex,
     expand_embed: bool,
 ) -> Vec<Span<'static>> {
-    let (todo_state, body) = split_todo_prefix(text);
+    // Strip TODO/DONE and quote markers in either order so the user
+    // can type `"> TODO foo"` or `"TODO > foo"` — same intent, two
+    // authoring shapes. The two affordances stack: a quoted TODO
+    // renders as `│ ☐ foo`. Body keeps its full colour palette —
+    // dimming refs / tags / bold would erase their affordance, and
+    // the `│` bar is already cue enough that "this is a quote".
+    let (todo_state, quoted, body) = split_block_prefixes(text);
     let mut out: Vec<Span<'static>> = Vec::new();
+    if quoted {
+        // Left bar + a space, dimmed. The `│` is one column wide; the
+        // trailing space gives the body breathing room without taking
+        // a second cell from the marker.
+        out.push(Span::styled("│ ", theme.dim));
+    }
     match todo_state {
         Some(false) => {
             out.push(Span::styled("☐ ", theme.todo_open));
@@ -73,7 +134,7 @@ fn render_pretty_block_text_impl(
             }
         }
         None => out.extend(render_markdown_inline_impl(
-            text,
+            body,
             theme,
             index,
             expand_embed,
@@ -217,11 +278,38 @@ fn render_markdown_inline_impl(
 /// columns match the underlying source bytes) or in Insert mode. The
 /// delimiters themselves use a dim style so the formatting markers
 /// don't distract.
+///
+/// Quote handling: we detect a leading `"> "` and **style** those two
+/// characters as dim — we never move them. Cursor columns continue to
+/// match source bytes 1:1 (the same constraint the rest of this
+/// function obeys). The reader still sees the body styled dim so the
+/// "this is a quote" affordance is present even on the cursor-bearing
+/// row; the chrome (left `│` bar) lives in the pretty render only,
+/// since drawing it here would push every column by 2.
 pub(crate) fn highlight_inline(text: &str, theme: &Theme) -> Vec<Span<'static>> {
     let mut out = Vec::new();
     let dim = theme.dim;
 
-    for tok in tokenize(text) {
+    // Detect + emit the quote prefix verbatim (no column shift), then
+    // tokenize the body. Treating it inside the per-token loop below
+    // would require special-casing the very first Plain token's leading
+    // characters — easier to handle once up-front.
+    // We only dim the `"> "` prefix; the body keeps its colours so
+    // refs / tags / bold inside a quoted block stay legible on the
+    // selected / editing row (the chrome `│` bar lives in the pretty
+    // render only).
+    let body = match text.strip_prefix(outl_actions::quote::QUOTE_PREFIX) {
+        Some(rest) => {
+            out.push(Span::styled(
+                outl_actions::quote::QUOTE_PREFIX.to_string(),
+                dim,
+            ));
+            rest
+        }
+        None => text,
+    };
+
+    for tok in tokenize(body) {
         match tok {
             InlineTok::Plain(s) => out.push(Span::raw(s.to_string())),
             InlineTok::PageRef { name } => {
@@ -273,4 +361,115 @@ pub(crate) fn highlight_inline(text: &str, theme: &Theme) -> Vec<Span<'static>> 
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::default_theme;
+
+    fn empty_index() -> outl_md::index::WorkspaceIndex {
+        outl_md::index::WorkspaceIndex::default()
+    }
+
+    /// A quoted bullet must lead with the `│ ` bar before any other
+    /// content. The TODO checkbox slots in after the bar so a quoted
+    /// open task reads as `│ ☐ body`.
+    #[test]
+    fn pretty_render_emits_quote_bar_first() {
+        let theme = default_theme();
+        let idx = empty_index();
+        let spans = render_pretty_block_text("> hello", &theme, &idx);
+        assert!(
+            spans
+                .first()
+                .map(|s| s.content.starts_with('│'))
+                .unwrap_or(false),
+            "expected leading │ bar, got {spans:#?}",
+        );
+    }
+
+    #[test]
+    fn pretty_render_composes_quote_and_todo() {
+        let theme = default_theme();
+        let idx = empty_index();
+        let spans = render_pretty_block_text("> TODO ship it", &theme, &idx);
+        // First span: quote bar. Second: TODO checkbox.
+        assert!(spans
+            .first()
+            .map(|s| s.content.starts_with('│'))
+            .unwrap_or(false));
+        assert!(
+            spans.iter().any(|s| s.content.contains('☐')),
+            "expected ☐ checkbox span somewhere after the bar, got {spans:#?}",
+        );
+    }
+
+    /// `TODO > body` must paint both checkbox and quote bar — the
+    /// user can author the prefixes in either order. Regression for
+    /// the screenshot where the TUI rendered `☐ > foo` literally
+    /// instead of `│ ☐ foo` when TODO came before quote.
+    #[test]
+    fn pretty_render_accepts_todo_before_quote() {
+        let theme = default_theme();
+        let idx = empty_index();
+        let spans = render_pretty_block_text("TODO > ship it", &theme, &idx);
+        assert!(spans
+            .first()
+            .map(|s| s.content.starts_with('│'))
+            .unwrap_or(false));
+        assert!(
+            spans.iter().any(|s| s.content.contains('☐')),
+            "expected ☐ checkbox span, got {spans:#?}",
+        );
+        // The literal `> ` must NOT survive to the body — split_block_prefixes
+        // ate both markers, the inline tokenizer sees `ship it` only.
+        assert!(
+            !spans.iter().any(|s| s.content.contains('>')),
+            "expected no literal `>` in the body, got {spans:#?}",
+        );
+    }
+
+    #[test]
+    fn split_block_prefixes_recognises_both_orders() {
+        assert_eq!(
+            split_block_prefixes("> TODO foo"),
+            (Some(false), true, "foo")
+        );
+        assert_eq!(
+            split_block_prefixes("TODO > foo"),
+            (Some(false), true, "foo")
+        );
+        assert_eq!(
+            split_block_prefixes("DONE > foo"),
+            (Some(true), true, "foo")
+        );
+        assert_eq!(
+            split_block_prefixes("> DONE foo"),
+            (Some(true), true, "foo")
+        );
+        assert_eq!(split_block_prefixes("> foo"), (None, true, "foo"));
+        assert_eq!(
+            split_block_prefixes("TODO foo"),
+            (Some(false), false, "foo")
+        );
+        assert_eq!(split_block_prefixes("foo"), (None, false, "foo"));
+        // Nested `>>` keeps inner `>` in body — no double-strip.
+        assert_eq!(split_block_prefixes("> > foo"), (None, true, "> foo"));
+    }
+
+    /// Plain (non-quoted) text must not get a leading bar.
+    #[test]
+    fn pretty_render_skips_bar_for_plain_text() {
+        let theme = default_theme();
+        let idx = empty_index();
+        let spans = render_pretty_block_text("plain body", &theme, &idx);
+        assert!(
+            !spans
+                .first()
+                .map(|s| s.content.starts_with('│'))
+                .unwrap_or(false),
+            "plain block must not lead with the quote bar, got {spans:#?}",
+        );
+    }
 }

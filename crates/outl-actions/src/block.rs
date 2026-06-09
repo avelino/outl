@@ -23,6 +23,7 @@ use outl_core::workspace::Workspace;
 use serde::{Deserialize, Serialize};
 
 use crate::error::ActionError;
+use crate::quote::toggle_quote as toggle_quote_prefix;
 use crate::todo::cycle_todo;
 use crate::tree::{next_sibling, position_after, position_for_new_last_child, previous_sibling};
 
@@ -269,6 +270,34 @@ pub fn toggle_todo(
     Ok(())
 }
 
+/// Toggle the block's blockquote marker: adds or removes the
+/// CommonMark `"> "` prefix on the block's text. See
+/// [`crate::quote`] for the wire-format details. Mirrors
+/// [`toggle_todo`] in shape — the actual prefix arithmetic lives in
+/// [`crate::quote::toggle_quote`] so every client agrees on the
+/// marker shape without re-implementing string surgery in TS.
+pub fn toggle_quote(
+    workspace: &mut Workspace,
+    hlc: &HlcGenerator,
+    node: NodeId,
+) -> Result<(), ActionError> {
+    ensure_in_tree(workspace, node)?;
+    let current = workspace.block_text(node).unwrap_or_default();
+    let next = toggle_quote_prefix(&current);
+    let update = workspace.build_text_replace_update(node, &next);
+    if update.is_empty() {
+        return Ok(());
+    }
+    workspace.apply(wrap(
+        hlc,
+        Op::Edit {
+            node,
+            text_op: update,
+        },
+    ))?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Move (delete is just move-to-trash)
 // ---------------------------------------------------------------------------
@@ -467,6 +496,28 @@ mod tests {
         assert_eq!(ws.block_text(n).as_deref(), Some("DONE ship it"));
         toggle_todo(&mut ws, &hlc, n).unwrap();
         assert_eq!(ws.block_text(n).as_deref(), Some("ship it"));
+    }
+
+    #[test]
+    fn toggle_quote_flips_the_prefix_on_and_off() {
+        let (mut ws, hlc) = new_workspace();
+        let n = append_block(&mut ws, &hlc, None, Some("a quote")).unwrap();
+        toggle_quote(&mut ws, &hlc, n).unwrap();
+        assert_eq!(ws.block_text(n).as_deref(), Some("> a quote"));
+        toggle_quote(&mut ws, &hlc, n).unwrap();
+        assert_eq!(ws.block_text(n).as_deref(), Some("a quote"));
+    }
+
+    #[test]
+    fn toggle_quote_composes_with_toggle_todo() {
+        // The TODO checkbox and the quote bar are orthogonal:
+        // toggling one must not eat the other's prefix.
+        let (mut ws, hlc) = new_workspace();
+        let n = append_block(&mut ws, &hlc, None, Some("ship it")).unwrap();
+        toggle_todo(&mut ws, &hlc, n).unwrap();
+        assert_eq!(ws.block_text(n).as_deref(), Some("TODO ship it"));
+        toggle_quote(&mut ws, &hlc, n).unwrap();
+        assert_eq!(ws.block_text(n).as_deref(), Some("> TODO ship it"));
     }
 
     #[test]

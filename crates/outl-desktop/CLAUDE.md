@@ -88,6 +88,23 @@ crates/outl-desktop/
             └── exec.rs        # run_code_block — thin Tauri adapter over outl_actions::exec::run_code_block (shared with mobile)
 ```
 
+## Blockquote chrome
+
+A block whose `text` starts with the CommonMark `"> "` marker renders with a left border (`border-l-2 border-(--color-outl-fg-dimmer)/50`), a very faint tint (`bg-(--color-outl-fg-dimmer)/[0.06]`), a right-rounded corner (`rounded-r-md`), and **full body colour** — refs, tags, bold, code keep their normal palette so the styled-token affordance isn't lost.
+The tint is intentionally ~6% alpha: enough to read as a soft box at a glance, low enough to not fight with surrounding outline rows.
+
+The chrome wrapper sits one level above the bullet button — it envelops **both bullet *and* body** as one flex container.
+That order (`│ ☐ body`) matches the TUI exactly and reads as "this is a quoted task" instead of "a task whose body happens to be a quote".
+The fold chevron and indent guides stay *outside* the chrome so the gutter chrome doesn't end up boxed twice.
+When the block isn't quoted, the wrapper degrades to a plain `flex min-w-0 flex-1 items-start` container, so non-quoted rows render byte-identical to before.
+
+TUI has no per-line background available in ratatui, so it stays with just the `│ ` bar — the tint is a desktop/mobile addition that costs nothing to omit on terminal.
+The detection uses `splitQuote` from `@outl/shared/markdown` (mirror of `outl_actions::quote::split_quote`); `stripQuoteFromTokens` drops the `> ` from the first `Plain` token before handing the list to `<MarkdownInline />` so the marker doesn't render twice.
+
+Composition: the marker stacks with TODO/DONE the same way the TUI does (`> TODO foo` → quote chrome + checkbox).
+Toggling the marker goes through the `toggleQuote(pageId, id)` wrapper in `@outl/shared/api/commands`, which calls the `toggle_quote` Tauri command (`src-tauri/src/commands/block.rs`), which delegates to `outl_actions::block::toggle_quote` — the same Rust function the mobile and TUI surfaces hit.
+**No string surgery on the TS side** — the prefix arithmetic owns the rule and stays in one place.
+
 ## Theme tokens — temporary mirror of iOS names
 
 The `@outl/shared/markdown::MarkdownInline` renderer still references CSS custom properties named after the mobile palette (`--color-ios-accent`, `--color-iosd-divider`, etc.).

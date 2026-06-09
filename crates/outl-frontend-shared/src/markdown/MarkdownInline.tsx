@@ -177,7 +177,13 @@ export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
                   }}
                   class="cursor-pointer text-(--color-outl-tag-link-fg) underline decoration-(--color-outl-tag-link-fg)/40 underline-offset-2 hover:decoration-(--color-outl-tag-link-fg)"
                 >
-                  #{tok.value}
+                  {/* The Rust token serialiser stores the leading `#` in
+                      `value` already (see `outl_md::inline::InlineToken::from_borrowed`
+                      and the `round_trips_every_variant_into_serializable_form`
+                      contract test that asserts `tag == "#tag"`). Adding
+                      another `#` here paints it twice (`##avelino`) —
+                      bug seen on desktop pretty render. */}
+                  {tok.value}
                 </span>
               </Show>
             );

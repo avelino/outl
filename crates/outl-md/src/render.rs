@@ -150,4 +150,55 @@ mod tests {
         let original = parse(md);
         assert_eq!(reparsed, original);
     }
+
+    // ---- Blockquote (`> ` prefix) round-trip ----
+    //
+    // Quote is encoded as a per-block text prefix (see
+    // `outl_actions::quote`). The parser already preserves the `> ` on
+    // continuation lines (each continuation line lands in
+    // `OutlineNode.text` separated by `\n`); the renderer emits each
+    // continuation at indent+1 verbatim. These tests pin that
+    // behaviour so a future refactor of the dialect doesn't silently
+    // strip the marker.
+
+    #[test]
+    fn single_line_quote_roundtrips() {
+        let md = "- > the only way to do great work\n";
+        let out = roundtrip(md);
+        assert_eq!(out, "- > the only way to do great work\n");
+    }
+
+    #[test]
+    fn multi_line_quote_roundtrips_with_marker_on_each_line() {
+        let md = "- > line one\n  > line two\n  > line three\n";
+        let out = roundtrip(md);
+        assert_eq!(out, "- > line one\n  > line two\n  > line three\n");
+    }
+
+    #[test]
+    fn mixed_quoted_and_regular_siblings_roundtrip() {
+        let md = "- regular\n- > quoted\n- another regular\n";
+        let out = roundtrip(md);
+        assert_eq!(out, "- regular\n- > quoted\n- another regular\n");
+    }
+
+    #[test]
+    fn quoted_block_with_inline_tokens_preserves_them() {
+        // The wrapper is transparent — bold / ref / tag inside the
+        // body stay verbatim.
+        let md = "- > **bold** [[ref]] #tag\n";
+        let out = roundtrip(md);
+        assert_eq!(out, "- > **bold** [[ref]] #tag\n");
+    }
+
+    #[test]
+    fn quoted_block_with_child_roundtrips() {
+        // Children of a quoted block are not implicitly quoted (the
+        // marker lives on the block, not on the subtree).
+        let md = "- > parent quote\n  - normal child\n";
+        let out = roundtrip(md);
+        let reparsed = parse(&out);
+        let original = parse(md);
+        assert_eq!(reparsed, original);
+    }
 }

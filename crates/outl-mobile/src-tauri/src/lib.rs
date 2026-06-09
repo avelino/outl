@@ -40,8 +40,8 @@ use outl_actions::{
     open_or_create_by_name, open_or_create_by_ref, open_today, outdent,
     page_meta as page_meta_action, paste_markdown as action_paste_markdown, previous_journal_date,
     read_page_outline_with_workspace, set_block_collapsed as action_set_block_collapsed, today,
-    toggle_todo as action_toggle_todo, ActionError, Backlink, OutlineNode, PageKind, PageMeta,
-    PasteAnchor,
+    toggle_quote as action_toggle_quote, toggle_todo as action_toggle_todo, ActionError, Backlink,
+    OutlineNode, PageKind, PageMeta, PasteAnchor,
 };
 use outl_core::hlc::HlcGenerator;
 use outl_core::id::{ActorId, NodeId};
@@ -477,6 +477,17 @@ fn toggle_todo(
 }
 
 #[tauri::command]
+fn toggle_quote(
+    page_id: String,
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<PageView, String> {
+    let page = parse_node_id(&page_id)?;
+    let node = parse_node_id(&id)?;
+    finish_in_page(&state, page, |ws| action_toggle_quote(ws, &state.hlc, node))
+}
+
+#[tauri::command]
 fn delete_block(
     page_id: String,
     id: String,
@@ -851,6 +862,7 @@ pub fn run() {
             create_block,
             edit_block,
             toggle_todo,
+            toggle_quote,
             delete_block,
             indent_block,
             outdent_block,
