@@ -3,6 +3,8 @@ import { For, Show, createEffect, createSignal } from "solid-js";
 import type { BlockNode, PageMeta, TodoState } from "@outl/shared/api/types";
 import {
   MarkdownInline,
+  QuoteWrap,
+  isBlockQuoted,
   splitQuote,
   stripQuoteFromTokens,
 } from "@outl/shared/markdown";
@@ -444,14 +446,15 @@ export function BlockRow(props: {
         </button>
 
         {/*
-         * Quote chrome wraps **bullet + body** so the left border lands
-         * *before* the checkbox — TUI parity, where `│ ☐ body` reads
-         * as "this is a quoted task" instead of "a task whose body
-         * happens to be a quote". When the block isn't quoted, the
-         * wrapper is a no-op flex container so layout is identical.
+         * Quote chrome wraps **bullet + body** via the shared
+         * `<QuoteWrap />` so the left border lands *before* the
+         * checkbox — TUI parity, where `│ ☐ body` reads as "this is
+         * a quoted task" instead of "a task whose body happens to be
+         * a quote". When the block isn't quoted the wrapper degrades
+         * to a plain flex container, so non-quoted rows render
+         * byte-identical.
          */}
         {(() => {
-          const { quoted } = splitQuote(props.block.text);
           const bullet = (
             <button
               type="button"
@@ -572,23 +575,18 @@ export function BlockRow(props: {
           })()}
         </div>
           );
-          // Left border + faint tint behind both bullet and body so
-          // the chrome reads as one cohesive quoted unit. When the
-          // block isn't quoted, the wrapper is a plain flex container
-          // so the row layout is byte-identical to a non-quoted block.
-          if (!quoted) {
-            return (
-              <div class="flex min-w-0 flex-1 items-start">
-                {bullet}
-                {body}
-              </div>
-            );
-          }
+          // Tailwind classes are passed as **string literals** so the
+          // JIT discovers them at build time — the shared
+          // `<QuoteWrap />` just composes the conditional `class=`.
           return (
-            <div class="flex min-w-0 flex-1 items-start rounded-r-md border-l-2 border-(--color-outl-fg-dimmer)/50 bg-(--color-outl-fg-dimmer)/[0.06] pl-2">
+            <QuoteWrap
+              quoted={isBlockQuoted(props.block.text)}
+              baseClass="flex min-w-0 flex-1 items-start"
+              chromeClass="rounded-r-md border-l-2 border-(--color-outl-fg-dimmer)/50 bg-(--color-outl-fg-dimmer)/[0.06] pl-2"
+            >
               {bullet}
               {body}
-            </div>
+            </QuoteWrap>
           );
         })()}
       </div>

@@ -83,7 +83,7 @@ The buffer carries the working text; on commit we replace the AST node's `.text`
   - Recursion is capped at depth 4 to break embed cycles.
   - Expansion runs in every render mode — but the carrying block's first row keeps the raw `!((…))` literal under the cursor so column-byte alignment holds.
 - The selected/editing block renders **raw** (delimiters visible, dimmed) so cursor columns map 1:1 to source bytes — including the literal `((blk-XXXXXX))` and `!((blk-XXXXXX))` forms.
-- A block whose text starts with the CommonMark `"> "` prefix renders with a left `│ ` bar (dimmed, `theme.dim`) and a dimmed body — same affordance as `TODO`/`DONE`, lives in `view::inline::render_pretty_block_text_impl`. The bar composes with the TODO checkbox (`│ ☐ foo`) so a `> TODO foo` reads as a quoted open task. Body styling is dimmed via `theme.dim` until a dedicated palette key lands.
+- A block whose text starts with the CommonMark `"> "` prefix renders with a left `│ ` bar (dimmed, `theme.dim`) and full body colour — the `│` is enough of a cue, dimming refs / tags / bold would erase their affordance. Same affordance as `TODO`/`DONE`. The chrome lives in **`view::inline::render_pretty_block_text_impl`** and is the **only owner** of the bar + checkbox + token rendering pipeline; the outline view's `BlockRowKind::Bullet if single_line_pretty` branch delegates to it directly (one owner, every caller wraps). The bar composes with the TODO checkbox (`│ ☐ foo`) and `view::inline::split_block_prefixes` accepts the prefixes in **either order**, so `"> TODO foo"` and `"TODO > foo"` render the same.
 - IDs are **never** shown.
 - Mode tag (`NORMAL`/`INSERT`) appears in the header.
 

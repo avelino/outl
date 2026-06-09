@@ -2,6 +2,8 @@ import { For, JSX, Show, onCleanup, onMount } from "solid-js";
 import type { BlockNode } from "@outl/shared/api/types";
 import {
   MarkdownInline,
+  QuoteWrap,
+  isBlockQuoted,
   splitQuote,
   stripQuoteFromTokens,
 } from "@outl/shared/markdown";
@@ -270,12 +272,12 @@ function BlockBody(props: {
       />
 
       {(() => {
-        // Quote chrome wraps **bullet + body** so the left border lands
-        // *before* the checkbox — TUI parity, where `│ ☐ body` reads
-        // as "this is a quoted task" instead of "a task whose body
-        // happens to be a quote". The CollapseTriangle stays outside so
-        // the gutter chrome isn't double-boxed.
-        const { quoted } = splitQuote(props.block.text);
+        // Quote chrome wraps **bullet + body** via the shared
+        // `<QuoteWrap />` so the left border lands *before* the
+        // checkbox — TUI parity, where `│ ☐ body` reads as "this is
+        // a quoted task" instead of "a task whose body happens to be
+        // a quote". The CollapseTriangle stays outside so the gutter
+        // chrome isn't double-boxed.
         const bullet = (
           <BulletOrCheckbox
             todo={props.editing ? null : props.block.todo}
@@ -344,23 +346,18 @@ function BlockBody(props: {
         </Show>
       </div>
         );
-        // Left border + faint tint behind both bullet and body so the
-        // chrome reads as one cohesive quoted unit (TUI's `│ ☐ body`
-        // policy). When the block isn't quoted, the wrapper is a plain
-        // flex container so the row layout is byte-identical.
-        if (!quoted) {
-          return (
-            <div class="flex min-w-0 flex-1 items-start gap-2.5">
-              {bullet}
-              {bodyDiv}
-            </div>
-          );
-        }
+        // Tailwind classes are passed as **string literals** so the
+        // JIT discovers them at build time — the shared `<QuoteWrap />`
+        // just composes the conditional `class=` attribute.
         return (
-          <div class="flex min-w-0 flex-1 items-start gap-2.5 rounded-r-md border-l-2 border-(--color-ios-text-secondary)/40 bg-(--color-ios-text-secondary)/[0.05] pl-2 dark:border-(--color-iosd-text-secondary)/40 dark:bg-(--color-iosd-text-secondary)/[0.07]">
+          <QuoteWrap
+            quoted={isBlockQuoted(props.block.text)}
+            baseClass="flex min-w-0 flex-1 items-start gap-2.5"
+            chromeClass="rounded-r-md border-l-2 border-(--color-ios-text-secondary)/40 bg-(--color-ios-text-secondary)/[0.05] pl-2 dark:border-(--color-iosd-text-secondary)/40 dark:bg-(--color-iosd-text-secondary)/[0.07]"
+          >
             {bullet}
             {bodyDiv}
-          </div>
+          </QuoteWrap>
         );
       })()}
     </div>

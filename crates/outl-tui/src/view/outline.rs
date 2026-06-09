@@ -5,9 +5,7 @@
 use crate::outline_ops::path_for_index;
 use crate::state::{App, Focus, Mode};
 use crate::theme::Theme;
-use crate::view::inline::{
-    highlight_inline, render_markdown_inline, render_pretty_block_text, split_block_prefixes,
-};
+use crate::view::inline::{highlight_inline, render_markdown_inline, render_pretty_block_text};
 use outl_md::inline::{byte_index_for_char, tokenize, InlineTok};
 use outl_md::parse::{OutlineNode, ParsedPage};
 use outl_md::view::{block_to_rows, BlockRowKind};
@@ -381,33 +379,14 @@ pub(crate) fn emit_block_lines(
                     spans.push(Span::styled(row.text.to_string(), app.theme.code));
                 }
                 BlockRowKind::Bullet if single_line_pretty => {
-                    // Strip TODO/DONE and quote markers in either order
-                    // so the user can type `"> TODO foo"` or
-                    // `"TODO > foo"` — same intent, two authoring
-                    // shapes. The two affordances stack as `│ ☐ foo`.
-                    // Body keeps full colours — dimming refs / tags /
-                    // bold would erase their affordance, the `│` bar
-                    // is already cue enough.
-                    let (todo_state, quoted, body) = split_block_prefixes(row.text);
-                    if quoted {
-                        spans.push(Span::styled("│ ", app.theme.dim));
-                    }
-                    match todo_state {
-                        Some(false) => {
-                            spans.push(Span::styled("☐ ", app.theme.todo_open));
-                            spans.extend(render_markdown_inline(body, &app.theme, &app.index));
-                        }
-                        Some(true) => {
-                            spans.push(Span::styled("☑ ", app.theme.todo_done));
-                            for sp in render_markdown_inline(body, &app.theme, &app.index) {
-                                spans.push(Span::styled(
-                                    sp.content.into_owned(),
-                                    sp.style.patch(app.theme.todo_done_body),
-                                ));
-                            }
-                        }
-                        None => spans.extend(render_markdown_inline(body, &app.theme, &app.index)),
-                    }
+                    // Single owner for the bullet's pretty render: it
+                    // strips TODO/DONE + `"> "` markers in either
+                    // order, paints the `│ ` quote bar and the
+                    // `☐`/`☑` checkbox, then tokenises the body. Same
+                    // function the embed expansion uses, so the
+                    // chrome stays in lockstep between bullet and
+                    // embed root.
+                    spans.extend(render_pretty_block_text(row.text, &app.theme, &app.index));
                 }
                 _ => spans.extend(render_markdown_inline(row.text, &app.theme, &app.index)),
             }

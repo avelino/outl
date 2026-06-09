@@ -82,7 +82,8 @@ When in doubt, ship in the client; promote later when the second client appears.
 | Concept | Entry | Mirrors (Rust) |
 |---|---|---|
 | `<MarkdownInline />` | `@outl/shared/markdown` | output of `outl_md::tokenize_owned` |
-| `splitQuote`, `isQuote`, `QUOTE_PREFIX` | `@outl/shared/markdown` (re-exported) | `outl_actions::quote::{split_quote, is_quote, QUOTE_PREFIX}` |
+| `splitQuote`, `isQuote`, `QUOTE_PREFIX`, `stripQuoteFromTokens` | `@outl/shared/markdown` (re-exported) | `outl_actions::quote::{split_quote, is_quote, QUOTE_PREFIX}` |
+| `<QuoteWrap />`, `isBlockQuoted` | `@outl/shared/markdown` | Wraps `bullet + body` in the blockquote chrome (left border + faint tint) so mobile and desktop don't duplicate the conditional wrapper. Each client passes its theme tokens via `baseClass` + `chromeClass` props (Tailwind string literals for JIT discovery). |
 | `looksLikeOutline` | `@outl/shared/paste` | `outl_actions::paste::looks_like_outline` |
 | `utf16OffsetToCharOffset` | `@outl/shared/paste` | (runtime gap — UTF-16 ↔ codepoint, no Rust mirror) |
 | `detectRefContext`, `autoClose/DeletePair`, `insertPair/Text`, `applySuggestion` | `@outl/shared/autocomplete` | `outl_tui::actions::overlay::detect_trigger` |
