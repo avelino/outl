@@ -9,7 +9,8 @@
 use outl_actions::{
     append_block, create_after, delete, edit_text, indent, move_down, move_up, outdent,
     paste_markdown as action_paste_markdown, set_block_collapsed as action_set_block_collapsed,
-    toggle_todo as action_toggle_todo, ActionError, PasteAnchor,
+    toggle_quote as action_toggle_quote, toggle_todo as action_toggle_todo, ActionError,
+    PasteAnchor,
 };
 use tauri::State;
 
@@ -69,6 +70,17 @@ pub(crate) fn toggle_todo(
     let page = parse_node_id(&page_id)?;
     let node = parse_node_id(&id)?;
     finish_in_page(&state, page, |ws| action_toggle_todo(ws, &state.hlc, node))
+}
+
+#[tauri::command]
+pub(crate) fn toggle_quote(
+    page_id: String,
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<PageView, String> {
+    let page = parse_node_id(&page_id)?;
+    let node = parse_node_id(&id)?;
+    finish_in_page(&state, page, |ws| action_toggle_quote(ws, &state.hlc, node))
 }
 
 #[tauri::command]

@@ -82,6 +82,7 @@ When in doubt, ship in the client; promote later when the second client appears.
 | Concept | Entry | Mirrors (Rust) |
 |---|---|---|
 | `<MarkdownInline />` | `@outl/shared/markdown` | output of `outl_md::tokenize_owned` |
+| `splitQuote`, `isQuote`, `QUOTE_PREFIX` | `@outl/shared/markdown` (re-exported) | `outl_actions::quote::{split_quote, is_quote, QUOTE_PREFIX}` |
 | `looksLikeOutline` | `@outl/shared/paste` | `outl_actions::paste::looks_like_outline` |
 | `utf16OffsetToCharOffset` | `@outl/shared/paste` | (runtime gap — UTF-16 ↔ codepoint, no Rust mirror) |
 | `detectRefContext`, `autoClose/DeletePair`, `insertPair/Text`, `applySuggestion` | `@outl/shared/autocomplete` | `outl_tui::actions::overlay::detect_trigger` |

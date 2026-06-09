@@ -75,6 +75,26 @@ single-sourced.
 land on `<page>`") but is **not** the navigation entry point — for
 that, always call `openRef`.
 
+## Blockquote chrome
+
+A block whose `text` starts with the CommonMark `"> "` marker renders with a left border (`border-l-2 border-(--color-ios-text-secondary)/40`), a very faint tint (`bg-(--color-ios-text-secondary)/[0.05]` light / `[0.07]` dark), a right-rounded corner (`rounded-r-md`), and **full body colour** — refs / bold / tags / code keep their normal palette so the styled-token affordance isn't lost.
+The tint is intentionally ~5% alpha: enough to read as a soft box at a glance, low enough to not fight with surrounding outline rows.
+
+The chrome wrapper sits one level above the bullet — it envelops **both `<BulletOrCheckbox />` *and* the body** in a single flex container.
+That order (`│ ☐ body`) matches the TUI exactly and reads as "this is a quoted task" instead of "a task whose body happens to be a quote".
+The `<CollapseTriangle />` stays outside the chrome so the gutter isn't double-boxed.
+When the block isn't quoted, the wrapper degrades to a plain `flex min-w-0 flex-1 items-start gap-2.5` container, so non-quoted rows render byte-identical.
+
+The earlier `italic text-(--color-ios-text-secondary)` body styling (suggested by issue #64's mock) was dropped after testing: the muted body erased the cyan of `[[ref]]` underlines and the bold weight of `**abc**` against the background, which hurts more than it helps when the user is scanning a quoted excerpt.
+
+The check uses **`splitQuote`** from `@outl/shared/markdown` (the TS mirror of `outl_actions::quote::split_quote`) and **`stripQuoteFromTokens`** to remove the `> ` from the first `Plain` token before handing the list to `<MarkdownInline />` — otherwise the marker would render once in the body and once in the chrome.
+The two pieces compose with the existing TODO/DONE checkbox: a `> TODO foo` row paints the checkbox **and** the left border.
+
+Toggling the marker goes through the same Tauri pipeline as TODO/DONE: a `toggleQuote(id)` wrapper in `@outl/shared/api/commands` calls the `toggle_quote` command on each client's `src-tauri`, which delegates to `outl_actions::block::toggle_quote`.
+There is **no string surgery on the TS side** — the prefix arithmetic owns the rule and stays in one place.
+
+The TUI applies the same "chrome only, body full colour" policy via `│ ` in `view::inline::render_pretty_block_text_impl` and `view/outline.rs::BlockRowKind::Bullet`. Three surfaces, one policy.
+
 ## Paste from external apps
 
 The textarea in `BlockRow.tsx` intercepts paste events whose payload looks like a bullet list (`@outl/shared/paste::looksLikeOutline`) and routes the text to `outl_actions::paste_markdown` via the `paste_markdown_at` Tauri command.

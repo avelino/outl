@@ -122,6 +122,21 @@ This is the wire format the TUI already uses and what `.md` files contain when s
 `outl-actions::cycle_todo` walks `None → TODO → DONE → None`.
 UI surfaces parse the prefix out via `split_todo` so they can render a checkbox.
 
+## Blockquote convention
+
+Blockquotes follow the same shape as TODO/DONE — a per-block text prefix, no AST field, every client renders its own visual.
+The prefix is the CommonMark `"> "` (greater-than + single space), so an `.md` round-trips cleanly when an external tool opens it:
+
+```
+"foo"             plain block
+"> foo"           quoted block
+```
+
+`outl-actions::quote::toggle_quote` flips the prefix on/off; `split_quote` separates the marker from the body for UI rendering.
+Multi-line quote bodies keep the `> ` on every continuation line so the `.md` stays a valid CommonMark blockquote.
+Children of a quoted block are **not** implicitly quoted — the marker lives on the block, not on its subtree.
+Inline tokens (`**bold**`, `[[ref]]`, `#tag`, `((blk-…))`) continue to tokenize **inside** the body — the wrapper is transparent.
+
 ## iCloud sync (mobile + TUI, today)
 
 The iOS app is on a public TestFlight beta — <https://testflight.apple.com/join/P2GdWAMd>.

@@ -6,7 +6,7 @@ use crate::outline_ops::path_for_index;
 use crate::state::{App, Focus, Mode};
 use crate::theme::Theme;
 use crate::view::inline::{
-    highlight_inline, render_markdown_inline, render_pretty_block_text, split_todo_prefix,
+    highlight_inline, render_markdown_inline, render_pretty_block_text, split_block_prefixes,
 };
 use outl_md::inline::{byte_index_for_char, tokenize, InlineTok};
 use outl_md::parse::{OutlineNode, ParsedPage};
@@ -381,7 +381,17 @@ pub(crate) fn emit_block_lines(
                     spans.push(Span::styled(row.text.to_string(), app.theme.code));
                 }
                 BlockRowKind::Bullet if single_line_pretty => {
-                    let (todo_state, body) = split_todo_prefix(row.text);
+                    // Strip TODO/DONE and quote markers in either order
+                    // so the user can type `"> TODO foo"` or
+                    // `"TODO > foo"` — same intent, two authoring
+                    // shapes. The two affordances stack as `│ ☐ foo`.
+                    // Body keeps full colours — dimming refs / tags /
+                    // bold would erase their affordance, the `│` bar
+                    // is already cue enough.
+                    let (todo_state, quoted, body) = split_block_prefixes(row.text);
+                    if quoted {
+                        spans.push(Span::styled("│ ", app.theme.dim));
+                    }
                     match todo_state {
                         Some(false) => {
                             spans.push(Span::styled("☐ ", app.theme.todo_open));
@@ -396,9 +406,7 @@ pub(crate) fn emit_block_lines(
                                 ));
                             }
                         }
-                        None => {
-                            spans.extend(render_markdown_inline(row.text, &app.theme, &app.index))
-                        }
+                        None => spans.extend(render_markdown_inline(body, &app.theme, &app.index)),
                     }
                 }
                 _ => spans.extend(render_markdown_inline(row.text, &app.theme, &app.index)),

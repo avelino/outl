@@ -771,6 +771,23 @@ mod tokenize_owned_tests {
         );
     }
 
+    /// The `> ` blockquote marker is block-level, not inline. It must
+    /// not become a token: the inline tokenizer is called on a body
+    /// that already had the prefix stripped by
+    /// `outl_actions::quote::split_quote`. If the marker ever shows up
+    /// inside the body (the user typed `"> > foo"` — single split, the
+    /// inner `"> foo"` is the body), it stays Plain so the inline
+    /// surface doesn't accidentally double-style it.
+    #[test]
+    fn quote_prefix_is_not_tokenized_as_an_inline() {
+        let toks = tokenize_owned("> still plain");
+        assert_eq!(toks.len(), 1);
+        assert!(
+            matches!(&toks[0], InlineToken::Plain { value } if value == "> still plain"),
+            "expected the whole string as Plain, got {toks:?}"
+        );
+    }
+
     #[test]
     fn serde_json_kind_field_matches_mobile_dto() {
         // Mobile reads `kind` lowercase via Serde's

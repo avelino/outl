@@ -313,7 +313,7 @@ Skim the headings, then drill in.
 | Sibling after a node + position helpers (for inserts) | `outl_actions::tree::next_sibling` / `position_after` / `position_for_new_last_child` | `crates/outl-actions/src/tree.rs` |
 | Which page (slug-bearing root child) does this node sit under? | `outl_actions::tree::enclosing_page_id` | `crates/outl-actions/src/tree.rs` |
 
-#### 3. Block mutations (outl-actions::block + collapsed + todo)
+#### 3. Block mutations (outl-actions::block + collapsed + todo + quote)
 
 Every entry here routes through `Workspace::apply` — never build a `LogOp` from a client and apply it directly.
 
@@ -328,6 +328,8 @@ Every entry here routes through `Workspace::apply` — never build a `LogOp` fro
 | Toggle a block's collapsed flag (converges via `Op::SetCollapsed`) | `outl_actions::collapsed::toggle_block_collapsed` / `set_block_collapsed` | `crates/outl-actions/src/collapsed.rs` |
 | Cycle / split / read TODO/DONE state (encoded as text prefix) | `outl_actions::todo::cycle_todo` / `split_todo` / `TodoState` / `TODO_PREFIX` / `DONE_PREFIX` | `crates/outl-actions/src/todo.rs` |
 | Toggle TODO/DONE on a block in one call | `outl_actions::block::toggle_todo` | `crates/outl-actions/src/block.rs` |
+| Read / toggle blockquote state (encoded as `"> "` text prefix, CommonMark-compatible) | `outl_actions::quote::is_quote` / `split_quote` / `toggle_quote` / `QUOTE_PREFIX` | `crates/outl-actions/src/quote.rs` |
+| Toggle blockquote on a block in one call | `outl_actions::block::toggle_quote` | `crates/outl-actions/src/block.rs` |
 
 #### 4. Pages and journals (outl-actions::page + journal)
 

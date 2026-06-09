@@ -80,6 +80,44 @@ After that point, plain indented text becomes "unrecognized" and is skipped — 
 In the TUI: `Alt+Enter` (or `Ctrl+J`, or `Shift+Enter` in kitty-protocol-aware terminals) inserts a soft newline inside the current block.
 Plain `Enter` commits and creates a sibling — unless the cursor is inside an open fenced code block, in which case `Enter` auto-detects and inserts a soft newline instead (see below).
 
+### Block-level prefixes (TODO / DONE / quote)
+
+A block's *kind* (open task, completed task, blockquote) is encoded as a **text prefix** on the bullet's body, not as a separate AST field.
+This keeps the wire format stable, round-trips through any CommonMark renderer, and lets a user drop the marker by erasing the prefix in their editor.
+
+| Prefix | Meaning | Helpers |
+|---|---|---|
+| `TODO ` | Open task | `outl_actions::todo::TODO_PREFIX` / `split_todo` / `cycle_todo` |
+| `DONE ` | Completed task | `outl_actions::todo::DONE_PREFIX` / `split_todo` / `cycle_todo` |
+| `> ` | Blockquote (CommonMark-compatible) | `outl_actions::quote::QUOTE_PREFIX` / `split_quote` / `toggle_quote` |
+
+Rules:
+
+- One space follows the marker.
+  `>foo` (no space) is **not** a quote — same CommonMark rule that decides `>foo` is a literal paragraph and `> foo` is a blockquote.
+- Markers compose: `> TODO ship it` is a quoted TODO; `TODO > foo` is **not** a quote because the quote split is checked from the start of the text.
+- Children of a quoted block are **not** implicitly quoted — the marker lives on the block, not on its subtree.
+  Same policy as TODO/DONE.
+- Multi-line quote bodies keep the `> ` on every continuation line so the file stays a valid CommonMark blockquote when an external tool opens it.
+
+Single-line:
+
+```
+- > the only way to do great work is to love what you do
+- regular block
+```
+
+Multi-line:
+
+```
+- > quote line one
+  > quote line two
+  > quote line three
+- next regular block
+```
+
+Inline tokens (`**bold**`, `[[ref]]`, `#tag`, `((blk-…))`) tokenize **inside** the quoted body — the wrapper is transparent to the inline tokenizer.
+
 ### Fenced code blocks inside a bullet
 
 CommonMark code fences are preserved literally:

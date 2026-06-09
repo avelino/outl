@@ -1,7 +1,11 @@
 import { For, Show, createEffect, createSignal } from "solid-js";
 
 import type { BlockNode, PageMeta, TodoState } from "@outl/shared/api/types";
-import { MarkdownInline } from "@outl/shared/markdown";
+import {
+  MarkdownInline,
+  splitQuote,
+  stripQuoteFromTokens,
+} from "@outl/shared/markdown";
 import {
   applySuggestion,
   autoClosePair,
@@ -440,84 +444,104 @@ export function BlockRow(props: {
         </button>
 
         {/*
-         * Unified bullet — `•` / `▢` / `▣` depending on TODO state.
-         * Click toggles cycle (None → TODO → DONE → None) via the
-         * `toggle_todo` Tauri command. TUI parity: theme colors
-         * todo_open / todo_done drive the glyph color, body styling
-         * picks up strikethrough for DONE.
+         * Quote chrome wraps **bullet + body** so the left border lands
+         * *before* the checkbox — TUI parity, where `│ ☐ body` reads
+         * as "this is a quoted task" instead of "a task whose body
+         * happens to be a quote". When the block isn't quoted, the
+         * wrapper is a no-op flex container so layout is identical.
          */}
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            void props.cb.onToggleTodo(props.block.id);
-          }}
-          {...(isInteractive() ? { "data-todo": "true" } : {})}
-          class={`outl-row-chrome mt-[5px] mr-2 w-3 shrink-0 cursor-pointer select-none text-center text-[13px] leading-none transition-opacity hover:opacity-70 ${bulletClass()}`}
-          title={
-            props.block.todo === "DONE"
-              ? "Click to uncheck"
-              : props.block.todo === "TODO"
-                ? "Click to mark done"
-                : "Click to mark as TODO"
-          }
-          aria-label={
-            props.block.todo === "DONE"
-              ? "Mark not done"
-              : props.block.todo === "TODO"
-                ? "Mark done"
-                : "Mark as TODO"
-          }
-        >
-          {bulletGlyph()}
-        </button>
-
-        <div class={`min-w-0 flex-1 leading-snug ${bodyClass()}`}>
-          {(() => {
-            const fence = !isEditing() ? detectFence(props.block.text) : null;
-            return (
-              <Show
-                when={isEditing()}
-                fallback={
-                  fence ? (
-                    <CodeFenceView
-                      language={fence.language}
-                      body={fence.body}
-                      onEdit={() => {
-                        setDraft(rawTextWithTodo(props.block));
-                        props.cb.onStartEdit(props.block.id);
-                        focusTextarea();
-                      }}
-                      onRun={() => props.cb.onRunCodeBlock(props.block.id)}
-                    />
-                  ) : (
-                    <div
-                      class="cursor-text whitespace-pre-wrap break-words"
-                      onClick={() => {
-                        setDraft(rawTextWithTodo(props.block));
-                        props.cb.onStartEdit(props.block.id);
-                        focusTextarea();
-                      }}
-                    >
-                      <Show
-                        when={props.block.tokens && props.block.tokens.length > 0}
-                        fallback={
-                          <span class={!props.block.text ? "opacity-30" : ""}>
-                            {props.block.text || "Click to add text…"}
-                          </span>
-                        }
-                      >
-                        <MarkdownInline
-                          tokens={props.block.tokens}
-                          variant="inline"
-                          onRefClick={props.cb.onRefClick}
-                          onTagClick={props.cb.onTagClick}
+        {(() => {
+          const { quoted } = splitQuote(props.block.text);
+          const bullet = (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                void props.cb.onToggleTodo(props.block.id);
+              }}
+              {...(isInteractive() ? { "data-todo": "true" } : {})}
+              class={`outl-row-chrome mt-[5px] mr-2 w-3 shrink-0 cursor-pointer select-none text-center text-[13px] leading-none transition-opacity hover:opacity-70 ${bulletClass()}`}
+              title={
+                props.block.todo === "DONE"
+                  ? "Click to uncheck"
+                  : props.block.todo === "TODO"
+                    ? "Click to mark done"
+                    : "Click to mark as TODO"
+              }
+              aria-label={
+                props.block.todo === "DONE"
+                  ? "Mark not done"
+                  : props.block.todo === "TODO"
+                    ? "Mark done"
+                    : "Mark as TODO"
+              }
+            >
+              {bulletGlyph()}
+            </button>
+          );
+          const body = (
+            <div class={`min-w-0 flex-1 leading-snug ${bodyClass()}`}>
+              {(() => {
+                const fence = !isEditing() ? detectFence(props.block.text) : null;
+                return (
+                  <Show
+                    when={isEditing()}
+                    fallback={
+                      fence ? (
+                        <CodeFenceView
+                          language={fence.language}
+                          body={fence.body}
+                          onEdit={() => {
+                            setDraft(rawTextWithTodo(props.block));
+                            props.cb.onStartEdit(props.block.id);
+                            focusTextarea();
+                          }}
+                          onRun={() => props.cb.onRunCodeBlock(props.block.id)}
                         />
-                      </Show>
-                    </div>
-                  )
-                }
-              >
+                      ) : (
+                        (() => {
+                          // The chrome lives on the wrapper a level
+                          // up — here we just strip the `> ` from the
+                          // tokens so the marker doesn't double-paint.
+                          const split = splitQuote(props.block.text);
+                          const renderedTokens = split.quoted
+                            ? stripQuoteFromTokens(props.block.tokens)
+                            : props.block.tokens;
+                          const hasContent = split.quoted
+                            ? split.body.length > 0
+                            : Boolean(props.block.text);
+                          return (
+                            <div
+                              class="cursor-text whitespace-pre-wrap break-words"
+                              onClick={() => {
+                                setDraft(rawTextWithTodo(props.block));
+                                props.cb.onStartEdit(props.block.id);
+                                focusTextarea();
+                              }}
+                            >
+                              <Show
+                                when={renderedTokens && renderedTokens.length > 0}
+                                fallback={
+                                  <span class={!hasContent ? "opacity-30" : ""}>
+                                    {hasContent
+                                      ? (split.quoted ? split.body : props.block.text)
+                                      : "Click to add text…"}
+                                  </span>
+                                }
+                              >
+                                <MarkdownInline
+                                  tokens={renderedTokens}
+                                  variant="inline"
+                                  onRefClick={props.cb.onRefClick}
+                                  onTagClick={props.cb.onTagClick}
+                                />
+                              </Show>
+                            </div>
+                          );
+                        })()
+                      )
+                    }
+                  >
             <div class="relative">
               <textarea
                 ref={textareaRef}
@@ -547,6 +571,26 @@ export function BlockRow(props: {
             );
           })()}
         </div>
+          );
+          // Left border + faint tint behind both bullet and body so
+          // the chrome reads as one cohesive quoted unit. When the
+          // block isn't quoted, the wrapper is a plain flex container
+          // so the row layout is byte-identical to a non-quoted block.
+          if (!quoted) {
+            return (
+              <div class="flex min-w-0 flex-1 items-start">
+                {bullet}
+                {body}
+              </div>
+            );
+          }
+          return (
+            <div class="flex min-w-0 flex-1 items-start rounded-r-md border-l-2 border-(--color-outl-fg-dimmer)/50 bg-(--color-outl-fg-dimmer)/[0.06] pl-2">
+              {bullet}
+              {body}
+            </div>
+          );
+        })()}
       </div>
 
       <Show when={!props.block.collapsed && props.block.children.length > 0}>

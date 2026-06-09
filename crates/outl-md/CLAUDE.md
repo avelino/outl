@@ -13,7 +13,10 @@ Treat matching with the same paranoia as the CRDT.
 - Parse `.md` (clean, no IDs) → outline AST.
   Parser is **permissive**: lines that don't match the outl dialect (e.g. a leading `# heading`, a stray paragraph, an HTML snippet at depth 0) are preserved verbatim as regular blocks and recorded in `ParsedPage.warnings: Vec<ParseWarning>` (kind `UnrecognizedBlockMarker`).
   Nothing is silently dropped; surfaces surface the warning list so the user can clean the file at their pace.
-- Render outline AST → `.md` (clean, no IDs)
+  Multi-line bodies (including `> ` blockquote continuation lines, `TODO ` / `DONE ` continuations, and free-text continuations) land verbatim in `OutlineNode.text` separated by `\n`; the prefix on each continuation line is preserved by the same "trim leading indent, append to text" path so blockquote bodies round-trip cleanly as CommonMark.
+- Render outline AST → `.md` (clean, no IDs).
+  Each line in `OutlineNode.text` after the first is emitted at `indent + 1`; the renderer **does not invent** prefixes on continuation lines — whatever the user (or the parser) put in `text` round-trips as-is.
+  Block-kind markers (`TODO `, `DONE `, `> `) are owned by `outl-actions` (`todo.rs`, `quote.rs`); this crate only preserves them verbatim.
 - Read/write `.outl` sidecar (JSON, dotfile) — current version `2`, reads v1 transparently (handles backfilled on load).
   The sidecar is **structural metadata only** (id, line, indent, content hash, ref handle).
   State that must converge between devices (fold flags, pinned, etc.) goes through the op log in `outl-core`, never here.
