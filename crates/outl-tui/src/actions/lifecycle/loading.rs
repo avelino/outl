@@ -88,10 +88,11 @@ impl App {
         self.page = parse(&text);
         self.parse_warnings = self.page.warnings.clone();
         // Surface a brief chip in the status line so the user notices
-        // even if they're not looking at the outline (and so the
-        // banner above the outline isn't the only signal — terminals
-        // with `show_warning_banner=false` still see this).
-        if !self.parse_warnings.is_empty() {
+        // even if they're not looking at the outline. Only set when
+        // the line is otherwise empty — a save error, a chord prompt,
+        // or any other recent status message takes priority. The
+        // banner above the outline stays as the persistent signal.
+        if !self.parse_warnings.is_empty() && self.status.is_empty() {
             self.status = format!(
                 "⚠ {} line(s) outside outl dialect — preserved (open :warnings to see)",
                 self.parse_warnings.len()

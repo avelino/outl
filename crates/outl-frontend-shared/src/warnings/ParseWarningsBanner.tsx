@@ -70,6 +70,13 @@ export function ParseWarningsBanner(props: ParseWarningsBannerProps) {
                 <button
                   type="button"
                   class="outl-parse-warnings-banner__row"
+                  // `idx()` is Solid's reactive accessor — evaluated at
+                  // click time, so it always returns the position the
+                  // item currently occupies in `props.warnings`. Caller
+                  // contract: do NOT mutate `props.warnings` from
+                  // inside `onWarningClick` itself (a reentrant mutation
+                  // would invalidate the index before the host handler
+                  // could act on it).
                   onClick={() => props.onWarningClick?.(idx())}
                   disabled={!props.onWarningClick}
                 >
