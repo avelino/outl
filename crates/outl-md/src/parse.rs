@@ -33,14 +33,23 @@ pub struct OutlineNode {
 /// Parsed page: top-level properties plus the outline tree.
 ///
 /// `warnings` accumulates non-fatal grammar deviations the parser
-/// recovered from — e.g. a markdown heading (`# title`) where outl
-/// expects a `- bullet`, or an indent that isn't a multiple of two.
-/// The parser **never** drops content: every offending line is
-/// preserved as a regular block with its raw text (see
-/// [`ParseWarningKind`] for the catalog of recoveries).
+/// recovered from at the **top level** — a markdown heading
+/// (`# title`) where outl expects a `- bullet`, a free paragraph,
+/// imported markdown, an over-indented snippet that landed before
+/// its parent bullet. Each such line is preserved verbatim as a
+/// regular block and the recovery is recorded in [`ParseWarning`]
+/// (see [`ParseWarningKind`] for the catalog).
+///
+/// Scope today is top-level only. Lines nested under a bullet that
+/// the grammar can't classify (and aren't valid continuation /
+/// property / child) are still skipped by `parse_block_list`'s
+/// inner loop — they don't surface as warnings yet. Expanding the
+/// catalog to cover nested recovery is a follow-up; the catalog
+/// here documents what the parser actually emits today, nothing more.
+///
 /// Surfaces (`outl-tui`, `outl-mobile`, `outl-desktop`, `outl doctor`)
-/// render the warning list so the user can choose to clean the file
-/// up — outl keeps working in the meantime.
+/// render the warning list so the user can clean the file. outl
+/// keeps working in the meantime.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedPage {
     /// Page-level properties (the lines above the first outline item).
@@ -143,8 +152,29 @@ fn parse_block_list(
             return blocks;
         }
         if line_indent > indent {
-            // Should be handled by the recursive call that owns this depth.
-            // Defensive: skip to avoid infinite loop on malformed input.
+            // Over-indented line. The grammar reserves child blocks
+            // under a bullet — that case is handled by the inner
+            // child-loop inside the bullet branch below. Reaching here
+            // means a deeper-indented line landed BEFORE its parent
+            // bullet (typical of imported markdown: an indented
+            // snippet at the top of the file, or a code-fence the
+            // dialect cannot recognise). At depth 0 we recover with a
+            // verbatim block + warning so no content is silently
+            // dropped. At deeper levels we still skip (the outer
+            // recursive call owns the context) but the same recovery
+            // upstream caught the parent line, so nothing leaks.
+            if indent == 0 {
+                warnings.push(ParseWarning {
+                    line: *i + 1,
+                    raw: raw.to_string(),
+                    kind: ParseWarningKind::UnrecognizedBlockMarker,
+                });
+                blocks.push(OutlineNode {
+                    text: raw.to_string(),
+                    properties: Vec::new(),
+                    children: Vec::new(),
+                });
+            }
             *i += 1;
             continue;
         }
@@ -154,8 +184,9 @@ fn parse_block_list(
             // a hand-written `.md` with a leading `# title`, a stray
             // paragraph, or imported markdown doesn't silently lose
             // content on the next save. At deeper levels we bail back
-            // to the caller (it knows the context) — the caller's loop
-            // ultimately funnels every line through this path.
+            // to the caller (it knows the context). Store `raw`, not
+            // the trimmed form, so trailing whitespace and any other
+            // significant bytes round-trip on the next save.
             if indent != 0 {
                 return blocks;
             }
@@ -165,7 +196,7 @@ fn parse_block_list(
                 kind: ParseWarningKind::UnrecognizedBlockMarker,
             });
             blocks.push(OutlineNode {
-                text: stripped.to_string(),
+                text: raw.to_string(),
                 properties: Vec::new(),
                 children: Vec::new(),
             });
@@ -462,6 +493,42 @@ mod tests {
         assert_eq!(p.blocks[1].text, "free paragraph");
         assert_eq!(p.warnings.len(), 1);
         assert_eq!(p.warnings[0].line, 2);
+    }
+
+    /// Over-indented line at the top level (e.g. an imported snippet
+    /// pasted before its parent bullet was added). The parser used to
+    /// silently drop it because `line_indent > indent` triggered an
+    /// unconditional `continue`. Permissive contract says it now
+    /// surfaces as a warning + verbatim block.
+    #[test]
+    fn permissive_recovers_over_indented_top_level_line() {
+        let md = "  indented orphan\n- real bullet\n";
+        let p = parse(md);
+        assert!(
+            p.blocks.iter().any(|b| b.text == "  indented orphan"),
+            "indented orphan must be preserved as a block, got blocks: {:#?}",
+            p.blocks,
+        );
+        assert!(
+            p.warnings.iter().any(|w| w.line == 1),
+            "warning for line 1 missing, got: {:#?}",
+            p.warnings,
+        );
+    }
+
+    /// The recovery path must preserve trailing whitespace and any
+    /// other significant bytes verbatim. Earlier the implementation
+    /// stored `stripped` instead of `raw`, so a line with trailing
+    /// spaces (significant in commonmark hard breaks) silently lost
+    /// data on the next save.
+    #[test]
+    fn permissive_recovery_preserves_trailing_whitespace() {
+        // Two trailing spaces after "trailing": a CommonMark hard break.
+        let md = "trailing  \n- bullet\n";
+        let p = parse(md);
+        assert_eq!(p.blocks[0].text, "trailing  ");
+        assert_eq!(p.warnings.len(), 1);
+        assert_eq!(p.warnings[0].raw, "trailing  ");
     }
 
     #[test]

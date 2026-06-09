@@ -88,13 +88,30 @@ impl App {
         self.page = parse(&text);
         self.parse_warnings = self.page.warnings.clone();
         // Surface a brief chip in the status line so the user notices
-        // even if they're not looking at the outline. Only set when
-        // the line is otherwise empty — a save error, a chord prompt,
-        // or any other recent status message takes priority. The
-        // banner above the outline stays as the persistent signal.
-        if !self.parse_warnings.is_empty() && self.status.is_empty() {
+        // even if they're not looking at the outline. We OWN the chip
+        // text (any status starting with the marker below is ours),
+        // so we can both refresh and clear it across reloads without
+        // touching messages other code paths set (save error, chord
+        // prompt, etc.).
+        //
+        // Refresh — warnings present and the slot is either empty or
+        //   our own chip from a previous load.
+        // Clear — warnings gone and the slot is our chip (otherwise
+        //   we'd erase someone else's message).
+        // Untouched — slot has a non-chip status (save error etc.):
+        //   the user reads that first, the banner above the outline
+        //   stays as the persistent warning signal.
+        const CHIP_MARKER: &str = "⚠ ";
+        let chip_is_ours =
+            self.status.starts_with(CHIP_MARKER) && self.status.contains("outside outl dialect");
+        if self.parse_warnings.is_empty() {
+            if chip_is_ours {
+                self.status.clear();
+            }
+        } else if self.status.is_empty() || chip_is_ours {
             self.status = format!(
-                "⚠ {} line(s) outside outl dialect — preserved (open :warnings to see)",
+                "{}{} line(s) outside outl dialect — preserved (open :warnings to see)",
+                CHIP_MARKER,
                 self.parse_warnings.len()
             );
         }
