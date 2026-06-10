@@ -510,14 +510,39 @@ mod tests {
 
     #[test]
     fn toggle_quote_composes_with_toggle_todo() {
-        // The TODO checkbox and the quote bar are orthogonal:
-        // toggling one must not eat the other's prefix.
+        // Canonical encoding is `"TODO > body"` (TODO before the
+        // quote marker) so the backend's `split_todo` still detects
+        // the task state when the block is also quoted — without
+        // this convention the DTO would land in mobile / desktop
+        // with `todo = null` and the checkbox would disappear.
         let (mut ws, hlc) = new_workspace();
         let n = append_block(&mut ws, &hlc, None, Some("ship it")).unwrap();
         toggle_todo(&mut ws, &hlc, n).unwrap();
         assert_eq!(ws.block_text(n).as_deref(), Some("TODO ship it"));
         toggle_quote(&mut ws, &hlc, n).unwrap();
-        assert_eq!(ws.block_text(n).as_deref(), Some("> TODO ship it"));
+        assert_eq!(ws.block_text(n).as_deref(), Some("TODO > ship it"));
+        // And the reverse: starting from a quoted block, toggle TODO
+        // also lands the canonical order.
+        toggle_quote(&mut ws, &hlc, n).unwrap(); // back to "TODO ship it"
+        toggle_todo(&mut ws, &hlc, n).unwrap(); // → "DONE ship it"
+        toggle_quote(&mut ws, &hlc, n).unwrap();
+        assert_eq!(ws.block_text(n).as_deref(), Some("DONE > ship it"));
+    }
+
+    #[test]
+    fn cycle_todo_preserves_quote_marker_in_canonical_order() {
+        // The quote marker survives a full TODO cycle and stays in
+        // the canonical position (after the task state).
+        let (mut ws, hlc) = new_workspace();
+        let n = append_block(&mut ws, &hlc, None, Some("ship it")).unwrap();
+        toggle_quote(&mut ws, &hlc, n).unwrap();
+        assert_eq!(ws.block_text(n).as_deref(), Some("> ship it"));
+        toggle_todo(&mut ws, &hlc, n).unwrap();
+        assert_eq!(ws.block_text(n).as_deref(), Some("TODO > ship it"));
+        toggle_todo(&mut ws, &hlc, n).unwrap();
+        assert_eq!(ws.block_text(n).as_deref(), Some("DONE > ship it"));
+        toggle_todo(&mut ws, &hlc, n).unwrap();
+        assert_eq!(ws.block_text(n).as_deref(), Some("> ship it"));
     }
 
     #[test]

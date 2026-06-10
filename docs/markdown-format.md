@@ -95,7 +95,10 @@ Rules:
 
 - One space follows the marker.
   `>foo` (no space) is **not** a quote — same CommonMark rule that decides `>foo` is a literal paragraph and `> foo` is a blockquote.
-- Markers compose: `> TODO ship it` is a quoted TODO; `TODO > foo` is **not** a quote because the quote split is checked from the start of the text.
+- Markers compose in a **canonical order**: `"TODO > body"` / `"DONE > body"` (TODO/DONE before the quote marker).
+  `toggle_quote` and `cycle_todo` peel both prefixes off and re-emit in canonical order, so a user who authors them in the other order (`"> TODO foo"`) gets normalised on the next toggle.
+  Why canonical order matters: the backend's `split_todo` reads from the **start** of the text, so a `"> TODO foo"` would surface in the `OutlineNode` DTO as `todo = null` and the literal `"> TODO foo"` in `text` — checkbox disappears mid-flight on mobile / desktop.
+  The TUI's `split_block_prefixes` still accepts either order for *display* (so externally authored `.md` reads correctly), but every mutation in `outl-actions` emits the canonical form.
 - Children of a quoted block are **not** implicitly quoted — the marker lives on the block, not on its subtree.
   Same policy as TODO/DONE.
 - Multi-line quote bodies keep the `> ` on every continuation line so the file stays a valid CommonMark blockquote when an external tool opens it.

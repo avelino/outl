@@ -133,6 +133,8 @@ The prefix is the CommonMark `"> "` (greater-than + single space), so an `.md` r
 ```
 
 `outl-actions::quote::toggle_quote` flips the prefix on/off; `split_quote` separates the marker from the body for UI rendering.
+Composition with TODO/DONE follows a canonical order: `"TODO > body"` (task state before quote marker), so the backend's `split_todo` still surfaces `block.todo` in the DTO when the block is also quoted.
+Both `toggle_quote` and `cycle_todo` peel both prefixes off and re-emit in canonical order — an externally authored `"> TODO foo"` gets normalised to `"TODO > foo"` on the first toggle from a client.
 Multi-line quote bodies keep the `> ` on every continuation line so the `.md` stays a valid CommonMark blockquote.
 Children of a quoted block are **not** implicitly quoted — the marker lives on the block, not on its subtree.
 Inline tokens (`**bold**`, `[[ref]]`, `#tag`, `((blk-…))`) continue to tokenize **inside** the body — the wrapper is transparent.

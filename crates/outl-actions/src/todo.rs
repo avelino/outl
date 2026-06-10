@@ -54,13 +54,34 @@ pub fn split_todo(raw: &str) -> (Option<TodoState>, &str) {
 
 /// Cycle the TODO state of `raw` to the next stop. Returns the new
 /// text, ready to be stored as the block's content.
+///
+/// Aware of an optional leading quote prefix so the canonical
+/// encoding stays **`"TODO > body"`** (TODO before the quote marker).
+/// Without the awareness, cycling a `"> foo"` block would yield
+/// `"TODO > foo"` only by lucky string concatenation, but cycling a
+/// `"> TODO foo"` block (TODO already after the quote, the legacy
+/// shape) would yield `"TODO > TODO foo"` — a double TODO that
+/// `split_todo` would misread. Peeling both prefixes and re-emitting
+/// in canonical order makes the operation idempotent across either
+/// authoring shape, and keeps mobile / desktop happy with `block.todo`
+/// populated.
 pub fn cycle_todo(raw: &str) -> String {
-    let (state, body) = split_todo(raw);
-    match state {
-        None => format!("TODO {body}"),
-        Some(TodoState::Todo) => format!("DONE {body}"),
-        Some(TodoState::Done) => body.to_string(),
+    let (quoted, after_quote) = crate::quote::split_quote(raw);
+    let (state, body) = split_todo(after_quote);
+    let next = match state {
+        None => Some(TodoState::Todo),
+        Some(TodoState::Todo) => Some(TodoState::Done),
+        Some(TodoState::Done) => None,
+    };
+    let mut out = String::new();
+    if let Some(s) = next {
+        out.push_str(s.prefix());
     }
+    if quoted {
+        out.push_str(crate::quote::QUOTE_PREFIX);
+    }
+    out.push_str(body);
+    out
 }
 
 #[cfg(test)]
@@ -89,5 +110,30 @@ mod tests {
         assert_eq!(s1, "TODO deploy frontend");
         assert_eq!(s2, "DONE deploy frontend");
         assert_eq!(s3, "deploy frontend");
+    }
+
+    #[test]
+    fn cycle_preserves_quote_marker_in_canonical_order() {
+        // Quote marker survives a full cycle and stays in canonical
+        // position (after the task state, before the body).
+        let s0 = "> deploy frontend";
+        let s1 = cycle_todo(s0);
+        let s2 = cycle_todo(&s1);
+        let s3 = cycle_todo(&s2);
+        assert_eq!(s1, "TODO > deploy frontend");
+        assert_eq!(s2, "DONE > deploy frontend");
+        assert_eq!(s3, "> deploy frontend");
+    }
+
+    #[test]
+    fn cycle_normalises_legacy_todo_after_quote_authoring() {
+        // A user who imported `"> TODO foo"` (legacy / external
+        // markdown shape) gets normalised: cycling promotes the
+        // TODO inside the quote body to canonical TODO-first.
+        // Without this normalisation, `cycle_todo("> TODO foo")`
+        // would output `"TODO > TODO foo"` — a double TODO that
+        // `split_todo` would misread.
+        assert_eq!(cycle_todo("> TODO foo"), "DONE > foo");
+        assert_eq!(cycle_todo("> DONE foo"), "> foo");
     }
 }
