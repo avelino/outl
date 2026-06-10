@@ -10,7 +10,9 @@
  * (`crates/outl-actions/src/quote.rs`). This file exists so a client
  * that only has `OutlineNode.text` (mobile's `<BlockRow />`, desktop's
  * row chrome) doesn't need a Tauri round-trip to know if a row should
- * paint with a left border + muted body.
+ * paint the blockquote chrome (left border + faint tint; body keeps
+ * its full colour so refs / bold / tags stay legible — see the
+ * per-client `CLAUDE.md` files for the exact tokens).
  */
 
 /** Wire prefix for a quoted block — keep in sync with `QUOTE_PREFIX` in Rust. */

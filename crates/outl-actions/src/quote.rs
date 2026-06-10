@@ -38,17 +38,37 @@ pub fn split_quote(raw: &str) -> (bool, &str) {
     }
 }
 
-/// Toggle the quote prefix on a block's raw text. Adds `"> "` when
-/// absent, removes it when present. Mirrors
-/// [`crate::todo::cycle_todo`] but with a two-state cycle (the quote
-/// marker is binary, unlike TODO ↔ DONE ↔ none).
+/// Toggle the quote prefix on a block's raw text.
+///
+/// Canonical encoding is **`"TODO > body"`** (TODO/DONE before the
+/// quote marker). The toggle peels both prefixes off, flips the
+/// quote flag, and re-emits in canonical order so `split_todo` in
+/// the backend (and every reader of `OutlineNode.text`) keeps
+/// detecting the task state when the block is also quoted.
+///
+/// Without this, a `toggle_quote` on `"TODO ship it"` would produce
+/// `"> TODO ship it"`, `outl_actions::outline::project_outline_node`
+/// would call `split_todo`, miss the marker, and the DTO would land
+/// in mobile / desktop with `todo = null` and the literal `> TODO`
+/// in `text`. Checkbox disappears mid-flight. Same hazard the
+/// **other** direction in [`crate::todo::cycle_todo`].
 pub fn toggle_quote(raw: &str) -> String {
-    let (quoted, body) = split_quote(raw);
-    if quoted {
-        body.to_string()
-    } else {
-        format!("{QUOTE_PREFIX}{raw}")
+    use crate::todo::{split_todo, TodoState};
+    let (todo_state, after_todo) = split_todo(raw);
+    let (quoted, body) = split_quote(after_todo);
+    let next_quoted = !quoted;
+    let mut out = String::new();
+    if let Some(state) = todo_state {
+        out.push_str(match state {
+            TodoState::Todo => "TODO ",
+            TodoState::Done => "DONE ",
+        });
     }
+    if next_quoted {
+        out.push_str(QUOTE_PREFIX);
+    }
+    out.push_str(body);
+    out
 }
 
 #[cfg(test)]
@@ -100,5 +120,29 @@ mod tests {
         // body without an intermediate "not a quote" state.
         assert_eq!(split_quote("> "), (true, ""));
         assert!(is_quote("> "));
+    }
+
+    #[test]
+    fn toggle_preserves_leading_todo_in_canonical_order() {
+        // Canonical encoding is `"TODO > body"` — TODO/DONE stay
+        // before the quote marker so the backend's `split_todo`
+        // keeps detecting the task state when the block is also
+        // quoted. Without this, `split_todo("> TODO foo")` would
+        // miss the marker and the DTO would land with `todo = null`.
+        assert_eq!(toggle_quote("TODO ship it"), "TODO > ship it");
+        assert_eq!(toggle_quote("DONE ship it"), "DONE > ship it");
+        assert_eq!(toggle_quote("TODO > ship it"), "TODO ship it");
+        assert_eq!(toggle_quote("DONE > ship it"), "DONE ship it");
+    }
+
+    #[test]
+    fn toggle_normalises_legacy_quote_before_todo_authoring() {
+        // A user who types `"> TODO foo"` by hand (TODO inside the
+        // quote body) gets normalised to canonical order on toggle:
+        // the inner TODO is plain text, so removing the quote leaves
+        // it sitting as text. Re-toggling builds canonical TODO+quote.
+        assert_eq!(toggle_quote("> TODO foo"), "TODO foo");
+        // …and a second toggle puts everything in canonical order.
+        assert_eq!(toggle_quote("TODO foo"), "TODO > foo");
     }
 }
