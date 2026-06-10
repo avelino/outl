@@ -1,10 +1,13 @@
 //! Backlinks: which blocks reference which pages.
 //!
-//! A reference is a literal `[[target]]` substring inside a block's
-//! text. `target` matches either a page's slug or its title (the page
-//! root's text). Tags (`#tag`) and block refs (`((blk-X))`) are
-//! handled by `outl-md::inline` — this module is the workspace-level
-//! "which page mentions me" view.
+//! A reference is either a literal `[[target]]` substring inside a
+//! block's text or a `#tag` token whose slug form resolves to the
+//! target page — the same `slugify` rule a tag click goes through
+//! (`open_or_create_by_name`), so "what opens the page" and "what
+//! shows up in the page's backlinks" can't drift. `target` matches
+//! either a page's slug or its title (the page root's text). Block
+//! refs (`((blk-X))`) are handled by `outl-md::inline` — this module
+//! is the workspace-level "which page mentions me" view.
 //!
 //! **This is the single source of truth for backlinks.** Both the
 //! mobile client and the TUI consume [`backlinks_for_page`]; the
@@ -84,15 +87,20 @@ where
     }
 }
 
-/// Every block in the workspace whose text mentions `[[target]]`.
+/// Every block in the workspace that mentions `target` — either as a
+/// literal `[[target]]` substring or as a `#tag` token whose slug
+/// form equals `target`'s slug form.
 ///
-/// `target` is matched literally — pass the page's slug AND title
-/// separately if you want to catch both forms. `root` is the
+/// `[[target]]` is matched literally — pass the page's slug AND title
+/// separately if you want to catch both forms. Tags go through
+/// `outl_md::slug::slugify` on both sides, mirroring how a tag click
+/// resolves its page (`open_or_create_by_name`), so `#Avelino` counts
+/// as a mention of the page whose slug is `avelino`. `root` is the
 /// workspace root directory; it's needed so each backlink can carry
 /// its `source_path` (the `.md` of the page the source block lives
 /// in).
 pub fn backlinks_for_target(workspace: &Workspace, root: &Path, target: &str) -> Vec<Backlink> {
-    let needle = format!("[[{target}]]");
+    let matcher = TargetMatcher::new(target);
     let mut out: Vec<Backlink> = Vec::new();
 
     for (page_id, _) in children_of(workspace, NodeId::root()) {
@@ -107,11 +115,48 @@ pub fn backlinks_for_target(workspace: &Workspace, root: &Path, target: &str) ->
             &meta,
             &source_path,
             &mut path,
-            &needle,
+            &matcher,
             &mut out,
         );
     }
     out
+}
+
+/// Pre-computed match state for one backlink target: the literal
+/// `[[target]]` needle plus the target's slug form for `#tag`
+/// comparison.
+struct TargetMatcher {
+    needle: String,
+    target_slug: String,
+}
+
+impl TargetMatcher {
+    fn new(target: &str) -> Self {
+        Self {
+            needle: format!("[[{target}]]"),
+            target_slug: outl_md::slug::slugify(target),
+        }
+    }
+
+    /// Does this block's text mention the target? `[[ref]]` is a
+    /// substring probe (cheap, exact thanks to the `]]` terminator);
+    /// `#tag` goes through the real inline tokenizer so tags inside
+    /// code spans don't count and `#avelino-foo` doesn't false-match
+    /// a target of `avelino`.
+    fn matches(&self, text: &str) -> bool {
+        if text.contains(&self.needle) {
+            return true;
+        }
+        if !text.contains('#') {
+            return false;
+        }
+        outl_md::inline::tokenize(text).iter().any(|tok| match tok {
+            outl_md::inline::InlineTok::Tag { name } => {
+                outl_md::slug::slugify(name) == self.target_slug
+            }
+            _ => false,
+        })
+    }
 }
 
 /// Convenience: backlinks against either the page's slug or its title.
@@ -130,7 +175,7 @@ pub fn backlinks_for_page(workspace: &Workspace, root: &Path, meta: &PageMeta) -
 }
 
 /// Recursive helper: descend into `parent`'s children, tracking the
-/// DFS path. Every block whose text contains `needle` becomes a
+/// DFS path. Every block whose text matches `matcher` becomes a
 /// [`Backlink`] in `out`.
 #[allow(clippy::too_many_arguments)]
 fn walk_inside_page(
@@ -139,13 +184,13 @@ fn walk_inside_page(
     meta: &PageMeta,
     source_path: &Path,
     path: &mut Vec<usize>,
-    needle: &str,
+    matcher: &TargetMatcher,
     out: &mut Vec<Backlink>,
 ) {
     for (idx, (child_id, _)) in children_of(workspace, parent).into_iter().enumerate() {
         path.push(idx);
         let text = workspace.block_text(child_id).unwrap_or_default();
-        if text.contains(needle) {
+        if matcher.matches(&text) {
             let (todo, body) = split_todo(&text);
             let source_block = project_outline_node(workspace, child_id);
             out.push(Backlink {
@@ -158,7 +203,7 @@ fn walk_inside_page(
                 source_path: Some(source_path.to_path_buf()),
             });
         }
-        walk_inside_page(workspace, child_id, meta, source_path, path, needle, out);
+        walk_inside_page(workspace, child_id, meta, source_path, path, matcher, out);
         path.pop();
     }
 }
@@ -239,6 +284,91 @@ mod tests {
     fn extract_refs_ignores_unbalanced() {
         let refs = extract_refs("[[unterminated and [[ok]] mixed");
         assert!(refs.contains(&"ok".to_string()));
+    }
+
+    #[test]
+    fn tag_mentions_count_as_backlinks() {
+        // `#avelino` must surface in the backlinks of the `avelino`
+        // page exactly like `[[avelino]]` would — a tag click and a
+        // ref click open the same page, so the "Linked from" panel
+        // has to agree.
+        let (mut w, hlc) = ws();
+        let target = open_or_create(&mut w, &hlc, "avelino", "Avelino", PageKind::Page).unwrap();
+        let meta = page_meta(&w, target).unwrap();
+        let day =
+            open_journal(&mut w, &hlc, NaiveDate::from_ymd_opt(2026, 6, 10).unwrap()).unwrap();
+        let mention =
+            append_block(&mut w, &hlc, Some(day), Some("pairing with #avelino today")).unwrap();
+
+        let links = backlinks_for_page(&w, root(), &meta);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].block_id, mention.to_string());
+    }
+
+    #[test]
+    fn tag_mentions_match_through_slugify() {
+        // A tag click resolves its page via `slugify` (see
+        // `open_or_create_by_name`), so `#Avelino` is a mention of
+        // the page whose slug is `avelino`.
+        let (mut w, hlc) = ws();
+        let target = open_or_create(&mut w, &hlc, "avelino", "Avelino", PageKind::Page).unwrap();
+        let meta = page_meta(&w, target).unwrap();
+        let day =
+            open_journal(&mut w, &hlc, NaiveDate::from_ymd_opt(2026, 6, 10).unwrap()).unwrap();
+        let mention = append_block(&mut w, &hlc, Some(day), Some("ship it #Avelino")).unwrap();
+
+        let links = backlinks_for_page(&w, root(), &meta);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].block_id, mention.to_string());
+    }
+
+    #[test]
+    fn longer_tag_does_not_false_match_a_prefix_target() {
+        // `#avelino-foo` is a different page; it must NOT appear in
+        // `avelino`'s backlinks. A substring probe on `#avelino`
+        // would get this wrong — the tokenizer-based match doesn't.
+        let (mut w, hlc) = ws();
+        let target = open_or_create(&mut w, &hlc, "avelino", "Avelino", PageKind::Page).unwrap();
+        let meta = page_meta(&w, target).unwrap();
+        let day =
+            open_journal(&mut w, &hlc, NaiveDate::from_ymd_opt(2026, 6, 10).unwrap()).unwrap();
+        let _ = append_block(&mut w, &hlc, Some(day), Some("see #avelino-foo instead")).unwrap();
+
+        let links = backlinks_for_page(&w, root(), &meta);
+        assert!(links.is_empty(), "prefix tag leaked in: {links:#?}");
+    }
+
+    #[test]
+    fn tag_inside_inline_code_is_not_a_mention() {
+        // `` `#avelino` `` is code, not a tag — the inline tokenizer
+        // already knows that; the backlink matcher must respect it.
+        let (mut w, hlc) = ws();
+        let target = open_or_create(&mut w, &hlc, "avelino", "Avelino", PageKind::Page).unwrap();
+        let meta = page_meta(&w, target).unwrap();
+        let day =
+            open_journal(&mut w, &hlc, NaiveDate::from_ymd_opt(2026, 6, 10).unwrap()).unwrap();
+        let _ = append_block(&mut w, &hlc, Some(day), Some("escape it as `#avelino`")).unwrap();
+
+        let links = backlinks_for_page(&w, root(), &meta);
+        assert!(links.is_empty(), "code-span tag leaked in: {links:#?}");
+    }
+
+    #[test]
+    fn block_with_ref_and_tag_emits_one_backlink() {
+        // Mentioning the same page via both forms in one block still
+        // produces a single backlink (matcher is a yes/no probe and
+        // `backlinks_for_page` dedupes by block id).
+        let (mut w, hlc) = ws();
+        let target = open_or_create(&mut w, &hlc, "avelino", "Avelino", PageKind::Page).unwrap();
+        let meta = page_meta(&w, target).unwrap();
+        let day =
+            open_journal(&mut w, &hlc, NaiveDate::from_ymd_opt(2026, 6, 10).unwrap()).unwrap();
+        let mention =
+            append_block(&mut w, &hlc, Some(day), Some("[[avelino]] aka #avelino")).unwrap();
+
+        let links = backlinks_for_page(&w, root(), &meta);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].block_id, mention.to_string());
     }
 
     #[test]
