@@ -8,6 +8,7 @@ import {
 import type { PageMeta } from "@outl/shared/api/types";
 import { listPages } from "@outl/shared/api/commands";
 import { createSheetDrag } from "../lib/sheet-drag";
+import { useKeyboardInset } from "../lib/viewport";
 
 interface PageSwitcherProps {
   open: boolean;
@@ -37,6 +38,13 @@ export function PageSwitcher(props: PageSwitcherProps) {
   // Calendar). Wire `drag.onPointer*` onto the grab handle only,
   // never the whole header.
   const drag = createSheetDrag(() => props.onClose());
+  // iOS WKWebView ignores `interactive-widget=resizes-content` (it's
+  // Chromium-only), so the keyboard OVERLAYS the layout viewport
+  // instead of shrinking it. Without compensating, the bottom of the
+  // filtered list sits behind the keyboard and can never be scrolled
+  // into view. We pad the sheet by the keyboard height so the scroll
+  // area ends right above it.
+  const keyboardInset = useKeyboardInset();
 
   const filtered = createMemo(() => {
     const all = pages() ?? [];
@@ -62,9 +70,16 @@ export function PageSwitcher(props: PageSwitcherProps) {
         onClick={props.onClose}
       />
       <div
-        class="outl-sheet-up fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col overflow-hidden rounded-t-2xl bg-(--color-ios-bg)/85 shadow-2xl backdrop-blur-2xl backdrop-saturate-150 dark:bg-(--color-iosd-bg)/85"
+        class="outl-sheet-up fixed inset-x-0 bottom-0 z-50 flex flex-col overflow-hidden rounded-t-2xl bg-(--color-ios-bg)/85 shadow-2xl backdrop-blur-2xl backdrop-saturate-150 dark:bg-(--color-iosd-bg)/85"
         style={{
-          "padding-bottom": "env(safe-area-inset-bottom)",
+          // Fullscreen sheet, iOS page-sheet style: anchored to the
+          // bottom and stretching up to just below the status bar so
+          // the rounded corners + grab handle stay visible.
+          top: "calc(env(safe-area-inset-top) + 8px)",
+          // When the keyboard is up, its inset already covers the
+          // home-indicator safe area — take the max instead of
+          // stacking both.
+          "padding-bottom": `max(env(safe-area-inset-bottom), ${keyboardInset()}px)`,
           transform: `translateY(${drag.translateY()}px)`,
           transition: drag.dragging()
             ? "none"
