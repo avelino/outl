@@ -68,7 +68,8 @@
       "Bash(cargo remove:*)",
       "Bash(rm:*)",
       "Bash(mv:*)",
-      "Bash(cp -r:*)"
+      "Bash(cp -r:*)",
+      "git push:*"
     ]
   },
   "hooks": {
