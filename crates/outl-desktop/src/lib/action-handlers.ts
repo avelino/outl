@@ -250,8 +250,8 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
     OpenRefUnderCursor: async () => {
       // Normal-mode `Enter`. Two branches in priority order:
       //
-      // 1. Cursor is on a backlink → open the source page and snap
-      //    the cursor to the referencing block on that page
+      // 1. Selection is on a backlink row → open the source page and
+      //    snap the selection to the referencing block on that page
       //    (backlink rows are read-only, so "open" is the only
       //    meaningful gesture there).
       // 2. Otherwise → enter Insert on the selected block.

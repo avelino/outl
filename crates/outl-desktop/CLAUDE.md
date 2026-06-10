@@ -134,7 +134,7 @@ The Vite dev server runs on **port 1421** so it can coexist with `outl-mobile` (
 | Rust commands | `cargo test -p outl-desktop` | command shims, settings IO, fs_watcher (Phases 1+) |
 | Frontend logic | `bun --filter outl-desktop test` | scaffold smoke (today), components + helpers (Phases 1+) |
 
-Today the suite is the scaffold: one Vitest file (`src/setup.test.ts`) that imports from `@outl/shared` to prove the alias is wired. Drop it once the first real component lands.
+Frontend suites today: `src/setup.test.ts` (scaffold smoke — `@outl/shared` alias resolves), `src/lib/chord-format.test.ts`, `src/lib/markdown-wrap.test.ts`, `src/lib/outline-walk.test.ts`, and `src/lib/action-handlers.test.ts` (regression tests for the `OpenRefUnderCursor` handler — Normal-mode `Enter` enters Insert on the selected block even when it carries a `[[ref]]`, and only a backlink-row selection opens the source page; pins #70).
 
 ## Shortcuts
 
