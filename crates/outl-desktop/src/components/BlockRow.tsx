@@ -684,8 +684,8 @@ function CodeFenceView(props: {
   }
 
   return (
-    <div class="rounded-md border border-white/10 bg-black/30">
-      <div class="flex items-center justify-between border-b border-white/10 px-2 py-1">
+    <div class="rounded-md border border-(--color-outl-fg)/10 bg-(--color-outl-bg-elev)/60">
+      <div class="flex items-center justify-between border-b border-(--color-outl-fg)/10 px-2 py-1">
         <span class="font-mono text-[10px] uppercase opacity-60">{props.language}</span>
         <button
           type="button"
@@ -694,7 +694,7 @@ function CodeFenceView(props: {
             void run();
           }}
           disabled={busy()}
-          class="rounded bg-white/10 px-2 py-0.5 text-[11px] hover:bg-white/20 disabled:opacity-50"
+          class="rounded bg-(--color-outl-fg)/10 px-2 py-0.5 text-[11px] hover:bg-(--color-outl-fg)/20 disabled:opacity-50"
         >
           {busy() ? "Running…" : "▶ Run"}
         </button>

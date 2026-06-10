@@ -48,7 +48,7 @@ export function WorkspacePicker(props: { onPicked: () => void }) {
         type="button"
         onClick={pickDirectory}
         disabled={busy()}
-        class="rounded-md bg-white/10 px-4 py-2 text-sm font-medium hover:bg-white/15 disabled:opacity-50"
+        class="rounded-md bg-(--color-outl-fg)/10 px-4 py-2 text-sm font-medium hover:bg-(--color-outl-fg)/15 disabled:opacity-50"
       >
         {busy() ? "Opening…" : "Pick workspace folder…"}
       </button>

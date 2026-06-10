@@ -129,7 +129,7 @@ export function Picker(props: { onPicked: (view: PageView) => void }) {
           if (e.target === e.currentTarget) close();
         }}
       >
-        <div class="mt-24 w-[520px] max-w-[90vw] overflow-hidden rounded-lg border border-white/15 bg-zinc-900/95 shadow-2xl">
+        <div class="mt-24 w-[520px] max-w-[90vw] overflow-hidden rounded-lg border border-(--color-outl-fg)/15 bg-(--color-outl-bg-elev)/95 shadow-2xl">
           <input
             ref={inputRef}
             type="text"
@@ -137,7 +137,7 @@ export function Picker(props: { onPicked: (view: PageView) => void }) {
             onInput={(e) => setQuery(e.currentTarget.value)}
             onKeyDown={handleKey}
             placeholder="Find or create a page…"
-            class="w-full border-b border-white/10 bg-transparent px-4 py-3 outline-none"
+            class="w-full border-b border-(--color-outl-fg)/10 bg-transparent px-4 py-3 outline-none"
           />
           <div class="max-h-[60vh] overflow-y-auto">
             <For each={results()}>
@@ -146,7 +146,9 @@ export function Picker(props: { onPicked: (view: PageView) => void }) {
                   type="button"
                   onClick={() => void pick(p.slug)}
                   class={`block w-full px-4 py-2 text-left text-sm ${
-                    idx() === highlight() ? "bg-white/10" : "hover:bg-white/5"
+                    idx() === highlight()
+                      ? "bg-(--color-outl-fg)/10"
+                      : "hover:bg-(--color-outl-fg)/5"
                   }`}
                 >
                   <div>
@@ -161,14 +163,14 @@ export function Picker(props: { onPicked: (view: PageView) => void }) {
               <button
                 type="button"
                 onClick={() => void pick(query().trim())}
-                class="block w-full px-4 py-2 text-left text-sm hover:bg-white/5"
+                class="block w-full px-4 py-2 text-left text-sm hover:bg-(--color-outl-fg)/5"
               >
                 <span class="opacity-60">Create new page </span>
                 <span class="font-medium">"{query().trim()}"</span>
               </button>
             </Show>
           </div>
-          <div class="border-t border-white/10 px-4 py-1.5 text-[10px] opacity-50">
+          <div class="border-t border-(--color-outl-fg)/10 px-4 py-1.5 text-[10px] opacity-50">
             ↑/↓ navigate · ⏎ open · Esc close
           </div>
         </div>

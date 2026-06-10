@@ -110,7 +110,7 @@ export function InlineBacklinks() {
                 <button
                   type="button"
                   onClick={() => void jumpTo(group.key === "__orphan__" ? undefined : group.key)}
-                  class="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left text-sm font-semibold hover:bg-white/5"
+                  class="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left text-sm font-semibold hover:bg-(--color-outl-fg)/5"
                 >
                   <span aria-hidden="true">{group.icon}</span>
                   <span>{group.title}</span>
@@ -144,7 +144,7 @@ export function InlineBacklinks() {
                                 link.block_id,
                               )
                             }
-                            class="block w-full rounded px-1 py-0.5 text-left text-sm leading-snug opacity-90 hover:bg-white/5 hover:opacity-100"
+                            class="block w-full rounded px-1 py-0.5 text-left text-sm leading-snug opacity-90 hover:bg-(--color-outl-fg)/5 hover:opacity-100"
                           >
                             <MarkdownInline
                               tokens={link.source_block.tokens}

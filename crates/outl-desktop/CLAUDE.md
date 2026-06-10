@@ -105,11 +105,20 @@ Composition: the marker stacks with TODO/DONE the same way the TUI does (`> TODO
 Toggling the marker goes through the `toggleQuote(pageId, id)` wrapper in `@outl/shared/api/commands`, which calls the `toggle_quote` Tauri command (`src-tauri/src/commands/block.rs`), which delegates to `outl_actions::block::toggle_quote` — the same Rust function the mobile and TUI surfaces hit.
 **No string surgery on the TS side** — the prefix arithmetic owns the rule and stays in one place.
 
-## Theme tokens — temporary mirror of iOS names
+## Theme tokens
 
-The `@outl/shared/markdown::MarkdownInline` renderer still references CSS custom properties named after the mobile palette (`--color-ios-accent`, `--color-iosd-divider`, etc.).
-`src/styles.css` defines them with desktop-appropriate values so the renderer stays client-agnostic.
-**When the desktop palette diverges meaningfully from mobile**, refactor the shared lib to use neutral `--color-outl-*` tokens — see the regla in [`outl-frontend-shared/CLAUDE.md`](../outl-frontend-shared/CLAUDE.md#theming-note).
+`src/lib/palette.ts::applyPaletteToRoot` writes two CSS custom-property namespaces on every theme switch:
+
+- **`--color-outl-*`** — the canonical set.
+  New desktop code uses only these (`bg-(--color-outl-bg-elev)`, `border-(--color-outl-fg)/15`, etc.).
+- **`--color-ios-*` / `--color-iosd-*`** — legacy names still consumed by `@outl/shared/markdown::MarkdownInline`.
+  They are mapped from the active palette so the shared renderer stays client-agnostic until it migrates.
+
+`src/styles.css` provides boot-default values for both namespaces (the `outl` brand palette) so the page isn't flash-unstyled before `applyPaletteToRoot` runs.
+`color-scheme` (`light` / `dark`) is also set from the palette's `bg` luminance so native controls (scrollbars, `<select>`) follow the active preset.
+
+**When `@outl/shared/markdown::MarkdownInline` migrates to `--color-outl-*`**, the `--color-ios-*` writes in `applyPaletteToRoot` and the legacy block in `styles.css` can both be removed.
+See [`outl-frontend-shared/CLAUDE.md`](../outl-frontend-shared/CLAUDE.md#theming-note) for the migration plan.
 
 ## Running
 

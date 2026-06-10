@@ -296,7 +296,7 @@ export function OutlineView() {
             <button
               type="button"
               onClick={addFirstBlock}
-              class="rounded px-3 py-2 text-sm opacity-60 hover:bg-white/5 hover:opacity-100"
+              class="rounded px-3 py-2 text-sm opacity-60 hover:bg-(--color-outl-fg)/5 hover:opacity-100"
             >
               {appState.page ? "Click to add the first block" : "Loading…"}
             </button>
