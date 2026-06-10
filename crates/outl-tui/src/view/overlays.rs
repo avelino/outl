@@ -102,7 +102,7 @@ pub(crate) fn render_autocomplete(
                 .border_style(app.theme.border)
                 .title(Span::styled(title, app.theme.help_title)),
         )
-        .style(Style::default().bg(app.theme.popup_bg));
+        .style(app.theme.popup_style());
     f.render_widget(list, area);
 }
 
@@ -144,7 +144,7 @@ pub(crate) fn render_quick_switch(
             .border_style(app.theme.border)
             .title(Span::styled("Quick Switcher", app.theme.help_title)),
     )
-    .style(Style::default().bg(app.theme.popup_bg));
+    .style(app.theme.popup_style());
     f.render_widget(input, outer[0]);
 
     // Telescope-style split: list on the left, preview on the right.
@@ -183,7 +183,7 @@ pub(crate) fn render_quick_switch(
                 .border_style(app.theme.border)
                 .title(format!("{} matches  ↑↓ Enter Esc", qs.candidates.len())),
         )
-        .style(Style::default().bg(app.theme.popup_bg));
+        .style(app.theme.popup_style());
     f.render_widget(list, cols[0]);
 
     render_preview_pane(f, cols[1], app, qs);
@@ -204,7 +204,7 @@ fn render_preview_pane(f: &mut ratatui::Frame<'_>, area: Rect, app: &App, qs: &Q
                 .border_style(app.theme.border)
                 .title(Span::styled(" preview ", app.theme.help_title)),
         )
-        .style(Style::default().bg(app.theme.popup_bg));
+        .style(app.theme.popup_style());
         f.render_widget(empty, area);
         return;
     };
@@ -252,7 +252,7 @@ fn render_preview_pane(f: &mut ratatui::Frame<'_>, area: Rect, app: &App, qs: &Q
                     app.theme.help_title,
                 )),
         )
-        .style(Style::default().bg(app.theme.popup_bg))
+        .style(app.theme.popup_style())
         .wrap(ratatui::widgets::Wrap { trim: false });
     f.render_widget(preview, area);
 }
@@ -317,7 +317,7 @@ pub(crate) fn render_search_overlay(
             .border_style(app.theme.border)
             .title(Span::styled("Search", app.theme.help_title)),
     )
-    .style(Style::default().bg(app.theme.popup_bg));
+    .style(app.theme.popup_style());
     f.render_widget(input, outer[0]);
 
     let lines: Vec<Line<'_>> = s
@@ -351,7 +351,7 @@ pub(crate) fn render_search_overlay(
                     s.hits.len()
                 )),
         )
-        .style(Style::default().bg(app.theme.popup_bg))
+        .style(app.theme.popup_style())
         .wrap(ratatui::widgets::Wrap { trim: false });
     f.render_widget(list, outer[1]);
 }
@@ -381,7 +381,7 @@ pub(crate) fn render_slash_overlay(
             .border_style(app.theme.border)
             .title(Span::styled(" Command palette ", app.theme.help_title)),
     )
-    .style(Style::default().bg(app.theme.popup_bg));
+    .style(app.theme.popup_style());
     f.render_widget(input, outer[0]);
 
     // Group candidates by category, then render section headers
@@ -456,7 +456,7 @@ pub(crate) fn render_slash_overlay(
                 .border_style(app.theme.border)
                 .title(format!(" {} commands · ↑↓ Enter Esc ", s.candidates.len())),
         )
-        .style(Style::default().bg(app.theme.popup_bg))
+        .style(app.theme.popup_style())
         .scroll((scroll, 0));
     f.render_widget(list, outer[1]);
 }
@@ -565,7 +565,7 @@ pub(crate) fn render_error_overlay(
                 .border_style(app.theme.status_message)
                 .title(Span::styled(title, app.theme.status_message)),
         )
-        .style(Style::default().bg(app.theme.popup_bg))
+        .style(app.theme.popup_style())
         .wrap(ratatui::widgets::Wrap { trim: false });
     f.render_widget(widget, area);
 }
@@ -595,7 +595,7 @@ pub(crate) fn render_command_bar(
                 .borders(Borders::ALL)
                 .border_style(app.theme.border),
         )
-        .style(Style::default().bg(app.theme.popup_bg));
+        .style(app.theme.popup_style());
     f.render_widget(bar, area);
 }
 
@@ -641,11 +641,9 @@ pub(crate) fn render_help_popup(f: &mut ratatui::Frame<'_>, full: Rect, app: &Ap
             )),
     )
     .style(
-        Style::default().bg(app.theme.popup_bg).fg(app
-            .theme
-            .dim
-            .fg
-            .unwrap_or(ratatui::style::Color::Gray)),
+        app.theme
+            .popup_style()
+            .fg(app.theme.dim.fg.unwrap_or(ratatui::style::Color::Gray)),
     )
     .highlight_style(app.theme.list_selected)
     .divider(Span::styled("│", app.theme.dim));
@@ -677,7 +675,7 @@ pub(crate) fn render_help_popup(f: &mut ratatui::Frame<'_>, full: Rect, app: &Ap
                 .border_style(app.theme.heading)
                 .title(Span::styled(title, app.theme.help_title)),
         )
-        .style(Style::default().bg(app.theme.popup_bg))
+        .style(app.theme.popup_style())
         .scroll((scroll, 0))
         .wrap(ratatui::widgets::Wrap { trim: false });
     f.render_widget(popup, chunks[1]);

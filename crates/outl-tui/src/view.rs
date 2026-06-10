@@ -54,6 +54,23 @@ pub(crate) fn render_app(f: &mut ratatui::Frame<'_>, app: &mut App) {
     // buffer. The cost is one extra full-area write per frame, which
     // is well inside the 60fps budget the TUI targets.
     f.render_widget(Clear, area);
+    // Paint the theme's canvas (background + base text color) across
+    // the whole frame. On the palette-derived RGB presets this is what
+    // makes a light theme readable on a dark terminal (and vice
+    // versa): spans that don't set an explicit fg/bg inherit these
+    // cell attributes instead of the terminal's defaults. The two
+    // ANSI presets (`default-dark`, `light`) carry `Color::Reset`
+    // here, so for them this paint is a no-op and the terminal's own
+    // palette keeps showing through — that behavior is intentional
+    // and documented in docs/theming.md.
+    f.render_widget(
+        Block::default().style(
+            ratatui::style::Style::default()
+                .fg(app.theme.foreground)
+                .bg(app.theme.background),
+        ),
+        area,
+    );
     render_main(f, area, app);
 
     // Overlays draw on top of everything else.
