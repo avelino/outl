@@ -216,6 +216,7 @@ pub const PRESETS: &[&str] = &[
     "outl",
     "default-dark",
     "light",
+    "logseq-light",
     "dracula",
     "solarized-dark",
     "nord",
@@ -238,6 +239,7 @@ pub fn by_name(name: &str) -> Option<Theme> {
         "outl" | "default" => Some(outl()),
         "default-dark" | "dark" => Some(default_dark()),
         "light" => Some(light()),
+        "logseq-light" | "logseq" => Some(logseq_light()),
         "dracula" => Some(dracula()),
         "solarized-dark" | "solarized" => Some(solarized_dark()),
         "nord" => Some(nord()),
@@ -402,6 +404,12 @@ pub fn light() -> Theme {
             .bg(Color::Blue)
             .add_modifier(Modifier::BOLD),
     }
+}
+
+/// Logseq light — Logseq's default light theme (Blueprint blues on
+/// a white canvas).
+pub fn logseq_light() -> Theme {
+    theme_from_palette("logseq-light", &outl_theme::presets::logseq_light())
 }
 
 /// Dracula — popular dark palette.

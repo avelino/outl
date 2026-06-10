@@ -61,7 +61,7 @@ font_size = 15
 |---|---|---|---|---|
 | `preset` | string | `"outl"` | TUI, desktop | Active palette. Unknown names fall through to `outl`. |
 
-Available presets: `outl`, `default-dark`, `light`, `dracula`, `solarized-dark`, `nord`, `monokai`. See [theming.md](theming.md) for the look of each.
+Available presets: `outl`, `default-dark`, `light`, `logseq-light`, `dracula`, `solarized-dark`, `nord`, `monokai`. See [theming.md](theming.md) for the look of each.
 
 #### `[editor]`
 

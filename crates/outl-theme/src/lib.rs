@@ -23,10 +23,10 @@
 //!
 //! ## Presets
 //!
-//! Seven built-in palettes, named identically to the TUI presets
+//! Eight built-in palettes, named identically to the TUI presets
 //! that shipped before this crate existed. The TUI's render path is
-//! unchanged; it now derives its `Theme` from these. Adding an
-//! eighth preset means: extend `presets`, add a name to
+//! unchanged; it now derives its `Theme` from these. Adding a
+//! preset means: extend `presets`, add a name to
 //! [`PRESETS`], and add a match arm in [`by_name`].
 
 pub mod palette;
@@ -40,6 +40,7 @@ pub const PRESETS: &[&str] = &[
     "outl",
     "default-dark",
     "light",
+    "logseq-light",
     "dracula",
     "solarized-dark",
     "nord",
@@ -66,6 +67,7 @@ pub fn by_name(name: &str) -> Option<Palette> {
         "outl" | "default" => Some(presets::outl()),
         "default-dark" | "dark" => Some(presets::default_dark()),
         "light" => Some(presets::light()),
+        "logseq-light" | "logseq" => Some(presets::logseq_light()),
         "dracula" => Some(presets::dracula()),
         "solarized-dark" | "solarized" => Some(presets::solarized_dark()),
         "nord" => Some(presets::nord()),

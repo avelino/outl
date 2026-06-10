@@ -188,6 +188,75 @@ pub fn light() -> Palette {
     }
 }
 
+/// Logseq light — the default light theme of Logseq. White canvas,
+/// warm dark-gray text (`#433f38`), and the Blueprint.js blue rail
+/// (`#106ba3` links, `#0069b6` active accent) Logseq ships out of
+/// the box. Hex values sourced from Logseq's `vars-classic.css`
+/// (`--ls-*` custom properties); the dim grays are alpha blends of
+/// the primary text color on white, matching how Logseq fades
+/// bullets and metadata.
+pub fn logseq_light() -> Palette {
+    let bg = "#ffffff"; // --ls-primary-background-color
+    let bg_elev = "#f7f7f7"; // --ls-secondary-background-color
+    let fg = "#433f38"; // --ls-primary-text-color
+    let fg_strong = "#161e2e"; // --ls-secondary-text-color
+    let title = "#0f1419"; // --ls-title-text-color
+    let fg_dim = "#8e8b87"; // fg at 60% on white
+    let fg_dimmer = "#bdbbb9"; // fg at 35% on white
+    let border = "#cccccc"; // --ls-border-color
+    let blue = "#106ba3"; // --ls-link-text-color
+    let blue_deep = "#1a537c"; // --ls-link-text-hover-color
+    let blue_bright = "#0069b6"; // --ls-active-primary-color
+    let selection = "#e4f2ff"; // --ls-selection-background-color
+    let green = "#0d8050"; // Blueprint green2, in-family with blue2
+    let orange = "#bf7326"; // Blueprint orange2
+    let violet = "#752f75"; // Blueprint violet2
+
+    Palette {
+        name: "logseq-light".into(),
+        bg: bg.into(),
+        bg_elev: bg_elev.into(),
+        fg: fg.into(),
+        fg_dim: fg_dim.into(),
+        fg_dimmer: fg_dimmer.into(),
+        border: border.into(),
+        hint: fg_dim.into(),
+        accent: blue.into(),
+        accent_soft: blue_bright.into(),
+        accent_alt: green.into(),
+        warn: orange.into(),
+        ref_link_fg: blue.into(),
+        tag_link_fg: blue_deep.into(),
+        md_link_fg: blue.into(),
+        bold_fg: fg_strong.into(),
+        italic_fg: fg.into(),
+        strike_fg: fg_dim.into(),
+        code_fg: green.into(),
+        todo_open_fg: orange.into(),
+        todo_done_fg: green.into(),
+        todo_done_body_fg: fg_dim.into(),
+        property_key_fg: fg_dim.into(),
+        property_value_fg: blue_bright.into(),
+        heading_fg: title.into(),
+        dim_fg: fg_dim.into(),
+        selected_bullet_bg: blue.into(),
+        selected_bullet_fg: bg.into(),
+        cursor_block_bg: fg.into(),
+        cursor_block_fg: bg.into(),
+        cursor_caret_fg: blue_bright.into(),
+        status_normal_bg: blue.into(),
+        status_normal_fg: bg.into(),
+        status_insert_bg: green.into(),
+        status_insert_fg: bg.into(),
+        status_visual_bg: violet.into(),
+        status_visual_fg: bg.into(),
+        status_message_fg: orange.into(),
+        list_selected_bg: selection.into(),
+        list_selected_fg: title.into(),
+        help_title_fg: blue.into(),
+    }
+}
+
 /// Dracula — popular dark palette (zenorocha).
 pub fn dracula() -> Palette {
     let bg = "#282a36";

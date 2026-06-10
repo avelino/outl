@@ -112,9 +112,11 @@ Pages you reference but haven't created yet are *real* the moment you press `Ent
 
 ## Try a theme
 
-Six built-in palettes:
+Eight built-in palettes:
 
 ```bash
+outl --workspace ~/notes --theme outl
+outl --workspace ~/notes --theme logseq-light
 outl --workspace ~/notes --theme dracula
 outl --workspace ~/notes --theme nord
 outl --workspace ~/notes --theme monokai
