@@ -187,6 +187,15 @@ Implementation lives in `lib/markdown-wrap.ts`: each handler reads `document.act
 | `Backspace` on empty | Delete the block |
 | `[[` / `((` | Auto-close pair (`@outl/shared/autocomplete`) |
 
+### `Enter` outside a textarea (Normal mode)
+
+With a block selected and no textarea focused (the DOM fallback puts the dispatcher in Normal mode even with `vim_mode == false`), `Enter` resolves to the shared `OpenRefUnderCursor` action — but the desktop handler **always enters Insert on the selected block**.
+The one exception: when the selection sits on a **backlink row** (read-only), `Enter` opens the source page and lands the cursor on the referencing block.
+
+Why the divergence from the TUI: the TUI's Normal mode has a character cursor, so "open the ref under the cursor" is well-defined (`ref_at_cursor`) and falls back to Insert when the cursor isn't on a ref.
+The desktop's Normal mode only has a selected block — an earlier handler approximated "under cursor" as "first `[[ref]]` in the block", which made every ref-carrying block impossible to edit via `Enter`.
+On the desktop, **following a ref is the click on the token** (`onRefClick` in `OutlineView`); `Enter` means edit.
+
 ### `[[page]]` ref autocomplete
 
 While the caret sits inside an open `[[…]]`, `BlockRow` shows a floating page-suggestion popup (`RefSuggestPopup`, anchored under the textarea). It reuses the shared `detectRefContext` / `applySuggestion` helpers (`@outl/shared/autocomplete`) and the `search_pages` command the `Cmd+P` picker already calls — no parallel implementation. `↑`/`↓` move the highlight, `Enter`/`Tab` accept (inserting the page title, or the ISO slug for journals), `Esc` closes the popup (a second `Esc` then commits the block), and clicking a row picks it (via `onMouseDown` + `preventDefault` so the textarea's blur-commit doesn't fire first). Block refs (`((…))`) are intentionally not suggested yet — separate feature.
