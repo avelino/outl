@@ -33,7 +33,7 @@ This is what lets every other crate cheaply depend on us.
 
 - [`Palette`] — the struct of named hex strings (one per semantic surface).
   Field naming follows "what the surface IS", not "what it looks like" (`ref_link_fg`, not `purple_underline`). Two surfaces that genuinely share a style share the field.
-- The seven built-in presets in `src/presets.rs`: `outl`, `default-dark`, `light`, `dracula`, `solarized-dark`, `nord`, `monokai`.
+- The eight built-in presets in `src/presets.rs`: `outl`, `default-dark`, `light`, `logseq-light`, `dracula`, `solarized-dark`, `nord`, `monokai`.
 - [`PRESETS`] — the canonical user-visible order (alphabetical-ish, brand first).
 - [`by_name`] — case- and separator-insensitive lookup so `"Solarized Dark"`, `"solarized_dark"`, and `"solarized-dark"` all resolve.
 - [`default`] / [`all`] — fallback + iterator helpers for pickers.
@@ -51,8 +51,17 @@ This is what lets every other crate cheaply depend on us.
 2. Set every field — the `every_palette_field_is_hex` test will fail if any field is empty or non-hex.
 3. Add the canonical name to [`PRESETS`] in `src/lib.rs` (alphabetical, after `outl`).
 4. Add a match arm in [`by_name`] (include any user-friendly aliases — case/separator insensitivity is handled, but `"Solarized Dark"` → `"solarized-dark"` aliasing is per-arm).
-5. Update `docs/theming.md` with a one-line description.
-6. Update `docs/config.md`'s "Available presets" list.
+5. Add a one-line TUI delegate in `crates/outl-tui/src/theme.rs`:
+   ```rust
+   pub fn my_preset() -> Theme {
+       theme_from_palette("my-preset", &outl_theme::presets::my_preset())
+   }
+   ```
+   Also add the name to `PRESETS` and a match arm in `by_name` in that file.
+   `default-dark` and `light` are the only two TUI presets that bypass `theme_from_palette` — they use ANSI named colors so the terminal's palette shows through.
+6. Desktop and mobile clients pick up the preset automatically via `list_themes` / `get_theme` Tauri commands — no extra wiring needed there.
+7. Update `docs/theming.md` with a one-line description.
+8. Update `docs/config.md`'s "Available presets" list.
 
 The `every_listed_preset_resolves` test catches forgetting step 4; the `name_matches_listed_preset` test catches forgetting to set `Palette.name`.
 

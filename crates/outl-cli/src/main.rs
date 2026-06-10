@@ -41,9 +41,9 @@ struct Cli {
     #[arg(short = 'w', long, global = true, value_name = "DIR")]
     workspace: Option<PathBuf>,
 
-    /// TUI theme preset (default-dark, light, dracula, solarized-dark,
-    /// nord, monokai). Overrides `[theme] preset` in workspace
-    /// `config.toml` for this run.
+    /// TUI theme preset (default-dark, light, logseq-light, dracula,
+    /// solarized-dark, nord, monokai). Overrides `[theme] preset` in
+    /// workspace `config.toml` for this run.
     #[arg(long, global = true, value_name = "PRESET")]
     theme: Option<String>,
 
