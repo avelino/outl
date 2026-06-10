@@ -8,19 +8,25 @@
     <title>outl</title>
     <style>
       /*
-       * Boot frame painted before Vite's CSS bundle loads. Mirrors the
-       * `outl` brand defaults from styles.css so the user never sees
-       * a flash of white. styles.css then takes over with
-       * @layer base + theme tokens; applyPaletteToRoot() picks up the
-       * active preset on mount.
+       * Boot frame painted before Vite's CSS bundle loads. The
+       * var() fallbacks mirror the `outl` brand defaults from
+       * styles.css so the user never sees a flash of white.
+       *
+       * IMPORTANT: this rule is *unlayered*, so in the cascade it
+       * beats everything styles.css declares inside `@layer base`.
+       * It MUST read the `--color-outl-*` custom properties (which
+       * applyPaletteToRoot() installs inline on <html>) instead of
+       * hardcoding hex values — a hardcoded background here
+       * permanently overrides every light theme and the app stays
+       * dark no matter which preset the user picks.
        */
       html,
       body,
       #root {
         margin: 0;
         height: 100%;
-        background-color: #0c0814;
-        color: #f4f1fa;
+        background-color: var(--color-outl-bg, #0c0814);
+        color: var(--color-outl-fg, #f4f1fa);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "SF Pro Text",
           system-ui, sans-serif;
       }

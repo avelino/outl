@@ -81,8 +81,8 @@ export function SettingsModal() {
           if (e.target === e.currentTarget) close();
         }}
       >
-        <div class="mt-24 w-[480px] max-w-[90vw] overflow-hidden rounded-lg border border-white/15 bg-zinc-900/95 shadow-2xl">
-          <header class="border-b border-white/10 px-5 py-3">
+        <div class="mt-24 w-[480px] max-w-[90vw] overflow-hidden rounded-lg border border-(--color-outl-fg)/15 bg-(--color-outl-bg-elev)/95 shadow-2xl">
+          <header class="border-b border-(--color-outl-fg)/10 px-5 py-3">
             <h2 class="text-lg font-semibold">Settings</h2>
           </header>
 
@@ -114,7 +114,7 @@ export function SettingsModal() {
                     setDraft({ ...draft()!, theme: next });
                     void previewTheme(next);
                   }}
-                  class="w-full rounded border border-white/15 bg-white/5 px-2 py-1 text-sm outline-none focus:border-white/30"
+                  class="w-full rounded border border-(--color-outl-fg)/15 bg-(--color-outl-fg)/5 px-2 py-1 text-sm outline-none focus:border-(--color-outl-fg)/30"
                 >
                   <For each={themes() ?? []}>
                     {(name) => <option value={name}>{name}</option>}
@@ -138,13 +138,13 @@ export function SettingsModal() {
                       font_size: Number(e.currentTarget.value) || 15,
                     })
                   }
-                  class="w-24 rounded border border-white/15 bg-white/5 px-2 py-1 text-sm outline-none focus:border-white/30"
+                  class="w-24 rounded border border-(--color-outl-fg)/15 bg-(--color-outl-fg)/5 px-2 py-1 text-sm outline-none focus:border-(--color-outl-fg)/30"
                 />
               </label>
 
               <div>
                 <div class="text-sm font-medium">Workspace</div>
-                <div class="mt-1 truncate rounded bg-white/5 px-2 py-1 font-mono text-xs opacity-70">
+                <div class="mt-1 truncate rounded bg-(--color-outl-fg)/5 px-2 py-1 font-mono text-xs opacity-70">
                   {draft()!.last_workspace ?? "(none)"}
                 </div>
                 <div class="mt-1 text-xs opacity-50">
@@ -154,7 +154,7 @@ export function SettingsModal() {
             </div>
           </Show>
 
-          <footer class="flex justify-end gap-2 border-t border-white/10 px-5 py-3">
+          <footer class="flex justify-end gap-2 border-t border-(--color-outl-fg)/10 px-5 py-3">
             <button
               type="button"
               onClick={close}
@@ -166,7 +166,7 @@ export function SettingsModal() {
               type="button"
               onClick={() => void save()}
               disabled={busy() || !draft()}
-              class="rounded bg-white/15 px-3 py-1 text-sm font-medium hover:bg-white/25 disabled:opacity-50"
+              class="rounded bg-(--color-outl-fg)/15 px-3 py-1 text-sm font-medium hover:bg-(--color-outl-fg)/25 disabled:opacity-50"
             >
               {busy() ? "Saving…" : "Save"}
             </button>

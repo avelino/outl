@@ -60,4 +60,22 @@ export function applyPaletteToRoot(palette: Palette) {
   // matches the theme before any class hydrates.
   document.body.style.backgroundColor = palette.bg;
   document.body.style.color = palette.fg;
+
+  // Native controls (select dropdowns, scrollbars, checkboxes)
+  // follow `color-scheme`, not our CSS variables. styles.css boots
+  // with `dark` (brand default); flip it per-palette so a light
+  // preset doesn't ship dark scrollbars and a dark select popup.
+  root.style.colorScheme = isLightHex(palette.bg) ? "light" : "dark";
+}
+
+/**
+ * Perceived-luminance check on a `#rrggbb` string (ITU-R BT.601
+ * weights). Used only to pick `color-scheme`; a malformed hex is
+ * treated as dark, matching the boot default.
+ */
+function isLightHex(hex: string): boolean {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(hex);
+  if (!m) return false;
+  const [r, g, b] = [m[1], m[2], m[3]].map((c) => parseInt(c, 16));
+  return 0.299 * r + 0.587 * g + 0.114 * b > 128;
 }

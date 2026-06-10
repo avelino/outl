@@ -127,8 +127,8 @@ The `every_palette_field_is_hex` test catches a typo like `"#xyz123"` or a misse
 
 - **Don't overlap modifiers on the same field across themes.** Solarized's `bold` is `fg(orange) + BOLD`; Dracula's is similar but on orange too.
   Keep modifiers semantic (BOLD for bold, etc.) and let the color carry the personality.
-- **Backgrounds**: only `popup_bg` and `background` matter today.
-  The alternate screen inherits the terminal's background; we don't fight it.
+- **Backgrounds**: the RGB presets (`outl`, `dracula`, `solarized-dark`, `nord`, `monokai`) paint `bg` across the whole TUI canvas and use `fg` as the base text color, so a light theme stays readable on a dark terminal (and vice versa).
+  Only the two ANSI presets (`default-dark`, `light`) keep `Color::Reset` and inherit the terminal's own background/foreground — that's their point.
 - **Underline on `ref_link` and `tag_link` is intentional.** They're the only "clickable" things in pretty-render mode, and the underline is the visual affordance.
 - **Contrast matters more than tone.** Test your theme against a workspace with lots of refs, tags, code, and TODOs.
 
@@ -137,7 +137,7 @@ The `every_palette_field_is_hex` test catches a typo like `"#xyz123"` or a misse
 | Client | What it does with the hex |
 |---|---|
 | **`outl-tui`** | `crates/outl-tui/src/theme.rs::theme_from_palette` converts each `#rrggbb` to `ratatui::Color::Rgb(r, g, b)` and re-applies the consistent modifiers (`BOLD` on `bold`, `UNDERLINED` on links, `ITALIC` on `italic`, `CROSSED_OUT` on `strike`). The five RGB presets (`outl`, `dracula`, `solarized-dark`, `nord`, `monokai`) are one-line delegates; `default-dark` and `light` stay manual on ANSI named colors. |
-| **`outl-desktop`** | The Tauri commands `list_themes()` and `get_theme(name)` return the `Palette` as JSON. The frontend writes each field as a CSS custom property on `<html>` (`--color-outl-accent`, `--color-outl-ref-link-fg`, …) so Tailwind class utilities like `text-(--color-outl-accent)` resolve at runtime. Settings modal exposes the dropdown. |
+| **`outl-desktop`** | The Tauri commands `list_themes()` and `get_theme(name)` return the `Palette` as JSON. The frontend writes each field as a CSS custom property on `<html>` (`--color-outl-accent`, `--color-outl-ref-link-fg`, …) so Tailwind class utilities like `text-(--color-outl-accent)` resolve at runtime, and flips `color-scheme` (light/dark) from the palette's `bg` luminance so native controls and scrollbars follow. Settings modal exposes the dropdown. Chrome surfaces never hardcode a hue — translucent layers derive from `--color-outl-fg` (`bg-(--color-outl-fg)/10`) so they adapt to light and dark presets alike. |
 | **`outl-mobile`** | Today the mobile client uses its iOS-specific tokens (`--color-ios-*`). When desktop ships, it mirrors those names so `<MarkdownInline />` from `@outl/shared` stays portable. The migration to neutral `--color-outl-*` tokens lands when mobile picks up the theme picker. |
 
 ## Future
