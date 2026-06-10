@@ -236,7 +236,7 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
       if (prev) setAppState("selectedBlockId", prev);
     },
 
-    // ── enter Insert (i / Shift+I / Enter on a non-ref block) ────
+    // ── enter Insert (i / Shift+I / Enter) ───────────────────────
     EnterInsert: () => {
       const id = appState.selectedBlockId;
       if (!id) return;
@@ -248,12 +248,21 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
       setAppState("editingBlockId", id);
     },
     OpenRefUnderCursor: async () => {
-      // Normal-mode `Enter`. Three branches in priority order:
+      // Normal-mode `Enter`. Two branches in priority order:
       //
       // 1. Cursor is on a backlink → open the source page and snap
-      //    the cursor to the referencing block on that page.
-      // 2. Selected block has a `[[ref]]` → follow it.
-      // 3. No ref → enter Insert on the selected block.
+      //    the cursor to the referencing block on that page
+      //    (backlink rows are read-only, so "open" is the only
+      //    meaningful gesture there).
+      // 2. Otherwise → enter Insert on the selected block.
+      //
+      // Unlike the TUI, the desktop's Normal mode has no character
+      // cursor — only a selected block — so "the ref under the
+      // cursor" cannot be resolved. An earlier version approximated
+      // it as "the first `[[ref]]` in the block", which made every
+      // ref-carrying block impossible to edit via Enter. Following
+      // a ref on the desktop is the click on the token
+      // (`onRefClick` in OutlineView).
       const curBacklink = appState.selectedBacklinkBlockId;
       if (curBacklink) {
         const link = appState.backlinks.find(
@@ -272,13 +281,6 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
       }
       const id = appState.selectedBlockId;
       if (!id) return;
-      const block = lookupBlock(id);
-      const firstRef = block?.tokens.find((t) => t.kind === "ref");
-      if (firstRef && firstRef.kind === "ref") {
-        const view = await safeCall(openRef(firstRef.value));
-        if (view) deps.applyView(view);
-        return;
-      }
       setAppState("editingBlockId", id);
     },
 
