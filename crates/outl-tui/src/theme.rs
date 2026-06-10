@@ -42,6 +42,7 @@ fn theme_from_palette(name: &'static str, p: &Palette) -> Theme {
     Theme {
         name,
         background: hex_to_color(&p.bg),
+        foreground: hex_to_color(&p.fg),
         bullet: Style::default().fg(hex_to_color(&p.fg_dimmer)),
         selected_bullet: Style::default()
             .fg(hex_to_color(&p.selected_bullet_fg))
@@ -125,6 +126,13 @@ pub struct Theme {
     pub name: &'static str,
     /// Background of the alternate screen.
     pub background: Color,
+    /// Base body-text color painted across the canvas together with
+    /// `background`. `Color::Reset` on the ANSI presets
+    /// (`default-dark`, `light`) so the terminal's own colors show
+    /// through; a concrete RGB on every palette-derived preset so a
+    /// light theme stays readable on a dark terminal (and vice
+    /// versa).
+    pub foreground: Color,
 
     // --- bullets / outline ---
     /// Plain `-` bullet when not selected.
@@ -191,6 +199,18 @@ pub struct Theme {
     pub list_selected: Style,
 }
 
+impl Theme {
+    /// Base style for elevated surfaces (popups, toasts): `popup_bg`
+    /// background plus the theme's base text color. Every overlay
+    /// paints this before its content so unstyled spans inherit a
+    /// readable foreground instead of the terminal's default — which
+    /// may have no contrast against `popup_bg` (light theme on a
+    /// dark terminal and vice versa).
+    pub fn popup_style(&self) -> Style {
+        Style::default().fg(self.foreground).bg(self.popup_bg)
+    }
+}
+
 /// List of preset names exposed to users (CLI / config / `outl theme list`).
 pub const PRESETS: &[&str] = &[
     "outl",
@@ -245,6 +265,7 @@ pub fn default_dark() -> Theme {
     Theme {
         name: "default-dark",
         background: Color::Reset,
+        foreground: Color::Reset,
         bullet: Style::default().fg(Color::DarkGray),
         selected_bullet: Style::default()
             .fg(Color::Black)
@@ -314,6 +335,7 @@ pub fn light() -> Theme {
     Theme {
         name: "light",
         background: Color::Reset,
+        foreground: Color::Reset,
         bullet: Style::default().fg(Color::Gray),
         selected_bullet: Style::default()
             .fg(Color::White)

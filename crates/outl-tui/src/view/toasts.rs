@@ -66,7 +66,7 @@ pub(crate) fn render_toasts(f: &mut ratatui::Frame<'_>, full: Rect, app: &App) {
                         Style::default().fg(accent).add_modifier(Modifier::BOLD),
                     )),
             )
-            .style(Style::default().bg(app.theme.popup_bg));
+            .style(app.theme.popup_style());
         f.render_widget(card, area);
 
         // Step up for the next toast. Saturating sub so we never
