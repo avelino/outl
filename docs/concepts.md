@@ -90,7 +90,8 @@ Properties drive queries (phase 3) and influence display.
 ### Tag
 
 A page reference with classification semantics.
-`#urgent` resolves to the same underlying file as `[[urgent]]`, but the UI treats them differently: tags appear in filter sidebars and counts; `[[refs]]` appear in backlinks.
+`#urgent` resolves to the same underlying file as `[[urgent]]`, and both forms count as backlinks: a block mentioning `#urgent` shows up in the `urgent` page's "Linked from" panel exactly like a block mentioning `[[urgent]]`.
+The remaining difference is presentational — tags additionally appear in filter sidebars and counts.
 
 ### Sidecar
 
