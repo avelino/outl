@@ -29,6 +29,14 @@ use crate::fs_watcher::{self, WatcherHandle};
 /// Idempotent: the `ops/`, `journals/`, `pages/` directories are
 /// created if missing, and `migrate_legacy_into_today` reshuffles any
 /// pre-page-model blocks under today's journal (also idempotent).
+///
+/// **Does NOT run the orphan-md reconcile pass** — that work scales
+/// with the number of pages in the workspace and used to block the
+/// app's first paint by tens of seconds on real graphs. The reconcile
+/// now runs on a separate background thread via
+/// [`spawn_background_reconcile`], so today's journal opens
+/// immediately and the user can start editing while legacy pages are
+/// materialised behind the scenes.
 pub(crate) fn open_workspace_at(
     actor: ActorId,
     hlc: &HlcGenerator,
@@ -48,30 +56,63 @@ pub(crate) fn open_workspace_at(
     if let Err(e) = open_today(&mut workspace, hlc) {
         warn!("could not pre-open today: {e}");
     }
-    reconcile_orphan_md(&mut workspace, hlc, path);
     Ok(workspace)
 }
 
-/// Scan `<root>/journals/` and `<root>/pages/` for `.md` files that
-/// are not represented in the op log yet — imported files, peer-written
-/// projections without sidecars, or files edited externally in vim/VS
-/// Code. Runs `reconcile_md` on each so the workspace, the sidecar,
-/// and `.md` converge.
-pub(crate) fn reconcile_orphan_md(
-    workspace: &mut Workspace,
-    hlc: &HlcGenerator,
-    storage_root: &Path,
+/// Background reconcile pass for pages whose `.md` is ahead of the
+/// op log: pages authored via vim, pulled from peers without a
+/// sidecar, imported by `outl serve`, etc. Run as a separate worker
+/// thread so the first paint is never blocked.
+///
+/// Each page is reconciled under a lock that is **released between
+/// iterations** so the frontend can read the workspace (build the
+/// outline, render the picker, run autocomplete queries) without
+/// waiting for the whole batch to finish. Pages that just got
+/// materialised become visible to the next read, no full reload
+/// required.
+///
+/// Emits `workspace-reconciled` when the batch completes so a client
+/// that wants to refresh the current view can do so explicitly. The
+/// event fires only on completion of the batch, not per-page —
+/// keystroke-grained refreshes would be noisier than they help.
+pub(crate) fn spawn_background_reconcile(
+    workspace_slot: Arc<Mutex<Option<Workspace>>>,
+    storage_root: PathBuf,
+    hlc: HlcGenerator,
+    app: tauri::AppHandle,
 ) {
-    let engine = outl_actions::SyncEngine::new(storage_root.to_path_buf(), hlc.actor());
-    let orphans = engine.scan_for_orphans();
-    if orphans.is_empty() {
-        return;
-    }
-    for path in &orphans {
-        if let Err(e) = outl_md::reconcile::reconcile_md(workspace, hlc, path, None) {
-            warn!("orphan reconcile failed for {}: {e}", path.display());
+    thread::spawn(move || {
+        let engine = outl_actions::SyncEngine::new(storage_root.clone(), hlc.actor());
+        // Filesystem walk needs no workspace lock.
+        let orphans = engine.scan_for_orphans();
+        if orphans.is_empty() {
+            return;
         }
-    }
+        info!(
+            "background reconcile: {} orphan(s) to process",
+            orphans.len()
+        );
+        for path in &orphans {
+            // Lock per page, drop between iterations so the frontend
+            // can grab the workspace between reconciles. A page with
+            // hundreds of blocks still runs in well under 50ms, well
+            // inside the user's perception threshold.
+            let mut slot = workspace_slot.lock();
+            let Some(ws) = slot.as_mut() else {
+                // Workspace was closed (user picked another) — abort
+                // the rest of the batch cleanly.
+                return;
+            };
+            if let Err(e) = outl_md::reconcile::reconcile_md(ws, &hlc, path, None) {
+                warn!("orphan reconcile failed for {}: {e}", path.display());
+            }
+            drop(slot);
+        }
+        info!("background reconcile complete");
+        if let Err(e) = app.emit("workspace-reconciled", ()) {
+            warn!("emit workspace-reconciled: {e}");
+        }
+    });
 }
 
 /// Load (or generate-and-persist) the device's actor id.
@@ -117,6 +158,10 @@ pub(crate) fn spawn_workspace_opener(
             );
             return;
         }
+        // Fast open: ops/, journals/, pages/ exist; today's journal is
+        // resolved; legacy blocks moved under it. **No orphan
+        // reconcile here** — that runs after we publish the workspace
+        // so the user sees today's journal immediately.
         let workspace = match open_workspace_at(actor, &hlc, &last_workspace) {
             Ok(w) => w,
             Err(e) => {
@@ -136,10 +181,19 @@ pub(crate) fn spawn_workspace_opener(
             Err(e) => warn!("fs watcher failed to start: {e}"),
         }
         *workspace_slot.lock() = Some(workspace);
-        *storage_root_slot.lock() = Some(last_workspace);
+        *storage_root_slot.lock() = Some(last_workspace.clone());
         if let Err(e) = app.emit("workspace-ready", ()) {
             warn!("emit workspace-ready: {e}");
         }
         info!("background workspace opener complete");
+
+        // Phase 2: scan and reconcile orphan `.md` files in yet
+        // another thread, releasing the workspace lock between each
+        // page. The frontend can already query the workspace; pages
+        // that get materialised by the reconcile become visible on
+        // the next read (no full reload required). The reconcile
+        // emits `workspace-reconciled` on completion if a client
+        // wants to explicitly refresh the current view.
+        spawn_background_reconcile(workspace_slot, last_workspace, hlc, app);
     });
 }

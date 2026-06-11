@@ -473,6 +473,23 @@ impl App {
                     });
                 }
             }
+            Some((AutocompleteKind::Mention, query)) => {
+                let candidates = self.candidates_for_mention(&query);
+                // No candidates → close the popup. The user typed past
+                // the matchable prefix (e.g. `@Thiago xyz`), so silently
+                // dropping the popup is the right move — the next
+                // matching keystroke reopens it.
+                if candidates.is_empty() {
+                    self.autocomplete = None;
+                } else {
+                    self.autocomplete = Some(AutocompleteState {
+                        kind: AutocompleteKind::Mention,
+                        query,
+                        candidates,
+                        selected: 0,
+                    });
+                }
+            }
             None => {
                 self.autocomplete = None;
             }
@@ -559,6 +576,50 @@ impl App {
         scored.into_iter().take(8).map(|(_, n)| n).collect()
     }
 
+    /// Mention candidates — page titles filtered to `type:: person`,
+    /// fuzzy-matched against the query.
+    ///
+    /// Empty query returns the first 8 persons in title order so the
+    /// popup is never blank right after the `@` keypress.
+    ///
+    /// **Create-new affordance.** When `q` is non-empty and no existing
+    /// person matches it exactly (case-insensitive), the query itself
+    /// is appended to the candidate list as a "create" entry. Accepting
+    /// inserts `[[@<query>]]`; the person page is materialised lazily
+    /// when the user opens that ref (via `open_or_create_by_ref`, which
+    /// already strips the `@` and sets `type:: person`).
+    /// Matches Notion / Slack / Linear's `@` convention: the popup
+    /// always has at least one row when the user is typing.
+    fn candidates_for_mention(&self, q: &str) -> Vec<String> {
+        let mut scored: Vec<(i32, String)> = self
+            .index
+            .pages_by_type(outl_actions::PERSON_TYPE)
+            .filter_map(|p| {
+                let title = p.title.clone();
+                if q.is_empty() {
+                    // Synthetic score so empty-query path keeps stable
+                    // ordering by title.
+                    return Some((0, title));
+                }
+                crate::fuzzy::fuzzy_score(q, &title).map(|s| (s, title))
+            })
+            .collect();
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        let mut result: Vec<String> = scored.into_iter().take(8).map(|(_, n)| n).collect();
+        // Append the query as a create-new candidate when it doesn't
+        // already match an existing person (case-insensitive). The
+        // typed casing is preserved so `@Vini` → `[[@Vini]]` and
+        // `@vini` → `[[@vini]]`.
+        if !q.is_empty()
+            && !result
+                .iter()
+                .any(|title| title.to_lowercase() == q.to_lowercase())
+        {
+            result.push(q.to_string());
+        }
+        result
+    }
+
     /// Accept the highlighted autocomplete candidate.
     ///
     /// For `[[` / `#` triggers: the trigger + query are replaced in
@@ -583,33 +644,57 @@ impl App {
             return;
         }
 
-        let Mode::Insert { buffer, .. } = &mut self.mode else {
-            return;
-        };
-        // Replace from the trigger position to the cursor with the
-        // completed token (closing the brackets for refs).
-        let trigger_len = match ac.kind {
-            AutocompleteKind::PageRef => 2 + ac.query.chars().count(), // `[[query`
-            AutocompleteKind::BlockRef => 2 + ac.query.chars().count(), // `((query`
-            AutocompleteKind::Tag => 1 + ac.query.chars().count(),     // `#query`
-            AutocompleteKind::SlashCommand => unreachable!("handled above"),
-        };
-        // Delete the trigger + query characters before the cursor.
-        for _ in 0..trigger_len {
-            buffer.delete_back();
+        {
+            let Mode::Insert { buffer, .. } = &mut self.mode else {
+                return;
+            };
+            // Replace from the trigger position to the cursor with the
+            // completed token (closing the brackets for refs).
+            let trigger_len = match ac.kind {
+                AutocompleteKind::PageRef => 2 + ac.query.chars().count(), // `[[query`
+                AutocompleteKind::BlockRef => 2 + ac.query.chars().count(), // `((query`
+                AutocompleteKind::Tag => 1 + ac.query.chars().count(),     // `#query`
+                AutocompleteKind::Mention => 1 + ac.query.chars().count(), // `@query` (spaces OK)
+                AutocompleteKind::SlashCommand => unreachable!("handled above"),
+            };
+            // Delete the trigger + query characters before the cursor.
+            for _ in 0..trigger_len {
+                buffer.delete_back();
+            }
+            match ac.kind {
+                AutocompleteKind::PageRef => {
+                    buffer.insert_str(&format!("[[{choice}]]"));
+                }
+                AutocompleteKind::BlockRef => {
+                    // `choice` is the handle (e.g. `blk-r6s4a1`).
+                    buffer.insert_str(&format!("(({choice}))"));
+                }
+                AutocompleteKind::Tag => {
+                    buffer.insert_str(&format!("#{choice}"));
+                }
+                AutocompleteKind::Mention => {
+                    // `choice` is the person's title (no `@`). The `@`
+                    // belongs to the link affordance, not the page identity.
+                    buffer.insert_str(&format!("[[@{choice}]]"));
+                }
+                AutocompleteKind::SlashCommand => unreachable!("handled above"),
+            }
         }
-        match ac.kind {
-            AutocompleteKind::PageRef => {
-                buffer.insert_str(&format!("[[{choice}]]"));
+        // Mention sugar: materialise the person page so the inserted
+        // `[[@title]]` link doesn't dangle. `open_or_create_by_ref`
+        // is idempotent — returns the existing page when present, or
+        // creates a fresh one tagged `type:: person` when missing.
+        // Same gesture desktop + mobile apply on accept; without it,
+        // accepting a create-new candidate would leave the link in
+        // the buffer with no page on disk until the user explicitly
+        // navigated the ref (Enter in Normal mode).
+        if let AutocompleteKind::Mention = ac.kind {
+            let target = format!("@{choice}");
+            if let Err(e) =
+                outl_actions::open_or_create_by_ref(&mut self.workspace, &self.hlc, &target)
+            {
+                self.status = format!("create person {choice} failed: {e}");
             }
-            AutocompleteKind::BlockRef => {
-                // `choice` is the handle (e.g. `blk-r6s4a1`).
-                buffer.insert_str(&format!("(({choice}))"));
-            }
-            AutocompleteKind::Tag => {
-                buffer.insert_str(&format!("#{choice}"));
-            }
-            AutocompleteKind::SlashCommand => unreachable!("handled above"),
         }
     }
 
@@ -652,12 +737,41 @@ impl App {
 }
 
 /// Look back from `cursor` over `chars` to find an open `[[` / `#` /
-/// `/` trigger plus the query typed after it. Returns `None` if no
-/// trigger is active (cursor outside any open token, or query contains
-/// chars that close it).
+/// `/` / `@` trigger plus the query typed after it. Returns `None` if
+/// no trigger is active (cursor outside any open token, or query
+/// contains chars that close it).
 pub(crate) fn detect_trigger(chars: &[char], cursor: usize) -> Option<(AutocompleteKind, String)> {
     if cursor == 0 {
         return None;
+    }
+    // Mention pre-pass — walk back looking for a word-initial `@`,
+    // allowing spaces in the query so composite names work
+    // (`@Thiago Avelino`). The main walk-back below stops at the first
+    // whitespace, so without this pre-pass `@Thiago ` would never
+    // trigger Mention. Caps at 64 chars to avoid scanning the whole
+    // buffer on a stray `@` followed by lots of prose.
+    {
+        let lower_bound = cursor.saturating_sub(64);
+        let mut j = cursor;
+        while j > lower_bound {
+            let ch = chars[j - 1];
+            if matches!(ch, '\n' | '[' | ']' | '(' | ')') {
+                break;
+            }
+            if ch == '@' {
+                let at_start = j == 1;
+                let preceded_by_space = j >= 2 && chars[j - 2].is_whitespace();
+                if at_start || preceded_by_space {
+                    let query: String = chars[j..cursor].iter().collect();
+                    return Some((AutocompleteKind::Mention, query));
+                }
+                // Mid-word `@` (email, social handle, etc.) is not a
+                // trigger — bail out so the main walk-back doesn't
+                // accidentally swallow it as part of another token.
+                break;
+            }
+            j -= 1;
+        }
     }
     // Walk back until we hit a trigger boundary.
     let mut i = cursor;
@@ -863,6 +977,68 @@ mod tests {
             after_foo,
             vec!["foo".to_string(), "food".to_string()],
             "shrinking the query must restore candidates the longer query dropped"
+        );
+    }
+
+    #[test]
+    fn detect_trigger_mention_at_buffer_start() {
+        let chars: Vec<char> = "@av".chars().collect();
+        let trigger = super::detect_trigger(&chars, chars.len());
+        assert_eq!(
+            trigger,
+            Some((crate::state::AutocompleteKind::Mention, "av".to_string()))
+        );
+    }
+
+    #[test]
+    fn detect_trigger_mention_after_whitespace() {
+        // Word-initial: `@` preceded by space counts.
+        let chars: Vec<char> = "hi @av".chars().collect();
+        let trigger = super::detect_trigger(&chars, chars.len());
+        assert_eq!(
+            trigger,
+            Some((crate::state::AutocompleteKind::Mention, "av".to_string()))
+        );
+    }
+
+    #[test]
+    fn detect_trigger_mention_keeps_spaces_in_query() {
+        // Composite name: query goes past spaces, all the way back to
+        // the opening `@`.
+        let chars: Vec<char> = "@Thiago Av".chars().collect();
+        let trigger = super::detect_trigger(&chars, chars.len());
+        assert_eq!(
+            trigger,
+            Some((
+                crate::state::AutocompleteKind::Mention,
+                "Thiago Av".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn detect_trigger_mention_ignores_mid_word_at() {
+        // `a@b.com` (email-shaped) must NOT trigger mention — the
+        // `@` is not word-initial.
+        let chars: Vec<char> = "a@b".chars().collect();
+        let trigger = super::detect_trigger(&chars, chars.len());
+        assert!(
+            !matches!(trigger, Some((crate::state::AutocompleteKind::Mention, _))),
+            "mid-word `@` must not produce a mention trigger"
+        );
+    }
+
+    #[test]
+    fn detect_trigger_mention_stops_at_brackets() {
+        // The `[[` opener for a normal page-ref must win over a stray
+        // `@` that sits before the bracket (because the user's caret
+        // is inside a `[[foo...` token, not a mention).
+        let chars: Vec<char> = "@x [[av".chars().collect();
+        let trigger = super::detect_trigger(&chars, chars.len());
+        // Should be PageRef, not Mention.
+        assert_eq!(
+            trigger,
+            Some((crate::state::AutocompleteKind::PageRef, "av".to_string()))
         );
     }
 }

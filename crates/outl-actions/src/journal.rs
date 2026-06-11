@@ -150,6 +150,12 @@ fn build_sidecar(workspace: &Workspace, page_root: NodeId, md: &str) -> Sidecar 
         last_synced_hash: file_hash(md),
         last_synced_at: chrono::Local::now().fixed_offset(),
         blocks,
+        // This builder runs after a workspace-driven render — the
+        // workspace tree already holds the page properties, so by
+        // construction they're in the op log. Stamp the current
+        // pipeline version to keep the orphan scanner from looping
+        // on this page.
+        pipeline_version: outl_md::sidecar::CURRENT_PIPELINE_VERSION,
     }
 }
 
@@ -267,6 +273,10 @@ fn build_sidecar_from_ast(
         last_synced_hash: file_hash(md),
         last_synced_at: chrono::Local::now().fixed_offset(),
         blocks,
+        // Built from a parsed `.md` + workspace tree — both sources
+        // already carry the page properties consistently, so this
+        // sidecar represents a fully-propagated state.
+        pipeline_version: outl_md::sidecar::CURRENT_PIPELINE_VERSION,
     }
 }
 

@@ -131,11 +131,21 @@ export function insertText(
 
 /** Result of {@link detectRefContext}. */
 export interface RefContext {
-  /** What kind of reference the caret is sitting inside. */
-  kind: "page" | "block";
+  /**
+   * What kind of reference the caret is sitting inside.
+   *
+   * - `"page"` — caret inside an open `[[…]]` page ref.
+   * - `"block"` — caret inside an open `((…))` block ref.
+   * - `"mention"` — caret right after a word-initial `@`, possibly
+   *   followed by a query that may include spaces (composite names
+   *   like `@Thiago Avelino`). Mentions have no closing delimiter;
+   *   `replaceEnd` equals the caret. On accept the popup wraps the
+   *   chosen title with `[[@…]]`.
+   */
+  kind: "page" | "block" | "mention";
   /** The text between the opener and the caret — what to filter by. */
   query: string;
-  /** Index of the first delimiter character (the leftmost `[` / `(`). */
+  /** Index of the first delimiter character (the leftmost `[` / `(` / `@`). */
   openIndex: number;
   /** Index of the character right after the closer, or the caret if
    *  no closer was found before the caret. Used to replace the whole
@@ -168,6 +178,44 @@ export function detectRefContext(
   value: string,
   selection: number,
 ): RefContext | null {
+  // Mention pre-pass: walk back looking for a word-initial `@`.
+  // Mentions allow spaces in the query (composite names like
+  // `@Thiago Avelino`), so the main walk-back below — which stops at
+  // bracket delimiters — would never detect them. Cap the search at
+  // 64 chars to avoid scanning the entire buffer when the user typed
+  // a stray `@` followed by lots of prose.
+  {
+    const MENTION_CAP = 64;
+    const lower = Math.max(0, selection - MENTION_CAP);
+    for (let i = selection - 1; i >= lower; i -= 1) {
+      const ch = value[i];
+      if (
+        ch === "\n" ||
+        ch === "[" ||
+        ch === "]" ||
+        ch === "(" ||
+        ch === ")"
+      ) {
+        // Walked into another token's territory — fall through to
+        // the main walk-back so `[[…` / `((…` still work.
+        break;
+      }
+      if (ch === "@") {
+        const prev = i === 0 ? "" : value[i - 1];
+        if (i === 0 || /\s/.test(prev)) {
+          return {
+            kind: "mention",
+            query: value.slice(i + 1, selection),
+            openIndex: i,
+            replaceEnd: selection, // mentions have no closer
+          };
+        }
+        // Mid-word `@` (email, social handle) — not a mention. Stop
+        // so the main walk-back doesn't accidentally fire.
+        break;
+      }
+    }
+  }
   let i = selection - 1;
   while (i >= 1) {
     const pair = value.slice(i - 1, i + 1);
@@ -200,10 +248,18 @@ export function applySuggestion(
   ctx: RefContext,
   replacement: string,
 ): PairCompletion {
-  const [open, close] = ctx.kind === "page" ? ["[[", "]]"] : ["((", "))"];
   const before = value.slice(0, ctx.openIndex);
   const after = value.slice(ctx.replaceEnd);
-  const rebuilt = `${open}${replacement}${close}`;
+  let rebuilt: string;
+  if (ctx.kind === "mention") {
+    // Mention sugar: the page identity does NOT carry the `@`, so the
+    // caller passes the page title verbatim. We add the `@` only on
+    // the link side (where it acts as the mention affordance).
+    rebuilt = `[[@${replacement}]]`;
+  } else {
+    const [open, close] = ctx.kind === "page" ? ["[[", "]]"] : ["((", "))"];
+    rebuilt = `${open}${replacement}${close}`;
+  }
   return {
     value: before + rebuilt + after,
     caret: before.length + rebuilt.length,

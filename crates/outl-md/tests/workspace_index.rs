@@ -339,3 +339,112 @@ fn title_prefix_lookup() {
     assert!(names.contains(&"Apple"));
     assert!(names.contains(&"Apricot"));
 }
+
+#[test]
+fn page_type_property_lands_on_the_page_entry() {
+    let dir = write_workspace(&[
+        (
+            "pages/avelino.md",
+            "title:: Avelino\ntype:: person\n\n- author\n",
+        ),
+        (
+            "pages/projeto.md",
+            "title:: Projeto\ntype:: project\n\n- shipped\n",
+        ),
+        ("pages/bare.md", "title:: Bare\n\n- nothing fancy\n"),
+    ]);
+    let idx = WorkspaceIndex::build(dir.path());
+
+    assert_eq!(
+        idx.by_slug("avelino").unwrap().page_type.as_deref(),
+        Some("person")
+    );
+    assert_eq!(
+        idx.by_slug("projeto").unwrap().page_type.as_deref(),
+        Some("project")
+    );
+    assert_eq!(idx.by_slug("bare").unwrap().page_type, None);
+}
+
+#[test]
+fn page_type_is_lowercased_on_index() {
+    let dir = write_workspace(&[(
+        "pages/avelino.md",
+        "title:: Avelino\ntype::   Person\n\n- author\n",
+    )]);
+    let idx = WorkspaceIndex::build(dir.path());
+    assert_eq!(
+        idx.by_slug("avelino").unwrap().page_type.as_deref(),
+        Some("person")
+    );
+}
+
+#[test]
+fn empty_page_type_is_treated_as_none() {
+    let dir = write_workspace(&[("pages/x.md", "title:: X\ntype::\n\n- body\n")]);
+    let idx = WorkspaceIndex::build(dir.path());
+    assert_eq!(idx.by_slug("x").unwrap().page_type, None);
+}
+
+#[test]
+fn pages_by_type_filters_to_matching_pages() {
+    let dir = write_workspace(&[
+        (
+            "pages/avelino.md",
+            "title:: Avelino\ntype:: person\n\n- a\n",
+        ),
+        ("pages/maria.md", "title:: Maria\ntype:: PERSON\n\n- a\n"),
+        (
+            "pages/projeto.md",
+            "title:: Projeto\ntype:: project\n\n- a\n",
+        ),
+        ("pages/bare.md", "title:: Bare\n\n- a\n"),
+    ]);
+    let idx = WorkspaceIndex::build(dir.path());
+
+    let persons: Vec<&str> = idx
+        .pages_by_type("person")
+        .map(|p| p.title.as_str())
+        .collect();
+    assert_eq!(
+        persons.len(),
+        2,
+        "expected Avelino + Maria, got {persons:?}"
+    );
+    assert!(persons.contains(&"Avelino"));
+    assert!(persons.contains(&"Maria"));
+
+    // Case-insensitive needle.
+    let persons_upper: Vec<&str> = idx
+        .pages_by_type("PERSON")
+        .map(|p| p.title.as_str())
+        .collect();
+    assert_eq!(persons_upper.len(), 2);
+
+    // Different type doesn't match.
+    let projects: Vec<&str> = idx
+        .pages_by_type("project")
+        .map(|p| p.title.as_str())
+        .collect();
+    assert_eq!(projects, vec!["Projeto"]);
+
+    // Unknown type returns nothing.
+    assert_eq!(idx.pages_by_type("ghost").count(), 0);
+}
+
+#[test]
+fn patch_page_refreshes_page_type() {
+    let dir = write_workspace(&[("pages/x.md", "title:: X\n\n- body\n")]);
+    let mut idx = WorkspaceIndex::build(dir.path());
+    assert_eq!(idx.by_slug("x").unwrap().page_type, None);
+
+    let path = dir.path().join("pages/x.md");
+    fs::write(&path, "title:: X\ntype:: person\n\n- body\n").unwrap();
+    let parsed = parse(&fs::read_to_string(&path).unwrap());
+    idx.patch_page(&path, &parsed);
+
+    assert_eq!(
+        idx.by_slug("x").unwrap().page_type.as_deref(),
+        Some("person")
+    );
+}

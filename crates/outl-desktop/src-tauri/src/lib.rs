@@ -54,8 +54,8 @@ use crate::commands::{
     indent_block, list_all_pages, list_shortcut_bindings, list_themes, move_block_down,
     move_block_up, next_day, open_journal_for, open_page_by_slug, open_ref, open_today_journal,
     outdent_block, paste_markdown_at, previous_day, reload_workspace, resolve_ref, run_code_block,
-    search_pages, set_block_collapsed, set_workspace, today_slug_cmd, toggle_quote, toggle_todo,
-    update_settings, workspace_stats,
+    search_pages, search_persons, set_block_collapsed, set_workspace, today_slug_cmd, toggle_quote,
+    toggle_todo, update_settings, workspace_stats,
 };
 use crate::state::AppState;
 use crate::workspace_open::{load_or_create_actor, spawn_workspace_opener};
@@ -127,6 +127,7 @@ pub fn run() {
             // Page / journal navigation
             list_all_pages,
             search_pages,
+            search_persons,
             open_today_journal,
             open_journal_for,
             open_page_by_slug,

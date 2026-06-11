@@ -46,6 +46,8 @@ status:: active
 - first block...
 ```
 
+The `type::` key carries the page's semantic kind and is consumed by surfaces that filter pages by role — `type:: person` is the canonical example, recognised by the `@` mention autocomplete (see [§Mentions](#mentions-name)). Other types (`type:: project`, `type:: meeting`, …) are free-form today; the autocomplete only filters on `person`.
+
 ### Outline items
 
 Standard markdown unordered lists:
@@ -198,6 +200,7 @@ The third line (`- this is a regular child block`) is a real child.
 |--------|---------|
 | `[[name]]` | Reference to page named "name" |
 | `[[2026-05-24]]` | Reference to journal "2026-05-24" (rendered as date) |
+| `[[@name]]` | Mention — reference to the person page `name` (page-level `type:: person`); the `@` is the link affordance, not part of the page identity |
 | `#name` | Tag (page reference with classification semantics) |
 | `((blk-XXXXXX))` | Block reference — renders as the source block's text, links to it |
 | `!((blk-XXXXXX))` | Block embed — renders the source block expanded with its subtree |
@@ -227,6 +230,27 @@ Handle collisions are vanishingly unlikely — 6 lowercase base32 chars is ~30 b
 When two blocks do land on the same base handle, the second block's handle is lazily expanded one character at a time (from the ULID's Crockford base32 tail) until unique within the workspace, so both the winner and the loser stay resolvable through their own (distinct) handles.
 The on-disk sidecar still records the deterministic 6-char handle — the divergence lives in memory until a future reconcile rewrites it.
 Workspaces that ever expanded a handle to 7+ characters keep working forever because lookup goes through the in-memory handle, not the literal sidecar field.
+
+#### Mentions (`[[@name]]`)
+
+`[[@name]]` is **not a new token**. It is a regular page reference whose target literal happens to start with `@`. Roundtrip, render, matching, and reconciliation flow through the same code path as `[[ref]]` — no separate parser branch.
+
+What makes it act as a mention is policy on top of the existing primitive:
+
+- **Page identity does not carry the `@`.** The page is `pages/<slug>.md` with `title:: <name>` (no `@`); the `@` belongs to the link affordance, like the `!` in `!((blk-XXXXXX))` belongs to the embed affordance.
+- **Reference resolution strips the `@`.** Opening `[[@avelino]]` resolves to the page `avelino` via the same decision tree as any `[[ref]]` (slug match → slugified match → case-insensitive title match → create). The `@` is consumed by the resolver before the lookup.
+- **Create-on-miss marks the new page as a person.** When the target doesn't exist yet, the resolver creates `pages/<slug>.md` and sets `type:: person` on it automatically — the next mention surfaces the page in the autocomplete popup without the user editing properties by hand.
+- **Backlinks recognise the `@`-aliased form.** A person page's backlinks panel surfaces blocks that wrote `[[@name]]` even though the page slug is `name`. Plain (non-person) pages do not scan the `@`-aliased form, so `[[@projeto]]` in a block does not accidentally show up under a non-person `projeto` page.
+
+#### Autocomplete trigger
+
+While the user is editing a block, every client opens a person picker on a **word-initial `@`** (the same word-initial rule the `#` tag trigger uses: `@` preceded by start-of-line or whitespace). The popup lists pages where `type:: person` is set, fuzzy-matched against whatever was typed after the `@`. Accepting a candidate inserts `[[@<title>]]` at the caret.
+
+- Composite names work: `@Thiago Avelino` is a valid query — the autocomplete query allows spaces, unlike `#tag` which terminates on the first non-word character.
+- Mid-word `@` is ignored — `a@b.com` (an email) is not a mention.
+- When no existing person matches the query, the popup offers the query itself as a "create new" candidate so a fresh mention can be minted without leaving the keyboard.
+
+The `type::` page-level property is what scopes the autocomplete candidate list (and marks the page semantically); the `@`-prefixed link text is what makes the rendered reference visually a mention.
 
 ### What is **not** in the file
 

@@ -10,7 +10,7 @@ use crate::fs_watcher;
 use crate::helpers::storage_root_or_err;
 use crate::settings::{self, Settings};
 use crate::state::{AppState, WorkspaceSummary};
-use crate::workspace_open::{open_workspace_at, reconcile_orphan_md};
+use crate::workspace_open::{open_workspace_at, spawn_background_reconcile};
 
 /// Pick a directory as the active workspace.
 ///
@@ -56,6 +56,17 @@ pub(crate) fn set_workspace(
     if let Err(e) = app.emit("workspace-ready", ()) {
         warn!("emit workspace-ready: {e}");
     }
+    // Phase 2: scan + reconcile in background so the user can start
+    // editing today's journal while legacy `.md` files (vim-authored,
+    // peer-pushed without sidecar, fixture imports) materialise into
+    // the workspace tree behind the scenes. Same policy the boot
+    // opener uses — single source of truth in `spawn_background_reconcile`.
+    spawn_background_reconcile(
+        state.workspace.clone(),
+        path,
+        state.hlc.clone(),
+        app.clone(),
+    );
     Ok(())
 }
 
@@ -120,16 +131,29 @@ pub(crate) fn update_settings(
 
 /// Reload the workspace from disk after a peer change. Called by the
 /// frontend whenever the `peer-ops-changed` Tauri event fires.
+///
+/// The reconcile step (scanning `.md` files for ones ahead of the op
+/// log) is now deferred to a background thread so the reload itself
+/// stays cheap. `app` is passed in only so the background thread can
+/// emit `workspace-reconciled` on completion.
 #[tauri::command]
-pub(crate) fn reload_workspace(state: State<'_, AppState>) -> Result<(), String> {
+pub(crate) fn reload_workspace(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let root = storage_root_or_err(&state)?;
     let engine = outl_actions::SyncEngine::new(root.clone(), state.hlc.actor());
     let mut fresh = engine
         .reload_workspace()
         .map_err(|e| format!("reload workspace: {e}"))?;
-    reconcile_orphan_md(&mut fresh, &state.hlc, &root);
     let today_id = open_today(&mut fresh, &state.hlc).map_err(|e| e.to_string())?;
     let _ = engine.reproject_page(&fresh, today_id);
     *state.workspace.lock() = Some(fresh);
+    // Same split as `set_workspace` and the boot opener — reconcile
+    // legacy / peer-pushed `.md` files in the background so the
+    // frontend doesn't wait. Idempotent: pages already materialised
+    // become no-ops inside `reconcile_md` via the
+    // `pipeline_v2_complete` short-circuit.
+    spawn_background_reconcile(state.workspace.clone(), root, state.hlc.clone(), app);
     Ok(())
 }

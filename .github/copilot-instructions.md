@@ -232,13 +232,15 @@ Reject PRs that build a `LogOp` from a client and call `apply` directly.
 
 | Intent | Use this | File |
 |---|---|---|
-| Page-property keys (constants — don't hardcode the strings) | `outl_actions::page::SLUG_KEY` / `KIND_KEY` | `crates/outl-actions/src/page.rs` |
-| Page metadata for a node id | `outl_actions::page::page_meta` / `PageMeta` / `PageKind` | `crates/outl-actions/src/page.rs` |
+| Page-property keys (constants — don't hardcode the strings) | `outl_actions::page::SLUG_KEY` / `KIND_KEY` / `TYPE_KEY` | `crates/outl-actions/src/page.rs` |
+| Canonical `type::` value marking a person (filter for `@` mention popup) | `outl_actions::page::PERSON_TYPE` | `crates/outl-actions/src/page.rs` |
+| Page metadata (slug, kind, title, **`page_type`**) for a node id | `outl_actions::page::page_meta` / `PageMeta` / `PageKind` | `crates/outl-actions/src/page.rs` |
 | Validate a slug for filesystem safety | `outl_actions::page::is_valid_slug` | `crates/outl-actions/src/page.rs` |
 | Derive a **deterministic page id** from slug | `outl_actions::page::page_id_from_slug` | `crates/outl-actions/src/page.rs` |
 | Find / list / create-if-missing pages | `outl_actions::page::find_by_slug` / `list_all` / `open_or_create` | `crates/outl-actions/src/page.rs` |
 | Open-or-create a page from a **human-typed name** (slugifies + keeps original as title) | `outl_actions::page::open_or_create_by_name` | `crates/outl-actions/src/page.rs` |
-| Open-or-create whatever a **user-typed ref target** points at (date → journal, else slug/title match → page, else create) | `outl_actions::page::open_or_create_by_ref` | `crates/outl-actions/src/page.rs` |
+| Open-or-create whatever a **user-typed ref target** points at (date → journal, `@x` mention → person page, else slug/title match → page, else create) | `outl_actions::page::open_or_create_by_ref` | `crates/outl-actions/src/page.rs` |
+| Search pages typed `type:: person`, fuzzy-ranked (powers `@` mention autocomplete) | `outl_actions::page::search_persons` | `crates/outl-actions/src/page.rs` |
 | Read / write a property on a page (or any node) | `outl_actions::page::read_text_prop` / `set_property` | `crates/outl-actions/src/page.rs` |
 | Migrate pre-page-model blocks under today's journal | `outl_actions::page::migrate_legacy_into_today` | `crates/outl-actions/src/page.rs` |
 | Open / create journal for a date or today | `outl_actions::page::open_journal` / `open_today` | `crates/outl-actions/src/page.rs` |
@@ -282,6 +284,8 @@ Reject PRs that build a `LogOp` from a client and call `apply` directly.
 | Reconcile error / report types | `outl_md::ReconcileError` / `ReconcileReport` | `crates/outl-md/src/reconcile.rs` |
 | 3-level matching algorithm | `outl_md::matching::match_blocks` → `Match` / `MatchLevel` | `crates/outl-md/src/matching.rs` |
 | Diff AST + AST + sidecar → minimum `Op`s | `outl_md::diff::diff_to_ops` → `DiffPlan` | `crates/outl-md/src/diff.rs` |
+| Same diff but also propagates page-level props (`title::`, `type::`, `pinned::`, …) into op log as `Op::SetProp` on the page root — fixes the desktop/mobile vs TUI divergence on fixture/external-editor pages | `outl_md::diff::diff_to_ops_with_page_props` | `crates/outl-md/src/diff.rs` |
+| Reconcile-pipeline version stamped on every sidecar — bumping it forces every legacy sidecar through `reconcile_md` once on the next boot (idempotent CRDT) | `outl_md::sidecar::CURRENT_PIPELINE_VERSION` | `crates/outl-md/src/sidecar.rs` |
 
 #### 8. Sidecar (outl-md::sidecar + atomic)
 

@@ -39,9 +39,10 @@ use outl_actions::{
     migrate_legacy_into_today, move_down, move_up, next_journal_date, open_journal,
     open_or_create_by_name, open_or_create_by_ref, open_today, outdent,
     page_meta as page_meta_action, paste_markdown as action_paste_markdown, previous_journal_date,
-    read_page_outline_with_workspace, set_block_collapsed as action_set_block_collapsed, today,
-    toggle_quote as action_toggle_quote, toggle_todo as action_toggle_todo, ActionError, Backlink,
-    OutlineNode, PageKind, PageMeta, PasteAnchor,
+    read_page_outline_with_workspace, search_persons as action_search_persons,
+    set_block_collapsed as action_set_block_collapsed, today, toggle_quote as action_toggle_quote,
+    toggle_todo as action_toggle_todo, ActionError, Backlink, OutlineNode, PageKind, PageMeta,
+    PasteAnchor,
 };
 use outl_core::hlc::HlcGenerator;
 use outl_core::id::{ActorId, NodeId};
@@ -305,6 +306,14 @@ fn search_pages(query: String, state: State<'_, AppState>) -> Result<Vec<PageMet
         scored.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.title.cmp(&b.1.title)));
         Ok(scored.into_iter().map(|(_, p)| p).take(25).collect())
     })
+}
+
+/// Same shape as [`search_pages`], but filtered to `type:: person`
+/// pages and ranked by the shared `outl_actions::search_persons`
+/// helper. Powers the `@` mention autocomplete on mobile.
+#[tauri::command]
+fn search_persons(query: String, state: State<'_, AppState>) -> Result<Vec<PageMeta>, String> {
+    with_ws(&state, |ws| Ok(action_search_persons(ws, &query)))
 }
 
 #[tauri::command]
@@ -848,6 +857,7 @@ pub fn run() {
             // Page / journal navigation
             list_all_pages,
             search_pages,
+            search_persons,
             open_today_journal,
             open_journal_for,
             open_page_by_slug,

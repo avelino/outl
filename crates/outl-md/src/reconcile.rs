@@ -8,7 +8,6 @@
 //! Orphan ids are logged before being moved to `TRASH_ROOT`, so a
 //! deletion is never silent.
 
-use crate::diff::diff_to_ops;
 use crate::matching::match_blocks;
 use crate::parse::{parse, OutlineNode};
 use crate::sidecar::{self, file_hash, sidecar_path_for, Sidecar, SidecarBlock, SIDECAR_VERSION};
@@ -75,28 +74,41 @@ pub fn reconcile_md(
     let md_hash = file_hash(&md_text);
 
     let sidecar_path = sidecar_path_for(md_path);
-    let (page_id, old_blocks, created_sidecar) = match sidecar::read(&sidecar_path) {
-        Ok(sc) => (sc.page_id, sc.blocks, false),
-        Err(sidecar::SidecarError::Io(e)) if e.kind() == io::ErrorKind::NotFound => {
-            (NodeId::new(), Vec::new(), true)
-        }
-        Err(_) => {
-            // Corrupt sidecar — rebuild from scratch.
-            (NodeId::new(), Vec::new(), true)
-        }
+    // Read the sidecar **once** — both the diff (which needs `page_id`
+    // and `old_blocks`) and the short-circuit below (which needs
+    // `last_synced_hash` + `pipeline_version`) consume the same JSON.
+    // A previous version read it twice with no lock between the
+    // reads, leaving a window where another process could rewrite
+    // the file mid-call and the two reads would disagree.
+    let existing_sidecar: Option<Sidecar> = match sidecar::read(&sidecar_path) {
+        Ok(sc) => Some(sc),
+        Err(sidecar::SidecarError::Io(e)) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(_) => None, // Corrupt sidecar — rebuild from scratch.
+    };
+    let (page_id, old_blocks, created_sidecar) = match &existing_sidecar {
+        Some(sc) => (sc.page_id, sc.blocks.clone(), false),
+        None => (NodeId::new(), Vec::new(), true),
     };
 
-    // Short-circuit: file unchanged since last sync.
-    if !created_sidecar {
-        if let Ok(existing) = sidecar::read(&sidecar_path) {
-            if existing.last_synced_hash == md_hash {
-                return Ok(ReconcileReport {
-                    md_path: md_path.to_path_buf(),
-                    ops_applied: 0,
-                    orphans: 0,
-                    created_sidecar: false,
-                });
-            }
+    // Short-circuit: file unchanged since last sync AND the sidecar
+    // was produced by the current reconcile pipeline (or newer). The
+    // `pipeline_version` clause is what triggers the one-shot
+    // migration for sidecars predating `diff_to_ops_with_page_props`
+    // and `ensure_page_root_in_tree` — without it, legacy pages whose
+    // hash hasn't changed (the common case: fixtures, imports,
+    // anything authored before the page-prop pipeline) skip the
+    // migration silently and the desktop / mobile keep seeing empty
+    // page properties while the `.md` shows them.
+    if let Some(existing) = &existing_sidecar {
+        if existing.last_synced_hash == md_hash
+            && existing.pipeline_version >= crate::sidecar::CURRENT_PIPELINE_VERSION
+        {
+            return Ok(ReconcileReport {
+                md_path: md_path.to_path_buf(),
+                ops_applied: 0,
+                orphans: 0,
+                created_sidecar: false,
+            });
         }
     }
 
@@ -108,15 +120,35 @@ pub fn reconcile_md(
         }
     }
 
-    let plan = diff_to_ops(
+    let mut ops_applied = 0usize;
+
+    // **Materialise the page root** as a child of `NodeId::root` with
+    // `page-slug` + `page-kind` set. Without this, a `.md` authored
+    // externally (vim, peer via iCloud, Roam import) emits `Create`
+    // ops for the blocks (whose `parent` is the `page_id`) but leaves
+    // the page node itself as an unrooted ghost. The CRDT happily
+    // stores blocks under it, but `children_of(root)` doesn't list
+    // it as a page — so `list_all_pages`, `search_persons`, and the
+    // sidebar all miss it silently. The `WorkspaceIndex`-driven
+    // surfaces (TUI autocomplete, picker preview) still see the page
+    // because they parse `.md` from disk; that hid the bug.
+    //
+    // Each call is idempotent: we emit `Op::Move` / `Op::SetProp` only
+    // when the workspace tree disagrees with what the filesystem says
+    // the page should look like. Pages created via the UI
+    // (`open_or_create_by_name`) already carry the right state, so
+    // this is a no-op for them.
+    ops_applied += ensure_page_root_in_tree(ws, hlc, page_id, md_path)?;
+
+    let plan = crate::diff::diff_to_ops_with_page_props(
         &new_ast.blocks,
         &matches,
         &orphans,
         page_id,
         &md_hash,
         &old_blocks,
+        &new_ast.properties,
     );
-    let mut ops_applied = 0usize;
 
     for op in plan.ops {
         let ts = hlc.next();
@@ -154,6 +186,7 @@ pub fn reconcile_md(
         last_synced_hash: md_hash,
         last_synced_at: plan.new_sidecar.last_synced_at,
         blocks: plan.new_sidecar.blocks,
+        pipeline_version: plan.new_sidecar.pipeline_version,
     };
     sidecar::write(&sidecar_path, &new_sidecar)?;
 
@@ -163,6 +196,146 @@ pub fn reconcile_md(
         orphans: orphans.len(),
         created_sidecar,
     })
+}
+
+/// Guarantee the page node `page_id` is rooted in the workspace tree
+/// as a child of `NodeId::root` with the `page-slug` / `page-kind`
+/// properties set, deriving the slug from the filename and the kind
+/// from the parent directory (`pages/` vs `journals/`).
+///
+/// Returns the number of ops applied (0–3). Idempotent: each op is
+/// emitted only when the workspace state disagrees with what the
+/// filesystem says the page should look like.
+///
+/// Why this lives in `outl-md` and inlines the key constants:
+/// `page-slug` / `page-kind` are owned by `outl-actions::page` but
+/// `outl-md` cannot depend on it (layering). The pair of strings
+/// stays inlined — if either side ever renames, both call-sites need
+/// to update together (the diff.rs's `PAGE_SLUG_KEY` skip-list and
+/// here). Keep these in sync with `outl_actions::page::{SLUG_KEY,
+/// KIND_KEY}`.
+fn ensure_page_root_in_tree(
+    ws: &mut Workspace,
+    hlc: &HlcGenerator,
+    page_id: NodeId,
+    md_path: &Path,
+) -> Result<usize, WorkspaceError> {
+    const PAGE_SLUG_KEY: &str = "page-slug";
+    const PAGE_KIND_KEY: &str = "page-kind";
+
+    let slug = md_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    let kind_value = if md_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        == Some("journals")
+    {
+        "journal"
+    } else {
+        "page"
+    };
+
+    let mut applied = 0usize;
+
+    // **Materialise the page node in the tree.**
+    //
+    // `Op::Move` on a node that has never been `Op::Create`d is a
+    // **no-op** inside `tree::do_op` (see `outl-core/src/tree/op.rs`,
+    // the `None` arm of the `match self.nodes.get(node)`). Pages
+    // authored externally (`vim` writing `pages/samara.md` directly)
+    // never receive a Create through any pipeline — `reconcile_md`
+    // only emits Create for the blocks inside the page, never for the
+    // page node itself. So emitting only `Op::Move` here would
+    // silently fail, the page would never appear under
+    // `children_of(root)`, and `search_persons` / `list_all_pages`
+    // would skip it forever. That was the bug behind "samara has
+    // `type:: person` in the .md, the op log has the SetProp, the
+    // sidecar says `pipeline_v2_complete: true`, but the desktop
+    // autocomplete still doesn't see it".
+    //
+    // Three cases:
+    //   - node absent from `self.nodes` (parent == None) → Create at root.
+    //   - node present but parented somewhere other than root → Move to root.
+    //   - node already at root → no-op.
+    let current_parent = ws.tree().parent(page_id);
+    if current_parent.is_none() {
+        // Fresh page: emit `Op::Create` so the node lands in
+        // `self.nodes` with the correct parent. Subsequent block
+        // `Op::Create` ops (whose parent is `page_id`) and
+        // `Op::SetProp` ops were already idempotent against
+        // non-existent nodes for `SetProp`, but `Move` was the
+        // failure mode that masked this bug for months.
+        let ts = hlc.next();
+        ws.apply(LogOp {
+            ts,
+            actor: ts.actor,
+            op: outl_core::op::Op::Create {
+                node: page_id,
+                parent: NodeId::root(),
+                position: outl_core::fractional::Fractional::between(None, None),
+            },
+        })?;
+        applied += 1;
+    } else if let Some(old_parent) = current_parent.filter(|p| *p != NodeId::root()) {
+        // Node exists somewhere else in the tree (rare: shouldn't
+        // happen for orphan reconcile, but covers the case where a
+        // page node migrates from being a block descendant — defensive).
+        let old_position = ws
+            .tree()
+            .position(page_id)
+            .cloned()
+            .unwrap_or_else(outl_core::fractional::Fractional::first);
+        let ts = hlc.next();
+        ws.apply(LogOp {
+            ts,
+            actor: ts.actor,
+            op: outl_core::op::Op::Move {
+                node: page_id,
+                new_parent: NodeId::root(),
+                position: outl_core::fractional::Fractional::between(None, None),
+                old_parent,
+                old_position,
+            },
+        })?;
+        applied += 1;
+    }
+    // `page-slug` property: must equal the filename stem.
+    let want_slug = outl_core::property::PropValue::Text(slug.clone());
+    if ws.tree().property(page_id, PAGE_SLUG_KEY) != Some(&want_slug) {
+        let ts = hlc.next();
+        ws.apply(LogOp {
+            ts,
+            actor: ts.actor,
+            op: outl_core::op::Op::SetProp {
+                node: page_id,
+                key: PAGE_SLUG_KEY.to_string(),
+                value: Some(want_slug),
+                old_value: None,
+            },
+        })?;
+        applied += 1;
+    }
+    // `page-kind` property: `page` or `journal` based on the directory.
+    let want_kind = outl_core::property::PropValue::Text(kind_value.to_string());
+    if ws.tree().property(page_id, PAGE_KIND_KEY) != Some(&want_kind) {
+        let ts = hlc.next();
+        ws.apply(LogOp {
+            ts,
+            actor: ts.actor,
+            op: outl_core::op::Op::SetProp {
+                node: page_id,
+                key: PAGE_KIND_KEY.to_string(),
+                value: Some(want_kind),
+                old_value: None,
+            },
+        })?;
+        applied += 1;
+    }
+    Ok(applied)
 }
 
 /// Walk the parsed AST and the freshly built sidecar block list in

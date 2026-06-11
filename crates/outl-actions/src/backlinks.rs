@@ -160,18 +160,35 @@ impl TargetMatcher {
 }
 
 /// Convenience: backlinks against either the page's slug or its title.
+///
+/// When the page is a person (`page_type == Some("person")`), we also
+/// scan for the **`@`-prefixed** alias forms (`@<slug>` and
+/// `@<title>`). Person pages don't carry the `@` in their slug or
+/// title — the `@` is purely the mention affordance produced by the
+/// `@` autocomplete (`[[@avelino]]` resolves to the page `avelino`).
+/// Without scanning the alias, every mention of `@avelino` would fall
+/// off the person's backlinks panel.
 pub fn backlinks_for_page(workspace: &Workspace, root: &Path, meta: &PageMeta) -> Vec<Backlink> {
-    let mut by_slug = backlinks_for_target(workspace, root, &meta.slug);
-    if meta.title != meta.slug {
-        let by_title = backlinks_for_target(workspace, root, &meta.title);
-        // De-dupe by block id (a block might mention both forms).
-        for link in by_title {
-            if !by_slug.iter().any(|l| l.block_id == link.block_id) {
-                by_slug.push(link);
+    let mut acc = backlinks_for_target(workspace, root, &meta.slug);
+    let mut push = |extra: Vec<Backlink>| {
+        for link in extra {
+            if !acc.iter().any(|l| l.block_id == link.block_id) {
+                acc.push(link);
             }
         }
+    };
+    if meta.title != meta.slug {
+        push(backlinks_for_target(workspace, root, &meta.title));
     }
-    by_slug
+    if meta.page_type.as_deref() == Some(crate::page::PERSON_TYPE) {
+        let at_slug = format!("@{}", meta.slug);
+        push(backlinks_for_target(workspace, root, &at_slug));
+        if meta.title != meta.slug {
+            let at_title = format!("@{}", meta.title);
+            push(backlinks_for_target(workspace, root, &at_title));
+        }
+    }
+    acc
 }
 
 /// Recursive helper: descend into `parent`'s children, tracking the
@@ -577,5 +594,52 @@ mod tests {
         assert_eq!(bl.source_block.children.len(), 2);
         assert_eq!(bl.source_block.children[0].text, "milestone A");
         assert_eq!(bl.source_block.children[1].text, "milestone B");
+    }
+
+    #[test]
+    fn person_page_picks_up_at_alias_mentions() {
+        use crate::page::{page_meta, set_property, PERSON_TYPE, TYPE_KEY};
+        use outl_core::property::PropValue;
+        let (mut w, hlc) = ws();
+        let avelino = open_or_create(&mut w, &hlc, "avelino", "Avelino", PageKind::Page).unwrap();
+        set_property(
+            &mut w,
+            &hlc,
+            avelino,
+            TYPE_KEY,
+            Some(PropValue::Text(PERSON_TYPE.into())),
+        )
+        .unwrap();
+        let meta = page_meta(&w, avelino).unwrap();
+
+        let day =
+            open_journal(&mut w, &hlc, NaiveDate::from_ymd_opt(2026, 5, 27).unwrap()).unwrap();
+        // The `@` autocomplete inserts `[[@avelino]]` — a normal
+        // wikilink whose target carries the `@`. The person's backlinks
+        // panel must surface it even though the page slug is `avelino`.
+        let at_mention =
+            append_block(&mut w, &hlc, Some(day), Some("blocked on [[@avelino]]")).unwrap();
+        let plain_mention =
+            append_block(&mut w, &hlc, Some(day), Some("talked to [[avelino]] today")).unwrap();
+
+        let links = backlinks_for_page(&w, root(), &meta);
+        let block_ids: Vec<String> = links.iter().map(|l| l.block_id.clone()).collect();
+        assert!(
+            block_ids.contains(&at_mention.to_string()),
+            "@-mention not surfaced in backlinks"
+        );
+        assert!(
+            block_ids.contains(&plain_mention.to_string()),
+            "plain [[avelino]] mention not surfaced"
+        );
+        // Plain pages (non-person) must NOT scan the `@` alias.
+        let other = open_or_create(&mut w, &hlc, "projeto", "Projeto", PageKind::Page).unwrap();
+        let projeto_meta = page_meta(&w, other).unwrap();
+        let _ = append_block(&mut w, &hlc, Some(day), Some("worked on [[@projeto]]")).unwrap();
+        let projeto_links = backlinks_for_page(&w, root(), &projeto_meta);
+        assert!(
+            projeto_links.is_empty(),
+            "non-person page must not match `@`-aliased refs"
+        );
     }
 }
