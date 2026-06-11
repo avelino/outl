@@ -233,24 +233,39 @@ Workspaces that ever expanded a handle to 7+ characters keep working forever bec
 
 #### Mentions (`[[@name]]`)
 
-`[[@name]]` is **not a new token**. It is a regular page reference whose target literal happens to start with `@`. Roundtrip, render, matching, and reconciliation flow through the same code path as `[[ref]]` — no separate parser branch.
+`[[@name]]` is **not a new token**.
+It is a regular page reference whose target literal happens to start with `@`.
+Roundtrip, render, matching, and reconciliation flow through the same code path as `[[ref]]`, no separate parser branch.
 
 What makes it act as a mention is policy on top of the existing primitive:
 
-- **Page identity does not carry the `@`.** The page is `pages/<slug>.md` with `title:: <name>` (no `@`); the `@` belongs to the link affordance, like the `!` in `!((blk-XXXXXX))` belongs to the embed affordance.
-- **Reference resolution strips the `@`.** Opening `[[@avelino]]` resolves to the page `avelino` via the same decision tree as any `[[ref]]` (slug match → slugified match → case-insensitive title match → create). The `@` is consumed by the resolver before the lookup.
-- **Create-on-miss marks the new page as a person.** When the target doesn't exist yet, the resolver creates `pages/<slug>.md` and sets `type:: person` on it automatically — the next mention surfaces the page in the autocomplete popup without the user editing properties by hand.
-- **Backlinks recognise the `@`-aliased form.** A person page's backlinks panel surfaces blocks that wrote `[[@name]]` even though the page slug is `name`. Plain (non-person) pages do not scan the `@`-aliased form, so `[[@projeto]]` in a block does not accidentally show up under a non-person `projeto` page.
+- **Page identity does not carry the `@`.**
+  The page is `pages/<slug>.md` with `title:: <name>` (no `@`).
+  The `@` belongs to the link affordance, like the `!` in `!((blk-XXXXXX))` belongs to the embed affordance.
+- **Reference resolution strips the `@`.**
+  Opening `[[@avelino]]` resolves to the page `avelino` via the same decision tree as any `[[ref]]` (slug match → slugified match → case-insensitive title match → create).
+  The `@` is consumed by the resolver before the lookup.
+- **Create-on-miss marks the new page as a person.**
+  When the target doesn't exist yet, the resolver creates `pages/<slug>.md` and sets `type:: person` on it automatically.
+  The next mention surfaces the page in the autocomplete popup without the user editing properties by hand.
+- **Backlinks recognise the `@`-aliased form.**
+  A person page's backlinks panel surfaces blocks that wrote `[[@name]]` even though the page slug is `name`.
+  Plain (non-person) pages do not scan the `@`-aliased form, so `[[@projeto]]` in a block does not accidentally show up under a non-person `projeto` page.
 
 #### Autocomplete trigger
 
-While the user is editing a block, every client opens a person picker on a **word-initial `@`** (the same word-initial rule the `#` tag trigger uses: `@` preceded by start-of-line or whitespace). The popup lists pages where `type:: person` is set, fuzzy-matched against whatever was typed after the `@`. Accepting a candidate inserts `[[@<title>]]` at the caret.
+While the user is editing a block, every client opens a person picker on a **word-initial `@`** (the same word-initial rule the `#` tag trigger uses: `@` preceded by start-of-line or whitespace).
+The popup lists pages where `type:: person` is set, fuzzy-matched against whatever was typed after the `@`.
+Accepting a candidate inserts `[[@<title>]]` at the caret.
 
-- Composite names work: `@Thiago Avelino` is a valid query — the autocomplete query allows spaces, unlike `#tag` which terminates on the first non-word character.
-- Mid-word `@` is ignored — `a@b.com` (an email) is not a mention.
+- Composite names work.
+  `@Thiago Avelino` is a valid query — the autocomplete query allows spaces, unlike `#tag` which terminates on the first non-word character.
+- Mid-word `@` is ignored.
+  `a@b.com` (an email) is not a mention.
 - When no existing person matches the query, the popup offers the query itself as a "create new" candidate so a fresh mention can be minted without leaving the keyboard.
 
-The `type::` page-level property is what scopes the autocomplete candidate list (and marks the page semantically); the `@`-prefixed link text is what makes the rendered reference visually a mention.
+The `type::` page-level property is what scopes the autocomplete candidate list (and marks the page semantically).
+The `@`-prefixed link text is what makes the rendered reference visually a mention.
 
 ### What is **not** in the file
 

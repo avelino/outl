@@ -103,10 +103,10 @@ pub struct Sidecar {
     /// page on the next boot — no user intervention, idempotent on
     /// the CRDT.
     ///
-    /// Sidecars predating this field (and earlier intermediates that
-    /// used a boolean `page_props_propagated` / `pipeline_v2_complete`)
-    /// deserialise as `0` via `#[serde(default)]`, which forces a
-    /// re-reconcile against the current pipeline.
+    /// Sidecars predating this field (including earlier intermediates
+    /// that used a boolean flag of a different name) deserialise as
+    /// `0` via `#[serde(default)]`, which forces a re-reconcile
+    /// against the current pipeline.
     #[serde(default)]
     pub pipeline_version: u32,
 }

@@ -49,7 +49,10 @@ type:: person
 - can be reached at [[email]]
 ```
 
-The `type::` property on a page is read by surfaces that filter pages by role. The canonical case is `type:: person`: every client opens a person picker on a word-initial `@` keystroke and lists only pages whose `type:: person` is set. Accepting a candidate inserts `[[@name]]` — a regular wikilink whose `@` is purely visual (the page identity is still `name`, without the `@`). See [the markdown format spec](markdown-format.md#mentions-name) for the full contract.
+The `type::` property on a page is read by surfaces that filter pages by role.
+The canonical case is `type:: person`: every client opens a person picker on a word-initial `@` keystroke and lists only pages whose `type:: person` is set.
+Accepting a candidate inserts `[[@name]]`, a regular wikilink whose `@` is purely visual (the page identity is still `name`, without the `@`).
+See [the markdown format spec](markdown-format.md#mentions-name) for the full contract.
 
 ### Journal
 

@@ -151,9 +151,11 @@ pub(crate) fn reload_workspace(
     *state.workspace.lock() = Some(fresh);
     // Same split as `set_workspace` and the boot opener — reconcile
     // legacy / peer-pushed `.md` files in the background so the
-    // frontend doesn't wait. Idempotent: pages already materialised
-    // become no-ops inside `reconcile_md` via the
-    // `pipeline_v2_complete` short-circuit.
+    // frontend doesn't wait.
+    // Idempotent: pages already materialised become no-ops inside
+    // `reconcile_md` via the
+    // `last_synced_hash == md_hash && pipeline_version >= CURRENT_PIPELINE_VERSION`
+    // short-circuit.
     spawn_background_reconcile(state.workspace.clone(), root, state.hlc.clone(), app);
     Ok(())
 }

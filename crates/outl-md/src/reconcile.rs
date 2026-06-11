@@ -223,11 +223,15 @@ fn ensure_page_root_in_tree(
     const PAGE_SLUG_KEY: &str = "page-slug";
     const PAGE_KIND_KEY: &str = "page-kind";
 
+    // `to_string_lossy` keeps the slug non-empty even when the
+    // filename is not valid UTF-8 (replaces invalid sequences with
+    // U+FFFD). `unwrap_or("")` would have left such pages with an
+    // empty `page-slug`, which `find_by_slug` and the picker treat
+    // as "no page" — silently hiding the file.
     let slug = md_path
         .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_string();
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let kind_value = if md_path
         .parent()
         .and_then(|p| p.file_name())
@@ -240,6 +244,23 @@ fn ensure_page_root_in_tree(
     };
 
     let mut applied = 0usize;
+
+    // Pick a fractional position that lands **after** the last
+    // existing child of `NodeId::root`. `Fractional::between(None, None)`
+    // always returns the midpoint (`"m"`), so every externally-authored
+    // page handled here would collide on the same key; iterators over
+    // `children_of(root)` would then see nondeterministic ordering
+    // (ties come from `HashMap` iteration, since fractional positions
+    // are equal).
+    let position_after_last_root_child = || {
+        let max = ws
+            .tree()
+            .iter_nodes()
+            .filter(|(_, parent, _)| *parent == NodeId::root())
+            .map(|(_, _, pos)| pos.clone())
+            .max();
+        outl_core::fractional::Fractional::between(max.as_ref(), None)
+    };
 
     // **Materialise the page node in the tree.**
     //
@@ -254,8 +275,8 @@ fn ensure_page_root_in_tree(
     // `children_of(root)`, and `search_persons` / `list_all_pages`
     // would skip it forever. That was the bug behind "samara has
     // `type:: person` in the .md, the op log has the SetProp, the
-    // sidecar says `pipeline_v2_complete: true`, but the desktop
-    // autocomplete still doesn't see it".
+    // sidecar carries the current `pipeline_version`, but the
+    // desktop autocomplete still doesn't see it".
     //
     // Three cases:
     //   - node absent from `self.nodes` (parent == None) → Create at root.
@@ -269,6 +290,7 @@ fn ensure_page_root_in_tree(
         // `Op::SetProp` ops were already idempotent against
         // non-existent nodes for `SetProp`, but `Move` was the
         // failure mode that masked this bug for months.
+        let position = position_after_last_root_child();
         let ts = hlc.next();
         ws.apply(LogOp {
             ts,
@@ -276,7 +298,7 @@ fn ensure_page_root_in_tree(
             op: outl_core::op::Op::Create {
                 node: page_id,
                 parent: NodeId::root(),
-                position: outl_core::fractional::Fractional::between(None, None),
+                position,
             },
         })?;
         applied += 1;
@@ -289,6 +311,7 @@ fn ensure_page_root_in_tree(
             .position(page_id)
             .cloned()
             .unwrap_or_else(outl_core::fractional::Fractional::first);
+        let position = position_after_last_root_child();
         let ts = hlc.next();
         ws.apply(LogOp {
             ts,
@@ -296,7 +319,7 @@ fn ensure_page_root_in_tree(
             op: outl_core::op::Op::Move {
                 node: page_id,
                 new_parent: NodeId::root(),
-                position: outl_core::fractional::Fractional::between(None, None),
+                position,
                 old_parent,
                 old_position,
             },
@@ -500,6 +523,48 @@ mod tests {
 
         let second = reconcile_md(&mut ws, &hlc, &md_path, None).unwrap();
         assert_eq!(second.ops_applied, 0);
+    }
+
+    /// Regression: `Fractional::between(None, None)` always returns
+    /// the midpoint, so two externally-authored pages reconciled in
+    /// the same session would land on identical positions and the
+    /// iteration order of `children_of(root)` would depend on
+    /// `HashMap` hashing.
+    #[test]
+    fn externally_authored_pages_get_distinct_positions_under_root() {
+        let (dir, mut ws, hlc) = setup_workspace();
+        let pages_dir = dir.path().join("pages");
+        fs::create_dir_all(&pages_dir).unwrap();
+        fs::write(
+            pages_dir.join("avelino.md"),
+            "title:: Avelino\ntype:: person\n\n- bio\n",
+        )
+        .unwrap();
+        fs::write(
+            pages_dir.join("samara.md"),
+            "title:: Samara\ntype:: person\n\n- bio\n",
+        )
+        .unwrap();
+
+        reconcile_md(&mut ws, &hlc, &pages_dir.join("avelino.md"), None).unwrap();
+        reconcile_md(&mut ws, &hlc, &pages_dir.join("samara.md"), None).unwrap();
+
+        // Collect (id, position) for every root child. Page nodes
+        // must end up with distinct fractional positions.
+        let positions: Vec<_> = ws
+            .tree()
+            .iter_nodes()
+            .filter(|(_, parent, _)| *parent == outl_core::id::NodeId::root())
+            .map(|(_, _, pos)| pos.clone())
+            .collect();
+        let mut dedup = positions.clone();
+        dedup.sort();
+        dedup.dedup();
+        assert_eq!(
+            positions.len(),
+            dedup.len(),
+            "two externally-authored pages must not share a fractional position; got {positions:?}"
+        );
     }
 
     #[test]

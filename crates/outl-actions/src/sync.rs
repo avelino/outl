@@ -228,15 +228,19 @@ fn scan_dir(dir: &Path, out: &mut Vec<PathBuf>) {
 /// the op log yet (legacy sidecars predating
 /// `diff_to_ops_with_page_props`).
 ///
-/// The propagation check is a one-shot migration trigger: the next
-/// `reconcile_md` emits the missing `Op::SetProp`s on the page root,
-/// flips `pipeline_v2_complete = true` in the rewritten sidecar, and
-/// the page is skipped on every subsequent scan. Without it, pages
-/// authored via fixtures, imports, or external editors keep their
-/// `type:: person` only in the rendered `.md` — and the desktop's
-/// `@` autocomplete (which reads from the CRDT tree) silently
-/// disagrees with the TUI's (which reads `WorkspaceIndex`'s parse of
-/// the same `.md`).
+/// The version check is a forward-compatible migration trigger.
+/// Every bump of [`outl_md::sidecar::CURRENT_PIPELINE_VERSION`]
+/// forces every legacy sidecar (with a lower value, including the
+/// default `0` from `#[serde(default)]` on payloads written before
+/// the field existed) through `reconcile_md` once.
+/// The reconcile emits the missing ops on the page root and stamps
+/// the new version in the rewritten sidecar.
+/// Subsequent scans skip the page until the next pipeline bump.
+/// Without this, pages authored via fixtures, imports, or external
+/// editors keep their `type:: person` only in the rendered `.md`,
+/// and the desktop's `@` autocomplete (which reads from the CRDT
+/// tree) silently disagrees with the TUI's (which reads
+/// `WorkspaceIndex`'s parse of the same `.md`).
 fn needs_reconcile(md_path: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(md_path) else {
         return false;

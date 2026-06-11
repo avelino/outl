@@ -36,9 +36,10 @@ pub const PERSON_TYPE: &str = "person";
 /// mention autocomplete every client surfaces (TUI, desktop, mobile).
 ///
 /// Ranking uses the same shape as the desktop's `search_pages` Tauri
-/// command (exact → prefix → contains), against both the title and the
-/// slug. An empty query returns the first 25 person pages in title
-/// order. Returns at most 25 results.
+/// command (exact → prefix → contains), against both the title and
+/// the slug. An empty query returns the first 25 person pages in
+/// **slug** order (the order `list_all` produces — slugs sort
+/// lexicographically). Returns at most 25 results.
 ///
 /// The filter is `page_type == PERSON_TYPE` exactly — the index already
 /// lowercased the property value, so we compare against the canonical
