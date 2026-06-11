@@ -28,3 +28,27 @@ export function onWorkspaceReady(handler: () => void): Promise<UnlistenFn> {
 export function onPeerOpsChanged(handler: () => void): Promise<UnlistenFn> {
   return listen("peer-ops-changed", () => handler());
 }
+
+/**
+ * Payload emitted with `ref-projection-failed` when `open_ref` resolved
+ * the target (the page now lives in the op log) but writing the
+ * resulting `pages/<slug>.md` + sidecar failed. The op log is still
+ * the source of truth; the next save / orphan scanner retries the
+ * projection. The frontend surfaces a toast so the user knows the
+ * link they just inserted may not be visible to peers yet.
+ */
+export interface RefProjectionFailedPayload {
+  target: string;
+  error: string;
+}
+
+/**
+ * Register a handler for the `ref-projection-failed` event.
+ */
+export function onRefProjectionFailed(
+  handler: (payload: RefProjectionFailedPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<RefProjectionFailedPayload>("ref-projection-failed", (e) =>
+    handler(e.payload),
+  );
+}

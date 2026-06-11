@@ -58,6 +58,7 @@ pub mod journal;
 pub mod outline;
 pub mod page;
 pub mod paste;
+pub mod person;
 pub mod quote;
 pub mod sync;
 pub mod todo;
@@ -86,12 +87,13 @@ pub use page::{
     date_from_slug, find_by_slug, is_valid_slug, journal_slug, journal_title,
     list_all as list_pages, migrate_legacy_into_today, next_journal_date, open_journal,
     open_or_create as open_or_create_page, open_or_create_by_name, open_or_create_by_ref,
-    open_today, page_meta, previous_journal_date, read_text_prop, search_persons, set_property,
-    today, PageKind, PageMeta, PERSON_TYPE, TYPE_KEY,
+    open_today, page_meta, previous_journal_date, read_text_prop, set_property, today, PageKind,
+    PageMeta,
 };
 pub use paste::{
     looks_like_outline, normalize_external_syntax, paste_markdown, PasteAnchor, PasteOutcome,
 };
+pub use person::{search_persons, PERSON_TYPE, TYPE_KEY};
 pub use sync::{OpsFileSnapshot, SyncEngine};
 pub use todo::{cycle_todo, split_todo, TodoState, DONE_PREFIX, TODO_PREFIX};
 pub use tree::{

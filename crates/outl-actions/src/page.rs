@@ -31,19 +31,11 @@ pub const SLUG_KEY: &str = "page-slug";
 /// Property key recording whether a page is a regular page or a
 /// journal.
 pub const KIND_KEY: &str = "page-kind";
-/// Page-level property key carrying the user-defined semantic type of
-/// the page (`type:: person`, `type:: project`, …). Read by the `@`
-/// mention autocomplete to filter to person pages only.
-///
-/// **Canonical for outl** is the bare `type` key — same shape Logseq
-/// and similar tools use, so an imported workspace lights up without
-/// rewriting.
-pub const TYPE_KEY: &str = "type";
-/// Canonical [`TYPE_KEY`] value marking a page as a person. The `@`
-/// mention autocomplete in every client surfaces pages where
-/// `page_type == PERSON_TYPE` (case-insensitive at the index level —
-/// see [`outl_md::index::WorkspaceIndex::pages_by_type`]).
-pub const PERSON_TYPE: &str = "person";
+// `TYPE_KEY` / `PERSON_TYPE` / `search_persons` / `ensure_person_by_name`
+// live in the sibling `person` module so this file stays focused on the
+// page-model primitives (slug, kind, title, journal). The constants and
+// `search_persons` are re-exported at the crate root via `lib.rs` for
+// back-compat with callers that imported them from `outl_actions::page`.
 
 /// Whether a page is a regular named page or a date-keyed journal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -138,46 +130,6 @@ pub fn list_all(workspace: &Workspace) -> Vec<PageMeta> {
     pages
 }
 
-/// Pages with `type:: person`, ranked against `query`. Powers the `@`
-/// mention autocomplete every client surfaces (TUI, desktop, mobile).
-///
-/// Ranking uses the same shape as the desktop's `search_pages` Tauri
-/// command (exact → prefix → contains), against both the title and the
-/// slug. An empty query returns the first 25 person pages in title
-/// order. Returns at most 25 results.
-///
-/// The filter is `page_type == PERSON_TYPE` exactly — the index already
-/// lowercased the property value, so we compare against the canonical
-/// lowercase form. Other types (`project`, …) and untyped pages are
-/// skipped.
-pub fn search_persons(workspace: &Workspace, query: &str) -> Vec<PageMeta> {
-    let q = query.trim().to_lowercase();
-    let persons = list_all(workspace)
-        .into_iter()
-        .filter(|p| p.page_type.as_deref() == Some(PERSON_TYPE));
-    if q.is_empty() {
-        return persons.take(25).collect();
-    }
-    let mut scored: Vec<(u8, PageMeta)> = persons
-        .filter_map(|p| {
-            let title = p.title.to_lowercase();
-            let slug = p.slug.to_lowercase();
-            let score = if title == q || slug == q {
-                0
-            } else if title.starts_with(&q) || slug.starts_with(&q) {
-                1
-            } else if title.contains(&q) || slug.contains(&q) {
-                2
-            } else {
-                return None;
-            };
-            Some((score, p))
-        })
-        .collect();
-    scored.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.title.cmp(&b.1.title)));
-    scored.into_iter().map(|(_, p)| p).take(25).collect()
-}
-
 /// Read page metadata from a node. Returns `None` when the node is
 /// not a page (no `page-slug` property).
 pub fn page_meta(workspace: &Workspace, id: NodeId) -> Option<PageMeta> {
@@ -212,7 +164,7 @@ pub fn page_meta(workspace: &Workspace, id: NodeId) -> Option<PageMeta> {
     // …). We surface it lowercased + trimmed so callers can compare
     // against `PERSON_TYPE` without re-normalising. Same shape as the
     // workspace index — see `outl_md::index::PageEntry.page_type`.
-    let page_type = match workspace.tree().property(id, TYPE_KEY) {
+    let page_type = match workspace.tree().property(id, crate::person::TYPE_KEY) {
         Some(PropValue::Text(s)) => {
             let normalised = s.trim().to_lowercase();
             if normalised.is_empty() {
@@ -422,7 +374,7 @@ pub fn open_or_create_by_ref(
     // user just resolved a mention against it. Keep this arm first.
     if let Some(rest) = target.strip_prefix('@') {
         if !rest.is_empty() {
-            return ensure_person_by_name(workspace, hlc, rest);
+            return crate::person::ensure_person_by_name(workspace, hlc, rest);
         }
         // `[[@]]` — empty name. Fall through to the generic path,
         // which will create an `untitled` page via slugifier. Not
@@ -449,72 +401,6 @@ pub fn open_or_create_by_ref(
         }
     }
     open_or_create_by_name(workspace, hlc, target, PageKind::Page)
-}
-
-/// Resolve `name` to its person page, creating one if missing **and
-/// idempotently marking the resulting node as `type:: person`**.
-///
-/// The "idempotent mark" is the load-bearing piece: when `name` resolves
-/// to a page that already existed (created before the feature shipped,
-/// authored by an external editor, or imported via fixtures), the user's
-/// `[[@name]]` gesture must promote it to a person — otherwise the
-/// `@` autocomplete `pages_by_type(PERSON_TYPE)` filter won't list it,
-/// and the user sees the same empty popup forever despite the page
-/// being right there on disk.
-///
-/// Re-emitting `Op::SetProp { key: "type", value: "person" }` when the
-/// property is already set is a no-op via the CRDT's HLC-ordered LWW
-/// (the new value matches the existing one), so calling this on every
-/// `@` gesture is cheap.
-fn ensure_person_by_name(
-    workspace: &mut Workspace,
-    hlc: &HlcGenerator,
-    name: &str,
-) -> Result<NodeId, ActionError> {
-    let id = resolve_or_create_person(workspace, hlc, name)?;
-    set_property(
-        workspace,
-        hlc,
-        id,
-        TYPE_KEY,
-        Some(PropValue::Text(PERSON_TYPE.to_string())),
-    )?;
-    Ok(id)
-}
-
-/// Lookup `name` against existing pages by slug → slugified-slug →
-/// case-insensitive title, falling back to creating a fresh page
-/// when nothing matches. Pure resolution: does **not** touch the
-/// `type::` property — caller (`ensure_person_by_name`) is in charge
-/// of that policy.
-fn resolve_or_create_person(
-    workspace: &mut Workspace,
-    hlc: &HlcGenerator,
-    name: &str,
-) -> Result<NodeId, ActionError> {
-    if let Some(id) = find_by_slug(workspace, name) {
-        return Ok(id);
-    }
-    let slug = outl_md::slug::slugify(name);
-    if let Some(id) = find_by_slug(workspace, &slug) {
-        return Ok(id);
-    }
-    // Title fallback so `[[@Thiago Avelino]]` matches a pre-existing
-    // page whose user-typed title was `Thiago Avelino` even before
-    // the slug got computed.
-    let name_lower = name.to_lowercase();
-    if let Some(existing) = list_all(workspace)
-        .into_iter()
-        .find(|p| p.title.to_lowercase() == name_lower)
-    {
-        use std::str::FromStr;
-        if let Ok(id) = ulid::Ulid::from_str(&existing.id) {
-            return Ok(NodeId(id));
-        }
-    }
-    // Not found: create with the human-typed `name` as the title
-    // (`open_or_create_by_name` slugifies internally).
-    open_or_create_by_name(workspace, hlc, name, PageKind::Page)
 }
 
 fn set_prop(
@@ -820,262 +706,7 @@ mod tests {
         assert_eq!(w.tree().parent(b), Some(today_id));
     }
 
-    #[test]
-    fn page_meta_surfaces_page_type_lowercased() {
-        let (mut w, hlc) = ws();
-        let id = open_or_create(&mut w, &hlc, "avelino", "Avelino", PageKind::Page).unwrap();
-        // Untyped page: `page_type == None`.
-        assert_eq!(page_meta(&w, id).unwrap().page_type, None);
-        // Setting `type:: Person` lands as Some("person") on the meta.
-        set_property(
-            &mut w,
-            &hlc,
-            id,
-            TYPE_KEY,
-            Some(PropValue::Text("Person".into())),
-        )
-        .unwrap();
-        assert_eq!(
-            page_meta(&w, id).unwrap().page_type.as_deref(),
-            Some("person")
-        );
-    }
-
-    #[test]
-    fn search_persons_filters_to_person_pages_only() {
-        let (mut w, hlc) = ws();
-        let avelino = open_or_create(&mut w, &hlc, "avelino", "Avelino", PageKind::Page).unwrap();
-        let maria = open_or_create(&mut w, &hlc, "maria", "Maria", PageKind::Page).unwrap();
-        let projeto = open_or_create(&mut w, &hlc, "projeto", "Projeto", PageKind::Page).unwrap();
-        for id in [avelino, maria] {
-            set_property(
-                &mut w,
-                &hlc,
-                id,
-                TYPE_KEY,
-                Some(PropValue::Text(PERSON_TYPE.into())),
-            )
-            .unwrap();
-        }
-        set_property(
-            &mut w,
-            &hlc,
-            projeto,
-            TYPE_KEY,
-            Some(PropValue::Text("project".into())),
-        )
-        .unwrap();
-
-        let all_persons = search_persons(&w, "");
-        let titles: Vec<&str> = all_persons.iter().map(|p| p.title.as_str()).collect();
-        assert_eq!(titles.len(), 2);
-        assert!(titles.contains(&"Avelino"));
-        assert!(titles.contains(&"Maria"));
-
-        // Fuzzy query matches the title prefix.
-        let hits = search_persons(&w, "av");
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].title, "Avelino");
-
-        // Query that doesn't match any person returns empty.
-        assert!(search_persons(&w, "zzz").is_empty());
-    }
-
-    #[test]
-    fn open_or_create_by_ref_strips_at_to_find_person() {
-        let (mut w, hlc) = ws();
-        let id = open_or_create(&mut w, &hlc, "avelino", "Avelino", PageKind::Page).unwrap();
-        set_property(
-            &mut w,
-            &hlc,
-            id,
-            TYPE_KEY,
-            Some(PropValue::Text(PERSON_TYPE.into())),
-        )
-        .unwrap();
-        // `[[@avelino]]` resolves to the same `avelino` page even
-        // though the slug does NOT carry the `@`.
-        let resolved = open_or_create_by_ref(&mut w, &hlc, "@avelino").unwrap();
-        assert_eq!(id, resolved);
-    }
-
-    #[test]
-    fn open_or_create_by_ref_marks_preexisting_page_as_person() {
-        // Regression for the slug-strip-`@` order-of-operations bug:
-        // `slugify("@avelino")` returns `"avelino"`, so a generic
-        // `find_by_slug(slugify(target))` branch would resolve before
-        // the `@` arm ever ran — leaving the pre-existing page (no
-        // `type:: person` set) silently un-marked. After accepting
-        // `@avelino` from the autocomplete, the page MUST carry
-        // `type:: person` so the next `@` mention surfaces it in the
-        // popup. This is the bug that prompted the rewrite.
-        let (mut w, hlc) = ws();
-        let id = open_or_create(&mut w, &hlc, "avelino", "Avelino", PageKind::Page).unwrap();
-        // Page deliberately starts WITHOUT `type:: person`.
-        assert_eq!(page_meta(&w, id).unwrap().page_type, None);
-
-        let resolved = open_or_create_by_ref(&mut w, &hlc, "@avelino").unwrap();
-        assert_eq!(id, resolved, "must resolve to the same page");
-        assert_eq!(
-            page_meta(&w, id).unwrap().page_type.as_deref(),
-            Some("person"),
-            "resolving via `@` must idempotently mark the page as person"
-        );
-    }
-
-    #[test]
-    fn open_or_create_by_ref_creates_missing_person_with_type() {
-        let (mut w, hlc) = ws();
-        // Page doesn't exist yet — `@avelino` must create it and
-        // automatically set `type:: person` so the next mention of
-        // `@avelino` lands in the autocomplete popup.
-        let id = open_or_create_by_ref(&mut w, &hlc, "@avelino").unwrap();
-        let meta = page_meta(&w, id).unwrap();
-        assert_eq!(meta.slug, "avelino");
-        assert_eq!(meta.title, "avelino");
-        assert_eq!(meta.page_type.as_deref(), Some("person"));
-    }
-
-    #[test]
-    fn open_or_create_by_ref_composite_name_slugifies_title_preserved() {
-        let (mut w, hlc) = ws();
-        let id = open_or_create_by_ref(&mut w, &hlc, "@Thiago Avelino").unwrap();
-        let meta = page_meta(&w, id).unwrap();
-        // Slug folded; title kept verbatim.
-        assert_eq!(meta.slug, "thiago-avelino");
-        assert_eq!(meta.title, "Thiago Avelino");
-        assert_eq!(meta.page_type.as_deref(), Some("person"));
-
-        // Calling again with the same target must resolve to the same
-        // node (idempotent — does not double-create).
-        let again = open_or_create_by_ref(&mut w, &hlc, "@Thiago Avelino").unwrap();
-        assert_eq!(id, again);
-    }
-
-    /// Edge cases the `@` prefix should handle without panicking or
-    /// creating bizarre slugs. The arm runs **before** the generic
-    /// `find_by_slug` / `slugify` branches, so it owns the policy
-    /// for everything that starts with `@`.
-    ///
-    /// Cases covered:
-    /// - `@Avelino` (mixed case) → resolves to existing `avelino`
-    ///   page (case-insensitive title match) and marks it person.
-    /// - `@ avelino` (space after @) → the space is part of the
-    ///   name; `open_or_create_by_name` slugifies it. The page is
-    ///   created as a person.
-    /// - `@avelino/outl` (slash in name) → slashes become dashes via
-    ///   slugify; the page is created at `avelino-outl` as a person.
-    /// - `@@avelino` (double @) → the second `@` is kept as part of
-    ///   the name; slugify drops it. The page lands at `avelino`
-    ///   (or whatever the slugifier produces) and is marked person.
-    #[test]
-    fn open_or_create_by_ref_at_edge_cases() {
-        // --- @Mixed case resolves to existing lowercase slug ---
-        let (mut w, hlc) = ws();
-        let pre = open_or_create(&mut w, &hlc, "avelino", "Avelino", PageKind::Page).unwrap();
-        // Pre-existing page deliberately WITHOUT `type:: person`.
-        assert_eq!(page_meta(&w, pre).unwrap().page_type, None);
-        let resolved = open_or_create_by_ref(&mut w, &hlc, "@Avelino").unwrap();
-        assert_eq!(
-            pre, resolved,
-            "@Avelino must resolve to the existing `avelino` page via case-insensitive title"
-        );
-        assert_eq!(
-            page_meta(&w, resolved).unwrap().page_type.as_deref(),
-            Some("person"),
-            "resolving via `@` must mark the page person even when matching by title"
-        );
-
-        // --- @ followed by space ---
-        let (mut w, hlc) = ws();
-        let id = open_or_create_by_ref(&mut w, &hlc, "@ avelino").unwrap();
-        let meta = page_meta(&w, id).unwrap();
-        // The title is the literal `" avelino"` typed; the slug is
-        // slugified. The page is still marked as a person.
-        assert_eq!(meta.page_type.as_deref(), Some("person"));
-        assert!(
-            !meta.slug.is_empty() && meta.slug != "untitled",
-            "@ avelino must not collapse to an empty/untitled slug, got {:?}",
-            meta.slug
-        );
-
-        // --- @ with a slash in the name ---
-        let (mut w, hlc) = ws();
-        let id = open_or_create_by_ref(&mut w, &hlc, "@avelino/outl").unwrap();
-        let meta = page_meta(&w, id).unwrap();
-        assert_eq!(meta.slug, "avelino-outl");
-        assert_eq!(meta.title, "avelino/outl");
-        assert_eq!(meta.page_type.as_deref(), Some("person"));
-
-        // --- @@avelino (double @) ---
-        // The arm strips one `@`; the second `@` is part of the name.
-        // Slugify drops the leading `@`, so the slug normalises.
-        let (mut w, hlc) = ws();
-        let id = open_or_create_by_ref(&mut w, &hlc, "@@avelino").unwrap();
-        let meta = page_meta(&w, id).unwrap();
-        assert_eq!(meta.page_type.as_deref(), Some("person"));
-        // Slug must be deterministic and non-empty; exact form depends
-        // on slugify (likely `avelino`).
-        assert!(
-            !meta.slug.is_empty() && meta.slug != "untitled",
-            "@@avelino must produce a real slug, got {:?}",
-            meta.slug
-        );
-
-        // --- Empty `@` ([[@]]) — falls through to the generic create
-        //     path and lands on the slugifier's untitled fallback. Not
-        //     great UX but documented: refusing here would force every
-        //     caller to model an extra error branch. The relevant
-        //     guarantee is just "doesn't panic".
-        let (mut w, hlc) = ws();
-        let _ = open_or_create_by_ref(&mut w, &hlc, "@").unwrap();
-    }
-
-    /// Reproduction of the user-reported scenario: `pages/samara.md`
-    /// authored via `vim` (no `Op::Create`/`Op::Move` ever emitted for
-    /// the page node), with `type:: person` set in the file. After
-    /// `reconcile_md` runs, the desktop's `@` autocomplete must be
-    /// able to find `samara` via `search_persons`.
-    ///
-    /// Walks the full pipeline the desktop boot path runs:
-    /// 1. `pages/samara.md` exists with page-level props.
-    /// 2. `reconcile_md` is invoked (the background pass would do this).
-    /// 3. `search_persons("sam")` returns the page.
-    #[test]
-    fn externally_authored_md_with_type_person_appears_in_search_persons() {
-        use tempfile::TempDir;
-
-        let dir = TempDir::new().unwrap();
-        let pages_dir = dir.path().join("pages");
-        std::fs::create_dir_all(&pages_dir).unwrap();
-        std::fs::write(
-            pages_dir.join("samara.md"),
-            "title:: Samara\ntype:: person\nrole:: PM\n\n- focused on FY26\n",
-        )
-        .unwrap();
-
-        let actor = ActorId::new();
-        let mut workspace = Workspace::open_in_memory(actor).unwrap();
-        let hlc = HlcGenerator::new(actor);
-
-        // The orphan scanner would call this. We invoke it directly
-        // so the test exercises the same code path.
-        outl_md::reconcile::reconcile_md(&mut workspace, &hlc, &pages_dir.join("samara.md"), None)
-            .expect("reconcile_md should succeed");
-
-        // After reconcile, the workspace tree must show samara as a
-        // page (child of root, `page-slug == "samara"`,
-        // `page-kind == "page"`, `type == "person"`).
-        let persons = search_persons(&workspace, "sam");
-        assert_eq!(
-            persons.len(),
-            1,
-            "search_persons(\"sam\") must surface the externally-authored samara page; \
-             got {} results: {:?}",
-            persons.len(),
-            persons.iter().map(|p| &p.slug).collect::<Vec<_>>()
-        );
-        assert_eq!(persons[0].slug, "samara");
-        assert_eq!(persons[0].page_type.as_deref(), Some("person"));
-    }
+    // Person-typed page tests (`type:: person`, `@` mention resolution,
+    // edge cases) live in `crate::person::tests`. Keep this module
+    // focused on the page-model primitives (slug, kind, title, journal).
 }

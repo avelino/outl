@@ -18,8 +18,8 @@ pub use crate::runtime::{run, run_with_theme_override};
 
 #[cfg(test)]
 mod tests {
+    use crate::actions::autocomplete::detect_trigger;
     use crate::actions::block::{cycle_todo_inline, cycle_todo_state};
-    use crate::actions::overlay::detect_trigger;
     use crate::edit_buffer::EditBuffer;
     use crate::state::AutocompleteKind;
     use crate::theme::{self, default_theme};

@@ -375,9 +375,31 @@ fn open_page_by_slug(slug: String, state: State<'_, AppState>) -> Result<PageVie
 /// page, else create), so the command never bubbles `invalid …` back
 /// for normal user input and the frontend has no branching to drift.
 #[tauri::command]
-fn open_ref(target: String, state: State<'_, AppState>) -> Result<PageView, String> {
+fn open_ref(
+    target: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<PageView, String> {
     let id = with_ws_mut(&state, |ws| {
         open_or_create_by_ref(ws, &state.hlc, &target).map_err(|e| e.to_string())
+    })?;
+    // Project the page's `.md` + sidecar after the mutation. Without
+    // this, `open_or_create_by_ref` creates the page in the op log
+    // but `pages/<slug>.md` never lands on disk — `WorkspaceIndex`
+    // disagrees with the tree CRDT silently, the just-inserted
+    // `[[@name]]` link points at a phantom until the next save
+    // touches the page. Mirrors the desktop fix.
+    with_ws_mut(&state, |ws| {
+        if let Err(e) = apply_page_md_with_sidecar(ws, &state.storage_root, id) {
+            let msg = format!("{e}");
+            eprintln!("open_ref: apply_page_md_with_sidecar failed for {target}: {msg}");
+            let _ = tauri::Emitter::emit(
+                &app,
+                "ref-projection-failed",
+                serde_json::json!({ "target": target, "error": msg }),
+            );
+        }
+        Ok::<_, String>(())
     })?;
     with_ws(&state, |ws| {
         build_page_view(ws, &state.storage_root, id).map_err(|e| e.to_string())

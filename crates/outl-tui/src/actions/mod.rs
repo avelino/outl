@@ -13,12 +13,13 @@
 //! - `visual` — Visual mode + its delete / indent / outdent
 //! - `yank` — yank register, paste after / before
 //! - `exec` — run code block under cursor via `outl_exec`
-//! - `overlay` — quick switcher, workspace search, command palette,
-//!   inline `[[`/`#` autocomplete
+//! - `overlay` — quick switcher, workspace search, command palette
+//! - `autocomplete` — Insert-mode inline `[[`/`#`/`((`/`/`/`@` popup
 //!
 //! Anything cross-cutting (constructors, `pub(crate)` free helpers
 //! consumed by `input` / `view`) is re-exported from this file.
 
+pub(crate) mod autocomplete;
 pub(crate) mod block;
 pub(crate) mod collapsed;
 pub(crate) mod exec;

@@ -278,3 +278,56 @@ function findCloser(value: string, from: number, closer: string): number {
   }
   return from;
 }
+
+/**
+ * Append a synthetic "create new person" candidate to the suggestion
+ * list when the typed query doesn't match any existing person
+ * exactly (case-insensitive). Matches the TUI's `candidates_for_mention`
+ * policy so every client surfaces the same affordance on the same
+ * gesture.
+ *
+ * Returns the input array verbatim when:
+ * - The query is empty or whitespace-only (avoids polluting the empty
+ *   popup with a useless "create ''" row).
+ * - An existing person already matches the query exactly
+ *   (case-insensitive on the `title`).
+ *
+ * Otherwise returns a new array with one extra candidate appended:
+ * a `PageMeta`-shaped record with `id: ""` (synthetic, not persisted
+ * yet), `slug` / `title` set to the typed query, `kind: "page"`, and
+ * `page_type: "person"`. The downstream `acceptSuggestion` path
+ * materialises the page via `openRef(`@${title}`)` (idempotent on the
+ * resolver side) — clients do not need to know whether the candidate
+ * was synthetic or real.
+ */
+export function withCreateNewPersonCandidate<T extends PageMetaLike>(
+  list: T[],
+  query: string,
+): T[] {
+  const trimmed = query.trim();
+  if (trimmed.length === 0) return list;
+  if (list.some((p) => p.title.toLowerCase() === trimmed.toLowerCase())) {
+    return list;
+  }
+  const synthetic = {
+    id: "",
+    slug: query,
+    title: query,
+    kind: "page" as const,
+    page_type: "person",
+  };
+  return [...list, synthetic as unknown as T];
+}
+
+/**
+ * Minimal shape `withCreateNewPersonCandidate` needs from a candidate.
+ * Kept structural (not bound to `PageMeta`) so callers can extend the
+ * shape with client-specific fields without losing the helper.
+ */
+export interface PageMetaLike {
+  id: string;
+  slug: string;
+  title: string;
+  kind: "page" | "journal";
+  page_type?: string | null;
+}

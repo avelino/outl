@@ -69,12 +69,45 @@ fn build_outline(workspace: &Workspace, parent: NodeId) -> Vec<OutlineNode> {
         .collect()
 }
 
-/// Render every block under `page_root` to a clean `.md` string. The
-/// page's title (`workspace.block_text(page_root)`) is **not** included
-/// in the body — clients can prepend it themselves if they want.
+/// Render every block under `page_root` to a clean `.md` string,
+/// **including** the page-level properties stored on the page node
+/// (`title::`, `icon::`, `pinned::`, `type::`, `role::`, anything
+/// custom). The page's title (`workspace.block_text(page_root)`) is
+/// **not** included in the body — clients can prepend it themselves
+/// if they want.
+///
+/// Internal book-keeping keys (`page-slug` / `page-kind`) are skipped:
+/// the page-model layer (`outl_actions::page`) owns those through its
+/// own ops; surfacing them in the rendered `.md` would re-write the
+/// slug on every reconcile (a no-op via the CRDT, but noise on disk).
+///
+/// Sort order is alphabetical on the key — `HashMap::iter` is
+/// unordered, and we don't want the rendered `.md` to flap between
+/// runs. The renderer doesn't care about order; users do.
 pub fn render_page_md(workspace: &Workspace, page_root: NodeId) -> String {
+    let mut properties: Vec<(String, String)> = workspace
+        .tree()
+        .properties_of(page_root)
+        .filter(|(k, _)| {
+            // Skip internal book-keeping owned by `outl_actions::page`.
+            *k != crate::page::SLUG_KEY && *k != crate::page::KIND_KEY
+        })
+        .filter_map(|(k, v)| match v {
+            // Only textual properties round-trip through the `.md`
+            // dialect. PageRef / Tag / List shapes would need
+            // dedicated render syntax — skip them silently for now,
+            // and revisit if a real consumer asks for them.
+            outl_core::property::PropValue::Text(s) => Some((k.to_string(), s.clone())),
+            outl_core::property::PropValue::PageRef(s) | outl_core::property::PropValue::Tag(s) => {
+                Some((k.to_string(), s.clone()))
+            }
+            outl_core::property::PropValue::List(_) => None,
+        })
+        .collect();
+    properties.sort_by(|a, b| a.0.cmp(&b.0));
+
     let page = ParsedPage {
-        properties: Vec::new(),
+        properties,
         blocks: build_outline(workspace, page_root),
         warnings: Vec::new(),
     };
@@ -358,6 +391,65 @@ mod tests {
 
         let md = render_page_md(&ws, page);
         assert_eq!(md, "- first\n- second\n");
+    }
+
+    #[test]
+    fn render_page_md_emits_page_level_properties() {
+        // Regression for the silent divergence between the op log
+        // and the rendered `.md`. Page-level properties (`type::`,
+        // `icon::`, etc.) used to be dropped on render because
+        // `render_page_md` always passed `properties: Vec::new()`.
+        // Result: a person page created via `@` autocomplete in the
+        // TUI carried `Op::SetProp { type: person }` in the log but
+        // its `.md` had only the blocks — the `WorkspaceIndex`
+        // (which parses `.md`) didn't list it under `pages_by_type`,
+        // so the next `@` mention never surfaced it.
+        use crate::page::set_property;
+        use outl_core::property::PropValue;
+
+        let actor = ActorId::new();
+        let hlc = HlcGenerator::new(actor);
+        let mut ws = Workspace::open_in_memory(actor).unwrap();
+        let page = open_or_create(&mut ws, &hlc, "avelino", "Avelino", PageKind::Page).unwrap();
+        set_property(
+            &mut ws,
+            &hlc,
+            page,
+            crate::person::TYPE_KEY,
+            Some(PropValue::Text(crate::person::PERSON_TYPE.to_string())),
+        )
+        .unwrap();
+        set_property(
+            &mut ws,
+            &hlc,
+            page,
+            "icon",
+            Some(PropValue::Text("🦀".to_string())),
+        )
+        .unwrap();
+        append_block(&mut ws, &hlc, Some(page), Some("bio")).unwrap();
+
+        let md = render_page_md(&ws, page);
+        assert!(
+            md.contains("type:: person"),
+            "rendered .md must carry the type:: person property; got:\n{md}"
+        );
+        assert!(
+            md.contains("icon:: 🦀"),
+            "rendered .md must carry the icon property; got:\n{md}"
+        );
+        // `page-slug` / `page-kind` stay internal — they're owned by
+        // the page-model layer, not by the rendered `.md`.
+        assert!(
+            !md.contains("page-slug"),
+            "internal book-keeping property leaked into rendered .md:\n{md}"
+        );
+        assert!(
+            !md.contains("page-kind"),
+            "internal book-keeping property leaked into rendered .md:\n{md}"
+        );
+        // Body still renders the block.
+        assert!(md.contains("- bio"));
     }
 
     #[test]

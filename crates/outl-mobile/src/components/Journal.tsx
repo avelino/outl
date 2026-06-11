@@ -40,7 +40,11 @@ import {
   findBlock,
   rawTextWithTodo,
 } from "../lib/outline";
-import { applySuggestion, detectRefContext } from "@outl/shared/autocomplete";
+import {
+  applySuggestion,
+  detectRefContext,
+  withCreateNewPersonCandidate,
+} from "@outl/shared/autocomplete";
 import { ParseWarningsBanner } from "@outl/shared/warnings";
 import { parkCaret, spliceText } from "../lib/textarea";
 import { withTimeout } from "../lib/async";
@@ -273,31 +277,11 @@ export function Journal() {
       const mention = ctx.kind === "mention";
       fetcher(ctx.query).then((items) => {
         if (token !== queryToken) return;
-        // Create-new affordance for mentions (parity with TUI +
-        // desktop). When the query doesn't match any existing person
-        // exactly, append it as a synthetic chip so a tap mints the
-        // mention; the person page is materialised lazily by
-        // `open_or_create_by_ref` when the user opens the resulting
-        // `[[@<query>]]` ref.
-        let finalItems = items;
-        if (
-          mention &&
-          ctx.query.trim().length > 0 &&
-          !items.some(
-            (p) => p.title.toLowerCase() === ctx.query.toLowerCase(),
-          )
-        ) {
-          finalItems = [
-            ...items,
-            {
-              id: "",
-              slug: ctx.query,
-              title: ctx.query,
-              kind: "page" as const,
-              page_type: "person",
-            },
-          ];
-        }
+        // Create-new affordance for mentions — shared with desktop
+        // via `@outl/shared/autocomplete::withCreateNewPersonCandidate`.
+        const finalItems = mention
+          ? withCreateNewPersonCandidate(items, ctx.query)
+          : items;
         if (finalItems.length === 0) {
           setNativeSuggesterState(HIDE_MESSAGE);
           return;

@@ -7,6 +7,7 @@ import {
   detectRefContext,
   insertPair,
   insertText,
+  withCreateNewPersonCandidate,
 } from "./index";
 
 describe("autoClosePair", () => {
@@ -223,5 +224,46 @@ describe("applySuggestion: mention", () => {
       value: "[[@Thiago Avelino]]",
       caret: 19,
     });
+  });
+});
+
+describe("withCreateNewPersonCandidate", () => {
+  const person = (slug: string, title = slug) => ({
+    id: `id-${slug}`,
+    slug,
+    title,
+    kind: "page" as const,
+    page_type: "person",
+  });
+
+  it("appends a synthetic candidate when no match exists", () => {
+    const result = withCreateNewPersonCandidate([person("avelino", "Avelino")], "vini");
+    expect(result).toHaveLength(2);
+    expect(result[1]).toEqual({
+      id: "",
+      slug: "vini",
+      title: "vini",
+      kind: "page",
+      page_type: "person",
+    });
+  });
+
+  it("returns the input verbatim when an existing person matches (case-insensitive)", () => {
+    const list = [person("avelino", "Avelino")];
+    const result = withCreateNewPersonCandidate(list, "AVELINO");
+    expect(result).toBe(list);
+  });
+
+  it("returns the input verbatim when the query is empty", () => {
+    const list = [person("avelino", "Avelino")];
+    expect(withCreateNewPersonCandidate(list, "")).toBe(list);
+    expect(withCreateNewPersonCandidate(list, "   ")).toBe(list);
+  });
+
+  it("appends to an empty list when the query is non-empty", () => {
+    const empty: ReturnType<typeof person>[] = [];
+    const result = withCreateNewPersonCandidate(empty, "lerolero");
+    expect(result).toHaveLength(1);
+    expect(result[0]?.title).toBe("lerolero");
   });
 });

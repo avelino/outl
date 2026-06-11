@@ -13,6 +13,7 @@ import {
   autoClosePair,
   autoDeletePair,
   detectRefContext,
+  withCreateNewPersonCandidate,
 } from "@outl/shared/autocomplete";
 import { openRef, searchPages, searchPersons } from "@outl/shared/api/commands";
 import { HighlightedCode } from "@outl/shared/highlight";
@@ -137,32 +138,14 @@ export function BlockRow(props: {
           ? detectRefContext(textareaRef.value, textareaRef.selectionStart ?? 0)
           : null;
         if (!cur || cur.kind !== wantedKind || cur.query !== ctx.query) return;
-        // Create-new affordance for mentions — mirrors the TUI's
-        // `candidates_for_mention`. When the query doesn't match any
-        // existing person exactly (case-insensitive), append the
-        // query itself as a synthetic candidate so the user can mint
-        // a new person without leaving the popup. The page is
-        // materialised lazily by `open_or_create_by_ref` when the
-        // user opens the inserted `[[@<query>]]` ref.
-        let finalList = list;
-        if (
-          wantedKind === "mention" &&
-          ctx.query.trim().length > 0 &&
-          !list.some(
-            (p) => p.title.toLowerCase() === ctx.query.toLowerCase(),
-          )
-        ) {
-          finalList = [
-            ...list,
-            {
-              id: "",
-              slug: ctx.query,
-              title: ctx.query,
-              kind: "page" as const,
-              page_type: "person",
-            },
-          ];
-        }
+        // Create-new affordance for mentions — shared with mobile
+        // via `@outl/shared/autocomplete::withCreateNewPersonCandidate`.
+        // Skips the helper entirely for non-mention contexts so plain
+        // page-ref searches stay free of synthetic rows.
+        const finalList =
+          wantedKind === "mention"
+            ? withCreateNewPersonCandidate(list, ctx.query)
+            : list;
         setSuggestions(finalList);
         setSuggestIndex(0);
       })

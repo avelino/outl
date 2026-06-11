@@ -180,7 +180,7 @@ pub fn backlinks_for_page(workspace: &Workspace, root: &Path, meta: &PageMeta) -
     if meta.title != meta.slug {
         push(backlinks_for_target(workspace, root, &meta.title));
     }
-    if meta.page_type.as_deref() == Some(crate::page::PERSON_TYPE) {
+    if meta.page_type.as_deref() == Some(crate::person::PERSON_TYPE) {
         let at_slug = format!("@{}", meta.slug);
         push(backlinks_for_target(workspace, root, &at_slug));
         if meta.title != meta.slug {
@@ -598,7 +598,8 @@ mod tests {
 
     #[test]
     fn person_page_picks_up_at_alias_mentions() {
-        use crate::page::{page_meta, set_property, PERSON_TYPE, TYPE_KEY};
+        use crate::page::{page_meta, set_property};
+        use crate::person::{PERSON_TYPE, TYPE_KEY};
         use outl_core::property::PropValue;
         let (mut w, hlc) = ws();
         let avelino = open_or_create(&mut w, &hlc, "avelino", "Avelino", PageKind::Page).unwrap();

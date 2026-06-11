@@ -104,7 +104,11 @@ pub(crate) fn open_page_by_slug(
 }
 
 #[tauri::command]
-pub(crate) fn open_ref(target: String, state: State<'_, AppState>) -> Result<PageView, String> {
+pub(crate) fn open_ref(
+    target: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<PageView, String> {
     let root = storage_root_or_err(&state)?;
     // Two-phase: resolve-or-create the target NodeId (mutation), then
     // project the page's `.md` + sidecar to disk before building the
@@ -124,10 +128,19 @@ pub(crate) fn open_ref(target: String, state: State<'_, AppState>) -> Result<Pag
         if let Err(e) = outl_actions::apply_page_md_with_sidecar(ws, &root, id) {
             // Non-fatal: the op log already has the mutation; the
             // `.md` projection will be retried on the next save / by
-            // the orphan scanner on the next boot. Surface to logs
-            // (`tracing` is wired in `lib.rs`) so a regression in the
-            // projection path is visible in dev.
-            tracing::warn!("open_ref: apply_page_md_with_sidecar failed for {target}: {e}");
+            // the orphan scanner on the next boot. Surface both to
+            // the local log AND to the frontend via a dedicated
+            // event so the UI can show a toast — `[[@x]]` is already
+            // in the user's buffer at this point, and silently
+            // leaving the `.md` un-projected means the next reopen
+            // shows a "link to nothing".
+            let msg = format!("{e}");
+            tracing::warn!("open_ref: apply_page_md_with_sidecar failed for {target}: {msg}");
+            let _ = tauri::Emitter::emit(
+                &app,
+                "ref-projection-failed",
+                serde_json::json!({ "target": target, "error": msg }),
+            );
         }
         Ok(())
     })?;
