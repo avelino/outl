@@ -96,7 +96,7 @@ The same "one owner, every client wraps" policy applies on the TS side.
 
 - `<MarkdownInline />` (renderer for `InlineToken[]` produced by `outl_md::tokenize_owned`)
 - `<ParseWarningsBanner />` (renders `PageView.warnings`; mirrors the TUI's `warnings_banner` chrome)
-- Pure helpers: `looksLikeOutline`, `utf16OffsetToCharOffset`, `detectRefContext`, `autoClose/DeletePair`, `insertPair/Text`, `applySuggestion`
+- Pure helpers: `looksLikeOutline`, `utf16OffsetToCharOffset`, `detectRefContext`, `autoClose/DeletePair`, `autoPairBracket`, `insertPair/Text`, `applySuggestion`
 - DTO interfaces (`PageMeta`, `OutlineNode`, `BlockNode`, `Backlink`, `InlineToken`, `PageView`, `WorkspaceSummary`, …)
 - Typed `invoke<T>()` wrappers for the Tauri commands every client uses (`@outl/shared/api/commands`)
 

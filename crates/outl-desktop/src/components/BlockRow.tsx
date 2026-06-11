@@ -10,8 +10,8 @@ import {
 } from "@outl/shared/markdown";
 import {
   applySuggestion,
-  autoClosePair,
   autoDeletePair,
+  autoPairBracket,
   detectRefContext,
 } from "@outl/shared/autocomplete";
 import { searchPages } from "@outl/shared/api/commands";
@@ -285,24 +285,6 @@ export function BlockRow(props: {
       await props.cb.onDeleteEmpty(props.block.id);
       return;
     }
-    // Bracket-pair completion ([[…]], ((…))).
-    if (e.key === "[" || e.key === "(") {
-      // Let the character land first; check on the next tick.
-      queueMicrotask(() => {
-        if (!textareaRef) return;
-        const completion = autoClosePair(textareaRef.value, textareaRef.selectionStart ?? 0);
-        if (completion) {
-          setDraft(completion.value);
-          textareaRef.value = completion.value;
-          textareaRef.setSelectionRange(completion.caret, completion.caret);
-        }
-        // Whether or not the pair auto-closed, the caret may now be
-        // inside a `[[…]]` — refresh the suggester (setting the value
-        // programmatically above doesn't fire `onInput`).
-        refreshSuggest();
-      });
-      return;
-    }
     if (e.key === "Backspace") {
       const ta = textareaRef;
       if (ta) {
@@ -317,6 +299,31 @@ export function BlockRow(props: {
     }
     // Default: let the keystroke through; the bound input handler
     // updates the draft signal.
+  }
+
+  /**
+   * Auto-pair `(` / `[` / `{` and step over auto-inserted closers
+   * (issue #21) — same Insert-mode behaviour as the TUI. Typing the
+   * second `[` lands as `[[|]]`, so the `[[` ref flow keeps working
+   * without `autoClosePair` (the closer is never doubled).
+   * `beforeinput` (not keydown) so layouts that reach brackets via
+   * AltGr / Option dead keys are matched by the character actually
+   * produced, never by the physical key.
+   */
+  function handleBeforeInput(e: InputEvent) {
+    if (e.inputType !== "insertText" || e.isComposing) return;
+    const ta = textareaRef;
+    if (!ta) return;
+    if (ta.selectionStart !== ta.selectionEnd) return; // typing over a selection
+    const completion = autoPairBracket(ta.value, ta.selectionStart ?? 0, e.data ?? "");
+    if (!completion) return;
+    e.preventDefault();
+    setDraft(completion.value);
+    ta.value = completion.value;
+    ta.setSelectionRange(completion.caret, completion.caret);
+    // Setting the value programmatically doesn't fire `onInput`, and
+    // the caret may now sit inside a `[[…]]` — refresh the suggester.
+    refreshSuggest();
   }
 
   async function handlePaste(e: ClipboardEvent) {
@@ -561,6 +568,7 @@ export function BlockRow(props: {
                 onSelect={() => refreshSuggest()}
                 onBlur={() => void commit()}
                 onKeyDown={handleKeydown}
+                onBeforeInput={handleBeforeInput}
                 onPaste={handlePaste}
               />
               <RefSuggestPopup

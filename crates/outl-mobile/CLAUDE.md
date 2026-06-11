@@ -122,6 +122,7 @@ They were extracted to **`crates/outl-frontend-shared/`** so mobile and desktop 
 | `looksLikeOutline` | `@outl/shared/paste` | `outl_actions::paste::looks_like_outline` |
 | `<MarkdownInline />` (renderer of `InlineToken[]`) | `@outl/shared/markdown` | `outl_md::tokenize_owned` (backend produces the tokens; the renderer is a discriminant-to-JSX switch) |
 | `detectRefContext` (+ `autoClose/DeletePair`, `insertPair/Text`, `applySuggestion`) | `@outl/shared/autocomplete` | `outl_tui::actions::overlay::detect_trigger` (the `[[` and `((` triggers; TUI also covers `#` and `/`) |
+| `autoPairBracket` (auto-pair `(`/`[`/`{` + step over auto-inserted closers; wired through `BlockRow`'s `onBeforeInput` because iOS soft keyboards don't emit reliable per-char `keydown`) | `@outl/shared/autocomplete` | `outl_tui::input::insert` (`insert_pair`) + `EditBuffer::delete_pair_back` |
 | `utf16OffsetToCharOffset` | `@outl/shared/paste` | runtime gap, no Rust mirror — `textarea.selectionStart` is UTF-16; the backend expects codepoints. Skipping this conversion shifts the splice by one per supplementary-plane character |
 
 **Adding a new cross-runtime contract = add it in `@outl/shared` from day one.** Never add it under `outl-mobile/src/lib/` first — the next time desktop catches up to the feature, it has to consume from the same file.

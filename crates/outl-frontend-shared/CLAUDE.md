@@ -38,7 +38,7 @@ crates/outl-frontend-shared/
     │   ├── index.ts        # looksLikeOutline, utf16OffsetToCharOffset
     │   └── paste.test.ts
     └── autocomplete/
-        ├── index.ts        # autoClosePair, autoDeletePair, insertPair, insertText, detectRefContext, applySuggestion
+        ├── index.ts        # autoClosePair, autoPairBracket, autoDeletePair, insertPair, insertText, detectRefContext, applySuggestion
         └── autocomplete.test.ts
 ```
 
@@ -87,6 +87,7 @@ When in doubt, ship in the client; promote later when the second client appears.
 | `looksLikeOutline` | `@outl/shared/paste` | `outl_actions::paste::looks_like_outline` |
 | `utf16OffsetToCharOffset` | `@outl/shared/paste` | (runtime gap — UTF-16 ↔ codepoint, no Rust mirror) |
 | `detectRefContext`, `autoClose/DeletePair`, `insertPair/Text`, `applySuggestion` | `@outl/shared/autocomplete` | `outl_tui::actions::overlay::detect_trigger` |
+| `autoPairBracket` (single `(`/`[`/`{` auto-pair + closer step-over; `autoDeletePair` also collapses empty `()`/`[]`/`{}`) | `@outl/shared/autocomplete` | `outl_tui::input::insert` (`insert_pair`) + `EditBuffer::delete_pair_back` |
 | `<ParseWarningsBanner />` + `@outl/shared/warnings/styles` CSS | `@outl/shared/warnings` | TUI `view::warnings_banner` (visual parity, neutral chrome). Clients **must** `@import "@outl/shared/warnings/styles"` from their root stylesheet — without it the banner renders with unstyled neutral classes and looks invisible against the page. |
 | `ParseWarning` / `ParseWarningKind` (DTO of `PageView.warnings`) | `@outl/shared/api/types` | `outl_md::ParseWarning` / `ParseWarningKind` |
 | DTOs (`PageMeta`, `OutlineNode`, `BlockNode`, `Backlink`, `InlineToken`, `PageView`, `CreateBlockReply`, `WorkspaceSummary`, …) | `@outl/shared/api/types` | the corresponding `serde`-serialised Rust structs |

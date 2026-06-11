@@ -64,35 +64,91 @@ export function autoClosePair(
   return null;
 }
 
+/** Single-character bracket pairs handled by {@link autoPairBracket}
+ *  and {@link autoDeletePair}. Mirrors the TUI's Insert-mode set
+ *  (`outl-tui/src/input/insert.rs`). */
+const BRACKET_PAIRS: Record<string, string> = {
+  "(": ")",
+  "[": "]",
+  "{": "}",
+};
+
+const BRACKET_CLOSERS = new Set(Object.values(BRACKET_PAIRS));
+
 /**
- * Inverse of {@link autoClosePair}: when the caret sits in the empty
- * middle of `[[]]` or `(())` and the user presses Backspace, delete
- * the whole pair in one shot so they don't have to mash backspace
- * four times to undo an aborted ref. Returns `null` when the caret
- * isn't between an empty pair — let the default backspace through.
+ * Auto-pair a single bracket keystroke, mirroring the TUI's Insert
+ * mode: typing `(`, `[` or `{` inserts the matching closer and
+ * leaves the caret between the two; typing `)`, `]` or `}` when that
+ * exact character already sits to the right of the caret steps over
+ * it instead of doubling (the closer was almost certainly
+ * auto-inserted, so the keystroke's intent is "move past it").
  *
- * Only fires for *empty* pairs (`[[]]`, `(())`). The moment the user
- * has typed something in the middle (`[[ave]]`), backspace goes
- * back to deleting one char at a time so they can fix typos.
+ * `typed` is the character the user is about to insert — callers
+ * intercept it in `beforeinput` (soft keyboards don't emit reliable
+ * `keydown` characters) and apply the returned value themselves.
+ * Returns `null` when `typed` isn't a bracket character; let the
+ * default insertion through.
+ *
+ * Pair insertion is deliberately unconditional, like the TUI's
+ * `insert_pair`: typing the second `[` next to an auto-inserted `]`
+ * yields `[[|]]` directly, which is exactly the shape the `[[` ref
+ * flow wants — and {@link autoClosePair} stays a no-op on it, so the
+ * two layers never double a closer.
+ */
+export function autoPairBracket(
+  value: string,
+  selection: number,
+  typed: string,
+): PairCompletion | null {
+  const close = BRACKET_PAIRS[typed];
+  if (close) {
+    return {
+      value: value.slice(0, selection) + typed + close + value.slice(selection),
+      caret: selection + 1,
+    };
+  }
+  if (BRACKET_CLOSERS.has(typed) && value[selection] === typed) {
+    return { value, caret: selection + 1 };
+  }
+  return null;
+}
+
+/**
+ * Inverse of {@link autoClosePair} / {@link autoPairBracket}: when
+ * the caret sits in the empty middle of a pair and the user presses
+ * Backspace, delete the whole pair in one shot so they don't have to
+ * mash backspace to undo an aborted ref or bracket. Returns `null`
+ * when the caret isn't between an empty pair — let the default
+ * backspace through.
+ *
+ * Doubled ref pairs (`[[]]`, `(())`) are checked first and collapse
+ * all four characters; the single-character pairs (`()`, `[]`, `{}`)
+ * collapse two. The moment the user has typed something in the
+ * middle (`[[ave]]`, `(x)`), backspace goes back to deleting one
+ * char at a time so they can fix typos.
  */
 export function autoDeletePair(
   value: string,
   selection: number,
 ): PairCompletion | null {
-  if (selection < 2) return null;
-  const left = value.slice(selection - 2, selection);
-  const right = value.slice(selection, selection + 2);
-  if (left === "[[" && right === "]]") {
-    return {
-      value: value.slice(0, selection - 2) + value.slice(selection + 2),
-      caret: selection - 2,
-    };
+  if (selection >= 2) {
+    const left = value.slice(selection - 2, selection);
+    const right = value.slice(selection, selection + 2);
+    if ((left === "[[" && right === "]]") || (left === "((" && right === "))")) {
+      return {
+        value: value.slice(0, selection - 2) + value.slice(selection + 2),
+        caret: selection - 2,
+      };
+    }
   }
-  if (left === "((" && right === "))") {
-    return {
-      value: value.slice(0, selection - 2) + value.slice(selection + 2),
-      caret: selection - 2,
-    };
+  if (selection >= 1) {
+    const close = BRACKET_PAIRS[value[selection - 1] ?? ""];
+    if (close !== undefined && value[selection] === close) {
+      return {
+        value: value.slice(0, selection - 1) + value.slice(selection + 1),
+        caret: selection - 1,
+      };
+    }
   }
   return null;
 }

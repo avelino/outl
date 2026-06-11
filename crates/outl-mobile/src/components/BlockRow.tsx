@@ -12,7 +12,11 @@ import { HighlightedCode, detectFence } from "@outl/shared/highlight";
 function detectFenceText(text: string) {
   return detectFence(text);
 }
-import { autoClosePair, autoDeletePair } from "@outl/shared/autocomplete";
+import {
+  autoClosePair,
+  autoDeletePair,
+  autoPairBracket,
+} from "@outl/shared/autocomplete";
 import { looksLikeOutline, utf16OffsetToCharOffset } from "@outl/shared/paste";
 import { haptic } from "../lib/haptics";
 import { rawTextWithTodo } from "../lib/outline";
@@ -540,6 +544,28 @@ function EditableTextarea(props: {
         // iOS WKWebView. `parkCaret` (called twice — once before and
         // once after `props.onInput` triggers Solid's `value=`
         // re-binding) keeps the caret where we asked.
+        ta.value = completion.value;
+        parkCaret(ta, completion.caret);
+        props.onInput(completion.value);
+        parkCaret(ta, completion.caret);
+        autoResize();
+      }}
+      onBeforeInput={(e) => {
+        // Auto-pair `(` / `[` / `{` and step over auto-inserted
+        // closers (issue #21) — same Insert-mode behaviour as the
+        // TUI. `beforeinput` (not keydown) because iOS soft
+        // keyboards don't emit reliable per-character key events;
+        // `insertText` with a single-char `data` is the one signal
+        // that survives every input method.
+        if (e.inputType !== "insertText" || e.isComposing) return;
+        const ta = e.currentTarget;
+        if (ta.selectionStart !== ta.selectionEnd) return; // typing over a selection
+        const caret = ta.selectionStart ?? 0;
+        const completion = autoPairBracket(ta.value, caret, e.data ?? "");
+        if (!completion) return;
+        e.preventDefault();
+        // Same caret-reset trap as Backspace above — park twice,
+        // around the Solid `value=` re-binding.
         ta.value = completion.value;
         parkCaret(ta, completion.caret);
         props.onInput(completion.value);

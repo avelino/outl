@@ -4,6 +4,7 @@ import {
   applySuggestion,
   autoClosePair,
   autoDeletePair,
+  autoPairBracket,
   detectRefContext,
   insertPair,
   insertText,
@@ -35,6 +36,56 @@ describe("autoClosePair", () => {
   });
 });
 
+describe("autoPairBracket", () => {
+  it.each([
+    ["(", ")"],
+    ["[", "]"],
+    ["{", "}"],
+  ])("typing %s inserts the pair with the caret between", (open, close) => {
+    const result = autoPairBracket("ab", 1, open);
+    expect(result).toEqual({ value: `a${open}${close}b`, caret: 2 });
+  });
+
+  it("pairs at the very start and end of the value", () => {
+    expect(autoPairBracket("", 0, "(")).toEqual({ value: "()", caret: 1 });
+    expect(autoPairBracket("xy", 2, "{")).toEqual({ value: "xy{}", caret: 3 });
+  });
+
+  it("builds [[|]] when the second [ is typed inside an auto-paired []", () => {
+    // First `[` produced `[|]`; the second one must land as `[[|]]`
+    // so the existing `[[` ref flow keeps working (autoClosePair is
+    // a no-op on that shape — the closer is never doubled).
+    const result = autoPairBracket("a[]", 2, "[");
+    expect(result).toEqual({ value: "a[[]]", caret: 3 });
+    expect(autoClosePair(result!.value, result!.caret)).toBeNull();
+  });
+
+  it.each([")", "]", "}"])(
+    "typing %s over an identical closer steps past it",
+    (close) => {
+      const open = { ")": "(", "]": "[", "}": "{" }[close]!;
+      const value = `${open}x${close}`;
+      expect(autoPairBracket(value, 2, close)).toEqual({ value, caret: 3 });
+    },
+  );
+
+  it("steps over both closers of a doubled ref pair", () => {
+    expect(autoPairBracket("[[a]]", 3, "]")).toEqual({ value: "[[a]]", caret: 4 });
+    expect(autoPairBracket("[[a]]", 4, "]")).toEqual({ value: "[[a]]", caret: 5 });
+  });
+
+  it("lets a closer through when the next char differs", () => {
+    expect(autoPairBracket("(x", 2, ")")).toBeNull();
+    expect(autoPairBracket("(]", 1, ")")).toBeNull();
+  });
+
+  it("ignores non-bracket characters", () => {
+    expect(autoPairBracket("ab", 1, "x")).toBeNull();
+    expect(autoPairBracket("ab", 1, '"')).toBeNull();
+    expect(autoPairBracket("ab", 1, "")).toBeNull();
+  });
+});
+
 describe("autoDeletePair", () => {
   it("collapses an empty [[]] when caret is in the middle", () => {
     const result = autoDeletePair("foo [[]]", 6);
@@ -63,6 +114,33 @@ describe("autoDeletePair", () => {
 
   it("does not cross-mix [[ with ))", () => {
     expect(autoDeletePair("[[))", 2)).toBeNull();
+  });
+
+  it.each([
+    ["()", "("],
+    ["[]", "["],
+    ["{}", "{"],
+  ])("collapses an empty %s in one keystroke", (pair) => {
+    const result = autoDeletePair(`a${pair}b`, 2);
+    expect(result).toEqual({ value: "ab", caret: 1 });
+  });
+
+  it("prefers the doubled pair over the inner single pair", () => {
+    // Caret in `[[|]]` — the whole ref scaffold goes, not just `[]`.
+    expect(autoDeletePair("[[]]", 2)).toEqual({ value: "", caret: 0 });
+  });
+
+  it("collapses nested singles one level at a time", () => {
+    expect(autoDeletePair("([])", 2)).toEqual({ value: "()", caret: 1 });
+  });
+
+  it("does not collapse a single pair with content between", () => {
+    expect(autoDeletePair("(x)", 2)).toBeNull();
+  });
+
+  it("does not cross-mix single openers and closers", () => {
+    expect(autoDeletePair("(]", 1)).toBeNull();
+    expect(autoDeletePair("{)", 1)).toBeNull();
   });
 });
 

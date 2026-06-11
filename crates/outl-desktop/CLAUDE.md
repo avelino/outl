@@ -195,6 +195,8 @@ Implementation lives in `lib/markdown-wrap.ts`: each handler reads `document.act
 | `Esc` / blur | Commit |
 | `Backspace` on empty | Delete the block |
 | `[[` / `((` | Auto-close pair (`@outl/shared/autocomplete`) |
+| `(` / `[` / `{` | Auto-pair with the matching closer, caret between (`autoPairBracket`, TUI parity); typing `)` / `]` / `}` over an identical closer steps past it instead of doubling |
+| `Backspace` inside an empty pair | Collapses the whole pair — `[[]]` / `(())` (4 chars) and `()` / `[]` / `{}` (2 chars) — via `autoDeletePair` |
 
 ### `Enter` outside a textarea (Normal mode)
 
