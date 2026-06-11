@@ -313,6 +313,15 @@ pub(crate) enum AutocompleteKind {
     /// On accept, the trigger + query are removed from the buffer
     /// and the command runs (or pops the `:` palette for arg entry).
     SlashCommand,
+    /// User typed `@` at the start of a word; pick a **person**.
+    /// Candidates are page titles where `type:: person` is set
+    /// (filtered through `WorkspaceIndex::pages_by_type`).
+    /// On accept the trigger + query are replaced with
+    /// `[[@<title>]]` — a regular wikilink whose target carries the
+    /// `@` prefix as a visual mention affordance.
+    /// Unlike `Tag`, the query **allows spaces** so composite names
+    /// like `@Thiago Avelino` work.
+    Mention,
 }
 
 #[derive(Debug)]

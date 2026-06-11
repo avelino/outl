@@ -84,6 +84,14 @@ export interface PageMeta {
    * still parses cleanly.
    */
   pinned?: boolean;
+  /**
+   * `type::` page-level property, lowercased+trimmed. `null`/omitted
+   * when unset. The `@` mention autocomplete filters to
+   * `page_type === "person"` candidates without re-querying the
+   * workspace index. Mirrors `outl_actions::PageMeta.page_type` and
+   * `outl_md::index::PageEntry.page_type`.
+   */
+  page_type?: string | null;
 }
 
 export interface Backlink {

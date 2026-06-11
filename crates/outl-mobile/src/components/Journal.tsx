@@ -28,6 +28,7 @@ import {
   reloadWorkspace,
   runCodeBlock,
   searchPages,
+  searchPersons,
   setBlockCollapsed,
   todaySlug,
   toggleTodo,
@@ -218,6 +219,17 @@ export function Journal() {
       if (!el) return;
       const ctx = detectRefContext(el.value, el.selectionStart ?? 0);
       if (!ctx) return;
+      // Mention sugar: materialise the person page in the backend
+      // (fire-and-forget) so the inserted `[[@title]]` link resolves
+      // on subsequent loads. Idempotent — `open_or_create_by_ref`
+      // strips the `@`, sets `type:: person` on a fresh page, and
+      // returns the existing node otherwise. Same policy desktop +
+      // TUI apply on the same gesture.
+      if (ctx.kind === "mention") {
+        void openRef(`@${slug}`).catch((e) => {
+          console.warn("openRef for mention failed:", e);
+        });
+      }
       // Build the result through the pure helper so its semantics
       // (e.g. choosing `[[` vs `((` delimiters) stay one place, but
       // apply it via `spliceText` + `parkCaret` to dodge the
@@ -245,7 +257,9 @@ export function Journal() {
         return;
       }
       const ctx = detectRefContext(el.value, el.selectionStart ?? text.length);
-      if (!ctx || ctx.kind !== "page") {
+      // `page` → fuzzy over every page; `mention` → fuzzy over
+      // persons only. Block-ref autocompletion stays out of this path.
+      if (!ctx || (ctx.kind !== "page" && ctx.kind !== "mention")) {
         if (lastQuery !== null) {
           setNativeSuggesterState(null);
           lastQuery = null;
@@ -255,13 +269,40 @@ export function Journal() {
       if (ctx.query === lastQuery) return;
       lastQuery = ctx.query;
       const token = ++queryToken;
-      searchPages(ctx.query).then((items) => {
+      const fetcher = ctx.kind === "mention" ? searchPersons : searchPages;
+      const mention = ctx.kind === "mention";
+      fetcher(ctx.query).then((items) => {
         if (token !== queryToken) return;
-        if (items.length === 0) {
+        // Create-new affordance for mentions (parity with TUI +
+        // desktop). When the query doesn't match any existing person
+        // exactly, append it as a synthetic chip so a tap mints the
+        // mention; the person page is materialised lazily by
+        // `open_or_create_by_ref` when the user opens the resulting
+        // `[[@<query>]]` ref.
+        let finalItems = items;
+        if (
+          mention &&
+          ctx.query.trim().length > 0 &&
+          !items.some(
+            (p) => p.title.toLowerCase() === ctx.query.toLowerCase(),
+          )
+        ) {
+          finalItems = [
+            ...items,
+            {
+              id: "",
+              slug: ctx.query,
+              title: ctx.query,
+              kind: "page" as const,
+              page_type: "person",
+            },
+          ];
+        }
+        if (finalItems.length === 0) {
           setNativeSuggesterState(HIDE_MESSAGE);
           return;
         }
-        setNativeSuggesterState(buildShowMessage(items));
+        setNativeSuggesterState(buildShowMessage(finalItems, { mention }));
       });
     });
   }

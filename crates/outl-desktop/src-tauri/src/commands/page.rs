@@ -3,7 +3,7 @@
 use outl_actions::{
     find_by_slug, journal_slug, journal_title, list_pages, next_journal_date, open_journal,
     open_or_create_by_name, open_or_create_by_ref, open_today, page_meta as page_meta_action,
-    previous_journal_date, today, PageKind, PageMeta,
+    previous_journal_date, search_persons as search_persons_action, today, PageKind, PageMeta,
 };
 use tauri::State;
 
@@ -46,6 +46,17 @@ pub(crate) fn search_pages(
         scored.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.title.cmp(&b.1.title)));
         Ok(scored.into_iter().map(|(_, p)| p).take(25).collect())
     })
+}
+
+/// Same shape as [`search_pages`], but filtered to `type:: person`
+/// pages and ranked by the shared `outl_actions::search_persons`
+/// helper. Powers the `@` mention autocomplete in the desktop client.
+#[tauri::command]
+pub(crate) fn search_persons(
+    query: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<PageMeta>, String> {
+    with_ws(&state, |ws| Ok(search_persons_action(ws, &query)))
 }
 
 #[tauri::command]
@@ -95,8 +106,30 @@ pub(crate) fn open_page_by_slug(
 #[tauri::command]
 pub(crate) fn open_ref(target: String, state: State<'_, AppState>) -> Result<PageView, String> {
     let root = storage_root_or_err(&state)?;
+    // Two-phase: resolve-or-create the target NodeId (mutation), then
+    // project the page's `.md` + sidecar to disk before building the
+    // view. The projection is what was missing previously — without
+    // it, `open_or_create_by_ref` would `Op::Create` + `SetProp` the
+    // page into the op log but `pages/<slug>.md` would never land on
+    // disk. Result: `WorkspaceIndex` (which parses `.md` from disk)
+    // disagreed with the tree CRDT silently, the `@` autocomplete
+    // didn't surface the newly-created person until the next time
+    // something else triggered `apply_page_md_with_sidecar` on that
+    // page, and a peer pulling the workspace via iCloud would never
+    // see the page at all.
     let id = with_ws_mut(&state, |ws| {
         open_or_create_by_ref(ws, &state.hlc, &target).map_err(|e| e.to_string())
+    })?;
+    with_ws_mut(&state, |ws| {
+        if let Err(e) = outl_actions::apply_page_md_with_sidecar(ws, &root, id) {
+            // Non-fatal: the op log already has the mutation; the
+            // `.md` projection will be retried on the next save / by
+            // the orphan scanner on the next boot. Surface to logs
+            // (`tracing` is wired in `lib.rs`) so a regression in the
+            // projection path is visible in dev.
+            tracing::warn!("open_ref: apply_page_md_with_sidecar failed for {target}: {e}");
+        }
+        Ok(())
     })?;
     with_ws(&state, |ws| {
         build_page_view(ws, &root, id).map_err(|e| e.to_string())

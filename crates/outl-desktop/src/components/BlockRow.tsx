@@ -14,7 +14,7 @@ import {
   autoDeletePair,
   detectRefContext,
 } from "@outl/shared/autocomplete";
-import { searchPages } from "@outl/shared/api/commands";
+import { openRef, searchPages, searchPersons } from "@outl/shared/api/commands";
 import { HighlightedCode } from "@outl/shared/highlight";
 import { looksLikeOutline, utf16OffsetToCharOffset } from "@outl/shared/paste";
 
@@ -118,11 +118,17 @@ export function BlockRow(props: {
     const ta = textareaRef;
     if (!ta) return closeSuggest();
     const ctx = detectRefContext(ta.value, ta.selectionStart ?? 0);
-    if (!ctx || ctx.kind !== "page") return closeSuggest();
+    // `page` → fuzzy over every page; `mention` → fuzzy over persons
+    // only. Block-ref autocompletion is intentionally skipped here.
+    if (!ctx || (ctx.kind !== "page" && ctx.kind !== "mention")) {
+      return closeSuggest();
+    }
     if (ctx.query === lastQuery) return;
     lastQuery = ctx.query;
     const token = ++searchToken;
-    void searchPages(ctx.query)
+    const fetcher = ctx.kind === "mention" ? searchPersons : searchPages;
+    const wantedKind = ctx.kind;
+    void fetcher(ctx.query)
       .then((list) => {
         // Drop stale responses: the user kept typing (newer token) or
         // moved the caret out of the ref while we were waiting.
@@ -130,21 +136,72 @@ export function BlockRow(props: {
         const cur = textareaRef
           ? detectRefContext(textareaRef.value, textareaRef.selectionStart ?? 0)
           : null;
-        if (!cur || cur.kind !== "page" || cur.query !== ctx.query) return;
-        setSuggestions(list);
+        if (!cur || cur.kind !== wantedKind || cur.query !== ctx.query) return;
+        // Create-new affordance for mentions — mirrors the TUI's
+        // `candidates_for_mention`. When the query doesn't match any
+        // existing person exactly (case-insensitive), append the
+        // query itself as a synthetic candidate so the user can mint
+        // a new person without leaving the popup. The page is
+        // materialised lazily by `open_or_create_by_ref` when the
+        // user opens the inserted `[[@<query>]]` ref.
+        let finalList = list;
+        if (
+          wantedKind === "mention" &&
+          ctx.query.trim().length > 0 &&
+          !list.some(
+            (p) => p.title.toLowerCase() === ctx.query.toLowerCase(),
+          )
+        ) {
+          finalList = [
+            ...list,
+            {
+              id: "",
+              slug: ctx.query,
+              title: ctx.query,
+              kind: "page" as const,
+              page_type: "person",
+            },
+          ];
+        }
+        setSuggestions(finalList);
         setSuggestIndex(0);
       })
       .catch(() => closeSuggest());
   }
 
-  /** Accept `page`: replace the `[[…]]` span with the page name, sync
-   *  the draft signal + textarea, and park the caret after the closer. */
+  /** Accept `page`: replace the `[[…]]` (or `@…`) span with the
+   *  chosen target, sync the draft signal + textarea, and park the
+   *  caret after the closer. The shared `applySuggestion` decides
+   *  whether to wrap the replacement in `[[…]]` (`page`) or `[[@…]]`
+   *  (`mention`). */
   function acceptSuggestion(page: PageMeta) {
     const ta = textareaRef;
     if (!ta) return;
     const ctx = detectRefContext(ta.value, ta.selectionStart ?? 0);
-    if (!ctx || ctx.kind !== "page") return closeSuggest();
-    const completion = applySuggestion(ta.value, ctx, refReplacement(page));
+    if (!ctx || (ctx.kind !== "page" && ctx.kind !== "mention")) {
+      return closeSuggest();
+    }
+    // For mentions the page identity carries no `@` — pass the title
+    // verbatim; `applySuggestion` prepends `@` on the link side.
+    const replacement =
+      ctx.kind === "mention" ? page.title : refReplacement(page);
+    // Mention sugar: materialise the person page in the backend
+    // (fire-and-forget) so the inserted `[[@title]]` link resolves
+    // on subsequent loads — `open_or_create_by_ref` strips the `@`
+    // and sets `type:: person` when the page doesn't exist yet, and
+    // is idempotent when it does. Without this, accepting a
+    // create-new candidate inserts the link but no page ever lands
+    // on disk, and the next `@title` lookup misses it.
+    if (ctx.kind === "mention") {
+      void openRef(`@${page.title}`).catch((e) => {
+        // Non-fatal — the link is already in the buffer; the user
+        // can still navigate it later (which would create the page
+        // then). Surface to the console so a backend regression
+        // (e.g. permission denied on `pages/`) shows up in dev.
+        console.warn("openRef for mention failed:", e);
+      });
+    }
+    const completion = applySuggestion(ta.value, ctx, replacement);
     setDraft(completion.value);
     ta.value = completion.value;
     ta.setSelectionRange(completion.caret, completion.caret);

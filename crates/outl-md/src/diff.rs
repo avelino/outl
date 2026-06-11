@@ -50,6 +50,44 @@ pub fn diff_to_ops(
     new_md_hash: &str,
     old_blocks: &[SidecarBlock],
 ) -> DiffPlan {
+    diff_to_ops_with_page_props(
+        new_blocks,
+        matches,
+        orphans,
+        page_id,
+        new_md_hash,
+        old_blocks,
+        &[],
+    )
+}
+
+/// Same as [`diff_to_ops`] but also propagates **page-level**
+/// properties (the `key:: value` lines at the top of the `.md`, before
+/// the first bullet) into the op log as `Op::SetProp` on `page_id`.
+///
+/// Without this, page-level metadata (`type:: person`, `pinned::`,
+/// `icon::`, `title::`, `role::`, …) lives only in the rendered `.md`
+/// — the workspace's CRDT tree never learns it, so anything that
+/// reads via `workspace.tree().property(page_id, ...)` (the desktop's
+/// `search_persons`, `page_meta.pinned`, etc.) gets `None`. Meanwhile
+/// `outl_md::WorkspaceIndex` parses the `.md` directly and sees the
+/// property, producing a silent divergence between two "should-be"
+/// authoritative views of the same fact.
+///
+/// Idempotency: emitting `Op::SetProp` with the same value the tree
+/// already has is a no-op via the CRDT's last-writer-wins on the same
+/// HLC clock, so we can safely re-emit on every reconcile pass
+/// (external `.md` edit, `outl-cli serve` watcher, peer ops change)
+/// without flooding the log.
+pub fn diff_to_ops_with_page_props(
+    new_blocks: &[OutlineNode],
+    matches: &[Match],
+    orphans: &[NodeId],
+    page_id: NodeId,
+    new_md_hash: &str,
+    old_blocks: &[SidecarBlock],
+    page_properties: &[(String, String)],
+) -> DiffPlan {
     let flat = flatten(new_blocks);
     assert_eq!(
         flat.len(),
@@ -100,6 +138,37 @@ pub fn diff_to_ops(
     // Track DFS line numbers for the sidecar.
     let mut line_counter: usize = 1;
 
+    // Page-level properties (`title::`, `type::`, `pinned::`, `icon::`,
+    // `role::`, …) live as `(key, value)` lines at the top of the `.md`
+    // — outside any block. Emit one `Op::SetProp` per property on the
+    // page root so the CRDT tree stays in sync with what's on disk.
+    // Without this, anything reading `workspace.tree().property(page_id, ...)`
+    // (`page_meta.pinned`, `search_persons`, future filters) silently
+    // sees `None` while the `.md` shows the property — exactly the
+    // divergence the desktop's `@` autocomplete hit on
+    // fixture-populated person pages.
+    //
+    // Internal book-keeping keys are skipped: the page-model layer
+    // (`outl-actions::page`) owns `page-slug` / `page-kind` through its
+    // own ops, and re-applying them from a `.md` parse would either
+    // no-op or accidentally overwrite a slug the renderer hides.
+    // Strings inlined here because `outl-md` does not depend on
+    // `outl-actions`; the canonical constants are
+    // `outl_actions::page::{SLUG_KEY, KIND_KEY}` — keep these in sync.
+    const PAGE_SLUG_KEY: &str = "page-slug";
+    const PAGE_KIND_KEY: &str = "page-kind";
+    for (key, value) in page_properties {
+        if key == PAGE_SLUG_KEY || key == PAGE_KIND_KEY {
+            continue;
+        }
+        ops.push(Op::SetProp {
+            node: page_id,
+            key: key.clone(),
+            value: Some(outl_core::property::PropValue::Text(value.clone())),
+            old_value: None,
+        });
+    }
+
     walk(
         new_blocks,
         0,
@@ -136,6 +205,11 @@ pub fn diff_to_ops(
         last_synced_hash: new_md_hash.to_string(),
         last_synced_at: chrono::Local::now().fixed_offset(),
         blocks: sidecar_blocks,
+        // This sidecar was just built by `diff_to_ops_with_page_props`,
+        // which emits one `Op::SetProp` per page-level property on
+        // `page_id`. Persist `true` so the orphan scanner skips this
+        // page on the next sweep (the migration is one-shot).
+        pipeline_version: crate::sidecar::CURRENT_PIPELINE_VERSION,
     };
 
     DiffPlan { ops, new_sidecar }
@@ -409,5 +483,135 @@ mod tests {
         );
         let sb = &plan.new_sidecar.blocks[0];
         assert_eq!(sb.ref_handle, derive_ref_handle(sb.id));
+    }
+
+    #[test]
+    fn page_props_emit_setprop_on_page_id() {
+        // A `.md` with page-level properties at the top must produce
+        // one `Op::SetProp` per property targeting the page root.
+        // Without this, page-level metadata (`type:: person`, …) lives
+        // only in the rendered `.md` and never reaches the workspace
+        // tree, so `workspace.tree().property(page_id, "type")` is
+        // silently `None` even though `WorkspaceIndex` (which reads
+        // the `.md` directly) sees the value.
+        let md = "title:: Avelino\ntype:: person\npinned:: true\n\n- bio\n";
+        let ast = parse(md);
+        let (matches, orphans) = match_blocks(&ast.blocks, &[]);
+        let page_id = NodeId::new();
+        let plan = diff_to_ops_with_page_props(
+            &ast.blocks,
+            &matches,
+            &orphans,
+            page_id,
+            &file_hash(md),
+            &[],
+            &ast.properties,
+        );
+
+        let prop_ops: Vec<(&str, &str)> = plan
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::SetProp {
+                    node,
+                    key,
+                    value: Some(outl_core::property::PropValue::Text(v)),
+                    ..
+                } if *node == page_id => Some((key.as_str(), v.as_str())),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            prop_ops.contains(&("title", "Avelino")),
+            "title:: Avelino must be emitted as SetProp on the page root"
+        );
+        assert!(
+            prop_ops.contains(&("type", "person")),
+            "type:: person must be emitted as SetProp on the page root"
+        );
+        assert!(
+            prop_ops.contains(&("pinned", "true")),
+            "pinned:: true must be emitted as SetProp on the page root"
+        );
+        assert_eq!(
+            plan.new_sidecar.pipeline_version,
+            crate::sidecar::CURRENT_PIPELINE_VERSION,
+            "new sidecar must stamp the current pipeline version"
+        );
+    }
+
+    #[test]
+    fn page_props_skip_internal_book_keeping_keys() {
+        // The page-model layer owns `page-slug` and `page-kind` and
+        // emits its own ops for them. The reconcile pipeline must
+        // **not** re-emit these from a `.md` parse — overwriting the
+        // slug would rename the page silently.
+        let md = "page-slug:: avelino\npage-kind:: page\ntitle:: Avelino\n\n- bio\n";
+        let ast = parse(md);
+        let (matches, orphans) = match_blocks(&ast.blocks, &[]);
+        let page_id = NodeId::new();
+        let plan = diff_to_ops_with_page_props(
+            &ast.blocks,
+            &matches,
+            &orphans,
+            page_id,
+            &file_hash(md),
+            &[],
+            &ast.properties,
+        );
+
+        let prop_keys: Vec<&str> = plan
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::SetProp { node, key, .. } if *node == page_id => Some(key.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            !prop_keys.contains(&"page-slug"),
+            "page-slug must be skipped — owned by outl_actions::page"
+        );
+        assert!(
+            !prop_keys.contains(&"page-kind"),
+            "page-kind must be skipped — owned by outl_actions::page"
+        );
+        assert!(
+            prop_keys.contains(&"title"),
+            "free-form props like `title` must still flow through"
+        );
+    }
+
+    #[test]
+    fn diff_to_ops_back_compat_does_not_emit_page_props() {
+        // Old call-sites that haven't migrated to
+        // `diff_to_ops_with_page_props` get the legacy behaviour:
+        // page-level props don't flow into the op log, and the
+        // sidecar marks them as not-yet-propagated so the orphan
+        // scanner re-runs reconcile on the next sweep.
+        let md = "type:: person\n\n- bio\n";
+        let ast = parse(md);
+        let (matches, orphans) = match_blocks(&ast.blocks, &[]);
+        let page_id = NodeId::new();
+        let plan = diff_to_ops(
+            &ast.blocks,
+            &matches,
+            &orphans,
+            page_id,
+            &file_hash(md),
+            &[],
+        );
+        let has_page_prop_op = plan.ops.iter().any(|op| {
+            matches!(
+                op,
+                Op::SetProp { node, .. } if *node == page_id
+            )
+        });
+        assert!(
+            !has_page_prop_op,
+            "legacy diff_to_ops must not emit page-level SetProps"
+        );
     }
 }

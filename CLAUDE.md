@@ -335,13 +335,15 @@ Every entry here routes through `Workspace::apply` — never build a `LogOp` fro
 
 | Intent | Use this | File |
 |---|---|---|
-| Page-property keys (constants — don't hardcode the strings) | `outl_actions::page::SLUG_KEY` / `KIND_KEY` | `crates/outl-actions/src/page.rs` |
-| Page metadata (slug, kind, title) for a node id | `outl_actions::page::page_meta` / `PageMeta` / `PageKind` | `crates/outl-actions/src/page.rs` |
+| Page-property keys (constants — don't hardcode the strings) | `outl_actions::page::SLUG_KEY` / `KIND_KEY` / `TYPE_KEY` | `crates/outl-actions/src/page.rs` |
+| Canonical `type::` value marking a page as a person (`@` mention autocomplete filter) | `outl_actions::page::PERSON_TYPE` | `crates/outl-actions/src/page.rs` |
+| Page metadata (slug, kind, title, **`page_type`**) for a node id | `outl_actions::page::page_meta` / `PageMeta` / `PageKind` | `crates/outl-actions/src/page.rs` |
 | Validate a slug for filesystem safety (`..`, `/`, `\`, control chars) | `outl_actions::page::is_valid_slug` | `crates/outl-actions/src/page.rs` |
 | Derive a **deterministic page id** from slug (so two peers converge) | `outl_actions::page::page_id_from_slug` | `crates/outl-actions/src/page.rs` |
 | Find / list / create-if-missing pages | `outl_actions::page::find_by_slug` / `list_all` / `open_or_create` | `crates/outl-actions/src/page.rs` |
 | Open-or-create a page from a **human-typed name** (slugifies + keeps original as title, used when a `[[ref]]` / `#tag` / picker query may not be a valid slug) | `outl_actions::page::open_or_create_by_name` | `crates/outl-actions/src/page.rs` |
-| Open-or-create whatever a **user-typed ref target** points at (date → journal, else literal/slugified/title match → existing page, else create) — the one decision tree so frontend regex and backend parser cannot drift on `[[2026-13-01]]` | `outl_actions::page::open_or_create_by_ref` | `crates/outl-actions/src/page.rs` |
+| Open-or-create whatever a **user-typed ref target** points at (date → journal, else literal/slugified/title match → existing page, else create) — handles `@`-prefixed mentions by stripping the `@` and marking new pages as `type:: person`; the one decision tree so frontend regex and backend parser cannot drift on `[[2026-13-01]]` or `[[@avelino]]` | `outl_actions::page::open_or_create_by_ref` | `crates/outl-actions/src/page.rs` |
+| Search pages typed `type:: person`, fuzzy-ranked by query (powers the `@` mention autocomplete in every client) | `outl_actions::page::search_persons` | `crates/outl-actions/src/page.rs` |
 | Read / write a property on a page (or any node) | `outl_actions::page::read_text_prop` / `set_property` | `crates/outl-actions/src/page.rs` |
 | Migrate pre-page-model blocks under today's journal (run on boot) | `outl_actions::page::migrate_legacy_into_today` | `crates/outl-actions/src/page.rs` |
 | Open / create the journal for a specific date or today | `outl_actions::page::open_journal` / `open_today` | `crates/outl-actions/src/page.rs` |
@@ -385,6 +387,8 @@ Every entry here routes through `Workspace::apply` — never build a `LogOp` fro
 | Reconcile error / report types | `outl_md::ReconcileError` / `ReconcileReport` | `crates/outl-md/src/reconcile.rs` |
 | 3-level matching algorithm (hash → similarity → orphan log) | `outl_md::matching::match_blocks` → `Match` / `MatchLevel` | `crates/outl-md/src/matching.rs` |
 | Diff old AST + new AST + old sidecar → minimum sequence of `Op`s | `outl_md::diff::diff_to_ops` → `DiffPlan` | `crates/outl-md/src/diff.rs` |
+| Same diff, **plus** propagate page-level properties (`title::`, `type::`, `pinned::`, `icon::`, …) into the op log as `Op::SetProp` on the page root so the CRDT tree agrees with what's on disk (legacy `.md` files populated via fixtures / external editors get materialised here on the next reconcile) | `outl_md::diff::diff_to_ops_with_page_props` | `crates/outl-md/src/diff.rs` |
+| Reconcile-pipeline version number stamped on every sidecar — orphan scanner re-runs `reconcile_md` when a sidecar's version is below this constant, so a binary that gains a new pipeline pass automatically rematerialises every legacy page on the next boot | `outl_md::sidecar::CURRENT_PIPELINE_VERSION` | `crates/outl-md/src/sidecar.rs` |
 
 #### 8. Sidecar (outl-md::sidecar + atomic)
 
@@ -415,7 +419,7 @@ UI-agnostic; both TUI and mobile consume them.
 
 | Intent | Use this | File |
 |---|---|---|
-| Build / query the workspace-wide index (slug → page, backlinks, block lookups) | `outl_md::WorkspaceIndex::build` / `by_slug` / `by_title` / `pages` / `pages_by_title_prefix` | `crates/outl-md/src/index.rs` |
+| Build / query the workspace-wide index (slug → page, backlinks, block lookups) | `outl_md::WorkspaceIndex::build` / `by_slug` / `by_title` / `pages` / `pages_by_title_prefix` / `pages_by_type` | `crates/outl-md/src/index.rs` |
 | Patch / remove a page in an existing index | `WorkspaceIndex::patch_page` / `remove_page` | `crates/outl-md/src/index.rs` |
 | Resolve `((blk-XXXXXX))` to a block / look a block up by id or location | `WorkspaceIndex::resolve_block_ref` / `block_by_id` / `block_at_location` | `crates/outl-md/src/index.rs` |
 | Reverse refs to a block / iterate / search | `WorkspaceIndex::block_refs_to` / `iter_blocks` / `search_block_text` / `block_count` | `crates/outl-md/src/index.rs` |

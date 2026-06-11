@@ -222,8 +222,21 @@ fn scan_dir(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// `true` when the `.md` at `md_path` is not reflected in its
-/// sidecar: either the sidecar is missing or its `last_synced_hash`
-/// doesn't match the file's current hash.
+/// sidecar: either the sidecar is missing, its `last_synced_hash`
+/// doesn't match the file's current hash, or page-level properties
+/// (`type::`, `pinned::`, `icon::`, …) haven't been propagated into
+/// the op log yet (legacy sidecars predating
+/// `diff_to_ops_with_page_props`).
+///
+/// The propagation check is a one-shot migration trigger: the next
+/// `reconcile_md` emits the missing `Op::SetProp`s on the page root,
+/// flips `pipeline_v2_complete = true` in the rewritten sidecar, and
+/// the page is skipped on every subsequent scan. Without it, pages
+/// authored via fixtures, imports, or external editors keep their
+/// `type:: person` only in the rendered `.md` — and the desktop's
+/// `@` autocomplete (which reads from the CRDT tree) silently
+/// disagrees with the TUI's (which reads `WorkspaceIndex`'s parse of
+/// the same `.md`).
 fn needs_reconcile(md_path: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(md_path) else {
         return false;
@@ -231,7 +244,10 @@ fn needs_reconcile(md_path: &Path) -> bool {
     let current = outl_md::sidecar::file_hash(&text);
     let sidecar_path = outl_md::resolve_sidecar_path(md_path);
     match outl_md::sidecar::read(&sidecar_path) {
-        Ok(sc) => sc.last_synced_hash != current,
+        Ok(sc) => {
+            sc.last_synced_hash != current
+                || sc.pipeline_version < outl_md::sidecar::CURRENT_PIPELINE_VERSION
+        }
         Err(_) => true, // sidecar missing or unreadable → orphan
     }
 }

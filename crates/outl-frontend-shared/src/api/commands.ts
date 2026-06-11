@@ -45,6 +45,17 @@ export function searchPages(query: string): Promise<PageMeta[]> {
   return invoke<PageMeta[]>("search_pages", { query });
 }
 
+/**
+ * Search the workspace for pages with `type:: person`, ranked by the
+ * query (same fuzzy shape as {@link searchPages} — exact, prefix,
+ * contains). Powers the `@` mention autocomplete in every client.
+ * Backed by `outl_actions::search_persons` so every surface ranks the
+ * same way without re-implementing the filter.
+ */
+export function searchPersons(query: string): Promise<PageMeta[]> {
+  return invoke<PageMeta[]>("search_persons", { query });
+}
+
 export function openTodayJournal(): Promise<PageView> {
   return invoke<PageView>("open_today_journal");
 }

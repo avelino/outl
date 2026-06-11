@@ -153,3 +153,75 @@ describe("applySuggestion", () => {
     expect(result).toEqual({ value: "see [[new]] tail", caret: 11 });
   });
 });
+
+describe("detectRefContext: mention", () => {
+  it("detects @ at the start of the buffer", () => {
+    expect(detectRefContext("@av", 3)).toEqual({
+      kind: "mention",
+      query: "av",
+      openIndex: 0,
+      replaceEnd: 3,
+    });
+  });
+
+  it("detects @ after whitespace (word-initial)", () => {
+    expect(detectRefContext("hi @av", 6)).toEqual({
+      kind: "mention",
+      query: "av",
+      openIndex: 3,
+      replaceEnd: 6,
+    });
+  });
+
+  it("keeps spaces in the query for composite names", () => {
+    expect(detectRefContext("@Thiago Av", 10)).toEqual({
+      kind: "mention",
+      query: "Thiago Av",
+      openIndex: 0,
+      replaceEnd: 10,
+    });
+  });
+
+  it("does not trigger on a mid-word @ (email-shaped input)", () => {
+    // `a@b.com` is an email, not a mention. The caret sits after
+    // `b`, walked back through `b` and `@`. Since `@` is preceded by
+    // `a` (no whitespace), the mention pre-pass must NOT fire.
+    const ctx = detectRefContext("a@b", 3);
+    expect(ctx?.kind).not.toBe("mention");
+  });
+
+  it("captures an empty query immediately after the @", () => {
+    expect(detectRefContext("hi @", 4)).toEqual({
+      kind: "mention",
+      query: "",
+      openIndex: 3,
+      replaceEnd: 4,
+    });
+  });
+
+  it("stops at a `[[` opener so page refs win over a stray @", () => {
+    // The caret sits inside an open `[[av…` — the page-ref branch
+    // must win, regardless of the `@x ` that sits earlier in the
+    // line.
+    const ctx = detectRefContext("@x [[av", 7);
+    expect(ctx?.kind).toBe("page");
+    expect(ctx?.query).toBe("av");
+  });
+});
+
+describe("applySuggestion: mention", () => {
+  it("wraps the chosen title in `[[@…]]`", () => {
+    const ctx = detectRefContext("hi @av", 6)!;
+    const result = applySuggestion("hi @av", ctx, "avelino");
+    expect(result).toEqual({ value: "hi [[@avelino]]", caret: 15 });
+  });
+
+  it("preserves spaces inside the chosen composite name", () => {
+    const ctx = detectRefContext("@Thiago Av", 10)!;
+    const result = applySuggestion("@Thiago Av", ctx, "Thiago Avelino");
+    expect(result).toEqual({
+      value: "[[@Thiago Avelino]]",
+      caret: 19,
+    });
+  });
+});

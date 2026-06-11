@@ -46,6 +46,10 @@ pub struct PageEntry {
     /// sidebar (TUI, future Tauri) list pinned pages prominently so
     /// frequently-touched notes are a single click away.
     pub pinned: bool,
+    /// `type::` page-level property, lowercased+trimmed. `None` when
+    /// unset. Powers `pages_by_type` — the `@` mention autocomplete
+    /// filters on `Some("person")` to surface only people pages.
+    pub page_type: Option<String>,
 }
 
 /// Full workspace index.
@@ -122,6 +126,12 @@ impl WorkspaceIndex {
                     .properties
                     .iter()
                     .any(|(k, v)| k == "pinned" && is_truthy(v));
+                let page_type = parsed
+                    .properties
+                    .iter()
+                    .find(|(k, _)| k == "type")
+                    .map(|(_, v)| v.trim().to_lowercase())
+                    .filter(|s| !s.is_empty());
 
                 idx.pages.insert(
                     slug.to_string(),
@@ -132,6 +142,7 @@ impl WorkspaceIndex {
                         icon,
                         is_journal,
                         pinned,
+                        page_type,
                     },
                 );
                 idx.title_to_slug.insert(title.clone(), slug.to_string());
@@ -225,6 +236,12 @@ impl WorkspaceIndex {
             .properties
             .iter()
             .any(|(k, v)| k == "pinned" && is_truthy(v));
+        let page_type = page
+            .properties
+            .iter()
+            .find(|(k, _)| k == "type")
+            .map(|(_, v)| v.trim().to_lowercase())
+            .filter(|s| !s.is_empty());
 
         // Forget the page's previous `title -> slug` mapping in case
         // the title changed (otherwise a stale alias would shadow the
@@ -238,6 +255,7 @@ impl WorkspaceIndex {
             icon,
             is_journal,
             pinned,
+            page_type,
         };
         self.pages.insert(slug.clone(), entry);
         self.title_to_slug.insert(title, slug.clone());
@@ -322,6 +340,21 @@ impl WorkspaceIndex {
         hits.sort_by_key(|p| (p.title.len(), p.title.clone()));
         hits.truncate(limit);
         hits
+    }
+
+    /// Pages whose `type::` property equals `t` (case-insensitive
+    /// comparison; `t` is matched against the already lowercased
+    /// `page_type` stored on each [`PageEntry`]).
+    ///
+    /// Powers the `@` mention autocomplete (with `t == "person"`).
+    /// The catalog of accepted `type::` values is a UX decision the
+    /// caller owns — this method just filters; no other normalization
+    /// (no plural aliasing, no synonyms).
+    pub fn pages_by_type<'a>(&'a self, t: &'a str) -> impl Iterator<Item = &'a PageEntry> + 'a {
+        let needle = t.to_lowercase();
+        self.pages
+            .values()
+            .filter(move |p| p.page_type.as_deref() == Some(needle.as_str()))
     }
 }
 

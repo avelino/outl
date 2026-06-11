@@ -40,11 +40,19 @@ export interface SuggesterHideMessage {
 
 export type SuggesterMessage = SuggesterShowMessage | SuggesterHideMessage;
 
-export function buildShowMessage(items: PageMeta[]): SuggesterShowMessage {
+export function buildShowMessage(
+  items: PageMeta[],
+  opts: { mention?: boolean } = {},
+): SuggesterShowMessage {
   return {
     action: "show",
     items: items.map((p) => ({
-      slug: p.slug,
+      // For the `@` mention popup, the picked value handed back to JS
+      // must be the **title** — `applySuggestion` wraps it in
+      // `[[@<title>]]`, and the page slug carries no `@`. For normal
+      // page refs, the slug is still the canonical identifier so
+      // navigation and ref-resolution match the picker.
+      slug: opts.mention ? p.title : p.slug,
       // Journal pages render under a human-readable title server-side
       // ("Thursday, May 28, 2026"). The mobile UI is anchored on ISO
       // slugs (`2026-05-28`), so show the slug in the chip strip

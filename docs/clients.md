@@ -209,9 +209,33 @@ whole decision tree in one place:
 3. Slugified slug match → existing page (`[[avelino/outl]]` finds
    `pages/avelino-outl.md` even if the ref was typed before the
    page existed).
-4. Case-insensitive title match → existing page.
-5. Fallback: create a fresh page via `open_or_create_by_name`
+4. **`@`-prefixed mention sugar** (`[[@avelino]]`, `[[@Thiago Avelino]]`)
+   → strip the `@` and resolve via steps 1-3 against the bare name.
+   When nothing matches, create the page and set `type:: person`
+   automatically so the next `@` mention surfaces it in the
+   autocomplete popup without any property editing. The `@` is
+   purely the link affordance; page identity does not carry it.
+5. Case-insensitive title match → existing page.
+6. Fallback: create a fresh page via `open_or_create_by_name`
    (slugifies disk path, keeps the typed string as title).
+
+### `@` mention autocomplete
+
+Every client surfaces a person picker on a word-initial `@`. The
+popup is filtered to pages where `type:: person` is set, ranked
+through the shared `outl_actions::page::search_persons(query)`
+helper (TUI calls it directly; desktop + mobile expose it as the
+`search_persons` Tauri command). Accepting a candidate inserts
+`[[@<title>]]` — a regular wikilink whose target carries the `@` as
+a visual prefix only. Mentions ride every existing page-ref code
+path (render, roundtrip, navigation), so adding the trigger costs
+no new render/matching/reconcile branch.
+
+A person's backlinks panel surfaces both forms (`[[avelino]]` and
+`[[@avelino]]`) — `backlinks_for_page` scans the `@`-prefixed alias
+when `meta.page_type == Some("person")`. Plain pages do not, so a
+stray `[[@projeto]]` in a non-person page's backlinks does not
+trigger false positives.
 
 Every client that turns a tap on a ref / tag / picker entry into a
 page view should wrap this single helper. There is no client-side

@@ -38,6 +38,7 @@ pub(crate) fn render_autocomplete(
         AutocompleteKind::Tag => format!("#{}", ac.query),
         AutocompleteKind::BlockRef => format!("(({}))", ac.query),
         AutocompleteKind::SlashCommand => format!("/{}", ac.query),
+        AutocompleteKind::Mention => format!("@{}", ac.query),
     };
     let items: Vec<ListItem<'_>> = ac
         .candidates
@@ -54,9 +55,11 @@ pub(crate) fn render_autocomplete(
             // for slash commands we append a dim description so the
             // popup doubles as in-context help.
             match ac.kind {
-                AutocompleteKind::PageRef | AutocompleteKind::Tag => {
+                AutocompleteKind::PageRef | AutocompleteKind::Tag | AutocompleteKind::Mention => {
+                    // Both PageRef and Mention list candidates by
+                    // **title** (`by_title`); Tag lists by slug.
                     let icon = match ac.kind {
-                        AutocompleteKind::PageRef => {
+                        AutocompleteKind::PageRef | AutocompleteKind::Mention => {
                             app.index.by_title(c).and_then(|p| p.icon.clone())
                         }
                         AutocompleteKind::Tag => app.index.by_slug(c).and_then(|p| p.icon.clone()),

@@ -90,7 +90,43 @@ pub struct Sidecar {
     pub last_synced_at: DateTime<FixedOffset>,
     /// Block entries in tree (depth-first preorder) order.
     pub blocks: Vec<SidecarBlock>,
+    /// Reconcile-pipeline version that produced the tree state this
+    /// sidecar describes.
+    ///
+    /// Bumped whenever the pipeline learns to emit a category of op
+    /// it didn't before — `diff_to_ops_with_page_props` propagating
+    /// page-level `Op::SetProp`s, `ensure_page_root_in_tree` emitting
+    /// `Op::Create` for the page root, etc. The orphan scanner
+    /// (`needs_reconcile`) re-runs `reconcile_md` when this value is
+    /// lower than [`CURRENT_PIPELINE_VERSION`], so a binary that gains
+    /// a new pipeline step automatically rematerialises every legacy
+    /// page on the next boot — no user intervention, idempotent on
+    /// the CRDT.
+    ///
+    /// Sidecars predating this field (and earlier intermediates that
+    /// used a boolean `page_props_propagated` / `pipeline_v2_complete`)
+    /// deserialise as `0` via `#[serde(default)]`, which forces a
+    /// re-reconcile against the current pipeline.
+    #[serde(default)]
+    pub pipeline_version: u32,
 }
+
+/// The pipeline version this binary writes to fresh sidecars and
+/// expects to find on disk before treating a page as fully
+/// reconciled.
+///
+/// Bump every time the reconcile pipeline acquires a new pass that
+/// could have produced a different op log for the same `.md`:
+///
+/// - `1` — `diff_to_ops_with_page_props` propagates page-level
+///   properties (`title::`, `type::`, `pinned::`, …) as
+///   `Op::SetProp` on the page root.
+/// - `2` — `ensure_page_root_in_tree` emits `Op::Create` for the page
+///   root when the node isn't in `self.nodes` yet. Without it,
+///   externally-authored `.md` files left the page as an unrooted
+///   ghost (`Op::Move` is a no-op on never-created nodes), so
+///   `children_of(root)` skipped them silently.
+pub const CURRENT_PIPELINE_VERSION: u32 = 2;
 
 impl Sidecar {
     /// Build an empty sidecar for a new page.
@@ -101,6 +137,9 @@ impl Sidecar {
             last_synced_hash: md_hash.to_string(),
             last_synced_at: now_local(),
             blocks: Vec::new(),
+            // Fresh sidecars stamp the current pipeline so the orphan
+            // scanner skips them next time.
+            pipeline_version: CURRENT_PIPELINE_VERSION,
         }
     }
 }
