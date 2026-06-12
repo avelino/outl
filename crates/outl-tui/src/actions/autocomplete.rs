@@ -530,7 +530,10 @@ pub(crate) fn detect_trigger(chars: &[char], cursor: usize) -> Option<(Autocompl
                 Some(c) if !c.is_ascii_lowercase() => return None,
                 _ => {}
             }
-            if chars_iter.any(|c| !outl_md::emoji::is_valid_shortcode(&c.to_string())) {
+            // Char-level alphabet check (`[a-z0-9_+-]`). Don't call
+            // `is_valid_shortcode(&c.to_string())` here: it allocates
+            // a fresh 1-char `String` per keystroke during typing.
+            if chars_iter.any(|c| !outl_md::emoji::is_valid_shortcode_char(c)) {
                 return None;
             }
             return Some((AutocompleteKind::Emoji, query));

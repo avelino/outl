@@ -110,7 +110,12 @@ public final class OutlToolbarView: UIView {
     private func setupViews() {
         capsule.translatesAutoresizingMaskIntoConstraints = false
         capsule.layer.cornerRadius = 22
-        capsule.clipsToBounds = true
+        // The capsule deliberately does NOT clip — `clipsToBounds`
+        // and `masksToBounds` are the same flag, so enabling either
+        // would also clip the drop shadow. The scrollable middle
+        // already clips its own content (`scroll.clipsToBounds`); the
+        // pinned containers live outside the scroll and have nothing
+        // to overflow.
         capsule.backgroundColor = UIColor { trait in
             trait.userInterfaceStyle == .dark
                 ? UIColor(white: 0.18, alpha: 0.98)
@@ -120,11 +125,6 @@ public final class OutlToolbarView: UIView {
         capsule.layer.shadowOffset = CGSize(width: 0, height: 2)
         capsule.layer.shadowRadius = 8
         capsule.layer.shadowOpacity = 0.12
-        // Shadow ignores the clipsToBounds = true on the layer itself —
-        // we want the capsule to clip the scroll view's content, but
-        // the drop shadow must paint outside, so masksToBounds stays
-        // off (default).
-        capsule.layer.masksToBounds = false
         addSubview(capsule)
 
         // ── Pinned containers ──────────────────────────────────────

@@ -441,6 +441,7 @@ UI-agnostic; both TUI and mobile consume them.
 | Canonicalize a fence info-string (`rs` → `rust`, `js`/`javascript`/`node` → `js`, …) — single source of truth for both `outl-exec`'s runtime dispatch and the frontend syntax highlighter | `outl_md::lang::canonical`, `outl_md::lang::KNOWN_ALIASES` | `crates/outl-md/src/lang.rs` |
 | Resolve a `:shortcode:` to its unicode glyph (one-way; never retro-translate glyph → shortcode, multiple shortcodes can alias the same codepoint) | `outl_md::emoji::shortcode_to_unicode` | `crates/outl-md/src/emoji.rs` |
 | Validate the `[a-z0-9_+-]+` shape of an emoji shortcode (does **not** check the catalog — that's `shortcode_to_unicode`) | `outl_md::emoji::is_valid_shortcode` | `crates/outl-md/src/emoji.rs` |
+| Validate **one char** of a shortcode (`[a-z0-9_+-]`) — use this when walking the buffer char-by-char (`try_emoji`, TUI's `detect_trigger`) so you don't allocate a 1-char `String` per keystroke just to call `is_valid_shortcode` | `outl_md::emoji::is_valid_shortcode_char` | `crates/outl-md/src/emoji.rs` |
 | Search the GitHub gemoji catalog for shortcodes matching a query (exact → prefix → substring; shorter shortcodes win ties) — powers the `:emoji:` autocomplete in every client through one shared `outl_emoji_search` Tauri command | `outl_md::emoji::search` → `EmojiHit` | `crates/outl-md/src/emoji.rs` |
 
 #### 12. Backlinks (outl-actions::backlinks)

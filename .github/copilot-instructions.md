@@ -337,6 +337,7 @@ UI-agnostic; TUI and mobile both consume them.
 | Canonicalize a fence info-string (`rs` → `rust`, etc.) — used by `outl-exec` runtime dispatch + frontend syntax highlighter | `outl_md::lang::canonical`, `outl_md::lang::KNOWN_ALIASES` | `crates/outl-md/src/lang.rs` |
 | Resolve a `:shortcode:` to its unicode glyph (one-way; multiple shortcodes can alias the same codepoint) | `outl_md::emoji::shortcode_to_unicode` | `crates/outl-md/src/emoji.rs` |
 | Validate the `[a-z0-9_+-]+` shape of an emoji shortcode (catalog check is separate) | `outl_md::emoji::is_valid_shortcode` | `crates/outl-md/src/emoji.rs` |
+| Validate one char of a shortcode (`[a-z0-9_+-]`) — char-by-char walks (TUI's `detect_trigger`, `try_emoji`) skip allocating a 1-char `String` per keystroke | `outl_md::emoji::is_valid_shortcode_char` | `crates/outl-md/src/emoji.rs` |
 | Search the GitHub gemoji catalog for shortcodes matching a query (powers `:emoji:` autocomplete across TUI / mobile / desktop) | `outl_md::emoji::search` → `EmojiHit` | `crates/outl-md/src/emoji.rs` |
 | Byte offset for a char index (UTF-8 safe) | `outl_md::inline::byte_index_for_char` | `crates/outl-md/src/inline.rs` |
 

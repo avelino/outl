@@ -38,11 +38,15 @@ pub fn is_valid_shortcode(s: &str) -> bool {
     !s.is_empty() && s.chars().all(is_valid_shortcode_char)
 }
 
-/// One char of a shortcode — lowercase ASCII letters, digits, `_`,
+/// One char of a shortcode: lowercase ASCII letters, digits, `_`,
 /// `+`, `-`. Pinned by the GitHub gemoji syntax (`:+1:`, `:-1:`,
-/// `:smile_cat:`, `:100:`). Not exported because the matcher in
-/// `inline.rs` reaches it through [`is_valid_shortcode`].
-pub(crate) fn is_valid_shortcode_char(c: char) -> bool {
+/// `:smile_cat:`, `:100:`).
+///
+/// Exposed so consumers walking the shortcode char-by-char (the
+/// inline tokenizer's `try_emoji` in `outl-md`, the TUI's
+/// `detect_trigger` in `outl-tui`) avoid allocating a 1-char `String`
+/// per keystroke just to call [`is_valid_shortcode`].
+pub fn is_valid_shortcode_char(c: char) -> bool {
     c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '+' || c == '-'
 }
 
@@ -86,17 +90,22 @@ pub fn search(query: &str, limit: usize) -> Vec<EmojiHit> {
 
     let mut hits: Vec<EmojiHit> = Vec::new();
     for emoji in emojis::iter() {
-        let Some(shortcode) = emoji.shortcode() else {
-            continue;
-        };
-        let Some(score) = score_match(shortcode, &q_lower) else {
-            continue;
-        };
-        hits.push(EmojiHit {
-            shortcode: shortcode.to_string(),
-            glyph: emoji.as_str().to_string(),
-            score,
-        });
+        let glyph = emoji.as_str();
+        // Iterate every shortcode the catalog records for this glyph
+        // (gemoji has aliases — `+1` / `thumbsup` both → 👍). Using
+        // `emoji.shortcode()` alone here would silently miss aliases
+        // even though `shortcode_to_unicode` resolves them, and the
+        // autocomplete would drift from what the parser accepts.
+        for shortcode in emoji.shortcodes() {
+            let Some(score) = score_match(shortcode, &q_lower) else {
+                continue;
+            };
+            hits.push(EmojiHit {
+                shortcode: shortcode.to_string(),
+                glyph: glyph.to_string(),
+                score,
+            });
+        }
     }
     hits.sort_by(|a, b| {
         b.score
