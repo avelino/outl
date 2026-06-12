@@ -78,4 +78,28 @@ final class SuggesterStateTests: XCTestCase {
             .hide
         )
     }
+
+    /// Regression: emoji chips used to fall back to `.page` here,
+    /// which made the tap fire `__outlSuggesterPicked(shortcode, "page")`
+    /// — the JS side dispatches on the second argument, so the emoji
+    /// branch never ran and the chip rendered but did nothing.
+    func testParsesEmojiKind() {
+        let json = """
+        {
+          "action": "show",
+          "items": [
+            {"title": "🎉", "slug": "tada", "kind": "emoji"},
+            {"title": "🚀", "slug": "rocket", "kind": "emoji"}
+          ]
+        }
+        """
+        let state = SuggesterState.parse(jsonString: json)
+        XCTAssertEqual(state.action, .show)
+        XCTAssertEqual(state.items.count, 2)
+        XCTAssertEqual(state.items.first?.kind, .emoji)
+        XCTAssertEqual(state.items.first?.slug, "tada")
+        // `rawValue` is what gets shipped back to JS — must stay "emoji"
+        // verbatim so `kind === "emoji"` matches in the picked callback.
+        XCTAssertEqual(state.items.first?.kind.rawValue, "emoji")
+    }
 }

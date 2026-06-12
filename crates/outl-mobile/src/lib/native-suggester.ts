@@ -20,6 +20,7 @@
  * — UIKit isn't there to read it, but Solid keeps the visual editor
  * consistent.
  */
+import type { EmojiHit } from "@outl/shared/api/commands";
 import type { PageMeta } from "@outl/shared/api/types";
 
 interface WindowWithBridge extends Window {
@@ -28,10 +29,18 @@ interface WindowWithBridge extends Window {
 }
 
 /** Shape UIKit reads off `window.__outlSuggesterState`. Exported for
- *  unit tests so we can lock the wire shape down. */
+ *  unit tests so we can lock the wire shape down.
+ *
+ *  `kind: "emoji"` chips carry the shortcode in `slug` and the unicode
+ *  glyph in `title` — UIKit renders the glyph as the chip label, and
+ *  the picked callback receives the shortcode for the insertion. */
 export interface SuggesterShowMessage {
   action: "show";
-  items: Array<{ slug: string; title: string; kind: "page" | "journal" }>;
+  items: Array<{
+    slug: string;
+    title: string;
+    kind: "page" | "journal" | "emoji";
+  }>;
 }
 
 export interface SuggesterHideMessage {
@@ -59,6 +68,23 @@ export function buildShowMessage(
       // instead — matches the journal header format too.
       title: p.kind === "journal" ? p.slug : p.title,
       kind: p.kind,
+    })),
+  };
+}
+
+/**
+ * Build a `SuggesterShowMessage` for the `:shortcode:` emoji
+ * autocomplete. The picked slug is the shortcode (`"tada"`); UIKit
+ * shows the glyph (`"🎉"`) as the chip label, which makes the strip
+ * scannable without the user reading shortcode names.
+ */
+export function buildEmojiShowMessage(hits: EmojiHit[]): SuggesterShowMessage {
+  return {
+    action: "show",
+    items: hits.map((h) => ({
+      slug: h.shortcode,
+      title: h.glyph,
+      kind: "emoji" as const,
     })),
   };
 }

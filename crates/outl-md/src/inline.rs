@@ -96,6 +96,18 @@ pub enum InlineTok<'a> {
         /// Full handle, e.g. `"blk-r6s4a1"`.
         handle: &'a str,
     },
+    /// `:shortcode:` — GitHub gemoji shortcode.
+    ///
+    /// The borrowed form carries only the shortcode (without the `:`s);
+    /// the glyph is resolved at conversion time by
+    /// [`crate::emoji::shortcode_to_unicode`]. The matcher only emits
+    /// this token when the catalog recognizes the shortcode — unknown
+    /// `:foo:` runs stay [`InlineTok::Plain`] so prose like
+    /// `meeting at 14:00 : ok?` is not silently rewritten.
+    Emoji {
+        /// Shortcode without the surrounding `:`s (e.g. `"tada"`).
+        shortcode: &'a str,
+    },
 }
 
 /// What `ref_at_cursor` resolves to.
@@ -189,6 +201,20 @@ pub enum InlineToken {
         /// Full handle including the `blk-` prefix.
         value: String,
     },
+    /// `:shortcode:` GitHub gemoji shortcode.
+    ///
+    /// `shortcode` is the literal text between the `:`s
+    /// (e.g. `"tada"`); `glyph` is the resolved unicode codepoint
+    /// (e.g. `"🎉"`). Clients render `glyph` and surface `shortcode`
+    /// for hover / `aria-label`. If the catalog ever misses (should
+    /// not happen — the tokenizer pre-validates) the client should
+    /// fall back to rendering `:${shortcode}:` literal.
+    Emoji {
+        /// Shortcode without the surrounding `:`s (e.g. `"tada"`).
+        shortcode: String,
+        /// Resolved unicode glyph (e.g. `"🎉"`).
+        glyph: String,
+    },
 }
 
 impl InlineToken {
@@ -226,6 +252,17 @@ impl InlineToken {
             },
             InlineTok::Embed { handle } => InlineToken::Embed {
                 value: (*handle).to_owned(),
+            },
+            InlineTok::Emoji { shortcode } => InlineToken::Emoji {
+                shortcode: (*shortcode).to_owned(),
+                // The tokenizer only emits `Emoji` when the catalog
+                // resolves — so this `unwrap_or("")` is a defensive
+                // landing pad, not a code path we expect to hit.
+                // Empty `glyph` lets the frontend fall back to the
+                // literal `:shortcode:` form without crashing.
+                glyph: crate::emoji::shortcode_to_unicode(shortcode)
+                    .unwrap_or("")
+                    .to_owned(),
             },
         }
     }
@@ -411,6 +448,12 @@ fn match_one(s: &str) -> Option<(InlineTok<'_>, usize)> {
     if let Some(out) = try_md_link(s) {
         return Some(out);
     }
+    // `try_emoji` sits between `try_md_link` and `try_tag` — `:` does
+    // not overlap with any other matcher's opener, so the slot is
+    // chosen for readability, not precedence.
+    if let Some(out) = try_emoji(s) {
+        return Some(out);
+    }
     if let Some(out) = try_tag(s) {
         return Some(out);
     }
@@ -541,6 +584,11 @@ pub fn inline_to_source(toks: &[InlineTok<'_>]) -> String {
                 out.push_str(handle);
                 out.push_str("))");
             }
+            InlineTok::Emoji { shortcode } => {
+                out.push(':');
+                out.push_str(shortcode);
+                out.push(':');
+            }
         }
     }
     out
@@ -669,6 +717,45 @@ fn try_md_link(s: &str) -> Option<(InlineTok<'_>, usize)> {
     Some((InlineTok::Link { text, url }, consumed))
 }
 
+/// `:shortcode:` — GitHub gemoji shortcode.
+///
+/// Strict on both ends:
+/// - the shape `[a-z0-9_+-]+` is pinned to gemoji syntax (covers `:+1:`,
+///   `:-1:`, `:smile_cat:`, `:100:`) — any non-shortcode char (incl.
+///   uppercase, whitespace, `/`, `.`, `:`) terminates the run and forces
+///   a closing `:` to be next, otherwise we bail.
+/// - the catalog gate (`shortcode_to_unicode`) means we never tokenize
+///   `:foo:` unless `foo` is a known emoji. Prose like
+///   `meeting at 14:00 :` stays plain.
+///
+/// URL boundary fall-out: `https://example.com:8080/api`, `ftp://host:21`,
+/// `mailto:foo@bar.com`, `git@github.com:avelino/outl.git` all fail this
+/// matcher naturally — either the inner run contains an invalid char
+/// (`/`, `.`, `@`) or there is no closing `:`. No look-behind needed.
+fn try_emoji(s: &str) -> Option<(InlineTok<'_>, usize)> {
+    let rest = s.strip_prefix(':')?;
+    let mut shortcode_byte_end = 0usize;
+    for (rel, ch) in rest.char_indices() {
+        if crate::emoji::is_valid_shortcode_char(ch) {
+            shortcode_byte_end = rel + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if shortcode_byte_end == 0 {
+        return None;
+    }
+    let after = &rest[shortcode_byte_end..];
+    if !after.starts_with(':') {
+        return None;
+    }
+    let shortcode = &rest[..shortcode_byte_end];
+    // Catalog gate: unknown shortcodes degrade to plain text.
+    crate::emoji::shortcode_to_unicode(shortcode)?;
+    // Consumed: opening `:` + shortcode + closing `:`.
+    Some((InlineTok::Emoji { shortcode }, 1 + shortcode_byte_end + 1))
+}
+
 fn try_tag(s: &str) -> Option<(InlineTok<'_>, usize)> {
     let rest = s.strip_prefix('#')?;
     let mut tag_byte_end = 0usize;
@@ -700,7 +787,7 @@ mod tokenize_owned_tests {
         // `blk-` (6 today) to pass `is_valid_block_handle`; shorter
         // handles correctly degrade to plain text.
         let toks = tokenize_owned(
-            "**b** *i* ~~s~~ `c` [t](u) [[p]] #tag ((blk-aaaaaa)) !((blk-bbbbbb)) tail",
+            "**b** *i* ~~s~~ `c` [t](u) [[p]] #tag ((blk-aaaaaa)) !((blk-bbbbbb)) :tada: tail",
         );
         // Spot-check shape (kind discriminant) and the `tag` prefixing,
         // since that's the one place `from_borrowed` does more than a
@@ -718,6 +805,7 @@ mod tokenize_owned_tests {
                 InlineToken::Tag { .. } => "tag",
                 InlineToken::BlockRef { .. } => "blockref",
                 InlineToken::Embed { .. } => "embed",
+                InlineToken::Emoji { .. } => "emoji",
             })
             .collect();
         assert_eq!(
@@ -725,6 +813,7 @@ mod tokenize_owned_tests {
             vec![
                 "bold", "plain", "italic", "plain", "strike", "plain", "code", "plain", "link",
                 "plain", "ref", "plain", "tag", "plain", "blockref", "plain", "embed", "plain",
+                "emoji", "plain",
             ],
         );
         // Tag value carries the leading `#` so the mobile renderer

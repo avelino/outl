@@ -335,6 +335,9 @@ UI-agnostic; TUI and mobile both consume them.
 | Resolve the ref under a caret position | `outl_md::inline::ref_at_cursor` → `RefTarget` | `crates/outl-md/src/inline.rs` |
 | Validate a `((blk-XXXXXX))` handle | `outl_md::inline::is_valid_block_handle` | `crates/outl-md/src/inline.rs` |
 | Canonicalize a fence info-string (`rs` → `rust`, etc.) — used by `outl-exec` runtime dispatch + frontend syntax highlighter | `outl_md::lang::canonical`, `outl_md::lang::KNOWN_ALIASES` | `crates/outl-md/src/lang.rs` |
+| Resolve a `:shortcode:` to its unicode glyph (one-way; multiple shortcodes can alias the same codepoint) | `outl_md::emoji::shortcode_to_unicode` | `crates/outl-md/src/emoji.rs` |
+| Validate the `[a-z0-9_+-]+` shape of an emoji shortcode (catalog check is separate) | `outl_md::emoji::is_valid_shortcode` | `crates/outl-md/src/emoji.rs` |
+| Search the GitHub gemoji catalog for shortcodes matching a query (powers `:emoji:` autocomplete across TUI / mobile / desktop) | `outl_md::emoji::search` → `EmojiHit` | `crates/outl-md/src/emoji.rs` |
 | Byte offset for a char index (UTF-8 safe) | `outl_md::inline::byte_index_for_char` | `crates/outl-md/src/inline.rs` |
 
 #### 12. Backlinks (outl-actions::backlinks)

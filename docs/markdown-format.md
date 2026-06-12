@@ -204,6 +204,7 @@ The third line (`- this is a regular child block`) is a real child.
 | `#name` | Tag (page reference with classification semantics) |
 | `((blk-XXXXXX))` | Block reference — renders as the source block's text, links to it |
 | `!((blk-XXXXXX))` | Block embed — renders the source block expanded with its subtree |
+| `:shortcode:` | GitHub gemoji shortcode — renders as the unicode glyph (`:tada:` → 🎉) |
 | `{{query: ...}}` | Saved query (phase 3 — parse as opaque) |
 | `**bold**`, `*italic*`, `\`code\`` | Standard CommonMark |
 
@@ -230,6 +231,32 @@ Handle collisions are vanishingly unlikely — 6 lowercase base32 chars is ~30 b
 When two blocks do land on the same base handle, the second block's handle is lazily expanded one character at a time (from the ULID's Crockford base32 tail) until unique within the workspace, so both the winner and the loser stay resolvable through their own (distinct) handles.
 The on-disk sidecar still records the deterministic 6-char handle — the divergence lives in memory until a future reconcile rewrites it.
 Workspaces that ever expanded a handle to 7+ characters keep working forever because lookup goes through the in-memory handle, not the literal sidecar field.
+
+#### Emoji shortcodes (`:tada:`)
+
+`:shortcode:` is the GitHub / Slack / Discord / Logseq convention.
+The catalog is GitHub gemoji (~1800 shortcodes), backed by the [`emojis`](https://crates.io/crates/emojis) crate.
+
+```
+- shipped the new build :tada: :rocket:
+- meeting moved to friday :calendar:
+- need to fix this :fire: :warning:
+```
+
+**Disk form is the shortcode, never the glyph.**
+The `.md` always stores `:tada:`; only the renderer translates to 🎉 at display time.
+Same discipline as IDs (invariant #2): the file stays greppable, diffable, and font-independent across devices.
+
+Clients **never** retro-translate a pasted unicode codepoint back into a shortcode — multiple shortcodes can alias the same codepoint (`:+1:` and `:thumbsup:` both → 👍) and the round-trip would be lossy.
+A user who wants the shortcode form types it through the autocomplete (`:roc` + Tab → `:rocket:`).
+
+Catalog gate:
+the parser only tokenizes `:foo:` when `outl_md::emoji::shortcode_to_unicode("foo")` returns a glyph.
+Unknown runs (`:notarealemoji:`, `meeting at 14:00 :`) stay plain — there is no "looks-like-a-shortcode" fallback.
+
+Shortcode shape: `[a-z0-9_+-]+`, single token.
+Covers `:+1:`, `:-1:`, `:smile_cat:`, `:100:`.
+This narrow alphabet is also what makes URL boundaries safe without look-behind: every URL fragment that contains `:` (`https://example.com:8080/api`, `mailto:foo@bar.com`, `git@github.com:avelino/outl.git`) either has an invalid char inside the candidate run (`/`, `.`, `@`) or no closing `:` — `try_emoji` bails on its own.
 
 #### Mentions (`[[@name]]`)
 

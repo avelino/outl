@@ -63,10 +63,24 @@ public enum ToolbarMFU {
     public static func orderedActions(
         counts: [String: Int]
     ) -> [ToolbarAction] {
+        [ToolbarAction.pinnedFirst]
+            + orderedMiddleActions(counts: counts)
+            + [ToolbarAction.pinnedLast]
+    }
+
+    /// Same MFU ordering as `orderedActions`, but **excludes the
+    /// pinned slots** — only the middle (scrollable) range comes back.
+    /// The view layer uses this to populate the `UIScrollView`'s stack
+    /// while keeping `pinnedFirst` / `pinnedLast` as static buttons
+    /// outside the scroll, so they stay visible regardless of how far
+    /// the user scrolled the middle row.
+    public static func orderedMiddleActions(
+        counts: [String: Int]
+    ) -> [ToolbarAction] {
         let middle = ToolbarAction.defaultOrder.filter {
             $0 != ToolbarAction.pinnedFirst && $0 != ToolbarAction.pinnedLast
         }
-        let sorted = middle.sorted { a, b in
+        return middle.sorted { a, b in
             let ca = counts[a.rawValue] ?? 0
             let cb = counts[b.rawValue] ?? 0
             if ca != cb { return ca > cb }
@@ -75,7 +89,6 @@ public enum ToolbarMFU {
             let ib = ToolbarAction.defaultOrder.firstIndex(of: b) ?? 0
             return ia < ib
         }
-        return [ToolbarAction.pinnedFirst] + sorted + [ToolbarAction.pinnedLast]
     }
 
     /// Convenience overload that reads counts from `defaults` and
@@ -85,5 +98,13 @@ public enum ToolbarMFU {
         defaults: UserDefaults = .standard
     ) -> [ToolbarAction] {
         orderedActions(counts: readCounts(defaults: defaults))
+    }
+
+    /// Convenience overload of [`orderedMiddleActions(counts:)`] that
+    /// reads counts from `defaults`.
+    public static func orderedMiddleActions(
+        defaults: UserDefaults = .standard
+    ) -> [ToolbarAction] {
+        orderedMiddleActions(counts: readCounts(defaults: defaults))
     }
 }

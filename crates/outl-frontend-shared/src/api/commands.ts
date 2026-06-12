@@ -24,6 +24,18 @@ import type {
   WorkspaceSummary,
 } from "./types";
 
+/**
+ * One emoji match returned by {@link searchEmojis}. Mirrors
+ * `outl_md::emoji::EmojiHit` (`outl-md/src/emoji.rs`). `score` is
+ * stable enough for the autocomplete popup to sort on — not a public
+ * ranking guarantee.
+ */
+export interface EmojiHit {
+  shortcode: string;
+  glyph: string;
+  score: number;
+}
+
 // ---------------------------------------------------------------------------
 // Page / journal navigation
 // ---------------------------------------------------------------------------
@@ -54,6 +66,17 @@ export function searchPages(query: string): Promise<PageMeta[]> {
  */
 export function searchPersons(query: string): Promise<PageMeta[]> {
   return invoke<PageMeta[]>("search_persons", { query });
+}
+
+/**
+ * Search the GitHub gemoji catalog for shortcodes matching `query`.
+ * Ranks exact → prefix → substring; shorter shortcodes win ties.
+ * `limit` caps the result set (defaults to 8 — the size of the
+ * autocomplete popup in every client). Backed by
+ * `outl_md::emoji::search` so TUI / mobile / desktop rank identically.
+ */
+export function searchEmojis(query: string, limit = 8): Promise<EmojiHit[]> {
+  return invoke<EmojiHit[]>("outl_emoji_search", { query, limit });
 }
 
 export function openTodayJournal(): Promise<PageView> {

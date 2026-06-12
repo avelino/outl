@@ -89,6 +89,22 @@ impl App {
                     });
                 }
             }
+            Some((AutocompleteKind::Emoji, query)) => {
+                let candidates = candidates_for_emoji(&query);
+                // No catalog hits → close the popup. Without this the
+                // user typing `:xyz` would keep an empty box around
+                // until a closer `:` lands.
+                if candidates.is_empty() {
+                    self.autocomplete = None;
+                } else {
+                    self.autocomplete = Some(AutocompleteState {
+                        kind: AutocompleteKind::Emoji,
+                        query,
+                        candidates,
+                        selected: 0,
+                    });
+                }
+            }
             None => {
                 self.autocomplete = None;
             }
@@ -254,6 +270,7 @@ impl App {
                 AutocompleteKind::BlockRef => 2 + ac.query.chars().count(), // `((query`
                 AutocompleteKind::Tag => 1 + ac.query.chars().count(),     // `#query`
                 AutocompleteKind::Mention => 1 + ac.query.chars().count(), // `@query` (spaces OK)
+                AutocompleteKind::Emoji => 1 + ac.query.chars().count(),   // `:query`
                 AutocompleteKind::SlashCommand => unreachable!("handled above"),
             };
             // Delete the trigger + query characters before the cursor.
@@ -275,6 +292,13 @@ impl App {
                     // `choice` is the person's title (no `@`). The `@`
                     // belongs to the link affordance, not the page identity.
                     buffer.insert_str(&format!("[[@{choice}]]"));
+                }
+                AutocompleteKind::Emoji => {
+                    // `choice` is the shortcode without `:`s. Canonical
+                    // disk form is `:shortcode:` so the renderer (TUI
+                    // pretty render, MarkdownInline.tsx) translates to
+                    // the glyph at display time.
+                    buffer.insert_str(&format!(":{choice}:"));
                 }
                 AutocompleteKind::SlashCommand => unreachable!("handled above"),
             }
@@ -329,6 +353,10 @@ impl App {
         }
     }
 
+    // (Emoji candidates are stateless — the catalog is static, no
+    // workspace lookup. Lives as a free function below so the impl
+    // block stays focused on workspace-aware candidates.)
+
     /// Slash branch of [`accept_autocomplete`]: erase `/<query>` from
     /// the buffer, then dispatch.
     ///
@@ -367,10 +395,26 @@ impl App {
     }
 }
 
+/// Emoji shortcode candidates for the `:shortcode` autocomplete.
+///
+/// Stateless wrapper over `outl_md::emoji::search`. Returns the
+/// shortcodes only — the popup row renders the glyph by re-resolving
+/// the shortcode through `outl_md::emoji::shortcode_to_unicode` so the
+/// candidate type stays `Vec<String>` (same as every other trigger).
+fn candidates_for_emoji(q: &str) -> Vec<String> {
+    if q.is_empty() {
+        return Vec::new();
+    }
+    outl_md::emoji::search(q, 8)
+        .into_iter()
+        .map(|hit| hit.shortcode)
+        .collect()
+}
+
 /// Look back from `cursor` over `chars` to find an open `[[` / `#` /
-/// `/` / `@` trigger plus the query typed after it. Returns `None` if
-/// no trigger is active (cursor outside any open token, or query
-/// contains chars that close it).
+/// `/` / `@` / `:` trigger plus the query typed after it. Returns
+/// `None` if no trigger is active (cursor outside any open token, or
+/// query contains chars that close it).
 pub(crate) fn detect_trigger(chars: &[char], cursor: usize) -> Option<(AutocompleteKind, String)> {
     if cursor == 0 {
         return None;
@@ -464,6 +508,32 @@ pub(crate) fn detect_trigger(chars: &[char], cursor: usize) -> Option<(Autocompl
                 return None;
             }
             return Some((AutocompleteKind::SlashCommand, query));
+        }
+        if prev == ':' {
+            // Emoji shortcode — word-initial rule keeps the popup
+            // silent for mid-word `:` (`14:00`, `key::value`, URLs).
+            let at_start = i == 1;
+            let preceded_by_space = i >= 2 && chars[i - 2].is_whitespace();
+            if !(at_start || preceded_by_space) {
+                return None;
+            }
+            let query: String = chars[i..cursor].iter().collect();
+            // Reject queries that aren't shortcode-shaped (lowercase
+            // ASCII letters / digits / `_` / `+` / `-`) — first
+            // non-shortcode char closes the trigger. The first char
+            // after `:` must additionally be `[a-z]` so the popup
+            // stays silent on digit-only / symbol-only prefixes (URL
+            // ports like `:8080`, `://`, etc.).
+            let mut chars_iter = query.chars();
+            match chars_iter.next() {
+                None => return None, // empty `:` → defer to next keystroke
+                Some(c) if !c.is_ascii_lowercase() => return None,
+                _ => {}
+            }
+            if chars_iter.any(|c| !outl_md::emoji::is_valid_shortcode(&c.to_string())) {
+                return None;
+            }
+            return Some((AutocompleteKind::Emoji, query));
         }
         // Whitespace or `]` ends the search without finding a trigger.
         if prev.is_whitespace() || prev == ']' {

@@ -7,6 +7,16 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Added
 
+- **`:shortcode:` emoji syntax + autocomplete across every client.**
+  The outl inline dialect now recognises GitHub-style gemoji shortcodes (`:tada:`, `:rocket:`, `:smile_cat:`, `:+1:`, `:100:`) and renders them as the unicode glyph (🎉, 🚀, 😸, 👍, 💯) on every read surface.
+  The catalog is the [`emojis`](https://crates.io/crates/emojis) crate (Unicode CLDR + GitHub aliases, ~1800 shortcodes) so `outl_md::emoji::search` is the one ranking source TUI, mobile, and desktop share through a single `outl_emoji_search` Tauri command — no parallel index on the JS side.
+  **Disk form is always the shortcode literal** (`:tada:`, never 🎉) so `.md` files stay greppable, diffable, font-independent, and safe across iCloud / Syncthing.
+  The parser only tokenises `:foo:` when the catalog recognises `foo`; unknown runs (`:notarealemoji:`, `meeting at 14:00 :`) stay plain.
+  URL boundaries fall out for free — the strict `[a-z0-9_+-]+` shape + catalog gate reject `https://example.com:8080/api`, `mailto:foo@bar.com`, and `git@github.com:avelino/outl.git` without a look-behind pass.
+  Typing `:roc` inside any block opens a popup with the top eight matches (`outl_md::emoji::search`, exact → prefix → substring, shorter shortcodes win ties); `Tab`/`Enter` commits the canonical `:rocket:` form into the buffer.
+  Wired into `outl-tui` (`AutocompleteKind::Emoji` + the existing overlay machinery), `outl-mobile` (UIKit chip strip via `buildEmojiShowMessage`), and `outl-desktop` (floating `EmojiSuggestPopup` under the textarea, parallel to `RefSuggestPopup`).
+  The shared `@outl/shared/autocomplete::detectEmojiContext` + `applyEmojiSuggestion` own the trigger detection and splice so the three GUI surfaces stay byte-identical.
+  See `docs/markdown-format.md` § "Emoji shortcodes" for the full dialect contract.
 - **`@` mention autocomplete** — typing `@` in any block opens a person picker filtered to pages with the `type:: person` page-level property, fuzzy-matched against the typed name.
   Accepting a candidate inserts `[[@name]]`, a regular wikilink whose `@` is the link affordance only (page identity stays clean, slug has no `@`).
   Composite names like `@Thiago Avelino` work because the autocomplete query allows spaces.

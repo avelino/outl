@@ -17,7 +17,8 @@ use serde::Serialize;
 use tauri::State;
 use tracing::warn;
 
-use crate::{build_page_view, parse_node_id, with_ws_mut, AppState, PageView};
+use crate::helpers::{build_page_view, parse_node_id, with_ws_mut};
+use crate::state::{AppState, PageView};
 
 /// Wire reply for `run_code_block`. Adds the per-client [`PageView`]
 /// to the shared [`RunCodeBlockOutcome`] so the frontend re-renders

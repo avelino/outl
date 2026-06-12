@@ -27,6 +27,7 @@ import {
   previousDay,
   reloadWorkspace,
   runCodeBlock,
+  searchEmojis,
   searchPages,
   searchPersons,
   setBlockCollapsed,
@@ -41,7 +42,9 @@ import {
   rawTextWithTodo,
 } from "../lib/outline";
 import {
+  applyEmojiSuggestion,
   applySuggestion,
+  detectEmojiContext,
   detectRefContext,
   withCreateNewPersonCandidate,
 } from "@outl/shared/autocomplete";
@@ -55,6 +58,7 @@ import { withTimeout } from "../lib/async";
 const EDIT_TIMEOUT_MS = 8000;
 import {
   HIDE_MESSAGE,
+  buildEmojiShowMessage,
   buildShowMessage,
   registerPickedCallback,
   setNativeSuggesterState,
@@ -218,9 +222,25 @@ export function Journal() {
    * into here.
    */
   function registerNativeSuggesterBridge() {
-    const cleanup = registerPickedCallback((slug, _kind) => {
+    const cleanup = registerPickedCallback((slug, kind) => {
       const el = activeTextareaSignal();
       if (!el) return;
+      // Emoji branch: the chip strip published `:shortcode:` candidates,
+      // tap returns the shortcode. Use `detectEmojiContext` (the same
+      // trigger detector the effect below ran) + `applyEmojiSuggestion`
+      // so the disk form stays the canonical `:shortcode:` literal.
+      if (kind === "emoji") {
+        const ctx = detectEmojiContext(el.value, el.selectionStart ?? 0);
+        if (!ctx) return;
+        const result = applyEmojiSuggestion(el.value, ctx, slug);
+        const insert = result.value.slice(ctx.openIndex, result.caret);
+        spliceText(el, ctx.openIndex, ctx.replaceEnd, insert);
+        parkCaret(el, result.caret);
+        setDraft(el.value);
+        parkCaret(el, result.caret);
+        setNativeSuggesterState(null);
+        return;
+      }
       const ctx = detectRefContext(el.value, el.selectionStart ?? 0);
       if (!ctx) return;
       // Mention sugar: materialise the person page in the backend
@@ -260,7 +280,30 @@ export function Journal() {
         }
         return;
       }
-      const ctx = detectRefContext(el.value, el.selectionStart ?? text.length);
+      const cursor = el.selectionStart ?? text.length;
+      // Emoji takes precedence over ref detection because both can be
+      // active at the same caret position (a `:` typed inside a stray
+      // `[[…` would otherwise stay invisible). Bail to the ref branch
+      // only when no `:shortcode` trigger is open.
+      const emojiCtx = detectEmojiContext(el.value, cursor);
+      if (emojiCtx) {
+        const key = `emoji:${emojiCtx.query}`;
+        if (key === lastQuery) return;
+        lastQuery = key;
+        const token = ++queryToken;
+        // `limit: 8` mirrors every other client's autocomplete cap so
+        // the chip strip doesn't overflow on long substring queries.
+        void searchEmojis(emojiCtx.query, 8).then((hits) => {
+          if (token !== queryToken) return;
+          if (hits.length === 0) {
+            setNativeSuggesterState(HIDE_MESSAGE);
+            return;
+          }
+          setNativeSuggesterState(buildEmojiShowMessage(hits));
+        });
+        return;
+      }
+      const ctx = detectRefContext(el.value, cursor);
       // `page` → fuzzy over every page; `mention` → fuzzy over
       // persons only. Block-ref autocompletion stays out of this path.
       if (!ctx || (ctx.kind !== "page" && ctx.kind !== "mention")) {
@@ -270,8 +313,9 @@ export function Journal() {
         }
         return;
       }
-      if (ctx.query === lastQuery) return;
-      lastQuery = ctx.query;
+      const key = `${ctx.kind}:${ctx.query}`;
+      if (key === lastQuery) return;
+      lastQuery = key;
       const token = ++queryToken;
       const fetcher = ctx.kind === "mention" ? searchPersons : searchPages;
       const mention = ctx.kind === "mention";

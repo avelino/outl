@@ -322,6 +322,14 @@ pub(crate) enum AutocompleteKind {
     /// Unlike `Tag`, the query **allows spaces** so composite names
     /// like `@Thiago Avelino` work.
     Mention,
+    /// User typed `:` at the start of a word or after whitespace,
+    /// followed by `[a-z]`. Candidates are shortcodes ranked by
+    /// `outl_md::emoji::search`; the popup row shows the glyph on the
+    /// left and `:shortcode:` on the right. On accept the trigger +
+    /// query are replaced with the canonical `:shortcode:` form (the
+    /// `.md` always stores the shortcode literal, never the glyph —
+    /// see `docs/markdown-format.md` § "Emoji shortcodes").
+    Emoji,
 }
 
 #[derive(Debug)]

@@ -11,11 +11,23 @@ outl-md                      (.md parse/render, sidecar)
 outl-actions                 (workspace operations + SyncEngine, shared with TUI)
    ↑
 outl-mobile (this crate)
-   ├── icloud_path.rs        (NSFileManager bridge — iOS-only)
-   ├── lib.rs                (Tauri commands: parse args → outl-actions → render)
-   ├── gen/apple/.../main.mm (NSMetadataQuery + NSFileCoordinator iCloud watcher)
-   └── (frontend in ../src)  (Solid components, Tailwind, Tauri bridge)
+   ├── src-tauri/src/
+   │   ├── lib.rs                  (mod decls + run())
+   │   ├── state.rs                (AppState, PageView, WorkspaceSummary, CreateBlockReply, ERR_LOADING)
+   │   ├── helpers.rs              (parse_node_id / parse_date / with_ws* / build_page_view / finish_in_page*)
+   │   ├── workspace_open.rs       (resolve_storage_root, spawn_workspace_opener, reconcile_orphan_md — iCloud-specific)
+   │   ├── icloud_path.rs          (NSFileManager bridge — iOS-only)
+   │   └── commands/               (Tauri command surface — split mirrors outl-desktop)
+   │       ├── mod.rs
+   │       ├── workspace.rs        (workspace_stats, reload_workspace)
+   │       ├── page.rs             (list_all_pages / search_pages / search_persons / outl_emoji_search / open_* / *_day / resolve_ref / legacy compat shims)
+   │       ├── block.rs            (create_block / edit_block / toggle_todo / toggle_quote / delete_block / indent_block / outdent_block / move_block_* / set_block_collapsed / paste_markdown_at)
+   │       └── exec.rs             (run_code_block — thin shim over outl_actions::exec::run_code_block)
+   ├── gen/apple/.../main.mm       (NSMetadataQuery + NSFileCoordinator iCloud watcher)
+   └── (frontend in ../src)        (Solid components, Tailwind, Tauri bridge)
 ```
+
+The split mirrors **`crates/outl-desktop/src-tauri/`** 1:1 — `commands/{workspace,page,block,exec}.rs` + `helpers.rs` + `state.rs` + `workspace_open.rs` — so a contributor who knows one crate's layout immediately knows the other. The intentional divergences (mobile's `storage_root: PathBuf` instead of `Arc<Mutex<Option<PathBuf>>>`, the inline orphan reconcile in `spawn_workspace_opener`, no `settings.rs` / `fs_watcher.rs` / `commands/{shortcuts,theme}.rs`) live entirely inside `workspace_open.rs` + `state.rs` so the command files read identically.
 
 The op log backend is the shared `outl_core::storage::JsonlStorage`; there is no `icloud_storage.rs` because the only iCloud-specific work is resolving the ubiquity container path (via `icloud_path.rs`) and forcing peer-file materialisation before reads (via `main.mm`).
 The storage trait stays generic; the transport gets handled outside it.

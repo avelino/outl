@@ -30,7 +30,8 @@ Treat matching with the same paranoia as the CRDT.
   The TUI re-exports them through a one-line shim at `outl-tui/src/outline_ops.rs`; the mobile client consumes them directly.
   **Insert helpers clamp**: `insert_sibling_after/before` clamp the computed position to `siblings.len()` instead of panicking when a caller passes a path the live tree no longer satisfies (typical case: page parsed to zero blocks because its content didn't start with a `- ` marker, but the TUI's `selected` cursor defaulted to `[0]`).
   Falling back to "append at the end" is the right shape — the user's intent ("create a new block") is satisfied, no data is lost.
-- **Inline tokenization** (`inline.rs`) — `**bold**`, `[[refs]]`, `#tags`, `((blk-XXXXXX))`, `!((blk-XXXXXX))` — and `ref_at_cursor` (resolves to `RefTarget::Page`, `Journal`, `Tag`, or `Block`).
+- **Emoji catalog** (`emoji.rs`) — GitHub gemoji catalog (backed by the [`emojis`] crate). `shortcode_to_unicode("tada") → Some("🎉")` is the one-way resolver every renderer uses; `search(query, limit) → Vec<EmojiHit>` powers the `:shortcode:` autocomplete shared by TUI / mobile / desktop through the `outl_emoji_search` Tauri command. The parser only tokenizes `:foo:` when `shortcode_to_unicode` finds `foo`, so unknown input (`:notarealemoji:`, `meeting at 14:00`) stays plain. **Never retro-translate `glyph → shortcode`** — multiple shortcodes can alias the same codepoint (`:+1:` and `:thumbsup:` both → 👍) so the disk form would become lossy.
+- **Inline tokenization** (`inline.rs`) — `**bold**`, `[[refs]]`, `#tags`, `((blk-XXXXXX))`, `!((blk-XXXXXX))`, `:shortcode:` — and `ref_at_cursor` (resolves to `RefTarget::Page`, `Journal`, `Tag`, or `Block`).
   **UI-agnostic.** TUI, future Tauri GUI, and mobile clients all consume the same `InlineTok` / `RefTarget` types and map them to their own primitives (`Span`, HTML, `AttributedString`, `AnnotatedString`). Two forms:
   - `InlineTok<'a>` + `tokenize` — borrowed, zero-copy. Use inside Rust where the source string outlives the tokens.
   - `InlineToken` (owned) + `tokenize_owned` — Serde-friendly, suitable for wire payloads. `outl-actions` attaches the result to `OutlineNode.tokens` so mobile renders without a TS tokenizer. Adding a variant to `InlineTok` requires adding the matching variant to `InlineToken` plus the conversion in `InlineToken::from_borrowed` in the same change.
@@ -149,7 +150,8 @@ src/
 ├── sidecar.rs      # read/write .outl JSON, derive_ref_handle, content_hash
 ├── matching.rs     # 3-level matching algorithm
 ├── diff.rs         # AST diff → Op sequence (takes old_blocks to preserve ref_handle)
-├── inline.rs       # InlineTok (Plain/Bold/.../BlockRef/Embed), RefTarget, ref_at_cursor
+├── inline.rs       # InlineTok (Plain/Bold/.../BlockRef/Embed/Emoji), RefTarget, ref_at_cursor
+├── emoji.rs        # shortcode_to_unicode, search, is_valid_shortcode, EmojiHit
 ├── lang.rs         # canonical(fence) — alias table shared by outl-exec + frontend syntax highlighter
 ├── index.rs        # WorkspaceIndex — page-level + block-level facade
 ├── block_index.rs  # BlockEntry, BlockReference, BlockIndex (id ↔ handle ↔ reverse refs)

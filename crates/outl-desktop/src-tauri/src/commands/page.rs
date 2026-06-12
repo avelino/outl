@@ -59,6 +59,21 @@ pub(crate) fn search_persons(
     with_ws(&state, |ws| Ok(search_persons_action(ws, &query)))
 }
 
+/// Search the GitHub gemoji catalog for shortcodes matching `query`.
+/// Powers the `:shortcode:` autocomplete in the desktop's block editor.
+/// Wraps `outl_md::emoji::search` so the TUI / mobile / desktop rank
+/// identically — no parallel catalog index lives in the frontend.
+///
+/// Returns up to `limit` hits. Empty / whitespace-only query short-
+/// circuits to an empty vec (matches the helper's contract).
+#[tauri::command]
+pub(crate) fn outl_emoji_search(
+    query: String,
+    limit: usize,
+) -> Result<Vec<outl_md::emoji::EmojiHit>, String> {
+    Ok(outl_md::emoji::search(&query, limit))
+}
+
 #[tauri::command]
 pub(crate) fn open_today_journal(state: State<'_, AppState>) -> Result<PageView, String> {
     let root = storage_root_or_err(&state)?;
