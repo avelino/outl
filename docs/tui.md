@@ -92,6 +92,7 @@ Esc commits (writes back to the `.md`), Enter commits + creates a new block.
 | `#` | Tag autocomplete |
 | `@` | Mention autocomplete — word-initial only (preceded by start-of-line or whitespace, so `a@b.com` doesn't fire). Lists pages where `type:: person` is set, fuzzy-matched against the typed name. Composite names allow spaces (`@Thiago Avelino` is one query, not a tag terminating at the space). When no existing person matches, the typed text is offered as a "create new" candidate; accepting it materialises the page with `type:: person` set. Insert produces `[[@name]]`. |
 | `((` | Block reference autocomplete — fuzzy-match on block text, inserts `((blk-XXXXXX))`. Empty query lists newest-first (NodeId descending = ULID time order) so the popup is deterministic and the same eight rows show on every keystroke. |
+| `:` | Emoji shortcode autocomplete — word-initial only (preceded by start-of-line or whitespace, so `14:00`, `key::value`, and `https://` don't fire). Backed by `outl_md::emoji::search` (GitHub gemoji catalog, ~1800 shortcodes). Popup row shows `glyph  :shortcode:`; accept inserts the canonical `:shortcode:` form into the buffer (the `.md` always stores the shortcode literal, never the codepoint — see `docs/markdown-format.md` § "Emoji shortcodes"). The pretty render translates `:shortcode:` to the unicode glyph; the editing row stays raw so cursor columns match source bytes 1:1. |
 | `↑` / `↓` in popup | Navigate completion |
 | `Enter` / `Tab` in popup | Accept completion |
 | `Esc` in popup | Cancel completion |

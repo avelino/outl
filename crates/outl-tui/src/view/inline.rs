@@ -226,6 +226,17 @@ fn render_markdown_inline_impl(
                     }
                 }
             }
+            InlineTok::Emoji { shortcode } => {
+                // Pretty render: just the glyph. Defensive fall-back
+                // to the literal `:shortcode:` if the catalog misses
+                // (parser pre-validates, so this is dead code in
+                // practice — but the day a peer ships an unknown
+                // shortcode the user should see it, not an empty span).
+                match outl_md::emoji::shortcode_to_unicode(shortcode) {
+                    Some(glyph) => out.push(Span::raw(glyph.to_string())),
+                    None => out.push(Span::raw(format!(":{shortcode}:"))),
+                }
+            }
             InlineTok::Embed { handle } => {
                 // Cycle / recursion guard: when this call is itself
                 // rendering an embedded block's body, treat the inner
@@ -357,6 +368,17 @@ pub(crate) fn highlight_inline(text: &str, theme: &Theme) -> Vec<Span<'static>> 
                 out.push(Span::styled("!((".to_string(), dim));
                 out.push(Span::styled(handle.to_string(), theme.ref_link));
                 out.push(Span::styled("))".to_string(), dim));
+            }
+            InlineTok::Emoji { shortcode } => {
+                // Highlight (cursor-bearing) render keeps the source
+                // shape intact: `:` (dim) + shortcode (raw) + `:` (dim).
+                // Rendering only the glyph here would shift cursor
+                // columns by `len(:shortcode:) - 1` and break the
+                // 1:1 char-to-column mapping the rest of this function
+                // relies on.
+                out.push(Span::styled(":".to_string(), dim));
+                out.push(Span::raw(shortcode.to_string()));
+                out.push(Span::styled(":".to_string(), dim));
             }
         }
     }

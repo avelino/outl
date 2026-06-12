@@ -207,6 +207,10 @@ Why the divergence from the TUI: the TUI's Normal mode has a character cursor, s
 The desktop's Normal mode only has a selected block — an earlier handler approximated "under cursor" as "first `[[ref]]` in the block", which made every ref-carrying block impossible to edit via `Enter`.
 On the desktop, **following a ref is the click on the token** (`onRefClick` in `OutlineView`); `Enter` means edit.
 
+### `:shortcode:` emoji autocomplete
+
+While the caret sits inside an open `:shortcode` trigger, `BlockRow` shows a floating popup (`EmojiSuggestPopup`, anchored under the textarea — same pattern as `RefSuggestPopup`). It reuses `detectEmojiContext` / `applyEmojiSuggestion` from `@outl/shared/autocomplete` and the `searchEmojis` command (`outl_emoji_search` Tauri side, backed by `outl_md::emoji::search`). `↑`/`↓` move the highlight, `Enter`/`Tab` accept (inserting the canonical `:shortcode:` form into the buffer — the `.md` stores the shortcode literal, never the codepoint), `Esc` closes the popup (a second `Esc` then commits the block), and clicking a row picks it (via `onMouseDown` + `preventDefault`). The emoji popup takes precedence over the ref popup at the same caret; the two never co-exist because `detectEmojiContext` only triggers on word-initial `:[a-z]`. No keyboard shortcut lives in `outl-shortcuts` for this — it's pure trigger-detection inside the textarea.
+
 ### `[[page]]` ref autocomplete
 
 While the caret sits inside an open `[[…]]`, `BlockRow` shows a floating page-suggestion popup (`RefSuggestPopup`, anchored under the textarea). It reuses the shared `detectRefContext` / `applySuggestion` helpers (`@outl/shared/autocomplete`) and the `search_pages` command the `Cmd+P` picker already calls — no parallel implementation. `↑`/`↓` move the highlight, `Enter`/`Tab` accept (inserting the page title, or the ISO slug for journals), `Esc` closes the popup (a second `Esc` then commits the block), and clicking a row picks it (via `onMouseDown` + `preventDefault` so the textarea's blur-commit doesn't fire first). Block refs (`((…))`) are intentionally not suggested yet — separate feature.

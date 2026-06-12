@@ -62,8 +62,26 @@ public final class OutlToolbarView: UIView {
 
     // MARK: - Subviews
 
+    /// Visual capsule background — single rounded pill behind
+    /// `leftPinned`, `scroll`, and `rightPinned` so the three areas
+    /// read as one toolbar.
     private let capsule = UIView()
+    /// Always-visible holder for `ToolbarAction.pinnedFirst` (`.newLine`).
+    /// Lives on the left edge of the capsule, outside the scroll view,
+    /// so the `+` button doesn't drift off-screen when the user scrolls
+    /// the middle row.
+    private let leftPinned = UIStackView()
+    /// Always-visible holder for `ToolbarAction.pinnedLast` (`.done`).
+    /// Mirrors `leftPinned` on the right edge — "Hide keyboard" stays
+    /// reachable from the thumb's resting position regardless of how
+    /// far the scroll moved.
+    private let rightPinned = UIStackView()
+    /// Horizontal scroll for the MFU-reordered middle range of actions.
+    /// Pinned actions are deliberately **outside** this view so they
+    /// stay visible at the edges; only the middle scrolls.
     private let scroll = UIScrollView()
+    /// Inner stack of the scroll — populated with the middle actions
+    /// (everything that isn't `pinnedFirst` / `pinnedLast`).
     private let stack = UIStackView()
 
     // MARK: - Init
@@ -92,7 +110,7 @@ public final class OutlToolbarView: UIView {
     private func setupViews() {
         capsule.translatesAutoresizingMaskIntoConstraints = false
         capsule.layer.cornerRadius = 22
-        capsule.clipsToBounds = false
+        capsule.clipsToBounds = true
         capsule.backgroundColor = UIColor { trait in
             trait.userInterfaceStyle == .dark
                 ? UIColor(white: 0.18, alpha: 0.98)
@@ -102,8 +120,26 @@ public final class OutlToolbarView: UIView {
         capsule.layer.shadowOffset = CGSize(width: 0, height: 2)
         capsule.layer.shadowRadius = 8
         capsule.layer.shadowOpacity = 0.12
+        // Shadow ignores the clipsToBounds = true on the layer itself —
+        // we want the capsule to clip the scroll view's content, but
+        // the drop shadow must paint outside, so masksToBounds stays
+        // off (default).
+        capsule.layer.masksToBounds = false
         addSubview(capsule)
 
+        // ── Pinned containers ──────────────────────────────────────
+        // Both stacks hold exactly one button each (the pinned action),
+        // but UIStackView gives us free centering + the same spacing
+        // rules as the middle stack so the visual rhythm matches.
+        for pinned in [leftPinned, rightPinned] {
+            pinned.axis = .horizontal
+            pinned.alignment = .center
+            pinned.spacing = 0
+            pinned.translatesAutoresizingMaskIntoConstraints = false
+            capsule.addSubview(pinned)
+        }
+
+        // ── Scrollable middle ─────────────────────────────────────
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.showsHorizontalScrollIndicator = false
         scroll.showsVerticalScrollIndicator = false
@@ -111,7 +147,10 @@ public final class OutlToolbarView: UIView {
         scroll.alwaysBounceVertical = false
         scroll.bounces = false
         scroll.scrollsToTop = false
-        scroll.layer.cornerRadius = 22
+        // No cornerRadius / clipsToBounds here: the scroll lives in the
+        // middle of the capsule, never touches the rounded corners. The
+        // capsule itself clips so middle-row content can't bleed under
+        // the pinned buttons during a scroll-overshoot.
         scroll.clipsToBounds = true
         capsule.addSubview(scroll)
 
@@ -127,13 +166,26 @@ public final class OutlToolbarView: UIView {
             capsule.centerYAnchor.constraint(equalTo: centerYAnchor),
             capsule.heightAnchor.constraint(equalToConstant: 44),
 
-            scroll.leadingAnchor.constraint(equalTo: capsule.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: capsule.trailingAnchor),
+            // Pinned left: flush against the capsule's left edge.
+            leftPinned.leadingAnchor.constraint(equalTo: capsule.leadingAnchor, constant: 8),
+            leftPinned.topAnchor.constraint(equalTo: capsule.topAnchor),
+            leftPinned.bottomAnchor.constraint(equalTo: capsule.bottomAnchor),
+
+            // Pinned right: flush against the capsule's right edge.
+            rightPinned.trailingAnchor.constraint(equalTo: capsule.trailingAnchor, constant: -8),
+            rightPinned.topAnchor.constraint(equalTo: capsule.topAnchor),
+            rightPinned.bottomAnchor.constraint(equalTo: capsule.bottomAnchor),
+
+            // Scroll sits between the two pinned stacks. The `4pt`
+            // gap on each side keeps the first/last scrolled buttons
+            // from kissing the pinned buttons during a scroll.
+            scroll.leadingAnchor.constraint(equalTo: leftPinned.trailingAnchor, constant: 4),
+            scroll.trailingAnchor.constraint(equalTo: rightPinned.leadingAnchor, constant: -4),
             scroll.topAnchor.constraint(equalTo: capsule.topAnchor),
             scroll.bottomAnchor.constraint(equalTo: capsule.bottomAnchor),
 
-            stack.leadingAnchor.constraint(equalTo: scroll.leadingAnchor, constant: 8),
-            stack.trailingAnchor.constraint(equalTo: scroll.trailingAnchor, constant: -8),
+            stack.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
             stack.topAnchor.constraint(equalTo: scroll.topAnchor),
             stack.bottomAnchor.constraint(equalTo: scroll.bottomAnchor),
             stack.heightAnchor.constraint(equalTo: scroll.heightAnchor),
@@ -141,13 +193,21 @@ public final class OutlToolbarView: UIView {
     }
 
     private func rebuildButtons() {
-        for view in stack.arrangedSubviews {
-            stack.removeArrangedSubview(view)
-            view.removeFromSuperview()
+        // 1. Clear all three containers.
+        for container in [leftPinned, stack, rightPinned] {
+            for view in container.arrangedSubviews {
+                container.removeArrangedSubview(view)
+                view.removeFromSuperview()
+            }
         }
-        for action in ToolbarMFU.orderedActions() {
+        // 2. Pinned left (`pinnedFirst` = `.newLine`).
+        leftPinned.addArrangedSubview(makeButton(for: ToolbarAction.pinnedFirst))
+        // 3. Middle (MFU-reordered, pinned slots excluded).
+        for action in ToolbarMFU.orderedMiddleActions() {
             stack.addArrangedSubview(makeButton(for: action))
         }
+        // 4. Pinned right (`pinnedLast` = `.done`, "Hide keyboard").
+        rightPinned.addArrangedSubview(makeButton(for: ToolbarAction.pinnedLast))
     }
 
     private func makeButton(for action: ToolbarAction) -> UIButton {

@@ -9,13 +9,21 @@ import {
   stripQuoteFromTokens,
 } from "@outl/shared/markdown";
 import {
+  applyEmojiSuggestion,
   applySuggestion,
   autoDeletePair,
   autoPairBracket,
+  detectEmojiContext,
   detectRefContext,
   withCreateNewPersonCandidate,
 } from "@outl/shared/autocomplete";
-import { openRef, searchPages, searchPersons } from "@outl/shared/api/commands";
+import {
+  type EmojiHit,
+  openRef,
+  searchEmojis,
+  searchPages,
+  searchPersons,
+} from "@outl/shared/api/commands";
 import { HighlightedCode } from "@outl/shared/highlight";
 import { looksLikeOutline, utf16OffsetToCharOffset } from "@outl/shared/paste";
 
@@ -86,6 +94,13 @@ export function BlockRow(props: {
   // non-empty.
   const [suggestions, setSuggestions] = createSignal<PageMeta[]>([]);
   const [suggestIndex, setSuggestIndex] = createSignal(0);
+  // Emoji shortcode popup. Lives alongside `suggestions` instead of
+  // being merged into one heterogeneous list because the two have
+  // different cell shapes (emoji shows `glyph :shortcode:`, ref shows
+  // icon + title) and the keyboard handlers are simpler when only one
+  // popup is active at a time.
+  const [emojiSuggestions, setEmojiSuggestions] = createSignal<EmojiHit[]>([]);
+  const [emojiIndex, setEmojiIndex] = createSignal(0);
   // `query` last sent to the backend — skip redundant round-trips when
   // the caret moves without changing the in-ref text (mirrors mobile's
   // `lastQuery` guard). `null` means "not in a ref right now".
@@ -105,6 +120,8 @@ export function BlockRow(props: {
     lastQuery = null;
     if (suggestions().length > 0) setSuggestions([]);
     setSuggestIndex(0);
+    if (emojiSuggestions().length > 0) setEmojiSuggestions([]);
+    setEmojiIndex(0);
   }
 
   /**
@@ -118,17 +135,51 @@ export function BlockRow(props: {
   function refreshSuggest() {
     const ta = textareaRef;
     if (!ta) return closeSuggest();
-    const ctx = detectRefContext(ta.value, ta.selectionStart ?? 0);
+    const cursor = ta.selectionStart ?? 0;
+    // Emoji takes precedence over ref detection: a `:` typed inside a
+    // stray `[[…` window must still surface the glyph popup. The two
+    // triggers don't overlap on real prose because `:` is rejected on
+    // word-internal positions.
+    const emojiCtx = detectEmojiContext(ta.value, cursor);
+    if (emojiCtx) {
+      const key = `emoji:${emojiCtx.query}`;
+      if (key === lastQuery) return;
+      lastQuery = key;
+      const token = ++searchToken;
+      void searchEmojis(emojiCtx.query, 8)
+        .then((hits) => {
+          if (token !== searchToken) return;
+          // Stale-response guard: the caret may have left the trigger
+          // while we were waiting for the catalog.
+          const cur = textareaRef
+            ? detectEmojiContext(
+                textareaRef.value,
+                textareaRef.selectionStart ?? 0,
+              )
+            : null;
+          if (!cur || cur.query !== emojiCtx.query) return;
+          // Make sure the ref popup isn't lingering from a previous
+          // trigger that is no longer active at this caret.
+          if (suggestions().length > 0) setSuggestions([]);
+          setEmojiSuggestions(hits);
+          setEmojiIndex(0);
+        })
+        .catch(() => closeSuggest());
+      return;
+    }
+    const ctx = detectRefContext(ta.value, cursor);
     // `page` → fuzzy over every page; `mention` → fuzzy over persons
     // only. Block-ref autocompletion is intentionally skipped here.
     if (!ctx || (ctx.kind !== "page" && ctx.kind !== "mention")) {
       return closeSuggest();
     }
-    if (ctx.query === lastQuery) return;
-    lastQuery = ctx.query;
+    const key = `${ctx.kind}:${ctx.query}`;
+    if (key === lastQuery) return;
+    lastQuery = key;
     const token = ++searchToken;
     const fetcher = ctx.kind === "mention" ? searchPersons : searchPages;
     const wantedKind = ctx.kind;
+    if (emojiSuggestions().length > 0) setEmojiSuggestions([]);
     void fetcher(ctx.query)
       .then((list) => {
         // Drop stale responses: the user kept typing (newer token) or
@@ -185,6 +236,22 @@ export function BlockRow(props: {
       });
     }
     const completion = applySuggestion(ta.value, ctx, replacement);
+    setDraft(completion.value);
+    ta.value = completion.value;
+    ta.setSelectionRange(completion.caret, completion.caret);
+    closeSuggest();
+    ta.focus();
+  }
+
+  /** Accept `hit`: replace the `:shortcode` trigger with the canonical
+   *  `:shortcode:` form. The disk stores the shortcode literal; the
+   *  renderer translates to the glyph at display time. */
+  function acceptEmojiSuggestion(hit: EmojiHit) {
+    const ta = textareaRef;
+    if (!ta) return;
+    const ctx = detectEmojiContext(ta.value, ta.selectionStart ?? 0);
+    if (!ctx) return closeSuggest();
+    const completion = applyEmojiSuggestion(ta.value, ctx, hit.shortcode);
     setDraft(completion.value);
     ta.value = completion.value;
     ta.setSelectionRange(completion.caret, completion.caret);
@@ -258,6 +325,41 @@ export function BlockRow(props: {
   }
 
   async function handleKeydown(e: KeyboardEvent) {
+    // Emoji popup takes precedence over the ref popup (they never
+    // co-exist, but checking first keeps the branching cheap).
+    const emoji = emojiSuggestions();
+    if (emoji.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        e.stopPropagation();
+        setEmojiIndex((i) => (i + 1) % emoji.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        e.stopPropagation();
+        setEmojiIndex((i) => (i - 1 + emoji.length) % emoji.length);
+        return;
+      }
+      if (
+        (e.key === "Enter" || e.key === "Tab") &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.shiftKey &&
+        !e.altKey
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        acceptEmojiSuggestion(emoji[emojiIndex()]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeSuggest();
+        return;
+      }
+    }
     // Ref-suggester navigation takes precedence while the popup is up:
     // arrows move the highlight, Enter/Tab accept, Esc closes the popup
     // (a *second* Esc then commits the block). stopPropagation keeps the
@@ -617,6 +719,12 @@ export function BlockRow(props: {
                 onHover={setSuggestIndex}
                 onPick={acceptSuggestion}
               />
+              <EmojiSuggestPopup
+                items={emojiSuggestions()}
+                activeIndex={emojiIndex()}
+                onHover={setEmojiIndex}
+                onPick={acceptEmojiSuggestion}
+              />
             </div>
           </Show>
             );
@@ -698,6 +806,57 @@ function RefSuggestPopup(props: {
                 </span>
                 <span class="truncate">
                   {page.kind === "journal" ? page.slug : page.title}
+                </span>
+              </button>
+            </li>
+          )}
+        </For>
+      </ul>
+    </Show>
+  );
+}
+
+/**
+ * Floating emoji-shortcode suggestion list shown while the caret is
+ * inside an open `:shortcode` trigger. Anchored just below the block's
+ * textarea — same pattern as `RefSuggestPopup`. The row shows the
+ * glyph on the left and the canonical `:shortcode:` form on the right
+ * so the user can scan by glyph but still see the literal that will
+ * land on disk.
+ */
+function EmojiSuggestPopup(props: {
+  items: EmojiHit[];
+  activeIndex: number;
+  onHover: (i: number) => void;
+  onPick: (hit: EmojiHit) => void;
+}) {
+  return (
+    <Show when={props.items.length > 0}>
+      <ul
+        class="absolute top-full left-0 z-30 mt-1 max-h-56 w-72 overflow-y-auto rounded-md border border-(--color-outl-border) bg-(--color-outl-bg-elev) py-1 text-[13px] shadow-lg"
+        role="listbox"
+      >
+        <For each={props.items}>
+          {(hit, i) => (
+            <li role="option" aria-selected={i() === props.activeIndex}>
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  props.onPick(hit);
+                }}
+                onMouseEnter={() => props.onHover(i())}
+                class={`flex w-full items-center gap-2 px-2 py-1 text-left ${
+                  i() === props.activeIndex
+                    ? "bg-(--color-outl-accent) text-(--color-outl-bg)"
+                    : "hover:bg-(--color-outl-bg)/50"
+                }`}
+              >
+                <span aria-hidden="true" class="shrink-0 text-base">
+                  {hit.glyph}
+                </span>
+                <span class="truncate font-mono text-[12px] opacity-80">
+                  :{hit.shortcode}:
                 </span>
               </button>
             </li>

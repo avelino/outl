@@ -33,7 +33,12 @@ export type InlineToken =
   | { kind: "ref"; value: string }
   | { kind: "tag"; value: string }
   | { kind: "blockref"; value: string }
-  | { kind: "embed"; value: string };
+  | { kind: "embed"; value: string }
+  // `:shortcode:` — GitHub gemoji shortcode. `shortcode` is the disk
+  // form (`"tada"`); `glyph` is the resolved unicode codepoint
+  // (`"🎉"`). The renderer shows the glyph and surfaces the shortcode
+  // for hover / `aria-label`. Mirrors `outl_md::InlineToken::Emoji`.
+  | { kind: "emoji"; shortcode: string; glyph: string };
 
 export interface BlockNode {
   id: string;

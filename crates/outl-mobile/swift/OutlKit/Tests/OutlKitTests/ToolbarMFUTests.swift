@@ -130,4 +130,49 @@ final class ToolbarMFUTests: XCTestCase {
         XCTAssertEqual(order[1], .italic)
         XCTAssertEqual(order.last, .done)
     }
+
+    // MARK: - Middle range (pinned-excluded)
+
+    /// `orderedMiddleActions` is what the view layer feeds into the
+    /// `UIScrollView`'s stack — `pinnedFirst` / `pinnedLast` are
+    /// rendered as static buttons outside the scroll, so they must
+    /// NOT appear here. Catches a regression where the middle stack
+    /// would otherwise render the `+` (newLine) twice (once outside
+    /// the scroll, once inside).
+    func testOrderedMiddleActionsExcludesPinned() {
+        let middle = ToolbarMFU.orderedMiddleActions(counts: [:])
+        XCTAssertFalse(middle.contains(ToolbarAction.pinnedFirst))
+        XCTAssertFalse(middle.contains(ToolbarAction.pinnedLast))
+        // Cardinality: every non-pinned action makes the cut.
+        let expectedCount = ToolbarAction.defaultOrder.count - 2
+        XCTAssertEqual(middle.count, expectedCount)
+    }
+
+    func testOrderedMiddleActionsHonoursCounts() {
+        // `code` is way more used than everything else; should land
+        // first in the middle range (i.e. visually right after the
+        // pinned `+`).
+        let middle = ToolbarMFU.orderedMiddleActions(counts: ["code": 10])
+        XCTAssertEqual(middle.first, .code)
+    }
+
+    func testOrderedMiddleActionsConvenienceReadsFromDefaults() {
+        ToolbarMFU.record(.bold, defaults: defaults)
+        let middle = ToolbarMFU.orderedMiddleActions(defaults: defaults)
+        XCTAssertEqual(middle.first, .bold)
+        XCTAssertFalse(middle.contains(.newLine))
+        XCTAssertFalse(middle.contains(.done))
+    }
+
+    /// Pinned + middle must reconstruct the full `orderedActions` list
+    /// — keeps the two APIs from drifting out of sync.
+    func testMiddlePlusPinnedEqualsOrderedActions() {
+        let counts: [String: Int] = ["italic": 3, "bold": 2]
+        let full = ToolbarMFU.orderedActions(counts: counts)
+        let reconstructed =
+            [ToolbarAction.pinnedFirst]
+            + ToolbarMFU.orderedMiddleActions(counts: counts)
+            + [ToolbarAction.pinnedLast]
+        XCTAssertEqual(full, reconstructed)
+    }
 }

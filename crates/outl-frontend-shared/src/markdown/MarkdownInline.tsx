@@ -199,6 +199,21 @@ export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
                 !{tok.value}
               </span>
             );
+          case "emoji":
+            // The backend's catalog gate guarantees `glyph` is set on
+            // every Emoji token. Defensive fall-back: if a peer ever
+            // ships an unknown shortcode (binary too old to know it),
+            // render the literal `:shortcode:` form so the user sees
+            // *something* instead of a blank span.
+            return (
+              <span
+                title={`:${tok.shortcode}:`}
+                aria-label={tok.shortcode}
+                class="mx-0.5"
+              >
+                {tok.glyph || `:${tok.shortcode}:`}
+              </span>
+            );
         }
       }}
     </For>

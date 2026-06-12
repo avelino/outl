@@ -73,7 +73,8 @@ The buffer carries the working text; on commit we replace the AST node's `.text`
 - Selected block is highlighted with a colored bullet.
 - In Insert mode, a `▏` caret marks cursor position inside the block.
 - In Normal mode on the selected block, a block cursor (white bg) sits on the character under `cursor_col`.
-- Other (non-focused) blocks render markdown prettily: `**bold**` shows as bold without asterisks, `*italic*` as italic, `~~strike~~` struck through, `` `code` `` in green, `[text](url)` blue-underlined, `[[ref]]` cyan-underlined (no brackets), `#tag` magenta-underlined, `((blk-XXXXXX))` resolves to the source block's text + page icon (orphan handles render dimmed).
+- Other (non-focused) blocks render markdown prettily: `**bold**` shows as bold without asterisks, `*italic*` as italic, `~~strike~~` struck through, `` `code` `` in green, `[text](url)` blue-underlined, `[[ref]]` cyan-underlined (no brackets), `#tag` magenta-underlined, `((blk-XXXXXX))` resolves to the source block's text + page icon (orphan handles render dimmed), `:shortcode:` renders as the unicode glyph (`:tada:` → 🎉; unknown shortcodes never tokenize so the literal stays visible).
+- The selected/editing block keeps `:` (dim) + shortcode (raw) + `:` (dim) so cursor columns match source bytes 1:1 — the pretty render is the only place the glyph appears.
 - `!((blk-XXXXXX))` — when a block contains a single embed token (whitespace OK around it) — expands the source block **and its children** read-only below the carrying block.
   Conventions:
   - Every embed row carries a `↳ ` prefix (root + descendants) so the expansion reads as one cohesive block.

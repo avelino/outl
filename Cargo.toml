@@ -57,6 +57,7 @@ yrs = "0.26"
 
 # Markdown
 comrak = { version = "0.52", default-features = false }
+emojis = "0.8"
 
 # TUI
 ratatui = "0.30"

@@ -39,6 +39,7 @@ pub(crate) fn render_autocomplete(
         AutocompleteKind::BlockRef => format!("(({}))", ac.query),
         AutocompleteKind::SlashCommand => format!("/{}", ac.query),
         AutocompleteKind::Mention => format!("@{}", ac.query),
+        AutocompleteKind::Emoji => format!(":{}", ac.query),
     };
     let items: Vec<ListItem<'_>> = ac
         .candidates
@@ -93,6 +94,17 @@ pub(crate) fn render_autocomplete(
                     ListItem::new(Line::from(vec![
                         Span::styled(format!("{c}{suffix}  "), style),
                         Span::styled(description.to_string(), app.theme.dim),
+                    ]))
+                }
+                AutocompleteKind::Emoji => {
+                    // `c` is the shortcode. Resolve to the glyph for
+                    // the leading column; the canonical shortcode stays
+                    // in the right column as the affordance the user
+                    // is searching by.
+                    let glyph = outl_md::emoji::shortcode_to_unicode(c).unwrap_or("");
+                    ListItem::new(Line::from(vec![
+                        Span::styled(format!("{glyph}  "), style),
+                        Span::styled(format!(":{c}:"), app.theme.dim),
                     ]))
                 }
             }

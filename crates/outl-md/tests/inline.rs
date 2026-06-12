@@ -309,3 +309,178 @@ fn ref_at_cursor_finds_second_block_ref_after_invalid_first() {
         other => panic!("expected Block, got {other:?}"),
     }
 }
+
+// --- emoji shortcodes -----------------------------------------------
+
+/// Find the first `Emoji` token's shortcode in a slice, or panic.
+fn emoji_shortcodes(toks: &[InlineTok<'_>]) -> Vec<String> {
+    toks.iter()
+        .filter_map(|t| match t {
+            InlineTok::Emoji { shortcode } => Some((*shortcode).to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn emoji_known_shortcode_tokenizes() {
+    let toks = tokenize("shipped :rocket: today");
+    assert_eq!(emoji_shortcodes(&toks), vec!["rocket"]);
+}
+
+#[test]
+fn emoji_unknown_shortcode_stays_plain() {
+    // Catalog miss: `:notarealemoji:` must not become a span — the
+    // whole text falls into Plain runs so the literal stays visible.
+    let toks = tokenize(":notarealemoji: tail");
+    assert!(
+        emoji_shortcodes(&toks).is_empty(),
+        "unknown shortcode should not tokenize, got {toks:?}"
+    );
+}
+
+#[test]
+fn emoji_with_underscore_works() {
+    let toks = tokenize("the :smile_cat: is cute");
+    assert_eq!(emoji_shortcodes(&toks), vec!["smile_cat"]);
+}
+
+#[test]
+fn emoji_with_plus_sign_works() {
+    // `:+1:` is gemoji; the `+` is part of the shortcode alphabet.
+    let toks = tokenize("LGTM :+1:");
+    assert_eq!(emoji_shortcodes(&toks), vec!["+1"]);
+}
+
+#[test]
+fn emoji_with_digits_only_works() {
+    // `:100:` — pins that digits-only shortcodes pass the alphabet
+    // check.
+    let toks = tokenize("nailed it :100:");
+    assert_eq!(emoji_shortcodes(&toks), vec!["100"]);
+}
+
+#[test]
+fn emoji_aliases_for_same_glyph_both_tokenize() {
+    // `:thumbsup:` and `:+1:` both → 👍. Each shortcode is preserved
+    // verbatim on disk (no canonicalization), so each appears in the
+    // token stream as itself.
+    let toks = tokenize(":thumbsup: and :+1:");
+    assert_eq!(emoji_shortcodes(&toks), vec!["thumbsup", "+1"]);
+}
+
+#[test]
+fn emoji_adjacent_no_space_both_tokenize() {
+    let toks = tokenize(":tada::rocket:");
+    assert_eq!(emoji_shortcodes(&toks), vec!["tada", "rocket"]);
+}
+
+#[test]
+fn emoji_at_start_of_block() {
+    let toks = tokenize(":tada: shipped");
+    assert!(matches!(toks.first(), Some(InlineTok::Emoji { shortcode }) if *shortcode == "tada"));
+}
+
+#[test]
+fn emoji_only_block() {
+    let toks = tokenize(":tada:");
+    assert_eq!(toks, vec![InlineTok::Emoji { shortcode: "tada" }]);
+}
+
+// --- URL boundary (mandatory per issue #65) -------------------------
+
+#[test]
+fn emoji_url_https_with_port_no_token() {
+    // `https://example.com:8080/api` — the `:8080:` shape never
+    // emerges because the run between `:`s contains `/` and `.`.
+    let toks = tokenize("see https://example.com:8080/api now");
+    assert!(
+        emoji_shortcodes(&toks).is_empty(),
+        "URL must not produce emoji tokens, got {toks:?}"
+    );
+}
+
+#[test]
+fn emoji_url_ftp_with_port_no_token() {
+    let toks = tokenize("ftp://host:21 for transfer");
+    assert!(emoji_shortcodes(&toks).is_empty());
+}
+
+#[test]
+fn emoji_mailto_no_token() {
+    // `mailto:foo@bar.com` — there is no closing `:` so try_emoji bails.
+    let toks = tokenize("write to mailto:foo@bar.com please");
+    assert!(emoji_shortcodes(&toks).is_empty());
+}
+
+#[test]
+fn emoji_git_ssh_url_no_token() {
+    let toks = tokenize("clone git@github.com:avelino/outl.git here");
+    assert!(emoji_shortcodes(&toks).is_empty());
+}
+
+#[test]
+fn emoji_url_and_real_emoji_in_same_line() {
+    // The real `:rocket:` must tokenize; the URL must not.
+    let toks = tokenize("shipped :rocket: see https://x.com:8080/api");
+    assert_eq!(emoji_shortcodes(&toks), vec!["rocket"]);
+}
+
+#[test]
+fn emoji_two_real_shortcodes_around_url() {
+    let toks = tokenize(":tada: https://x.com :fire:");
+    assert_eq!(emoji_shortcodes(&toks), vec!["tada", "fire"]);
+}
+
+// --- code-fence / inline-code isolation -----------------------------
+
+#[test]
+fn emoji_inside_inline_code_stays_literal() {
+    // The `Code` matcher fires first; whatever's between backticks
+    // is preserved verbatim and never tokenized.
+    let toks = tokenize("the literal `:smile:` here");
+    assert!(
+        emoji_shortcodes(&toks).is_empty(),
+        "emoji inside backticks must stay literal, got {toks:?}"
+    );
+    // And the Code token carries the raw shortcode.
+    let code = toks.iter().find_map(|t| match t {
+        InlineTok::Code { inner } => Some(*inner),
+        _ => None,
+    });
+    assert_eq!(code, Some(":smile:"));
+}
+
+// --- multi-byte adjacency -------------------------------------------
+
+#[test]
+fn emoji_between_multibyte_runs() {
+    // UTF-8 char-boundary correctness: scan must advance by
+    // `ch.len_utf8()` so a 2-byte char before / after doesn't shift
+    // the closing `:` index.
+    let toks = tokenize("café:fire:日本");
+    assert_eq!(emoji_shortcodes(&toks), vec!["fire"]);
+}
+
+// --- round-trip via inline_to_source --------------------------------
+
+#[test]
+fn emoji_inline_to_source_round_trip() {
+    use outl_md::inline::inline_to_source;
+    let original = "shipped :rocket: today :tada:!";
+    let toks = tokenize(original);
+    let back = inline_to_source(&toks);
+    assert_eq!(back, original);
+}
+
+// --- token round-trip without the `Emoji` matcher firing on prose ---
+
+#[test]
+fn emoji_lone_colon_does_not_tokenize() {
+    // Single `:` with no closer — stays plain.
+    let toks = tokenize("time: 14:00 meeting");
+    assert!(
+        emoji_shortcodes(&toks).is_empty(),
+        "non-shortcode colons must stay plain, got {toks:?}"
+    );
+}

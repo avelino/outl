@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyEmojiSuggestion,
   applySuggestion,
   autoClosePair,
   autoDeletePair,
   autoPairBracket,
+  detectEmojiContext,
   detectRefContext,
   insertPair,
   insertText,
@@ -343,5 +345,77 @@ describe("withCreateNewPersonCandidate", () => {
     const result = withCreateNewPersonCandidate(empty, "lerolero");
     expect(result).toHaveLength(1);
     expect(result[0]?.title).toBe("lerolero");
+  });
+});
+
+describe("detectEmojiContext", () => {
+  it("opens after `:[a-z]` at start of buffer", () => {
+    const ctx = detectEmojiContext(":roc", 4);
+    expect(ctx).toEqual({ query: "roc", openIndex: 0, replaceEnd: 4 });
+  });
+
+  it("opens after a space + `:[a-z]`", () => {
+    // value = "shipped :roc" — caret right after `c`.
+    const ctx = detectEmojiContext("shipped :roc", 12);
+    expect(ctx).toEqual({ query: "roc", openIndex: 8, replaceEnd: 12 });
+  });
+
+  it("opens after a newline + `:[a-z]`", () => {
+    const ctx = detectEmojiContext("\n:fi", 4);
+    expect(ctx).toEqual({ query: "fi", openIndex: 1, replaceEnd: 4 });
+  });
+
+  it("rejects mid-word `:` (URL boundary)", () => {
+    // `https://` — the `:` is preceded by `s` (alphanumeric), so the
+    // trigger should never open.
+    expect(detectEmojiContext("https:/", 7)).toBeNull();
+    expect(detectEmojiContext("see http:", 9)).toBeNull();
+    expect(detectEmojiContext("14:00", 5)).toBeNull();
+  });
+
+  it("rejects `:` followed by a non-letter (digits, symbols, slash)", () => {
+    // `:8080`, `:+1`, `://` — first char after `:` must be `[a-z]` so
+    // the popup stays silent for ports / URL fragments.
+    expect(detectEmojiContext(":8080", 5)).toBeNull();
+    expect(detectEmojiContext(":+1", 3)).toBeNull();
+    expect(detectEmojiContext(":/", 2)).toBeNull();
+  });
+
+  it("returns null when the caret is past a non-shortcode char", () => {
+    // Whitespace between the typed prefix and the caret closes the trigger.
+    expect(detectEmojiContext(":roc et", 7)).toBeNull();
+  });
+
+  it("returns null when no `:` is in the lookback window", () => {
+    expect(detectEmojiContext("hello world", 11)).toBeNull();
+  });
+
+  it("returns null when the query exceeds the lookback cap", () => {
+    // Cap is 32 chars. Query of 33 chars + `:` is 34 left of caret.
+    const long = ":" + "a".repeat(33);
+    expect(detectEmojiContext(long, long.length)).toBeNull();
+  });
+
+  it("opens with an empty query right after the `:` opener", () => {
+    // The catalog gate rejects `:[a-z]` requirement; the cursor sitting
+    // *on* the opener with nothing typed yet is technically empty.
+    expect(detectEmojiContext(":", 1)).toBeNull();
+  });
+});
+
+describe("applyEmojiSuggestion", () => {
+  it("rewrites the in-flight :query to a canonical :shortcode:", () => {
+    const ctx = detectEmojiContext("shipped :roc", 12)!;
+    const out = applyEmojiSuggestion("shipped :roc", ctx, "rocket");
+    expect(out.value).toBe("shipped :rocket:");
+    expect(out.caret).toBe("shipped :rocket:".length);
+  });
+
+  it("preserves trailing text after the trigger", () => {
+    // Caret in the middle of a longer buffer.
+    const value = "shipped :roc today";
+    const ctx = detectEmojiContext(value, 12)!;
+    const out = applyEmojiSuggestion(value, ctx, "rocket");
+    expect(out.value).toBe("shipped :rocket: today");
   });
 });
