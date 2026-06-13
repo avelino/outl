@@ -37,7 +37,7 @@ import {
 } from "@outl/shared/api/commands";
 import type { BlockNode, PageView } from "@outl/shared/api/types";
 
-import { runCodeBlock } from "./api";
+import { redoPage, runCodeBlock, undoPage } from "./api";
 import { insertLink, wrapSelection } from "./markdown-wrap";
 import {
   flattenVisible,
@@ -431,24 +431,51 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
     WrapStrike: () => wrapSelection("~~"),
     InsertLink: () => insertLink(),
 
-    // ── run code block (Cmd+X) ───────────────────────────────────
+    // ── run code block (Cmd+Shift+X) ─────────────────────────────
     //
-    // Targets the focused textarea (Insert) or the selected block
-    // (Normal). Resolves the block, asks the backend to execute the
+    // Targets the selected block (Normal — inside a textarea the
+    // chord resolves to the Insert-mode WrapStrike binding instead).
+    // Resolves the block, asks the backend to execute the
     // `\`\`\`lang … \`\`\`` fence via `outl-exec`, and surfaces the
-    // resulting stdout/stderr through `applyView`.
+    // resulting stdout/stderr through `applyView`. Plain `Cmd+X`
+    // deliberately has no binding — it falls through to the
+    // webview's native cut (issue #80).
     RunCodeBlock: async () => {
       const pageId = appState.page?.id;
       if (!pageId) return;
       const id = targetBlockId();
       if (!id) {
         deps.setError(
-          "Select or focus a code block first, then ⌘X runs it",
+          "Select or focus a code block first, then ⌘⇧X runs it",
         );
         return;
       }
       const reply = await safeCall(runCodeBlock(pageId, id));
       if (reply) deps.applyView(reply.view);
+    },
+
+    // ── undo / redo (Cmd+Z / Cmd+Shift+Z, Normal mode) ───────────
+    //
+    // Block-level history: reverts / re-applies the last committed
+    // mutation on the current page (the backend snapshots the
+    // page's `.md` render around every `finish_in_page` mutation).
+    // The chords are Normal-mode only, so a focused textarea keeps
+    // its own `Cmd+Z`. An empty stack rejects with "nothing to
+    // undo" / "nothing to redo" — surfaced via the status bar.
+    // Selection is left as-is; if the restored outline no longer
+    // contains the selected block, `<OutlineView />`'s
+    // auto-selection recovers.
+    Undo: async () => {
+      const pageId = appState.page?.id;
+      if (!pageId) return;
+      const view = await safeCall(undoPage(pageId));
+      if (view) deps.applyView(view);
+    },
+    Redo: async () => {
+      const pageId = appState.page?.id;
+      if (!pageId) return;
+      const view = await safeCall(redoPage(pageId));
+      if (view) deps.applyView(view);
     },
 
     // ── commit + new sibling ─────────────────────────────────────
@@ -485,8 +512,7 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
     // preventDefault) and the textarea / OS handles the chord:
     //
     //   EditBlock chord buffer (CopyBlockRef), EnterVisual,
-    //   YankRange, DeleteRange, Undo, Redo, OpenCommandPalette,
-    //   RunCodeBlock (per-block button).
+    //   YankRange, DeleteRange, OpenCommandPalette.
     //
     // Each shows up as `[shortcuts] … no JS handler` in DevTools so
     // a debugging session can see what's still on the to-do list.

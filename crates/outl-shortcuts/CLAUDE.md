@@ -76,6 +76,12 @@ A binding that only the TUI cares about still lives here (with `Mode::Normal` / 
 - `Normal` mode → no binding either (the desktop frontend used to wire it to "toggle sidebar"; that's `Cmd+Shift+E` now to avoid hijacking markdown's universal bold chord — see `crates/outl-desktop/CLAUDE.md` for the rationale).
 
 If you find yourself wanting two different actions on the same chord across modes, the catalog already supports it — just add two `Binding` rows with different `mode` fields and the `no_duplicate_chord_in_same_mode` test will let them through.
+`Cmd+Shift+X` ships exactly that split today: `WrapStrike` in Insert (textarea focused) and `RunCodeBlock` in Global — inside a textarea the mode-specific row wins, everywhere else the Global one fires.
+
+**`Cmd+Z` / `Cmd+X` are the canonical "don't shadow the OS" examples:**
+
+- Plain `Cmd+X` carries **no binding at all** — it used to be `RunCodeBlock` (Global), which `preventDefault`ed the OS-universal cut inside every desktop textarea (issue #80). Run-code lives on `Cmd+Shift+X` now.
+- `Cmd/Ctrl+Z` (Undo) and `Cmd/Ctrl+Shift+Z` (Redo) are bound in **Normal**, not Global, so a focused textarea keeps the chord for its own native undo instead of having the dispatcher swallow it. They sit next to the vim spellings (`u` / `Ctrl+R`) in the catalog.
 
 ## Wire format (Tauri / JSON)
 
