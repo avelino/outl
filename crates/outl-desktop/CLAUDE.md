@@ -160,7 +160,7 @@ Two of these chords also have **visible icon affordances** in a fixed bottom-lef
 | `Cmd/Ctrl+T` | Toggle TODO / DONE on the focused / selected block (T for **t**ask) |
 | `Cmd/Ctrl+Enter` | Toggle TODO / DONE on the focused / selected block (alt) |
 | `Cmd/Ctrl+Shift+Enter` | Commit + create a sibling block below |
-| `Cmd/Ctrl+X` | E**x**ecute the focused / selected code block (mirrors the TUI's `g x` chord) |
+| `Cmd/Ctrl+Shift+X` | E**x**ecute the focused / selected code block (mirrors the TUI's `g x` chord). Inside a textarea the Insert-mode strikethrough binding wins (mode-specific beats Global) — commit first or use the per-block run button. |
 | `Cmd/Ctrl+[` / `]` | Previous / next journal day |
 | `Cmd/Ctrl+Shift+E` | Toggle sidebar (mirrors VS Code's explorer chord) |
 | `Cmd/Ctrl+Shift+B` | Toggle backlinks panel |
@@ -168,6 +168,22 @@ Two of these chords also have **visible icon affordances** in a fixed bottom-lef
 
 > **Why `Cmd+J` for the journal and not `Cmd+T`?** `T` is universally "task" in outliners (TUI's `Ctrl+T`, Logseq's `Cmd+T`, every Markdown task list shortcut). We don't make the user re-learn that. `J` for **journal** is unambiguous and lines up with the `g j` chord the TUI uses.
 > **Why not `Cmd+B` / `Cmd+\`?** `Cmd+B` is **reserved for bold** in every popular markdown editor (Notion, Obsidian, Discord, Slack) — retraining users on a non-standard meaning is hostile. `Cmd+\` is **1Password's** global autofill chord on macOS; hijacking it breaks every user with 1Password installed.
+> **Why did `Cmd+X` stop running code blocks?** It shadowed the OS-universal **cut** inside every textarea (the dispatcher `preventDefault`s matched Global chords even in Insert mode). Clipboard muscle memory beats the e**x**ecute mnemonic in a text-editing app, so run-code moved to `Cmd+Shift+X` and plain `Cmd+X` now falls through to the webview's native cut. See issue #80.
+
+### Undo / redo (Normal mode — fire when no textarea is focused)
+
+| Chord | Action |
+|---|---|
+| `Cmd/Ctrl+Z` | Undo the last committed block mutation on the current page |
+| `Cmd/Ctrl+Shift+Z` | Redo it |
+| `u` / `Ctrl+R` | Same actions, vim spelling (TUI parity) |
+
+Deliberately **Normal**, not Global: with a textarea focused the chord falls through to the webview (the in-flight draft is the textarea's own undo domain), and a Global binding would `preventDefault` it away.
+History is **block-level**: each mutation that goes through `finish_in_page` (edit, create, indent / outdent, move, delete, TODO / quote toggle, paste) pushes the page's pre-mutation `.md` render onto a bounded per-page stack (`outl_actions::history::HistoryStacks`); undo restores the snapshot through `outl_md::reconcile_md`, so the restore is itself ops in the log — the op log stays the source of truth, nothing is rewritten.
+Fold toggles (`set_block_collapsed`) bypass `finish_in_page` and are not undoable, matching their "view state, not content" semantics.
+Invalidation is **surgical**: a workspace **switch** clears every stack, but a peer-driven **reload** (`peer-ops-changed` → `reload_workspace`) drops only the stacks of pages whose projection actually changed across the reload — restoring one of those would silently revert the peer's edits.
+Pages the peer didn't touch keep their full undo depth.
+(The first cut cleared everything on every reload, which capped `Cmd+Z` at one step whenever the TUI was open on the same workspace — every TUI write fires `peer-ops-changed`.)
 
 ### Inline markdown (Insert mode — fire when a textarea is focused)
 
@@ -190,7 +206,8 @@ Implementation lives in `lib/markdown-wrap.ts`: each handler reads `document.act
 | `Enter` | Insert a `\n` inside the current block (multi-line text) |
 | `Cmd/Ctrl+Shift+Enter` | Commit + create a sibling below + edit it |
 | `Cmd/Ctrl+T` / `Cmd/Ctrl+Enter` | Toggle TODO / DONE on this block |
-| `Cmd/Ctrl+X` | Run the code block (mirrors TUI's `g x`) |
+| `Cmd/Ctrl+X` | Native cut — falls through to the webview (no catalog binding matches inside a textarea) |
+| `Cmd/Ctrl+Z` | Falls through to the webview too, but native per-keystroke undo is still broken: the controlled `value={draft()}` binding resets the textarea's undo stack on every keystroke (tracked as follow-up in issue #80) |
 | `Tab` / `Shift-Tab` | Indent / outdent |
 | `Esc` / blur | Commit |
 | `Backspace` on empty | Delete the block |

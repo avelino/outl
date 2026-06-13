@@ -503,7 +503,7 @@ UI-agnostic; both TUI and mobile consume them.
 
 #### 13. Code-block execution (outl-actions::exec)
 
-The **cross-client glue** every UI uses to wire a "run this fence" gesture (TUI `g x`, desktop `Cmd+X`, mobile long-press → "Run code") through to `outl-exec` and back. `outl_actions::exec::run_code_block` is the **only** entry point a Tauri command / TUI action should call — never re-implement the flat-DFS walk, the `.md` path lookup, or the DTO shape per client.
+The **cross-client glue** every UI uses to wire a "run this fence" gesture (TUI `g x`, desktop `Cmd+Shift+X`, mobile long-press → "Run code") through to `outl-exec` and back. `outl_actions::exec::run_code_block` is the **only** entry point a Tauri command / TUI action should call — never re-implement the flat-DFS walk, the `.md` path lookup, or the DTO shape per client.
 
 | Intent | Use this | File |
 |---|---|---|
@@ -527,6 +527,18 @@ The runtime catalog (which languages are available) is selected by the **binary*
 | Acquire the per-actor write lock (one process writing this actor's jsonl) | `outl_core::ActorWriteLock::try_acquire` | `crates/outl-core/src/lock.rs` |
 | Resolve which actor this process writes as | `outl_core::resolve_write_actor` | `crates/outl-core/src/lock.rs` |
 | The `Storage` trait every persistent backend implements (invariant #5) | `outl_core::Storage` / `StorageError` | `crates/outl-core/src/storage/mod.rs` |
+
+#### 15. Undo / redo history (outl-actions::history)
+
+Bounded snapshot stacks with vim semantics (a new edit clears redo) shared by GUI clients — the desktop's `Cmd+Z` / `Cmd+Shift+Z` ride these.
+Restores route through `outl_md::reconcile_md`, so an undo is **new ops in the log**, never a rewrite (invariant #1 holds).
+This is *not* per-keystroke undo inside an uncommitted draft — that belongs to the client's editor widget.
+
+| Intent | Use this | File |
+|---|---|---|
+| Bounded undo / redo stacks over any snapshot type (`record` / `undo` / `redo` / `can_undo` / `can_redo` / `clear`) | `outl_actions::history::HistoryStacks` | `crates/outl-actions/src/history.rs` |
+| Default per-stack bound (matches the TUI's session cap) | `outl_actions::DEFAULT_HISTORY_CAP` | `crates/outl-actions/src/history.rs` |
+| Restore a page to a previously-rendered `.md` snapshot (write + reconcile → min ops through `Workspace::apply`) | `outl_actions::restore_page_md` | `crates/outl-actions/src/history.rs` |
 
 If your need is **not** in this catalog and you've grepped honestly, that's a fair sign the primitive doesn't exist yet — add it in the upstream crate that owns the concept (usually `outl-md` for parse / render / sidecar / inline, `outl-actions` for workspace mutations and ingest, `outl-core` for op-log / tree / HLC), then update this catalog in the same commit.
 The hook will remind you to sync `copilot-instructions.md`.

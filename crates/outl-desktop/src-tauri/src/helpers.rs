@@ -9,7 +9,7 @@ use std::str::FromStr;
 use chrono::NaiveDate;
 use outl_actions::{
     apply_page_md_with_sidecar, backlinks_for_page, date_from_slug, page_meta as page_meta_action,
-    read_page_outline_with_workspace, ActionError, PageOutline,
+    read_page_outline_with_workspace, render_page_md, ActionError, PageOutline,
 };
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
@@ -113,7 +113,21 @@ where
 {
     let root = storage_root_or_err(state)?;
     with_ws_mut(state, |ws| {
+        // Capture the pre-mutation projection for undo. Recorded only
+        // when the mutation actually changed the page render, so
+        // no-op commands (indent with no previous sibling, an edit
+        // committing identical text) don't turn `Cmd+Z` into a
+        // visible nothing.
+        let before = render_page_md(ws, page_id);
         let value = f(ws).map_err(|e| e.to_string())?;
+        if render_page_md(ws, page_id) != before {
+            state
+                .history
+                .lock()
+                .entry(page_id)
+                .or_default()
+                .record(before);
+        }
         if let Err(e) = apply_page_md_with_sidecar(ws, &root, page_id) {
             warn!("page md+sidecar sync failed: {e}");
         }
