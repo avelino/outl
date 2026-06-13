@@ -16,6 +16,7 @@ To keep them honest, we route every workspace operation through one shared crate
 ┌──────────────────────────────────────────────────────────────┐
 │ outl-actions                                                  │
 │   block · tree · todo · journal · outline · page · backlinks  │
+│   history (bounded undo/redo stacks + .md snapshot restore)   │
 │   sync (SyncEngine: reload workspace, reproject page,         │
 │         snapshot peer jsonls, scan for orphan .md)            │
 └──────────────────────────────────────────────────────────────┘
@@ -39,6 +40,7 @@ To keep them honest, we route every workspace operation through one shared crate
 | Op log, tree CRDT, storage trait     | `outl-core`                     |
 | `.md` parse / render, sidecar        | `outl-md`                       |
 | Workspace mutations (edit, indent, todo, delete, journal render) | `outl-actions` |
+| Committed-mutation undo / redo (snapshot stacks + `.md` restore via reconcile) | `outl-actions::history` |
 | Code-block execution (runtimes + orchestration) | `outl-exec`            |
 | Cross-client "run a fence" glue (`run_code_block`) | `outl-actions::exec` |
 | TUI: keymaps, modes, overlays, in-flight AST manipulation | `outl-tui`         |
@@ -80,10 +82,10 @@ Users decide when to clean up; outl never deletes content on their behalf.
 
 ## Running code blocks
 
-Every client that lets the user execute a `` ```lang ``` `` block (TUI `g x`, desktop `Cmd+X` / Run button, mobile long-press → "Run code") goes through **one** shared entry point: `outl_actions::exec::run_code_block(ws, hlc, root, registry, page, block)`.
+Every client that lets the user execute a `` ```lang ``` `` block (TUI `g x`, desktop `Cmd+Shift+X` / Run button, mobile long-press → "Run code") goes through **one** shared entry point: `outl_actions::exec::run_code_block(ws, hlc, root, registry, page, block)`.
 
 ```text
-client gesture (TUI chord / Cmd+X / long-press)
+client gesture (TUI chord / Cmd+Shift+X / long-press)
         │
         ▼
 outl_actions::exec::run_code_block

@@ -39,12 +39,15 @@ vi.mock("@outl/shared/api/commands", () => ({
 }));
 
 vi.mock("./api", () => ({
+  redoPage: vi.fn(),
   runCodeBlock: vi.fn(),
+  undoPage: vi.fn(),
 }));
 
 import { openRef } from "@outl/shared/api/commands";
 
 import { buildHandlers } from "./action-handlers";
+import { redoPage, undoPage } from "./api";
 import { appState, setAppState } from "./store";
 
 function block(id: string, text: string): BlockNode {
@@ -149,5 +152,67 @@ describe("OpenRefUnderCursor (Normal-mode Enter)", () => {
     // Cursor lands on the referencing block of the opened page.
     expect(appState.selectedBacklinkBlockId).toBeNull();
     expect(appState.selectedBlockId).toBe("blk-source");
+  });
+});
+
+describe("Undo / Redo (Cmd+Z / Cmd+Shift+Z)", () => {
+  const applyView = vi.fn();
+  const setError = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setAppState({
+      page: { id: "pg-1", slug: "today", title: "Today", kind: "journal" },
+      outline: [block("blk-1", "hello")],
+      backlinks: [],
+      selectedBlockId: "blk-1",
+      selectedBacklinkBlockId: null,
+      editingBlockId: null,
+      backlinksOpen: false,
+    });
+  });
+
+  it("undoes on the current page and applies the restored view", async () => {
+    const view = pageView();
+    vi.mocked(undoPage).mockResolvedValue(view);
+
+    const handlers = buildHandlers({ applyView, setError });
+    await handlers.Undo?.();
+
+    expect(undoPage).toHaveBeenCalledWith("pg-1");
+    expect(applyView).toHaveBeenCalledWith(view);
+    expect(setError).not.toHaveBeenCalled();
+  });
+
+  it("redoes on the current page and applies the restored view", async () => {
+    const view = pageView();
+    vi.mocked(redoPage).mockResolvedValue(view);
+
+    const handlers = buildHandlers({ applyView, setError });
+    await handlers.Redo?.();
+
+    expect(redoPage).toHaveBeenCalledWith("pg-1");
+    expect(applyView).toHaveBeenCalledWith(view);
+  });
+
+  it("surfaces an empty history as a status message, not a crash", async () => {
+    vi.mocked(undoPage).mockRejectedValue("nothing to undo");
+
+    const handlers = buildHandlers({ applyView, setError });
+    await handlers.Undo?.();
+
+    expect(setError).toHaveBeenCalledWith("nothing to undo");
+    expect(applyView).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when no page is open", async () => {
+    setAppState("page", null);
+
+    const handlers = buildHandlers({ applyView, setError });
+    await handlers.Undo?.();
+    await handlers.Redo?.();
+
+    expect(undoPage).not.toHaveBeenCalled();
+    expect(redoPage).not.toHaveBeenCalled();
   });
 });
