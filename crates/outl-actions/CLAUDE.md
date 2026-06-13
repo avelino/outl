@@ -34,6 +34,7 @@ outl-cli / outl-tui / outl-mobile / future clients
 | `page`      | `PageMeta` (`id`, `slug`, `title`, `kind`, `icon`, **`pinned`** — surfaced from the `pinned::` page property so every client that consumes `list_all` sees the flag without re-querying the workspace index), `PageKind` (Page / Journal), `open_or_create`, `open_or_create_by_name` (slugifies a human-typed name + keeps it as the title — drives `[[ref]]`/`#tag` click handlers in TUI + mobile), `open_or_create_by_ref` (the canonical "user tapped a ref" decision tree — date → journal, literal/slugified/title match → existing page, else create), `open_journal`, `open_today`, `find_by_slug`, `list_all`, `migrate_legacy_into_today`, `journal_slug`, `journal_title`, `today`, `date_from_slug`, `previous_journal_date`, `next_journal_date`, `page_id_from_slug` (deterministic ID derivation so two peers agree on a fresh page's NodeId) |
 | `backlinks` | `Backlink`, `backlinks_for_target`, `backlinks_for_page` (a mention is a literal `[[target]]` **or** a `#tag` whose slug form resolves to the page — the same `slugify` rule a tag click goes through, so navigation and "Linked from" can't drift), `extract_refs` (parse `[[ref]]` tokens) |
 | `journal`   | `render_page_md`, `apply_page_md`, `apply_page_md_with_sidecar`, `apply_all_pages_md`, `mutate_page_md`, `journals_dir`, `pages_dir`, `page_md_path`, `write_md_atomic` |
+| `history`   | `HistoryStacks<T>` (bounded undo / redo stacks, vim semantics: a new edit clears redo), `DEFAULT_HISTORY_CAP`, `restore_page_md` (write a previously-rendered `.md` snapshot + reconcile it back — the restore is new ops through `Workspace::apply`, never a log rewrite). Drives the desktop's `Cmd+Z` / `Cmd+Shift+Z`; per-keystroke undo inside an uncommitted draft stays in the client's editor widget. |
 | `sync`      | `SyncEngine`, `OpsFileSnapshot`. Reload workspace from disk, re-project a page's `.md` + sidecar, snapshot peer jsonls (skipping own), scan for orphan `.md` files (no sidecar / stale hash). Shared by TUI poller + mobile iCloud watcher. |
 | `paste`     | `paste_markdown`, `PasteAnchor`, `PasteOutcome`, `normalize_external_syntax`. Converts external clipboard markdown (Roam `{{[[TODO]]}}`, GitHub `[ ]/[x]`, Logseq `id::`, 4-space indent) into outl syntax and grafts the bullet structure as blocks. Drives `Event::Paste` in the TUI and the mobile `paste_markdown_at` Tauri command. |
 | `error`     | `ActionError`                                                                  |
@@ -94,7 +95,8 @@ The historical "auto-preserve prefix" behaviour was removed because it made `TOD
 
 ## What this crate does NOT own
 
-- **UI state.** Selections, modes, keymaps, undo stack for in-flight text editing live in the clients.
+- **UI state.** Selections, modes, keymaps, and the undo stack for **in-flight text editing** (per-keystroke history inside an uncommitted draft) live in the clients.
+  Committed-mutation undo is different: the bounded snapshot stacks + `.md` restore live here in `history` so every GUI shares one engine.
 - **In-flight outline AST.** When the user is typing into a buffer that hasn't been parsed yet, the manipulation happens on `Vec<OutlineNode>` via `outl_md::outline_ops` (re-exported through the `outl-tui/src/outline_ops.rs` shim).
   We don't pull that up because it's not workspace-grounded — it's a stage *before* ops exist.
   It lives in `outl-md` because the mobile client also needs it, but no `Workspace` is touched, so it stays out of `outl-actions`.

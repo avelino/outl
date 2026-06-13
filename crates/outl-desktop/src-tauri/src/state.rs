@@ -6,11 +6,13 @@
 //! swap workspaces at runtime and the background opener thread writes
 //! into them.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use outl_actions::{Backlink, OutlineNode, PageMeta};
+use outl_actions::{Backlink, HistoryStacks, OutlineNode, PageMeta};
 use outl_core::hlc::HlcGenerator;
+use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
 use outl_exec::RuntimeRegistry;
 use parking_lot::Mutex;
@@ -49,6 +51,15 @@ pub(crate) struct AppState {
     /// (replaced) when the user switches workspaces; `None` while
     /// the picker is still up.
     pub fs_watcher: Arc<Mutex<Option<WatcherHandle>>>,
+    /// Per-page undo / redo stacks of rendered `.md` snapshots
+    /// (`outl_actions::history::HistoryStacks`). `finish_in_page_with`
+    /// records the pre-mutation render; `undo_page` / `redo_page`
+    /// restore one through `outl_actions::restore_page_md` (the
+    /// restore is ops in the log, never a rewrite). Fully cleared on
+    /// workspace **switch**; on a peer-driven **reload** only the
+    /// pages whose projection changed lose their stacks (see
+    /// `commands::workspace::reload_workspace`).
+    pub history: Mutex<HashMap<NodeId, HistoryStacks<String>>>,
 }
 
 /// Returned by the `workspace_stats` command.

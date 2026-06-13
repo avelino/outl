@@ -2,7 +2,8 @@
 
 use std::path::PathBuf;
 
-use outl_actions::open_today;
+use outl_actions::{open_today, render_page_md};
+use outl_core::id::NodeId;
 use tauri::{Emitter, State};
 use tracing::warn;
 
@@ -34,6 +35,8 @@ pub(crate) fn set_workspace(
 
     *state.workspace.lock() = Some(workspace);
     *state.storage_root.lock() = Some(path.clone());
+    // Undo snapshots belong to the previous workspace.
+    state.history.lock().clear();
 
     // (Re)start the FS watcher for the new root. Dropping the
     // previous handle inside `swap_watcher` stops watching the
@@ -148,7 +151,33 @@ pub(crate) fn reload_workspace(
         .map_err(|e| format!("reload workspace: {e}"))?;
     let today_id = open_today(&mut fresh, &state.hlc).map_err(|e| e.to_string())?;
     let _ = engine.reproject_page(&fresh, today_id);
+    // Surgical undo invalidation: only pages whose projection actually
+    // changed across the reload lose their stacks. Restoring a
+    // snapshot of a page the peer DID change would silently revert the
+    // peer's edits — those stacks go. But a blanket `clear()` here
+    // capped `Cmd+Z` at one step whenever the TUI was open on the same
+    // workspace: every TUI write fires `peer-ops-changed` → reload,
+    // and the only snapshot surviving was the one recorded after the
+    // last reload.
+    let stale: Vec<NodeId> = {
+        let ws_guard = state.workspace.lock();
+        let history = state.history.lock();
+        match ws_guard.as_ref() {
+            Some(old) => history
+                .keys()
+                .filter(|id| render_page_md(old, **id) != render_page_md(&fresh, **id))
+                .copied()
+                .collect(),
+            None => history.keys().copied().collect(),
+        }
+    };
     *state.workspace.lock() = Some(fresh);
+    {
+        let mut history = state.history.lock();
+        for id in stale {
+            history.remove(&id);
+        }
+    }
     // Same split as `set_workspace` and the boot opener — reconcile
     // legacy / peer-pushed `.md` files in the background so the
     // frontend doesn't wait.
