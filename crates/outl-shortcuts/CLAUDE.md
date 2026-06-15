@@ -33,7 +33,7 @@ A binding that only the TUI cares about still lives here (with `Mode::Normal` / 
 - **[`Binding`]** — `(mode, chord, action, description)` row.
   The description is what the help overlay displays — keep it short and verb-led ("Open today's journal", not "This shortcut opens today's journal in the current window").
 - **[`default_bindings`]** — the canonical table. Hand-curated, ordered for help-overlay readability.
-- **[`bindings_for_mode`] / [`lookup`]** — query helpers. `lookup` is `O(n)` over the table; the table is small (under 100 entries today) so we don't bother with a hashmap.
+- **[`bindings_for_mode`] / [`lookup`]** — query helpers. `lookup` is `O(n)` over the table; the table is small (under 100 entries today) so we don't bother with a hashmap. **`lookup` prefers a mode-specific binding over a `Global` one** for the same chord — it can't rely on table order because the `Global` chrome rows are listed first for help-overlay readability, so a naive first-match would resolve every dual-bound chord (e.g. `Cmd+Shift+X` → `WrapStrike` in Insert vs. `RunCodeBlock` in Global) to its `Global` action even inside the overriding mode.
 
 ## What this crate does NOT own
 
