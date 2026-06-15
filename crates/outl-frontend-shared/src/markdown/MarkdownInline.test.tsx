@@ -4,7 +4,11 @@ import { describe, expect, it } from "vitest";
 import type { InlineToken } from "../api/types";
 import { MarkdownInline } from "./MarkdownInline";
 
-function mount(tokens: InlineToken[], variant?: "inline") {
+function mount(
+  tokens: InlineToken[],
+  variant?: "inline",
+  onLinkClick?: (href: string) => void,
+) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const dispose = render(
@@ -12,6 +16,7 @@ function mount(tokens: InlineToken[], variant?: "inline") {
       <MarkdownInline
         tokens={tokens}
         variant={variant}
+        onLinkClick={onLinkClick}
       />
     ),
     host,
@@ -58,6 +63,33 @@ describe("MarkdownInline — tag rendering", () => {
     ];
     const m = mount(tokens, "inline");
     expect(m.host.textContent).toBe("see #code-review for context");
+    m.dispose();
+  });
+});
+
+describe("MarkdownInline — external link rendering", () => {
+  const linkTok: InlineToken[] = [
+    { kind: "link", value: "site", href: "https://example.com" },
+  ];
+
+  it("fires onLinkClick with the href when a link is clicked", () => {
+    const opened: string[] = [];
+    const m = mount(linkTok, "inline", (href) => opened.push(href));
+    const span = m.host.querySelector('[role="button"]') as HTMLElement;
+    expect(span).not.toBeNull();
+    expect(span.textContent).toBe("site");
+    span.click();
+    expect(opened).toEqual(["https://example.com"]);
+    m.dispose();
+  });
+
+  it("renders the label as inert text when no onLinkClick is supplied", () => {
+    const m = mount(linkTok, "inline");
+    expect(m.host.textContent).toBe("site");
+    const span = m.host.querySelector("span") as HTMLElement;
+    // No handler → clicking must not throw and must not be cursor-pointer.
+    expect(() => span.click()).not.toThrow();
+    expect(span.className).not.toContain("cursor-pointer");
     m.dispose();
   });
 });

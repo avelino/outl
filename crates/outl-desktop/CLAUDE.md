@@ -243,6 +243,10 @@ While the caret sits inside an open `:shortcode` trigger, `BlockRow` shows a flo
 
 While the caret sits inside an open `[[…]]`, `BlockRow` shows a floating page-suggestion popup (`RefSuggestPopup`, anchored under the textarea). It reuses the shared `detectRefContext` / `applySuggestion` helpers (`@outl/shared/autocomplete`) and the `search_pages` command the `Cmd+P` picker already calls — no parallel implementation. `↑`/`↓` move the highlight, `Enter`/`Tab` accept (inserting the page title, or the ISO slug for journals), `Esc` closes the popup (a second `Esc` then commits the block), and clicking a row picks it (via `onMouseDown` + `preventDefault` so the textarea's blur-commit doesn't fire first). Block refs (`((…))`) are intentionally not suggested yet — separate feature.
 
+### Clicking external `[label](url)` links
+
+`<MarkdownInline />` renders external markdown links clickable when given an `onLinkClick(href)` prop. `OutlineView` wires it to `openExternalUrl` (`@outl/shared/api/commands`), which scheme-guards to `http(s)`/`mailto` and opens in the system browser via **`tauri-plugin-opener`** (registered in `src-tauri/src/lib.rs`; the capability grants a scoped `opener:allow-open-url` for `http`/`https`/`mailto` in `capabilities/default.json`). Failures (malformed URL, disallowed scheme) land on the status line via `appState.lastError`. The `[[ref]]` / `#tag` click handlers are unchanged (they navigate the workspace, not the browser). The opener call lives in the shared wrapper — not a custom Tauri command — so mobile can opt in later by registering the same plugin and passing `onLinkClick`. Backlink rows stay inert (the whole row is already a navigate-to-source button; nesting a second click target would conflict).
+
 ## Settings
 
 Stored at `<app_config_dir>/settings.json`:

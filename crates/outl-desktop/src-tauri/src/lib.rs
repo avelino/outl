@@ -64,6 +64,7 @@ use crate::workspace_open::{load_or_create_actor, spawn_workspace_opener};
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| -> Result<(), Box<dyn std::error::Error>> {
             // Local-only state (the per-device `actor` ULID and the
             // `config.toml`) lives at `~/.config/outl/` — the XDG

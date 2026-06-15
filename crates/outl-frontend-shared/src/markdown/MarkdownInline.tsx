@@ -14,8 +14,9 @@ import type { InlineToken } from "../api/types";
  * Variants currently supported:
  *
  * - `**bold**`, `*italic*` / `_italic_`, `~~strike~~`, `` `code` ``
- * - `[label](url)` links (non-clickable for now, would need the
- *   Tauri opener plugin)
+ * - `[label](url)` links — clickable when the host passes
+ *   `onLinkClick` (desktop wires it to the Tauri opener so the URL
+ *   opens in the system browser); inert text otherwise.
  * - `[[page name]]` wiki refs and `#tag` (visual style controlled
  *   by `variant`)
  * - `((blk-XXXXXX))` block refs and `!((blk-XXXXXX))` embeds
@@ -49,6 +50,10 @@ interface MarkdownInlineProps {
   onRefClick?: (target: string) => void;
   /** Invoked when the user taps a `#tag`. */
   onTagClick?: (tag: string) => void;
+  /** Invoked when the user taps an external `[label](url)` link. The
+   * argument is the raw `href`. When omitted the link renders as inert
+   * text (mobile / backlink contexts that don't open URLs yet). */
+  onLinkClick?: (href: string) => void;
 }
 
 export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
@@ -73,6 +78,7 @@ export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
                   variant={props.variant}
                   onRefClick={props.onRefClick}
                   onTagClick={props.onTagClick}
+                  onLinkClick={props.onLinkClick}
                 />
               </span>
             );
@@ -84,6 +90,7 @@ export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
                   variant={props.variant}
                   onRefClick={props.onRefClick}
                   onTagClick={props.onTagClick}
+                  onLinkClick={props.onLinkClick}
                 />
               </span>
             );
@@ -95,6 +102,7 @@ export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
                   variant={props.variant}
                   onRefClick={props.onRefClick}
                   onTagClick={props.onTagClick}
+                  onLinkClick={props.onLinkClick}
                 />
               </span>
             );
@@ -104,21 +112,39 @@ export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
                 {tok.value}
               </code>
             );
-          case "link":
+          case "link": {
+            const openLink = (e: MouseEvent) => {
+              if (!props.onLinkClick) return;
+              e.stopPropagation();
+              props.onLinkClick(tok.href);
+            };
             return (
               <Show
                 when={variant() === "inline"}
                 fallback={
-                  <span class="text-(--color-ios-accent) underline dark:text-(--color-iosd-accent)">
+                  <span
+                    role="button"
+                    title={tok.href}
+                    onClick={openLink}
+                    class="text-(--color-ios-accent) underline active:opacity-60 dark:text-(--color-iosd-accent)"
+                    classList={{ "cursor-pointer": !!props.onLinkClick }}
+                  >
                     {tok.value}
                   </span>
                 }
               >
-                <span class="text-(--color-outl-md-link-fg) underline decoration-(--color-outl-md-link-fg)/40 underline-offset-2 hover:decoration-(--color-outl-md-link-fg)">
+                <span
+                  role="button"
+                  title={tok.href}
+                  onClick={openLink}
+                  class="text-(--color-outl-md-link-fg) underline decoration-(--color-outl-md-link-fg)/40 underline-offset-2 hover:decoration-(--color-outl-md-link-fg)"
+                  classList={{ "cursor-pointer": !!props.onLinkClick }}
+                >
                   {tok.value}
                 </span>
               </Show>
             );
+          }
           case "ref":
             return (
               <Show
