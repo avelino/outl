@@ -38,6 +38,7 @@ A binding that only the TUI cares about still lives here (with `Mode::Normal` / 
 ## What this crate does NOT own
 
 - ❌ Handlers. Each client maps `Action -> {do_something}` itself. The TUI's `App::dispatch` and the desktop's `lib/action-handlers.ts` are the dispatchers; this crate doesn't know how a "commit insert buffer" actually commits.
+  > **Handler behaviour contracts** (e.g. `FoldAll` skipping leaves, `UnfoldAll` walking the full tree, `DeleteRange` iterating bottom-up) live in the per-client CLAUDE.md (`outl-tui/CLAUDE.md`, `outl-desktop/CLAUDE.md`) under their vim / mode sections — and in `docs/tui.md` / `docs/shortcuts.md` for user-facing copy. This file owns *which `Action` exists*; the *what the handler does* is a per-client concern documented next to the dispatcher. The `doc-sync-guard` hook flags edits to `action-handlers.ts` here as a heuristic — when the change is purely how the handler dispatches (not a new chord or `Action` variant), the per-client doc is the right place to land the contract, not this file.
 - ❌ Input adapters. `crossterm::KeyEvent → Chord` lives in `outl-tui`; `KeyboardEvent → Chord` lives in `outl-desktop/src/lib/shortcuts.ts`. Both produce a [`Chord`] this crate resolves.
 - ❌ User-level overrides (rebinding `i` to `a`). When that ships, it'll go through the same `Vec<Binding>` shape — a user override is just a different source list fed into the same `lookup` algorithm.
 - ❌ OS-specific chord rewriting (`Cmd` ↔ `Ctrl`). Each client decides which physical key its `Chord::ctrl(c)` corresponds to on the running OS.

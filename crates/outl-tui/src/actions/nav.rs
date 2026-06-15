@@ -454,12 +454,8 @@ impl App {
         if forward {
             // `accept_search` already lands on hit 0; nothing else to do.
         } else {
-            // Jump to the *last* hit so `#` mirrors `*` going backward.
-            if let Some(ls) = self.last_search.as_mut() {
-                if !ls.hits.is_empty() {
-                    ls.cursor = ls.hits.len() - 1;
-                }
-            }
+            // `accept_search` set `last_search.cursor = 0`. `search_prev`
+            // wraps 0 → len-1, which is exactly the last hit `#` wants.
             self.search_prev()?;
         }
         Ok(())

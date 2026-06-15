@@ -41,6 +41,7 @@ import { runCodeBlock } from "./api";
 import { insertLink, wrapSelection } from "./markdown-wrap";
 import {
   flattenAll,
+  flattenParents,
   flattenVisible,
   nextVisibleId,
   previousVisibleId,
@@ -142,16 +143,25 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
   }
 
   /** Walk every block on the current page and set its `collapsed`
-   *  flag to `value`. **Uses `flattenAll`**, not `flattenVisible`,
-   *  because the whole point of `zR` is to expand subtrees currently
-   *  hidden under a collapsed parent — the visible-only walk would
-   *  silently no-op on every descendant of a folded node. The
-   *  backend no-ops when the value already matches, so the loop
-   *  doesn't bloat the op log on already-expanded blocks. */
+   *  flag to `value`. **Never `flattenVisible`** — the whole point of
+   *  `zR` is to expand subtrees currently hidden under a collapsed
+   *  parent, and the visible-only walk would silently no-op on every
+   *  descendant of a folded node.
+   *
+   *  `zM` (value=true) uses `flattenParents` so leaves are skipped:
+   *  folding a leaf is invisible today, but `outl_actions::set_block_collapsed`
+   *  always writes `Op::SetCollapsed` to the log (a CRDT contract:
+   *  every flip lands so concurrent flips converge via HLC), so when
+   *  the user later adds children underneath they appear collapsed —
+   *  future-surprise. `zR` (value=false) uses `flattenAll`: descolapsar
+   *  leaf não tem efeito futuro e mantém a contagem de ops simétrica.
+   *  Mirror exato do `collect_collapse_candidates` no TUI. */
   async function applyCollapsedToAll(value: boolean) {
     const pageId = appState.page?.id;
     if (!pageId) return;
-    const ids = flattenAll(appState.outline);
+    const ids = value
+      ? flattenParents(appState.outline)
+      : flattenAll(appState.outline);
     let lastView: PageView | undefined;
     for (const id of ids) {
       const view = await safeCall(setBlockCollapsed(pageId, id, value));

@@ -61,7 +61,7 @@ No characters insert themselves — every key is a command.
 | `Y` | Yank current block (alias of `y y`) |
 | `e` | Cursor to the end of the current / next word (vim `e`; pairs with `w`) |
 | `*` / `#` | Search workspace for the word under cursor (forward / backward). Walk results with `n` / `N`. |
-| `z R` / `z M` | Unfold all / fold all blocks on the current page (chord) |
+| `z R` / `z M` | Unfold all / fold all blocks on the current page (chord). `z M` skips leaf blocks — only blocks that already have children get folded; folding a leaf today is invisible, but would silently surface as "children appear collapsed" once the user added any underneath. |
 | `z z` | Center viewport vertically on the cursor (chord) |
 | `g v` | Re-enter Visual mode at the last captured range (chord) |
 | `o` / `O` | New block below / above |

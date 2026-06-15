@@ -1,4 +1,4 @@
-import { For, Show, createEffect } from "solid-js";
+import { For, Show, createEffect, createMemo } from "solid-js";
 
 import {
   createBlock,
@@ -16,6 +16,7 @@ import type { PageView } from "@outl/shared/api/types";
 
 import { ParseWarningsBanner } from "@outl/shared/warnings";
 import { runCodeBlock } from "../lib/api";
+import { visualRangeSet } from "../lib/outline-walk";
 import { appState, setAppState } from "../lib/store";
 import { BlockRow, type BlockCallbacks } from "./BlockRow";
 import { InlineBacklinks } from "./InlineBacklinks";
@@ -103,6 +104,27 @@ export function OutlineView() {
       parseWarnings: view.warnings ?? [],
     });
   }
+
+  /**
+   * Memoised Visual-range membership set. Built once per
+   * outline / anchor / cursor / mode change, then read O(1) by every
+   * `<BlockRow />` via the `visualRangeSet` prop. The previous shape
+   * called `isInVisualRange(id, anchor, cursor, outline)` per row,
+   * which rebuilt `flattenVisible(blocks)` from scratch — N rows × N
+   * DFS = O(N²) per Visual extension keystroke. On a 500-block page
+   * the extension felt laggy by the third `j`.
+   *
+   * `null` outside vim-visual mode (most renders) so `<BlockRow />`
+   * can short-circuit without touching the Set at all.
+   */
+  const visualSet = createMemo<Set<string> | null>(() => {
+    if (appState.mode !== "vim-visual") return null;
+    return visualRangeSet(
+      appState.visualAnchorId,
+      appState.selectedBlockId,
+      appState.outline,
+    );
+  });
 
   async function handleError<T>(promise: Promise<T>): Promise<T | undefined> {
     try {
@@ -307,6 +329,7 @@ export function OutlineView() {
                   block={block}
                   depth={0}
                   editingId={editingId()}
+                  visualSet={visualSet()}
                   cb={cb}
                 />
               )}

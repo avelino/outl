@@ -59,6 +59,29 @@ export function flattenAll(blocks: BlockNode[]): string[] {
 }
 
 /**
+ * IDs that `zM` (fold-all) should target. Walks the full outline in
+ * DFS order **but skips leaves**: folding a leaf is invisible today
+ * yet still writes `Op::SetCollapsed(true)` to the log, so when the
+ * user later adds children underneath they appear collapsed — real
+ * future-surprise. By contrast, `zR` (unfold-all) wants every id
+ * (use [`flattenAll`] for that) — descolapsar leaf é no-op futuro.
+ *
+ * Mirror of `outl-tui`'s `collect_collapse_candidates` so a 200-block
+ * page fires the same op count on every client.
+ */
+export function flattenParents(blocks: BlockNode[]): string[] {
+  const out: string[] = [];
+  const walk = (bs: BlockNode[]) => {
+    for (const b of bs) {
+      if (b.children.length > 0) out.push(b.id);
+      if (b.children.length > 0) walk(b.children);
+    }
+  };
+  walk(blocks);
+  return out;
+}
+
+/**
  * Return the next visible id after `current`, or `current` itself
  * when already at the bottom (clamps; no wrap). When `current` is
  * `null` or not in the outline, returns the first visible id.
@@ -114,15 +137,43 @@ export function visualRangeIds(
 }
 
 /**
- * Predicate variant of [`visualRangeIds`] used by `<BlockRow />` to
- * decide whether to apply the Visual highlight. Hot path: runs for
- * every block in the page on every Visual selection change.
+ * Build the **set of block ids inside the Visual range** in one DFS
+ * walk. The parent component (`<OutlineView />`) memoises the result
+ * inside a `createMemo`; every `<BlockRow />` then answers membership
+ * in O(1) via `Set.has(id)`.
  *
- * Walks the outline **once** (vs. the naive `visualRangeIds(...)` +
- * `flattenVisible(...)` pair, which used to walk it twice — one
- * round trip wasted per render). Solid's reactivity already caches
- * `appState.outline` reference identity, so the cost per row is
- * dominated by the single DFS walk + three `indexOf`s here.
+ * Why a Set lives at the parent and not inside each row: the earlier
+ * implementation called `isInVisualRange(id, anchor, cursor, outline)`
+ * per row, and each call rebuilt `flattenVisible(blocks)` from scratch
+ * (a full DFS). With N visible blocks that's O(N²) per Visual extension
+ * keystroke — on a 500-block page that's measurable lag. The memo
+ * pushes the DFS up to one walk per outline/anchor/cursor change.
+ *
+ * Returns `null` when anchor or cursor is unset, or when either id
+ * isn't in the visible outline (collapsed subtree shifted between
+ * entry and read). `null` is the caller's signal for "no range".
+ */
+export function visualRangeSet(
+  anchor: string | null,
+  cursor: string | null,
+  blocks: BlockNode[],
+): Set<string> | null {
+  if (!anchor || !cursor) return null;
+  const ids = flattenVisible(blocks);
+  const a = ids.indexOf(anchor);
+  const c = ids.indexOf(cursor);
+  if (a === -1 || c === -1) return null;
+  const lo = Math.min(a, c);
+  const hi = Math.max(a, c);
+  return new Set(ids.slice(lo, hi + 1));
+}
+
+/**
+ * Predicate variant of [`visualRangeIds`]. Kept for the `outline-walk`
+ * test suite and any caller that needs an ad-hoc membership check
+ * without paying for the Set allocation. **In React/Solid render
+ * paths, prefer [`visualRangeSet`] hoisted to a parent `createMemo`** —
+ * calling this per row is O(N²) by construction.
  */
 export function isInVisualRange(
   id: string,
@@ -130,13 +181,6 @@ export function isInVisualRange(
   cursor: string | null,
   blocks: BlockNode[],
 ): boolean {
-  if (!anchor || !cursor) return false;
-  const ids = flattenVisible(blocks);
-  const a = ids.indexOf(anchor);
-  const c = ids.indexOf(cursor);
-  if (a === -1 || c === -1) return false;
-  const lo = Math.min(a, c);
-  const hi = Math.max(a, c);
-  const me = ids.indexOf(id);
-  return me >= lo && me <= hi;
+  const set = visualRangeSet(anchor, cursor, blocks);
+  return set !== null && set.has(id);
 }

@@ -104,22 +104,32 @@ impl App {
     }
 
     /// `zR` — unfold every block on the current page. Emits one
-    /// `Op::SetCollapsed(false)` per id that's currently collapsed;
-    /// `outl_actions::set_block_collapsed` no-ops when the value
-    /// matches, so we don't bloat the log with redundant ops.
+    /// `Op::SetCollapsed(false)` per id in flat order. Every flip lands
+    /// in the op log, including no-ops on already-expanded blocks:
+    /// `outl_actions::set_block_collapsed` always appends an
+    /// `Op::SetCollapsed` (the CRDT needs every flip in the log to
+    /// converge concurrent flips across devices via HLC ordering).
+    /// `Ok(false)` from the action only reports "value didn't change";
+    /// it does **not** mean "log untouched".
     pub(crate) fn unfold_all(&mut self) {
         self.set_all_collapsed(false, "unfolded all");
     }
 
-    /// `zM` — fold every block on the current page that has children.
-    /// Same emit-only-on-change discipline as `unfold_all`.
+    /// `zM` — fold every block on the current page **that has
+    /// children**. Leaves are skipped because foldar um leaf hoje é
+    /// invisível, mas grava `Op::SetCollapsed(true)` no log; quando o
+    /// usuário adicionar children embaixo depois, eles aparecem
+    /// colapsados — surpresa real. Skip-leaves elimina esse smell e
+    /// reduz N (typical pages têm muitos leaves).
+    /// See `unfold_all` for the per-op-log-write cost note.
     pub(crate) fn fold_all(&mut self) {
         self.set_all_collapsed(true, "folded all");
     }
 
-    /// Shared body for `unfold_all` / `fold_all`. Iterates
-    /// `id_by_flat`, asks the workspace to set each block's collapsed
-    /// flag to `value`, and resyncs the local mirror at the end.
+    /// Shared body for `unfold_all` / `fold_all`. Walks the AST in
+    /// DFS preorder so a node's `children` is in scope; picks ids by
+    /// `should_emit` (see [`collect_collapse_candidates`]); asks the
+    /// workspace to flip each one and resyncs the local mirror.
     /// Errors are aggregated into a single toast — partial progress
     /// stands so the user doesn't get a half-folded outline.
     fn set_all_collapsed(&mut self, value: bool, success_msg: &str) {
@@ -132,10 +142,10 @@ impl App {
         if self.id_by_flat.is_empty() {
             return;
         }
-        let ids: Vec<_> = self.id_by_flat.clone();
+        let candidates = collect_collapse_candidates(&self.page.blocks, &self.id_by_flat, value);
         let mut errors = 0usize;
         let mut changed = 0usize;
-        for id in ids {
+        for id in candidates {
             match outl_actions::set_block_collapsed(&mut self.workspace, &self.hlc, id, value) {
                 Ok(true) => changed += 1,
                 Ok(false) => {}
@@ -155,6 +165,43 @@ impl App {
         } else {
             format!("{success_msg} ({changed})")
         };
+    }
+}
+
+/// Walk `blocks` in DFS preorder (mirror of `id_by_flat`'s build
+/// order) and return the ids `set_all_collapsed` should target.
+///
+/// When `value == true` (foldar), skip leaves: a `SetCollapsed(true)`
+/// on a leaf is invisible today but turns into a surprise the moment
+/// the user adds children embaixo. When `value == false` (descolapsar),
+/// include every id — descolapsar leaf é no-op no tree mas mantém o
+/// log consistente (every flip lands per CRDT contract).
+fn collect_collapse_candidates(
+    blocks: &[OutlineNode],
+    id_by_flat: &[outl_core::id::NodeId],
+    value: bool,
+) -> Vec<outl_core::id::NodeId> {
+    let mut out = Vec::new();
+    let mut cursor = 0usize;
+    walk_candidates(blocks, id_by_flat, &mut cursor, &mut out, value);
+    out
+}
+
+fn walk_candidates(
+    blocks: &[OutlineNode],
+    id_by_flat: &[outl_core::id::NodeId],
+    cursor: &mut usize,
+    out: &mut Vec<outl_core::id::NodeId>,
+    value: bool,
+) {
+    for b in blocks {
+        let id = id_by_flat.get(*cursor).copied();
+        *cursor += 1;
+        let keep = !value || !b.children.is_empty();
+        if let (true, Some(id)) = (keep, id) {
+            out.push(id);
+        }
+        walk_candidates(&b.children, id_by_flat, cursor, out, value);
     }
 }
 

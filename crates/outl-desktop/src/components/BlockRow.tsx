@@ -28,7 +28,6 @@ import { HighlightedCode } from "@outl/shared/highlight";
 import { looksLikeOutline, utf16OffsetToCharOffset } from "@outl/shared/paste";
 
 import { detectFence } from "@outl/shared/highlight";
-import { isInVisualRange } from "../lib/outline-walk";
 import { appState, setAppState } from "../lib/store";
 
 export interface BlockCallbacks {
@@ -77,6 +76,13 @@ export function BlockRow(props: {
   block: BlockNode;
   depth: number;
   editingId: string | null;
+  /** Memoised Visual-range membership set built once in
+   *  `<OutlineView />` (`createMemo` over outline + anchor + cursor +
+   *  mode). `null` outside Visual mode. We pay one DFS for the whole
+   *  outline; every row answers `Set.has(id)` in O(1). The previous
+   *  shape called `isInVisualRange(...)` per row, which rebuilt
+   *  `flattenVisible` from scratch each call — O(N²) on extension. */
+  visualSet: Set<string> | null;
   cb: BlockCallbacks;
 }) {
   const isEditing = () => props.editingId === props.block.id;
@@ -534,14 +540,7 @@ export function BlockRow(props: {
    *  `isSelected()` rendering-wise: when both are true we apply the
    *  Visual style so the user sees the contiguous band, not a single
    *  bright row at the cursor. */
-  const isInVisual = () =>
-    appState.mode === "vim-visual" &&
-    isInVisualRange(
-      props.block.id,
-      appState.visualAnchorId,
-      appState.selectedBlockId,
-      appState.outline,
-    );
+  const isInVisual = () => props.visualSet?.has(props.block.id) ?? false;
   const isInteractive = () => isEditing() || props.block.todo !== null;
 
   /** Outer row click — select without entering Insert. Lets the
@@ -796,6 +795,7 @@ export function BlockRow(props: {
               block={child}
               depth={props.depth + 1}
               editingId={props.editingId}
+              visualSet={props.visualSet}
               cb={props.cb}
             />
           )}
