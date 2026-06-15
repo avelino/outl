@@ -7,10 +7,10 @@
 //! doc for why.
 
 use outl_actions::{
-    append_block, create_after, delete, edit_text, indent, move_down, move_up, outdent,
-    paste_markdown as action_paste_markdown, set_block_collapsed as action_set_block_collapsed,
-    toggle_quote as action_toggle_quote, toggle_todo as action_toggle_todo, ActionError,
-    PasteAnchor,
+    append_block, create_after, create_before, delete, edit_text, indent, move_down, move_up,
+    outdent, paste_markdown as action_paste_markdown,
+    set_block_collapsed as action_set_block_collapsed, toggle_quote as action_toggle_quote,
+    toggle_todo as action_toggle_todo, ActionError, PasteAnchor,
 };
 use tauri::State;
 
@@ -24,20 +24,26 @@ use crate::state::{AppState, CreateBlockReply, PageView};
 pub(crate) fn create_block(
     page_id: String,
     after_id: Option<String>,
+    before_id: Option<String>,
     parent_id: Option<String>,
     text: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<CreateBlockReply, String> {
     let page = parse_node_id(&page_id)?;
     let text_owned = text.clone();
-    let (new_id, view) = finish_in_page_with(&state, page, |ws| match after_id {
-        Some(id) => {
-            let node = parse_node_id(&id).map_err(ActionError::NotInTree)?;
+    // Precedence: `before_id` (vim `O` / `Cmd+Shift+Tab`) wins over
+    // `after_id` (vim `o` / `Enter`); falling back to "last child of
+    // `parent_id`" (defaults to the page root) when neither is set.
+    let (new_id, view) = finish_in_page_with(&state, page, |ws| {
+        if let Some(id) = &before_id {
+            let node = parse_node_id(id).map_err(ActionError::NotInTree)?;
+            create_before(ws, &state.hlc, node, text_owned.as_deref())
+        } else if let Some(id) = &after_id {
+            let node = parse_node_id(id).map_err(ActionError::NotInTree)?;
             create_after(ws, &state.hlc, node, text_owned.as_deref())
-        }
-        None => {
-            let parent = match parent_id {
-                Some(id) => parse_node_id(&id).map_err(ActionError::NotInTree)?,
+        } else {
+            let parent = match &parent_id {
+                Some(id) => parse_node_id(id).map_err(ActionError::NotInTree)?,
                 None => page,
             };
             append_block(ws, &state.hlc, Some(parent), text_owned.as_deref())

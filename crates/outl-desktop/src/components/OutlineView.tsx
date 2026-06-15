@@ -177,6 +177,22 @@ export function OutlineView() {
       applyView(reply.view);
       setEditingId(reply.new_id);
     },
+    onCreateBefore: async (id, text) => {
+      const pageId = appState.page?.id;
+      if (!pageId) return;
+      // Commit the in-flight edit first, then create the sibling
+      // before it. `beforeId` lets the backend pick the fractional
+      // index; we focus the freshly-minted block via its returned id
+      // (same pattern as `onEnter`).
+      await handleError(editBlock(pageId, id, text));
+      const reply = await handleError(
+        createBlock(pageId, { beforeId: id, text: "" }),
+      );
+      if (!reply) return;
+      applyView(reply.view);
+      setAppState("selectedBlockId", reply.new_id);
+      setEditingId(reply.new_id);
+    },
     onIndent: async (id) => {
       const pageId = appState.page?.id;
       if (!pageId) return;

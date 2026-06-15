@@ -359,7 +359,7 @@ Skim the headings, then drill in.
 | Walk every node in the tree | `Tree::iter_nodes` / `node_count` | `crates/outl-core/src/tree/mod.rs` |
 | Children of a parent (in fractional order) | `outl_actions::tree::children_of` | `crates/outl-actions/src/tree.rs` |
 | Walk a subtree applying a closure | `outl_actions::tree::walk_subtree` | `crates/outl-actions/src/tree.rs` |
-| Sibling after a node + position helpers (for inserts) | `outl_actions::tree::next_sibling` / `position_after` / `position_for_new_last_child` | `crates/outl-actions/src/tree.rs` |
+| Sibling after a node + position helpers (for inserts) | `outl_actions::tree::next_sibling` / `position_after` / `position_before` / `position_for_new_last_child` | `crates/outl-actions/src/tree.rs` |
 | Which page (slug-bearing root child) does this node sit under? | `outl_actions::tree::enclosing_page_id` | `crates/outl-actions/src/tree.rs` |
 
 #### 3. Block mutations (outl-actions::block + collapsed + todo + quote)
@@ -370,6 +370,7 @@ Every entry here routes through `Workspace::apply` — never build a `LogOp` fro
 |---|---|---|
 | Append a single block under a parent | `outl_actions::block::append_block` | `crates/outl-actions/src/block.rs` |
 | Append a tree / forest (with children) under a parent | `outl_actions::block::append_tree` / `append_forest` (uses `BlockTreeSpec` → returns `BlockTreeOutcome`) | `crates/outl-actions/src/block.rs` |
+| Create sibling before a block | `outl_actions::block::create_before` | `crates/outl-actions/src/block.rs` |
 | Create sibling after / child under a block | `outl_actions::block::create_after` / `create_under` | `crates/outl-actions/src/block.rs` |
 | Edit a block's text | `outl_actions::block::edit_text` | `crates/outl-actions/src/block.rs` |
 | Indent / outdent / move up / move down a block | `outl_actions::block::indent` / `outdent` / `move_up` / `move_down` | `crates/outl-actions/src/block.rs` |

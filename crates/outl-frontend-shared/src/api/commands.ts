@@ -136,21 +136,28 @@ export function workspaceStats(): Promise<WorkspaceSummary> {
 // ---------------------------------------------------------------------------
 
 /**
- * Insert a new block under `pageId`, either as a sibling after
- * `afterId` or as the last child of `parentId` (defaults to the page
- * itself when both are null). Returns the refreshed {@link PageView}
- * paired with `new_id` — the id of the freshly-inserted block —
- * so the caller can put it into edit mode without diffing the
- * outline. See {@link CreateBlockReply} for why the id is on the
- * wire.
+ * Insert a new block under `pageId`. Placement precedence:
+ * `beforeId` (sibling immediately before — vim `O`) wins over
+ * `afterId` (sibling immediately after — vim `o`), falling back to
+ * the last child of `parentId` (defaults to the page itself when all
+ * are null). Returns the refreshed {@link PageView} paired with
+ * `new_id` — the id of the freshly-inserted block — so the caller
+ * can put it into edit mode without diffing the outline. See
+ * {@link CreateBlockReply} for why the id is on the wire.
  */
 export function createBlock(
   pageId: string,
-  opts: { afterId?: string | null; parentId?: string | null; text?: string | null },
+  opts: {
+    afterId?: string | null;
+    beforeId?: string | null;
+    parentId?: string | null;
+    text?: string | null;
+  },
 ): Promise<CreateBlockReply> {
   return invoke<CreateBlockReply>("create_block", {
     pageId,
     afterId: opts.afterId ?? null,
+    beforeId: opts.beforeId ?? null,
     parentId: opts.parentId ?? null,
     text: opts.text ?? null,
   });

@@ -188,7 +188,7 @@ Implementation lives in `lib/markdown-wrap.ts`: each handler reads `document.act
 | Chord | Action |
 |---|---|
 | `Enter` | Insert a `\n` inside the current block (multi-line text) |
-| `Cmd/Ctrl+Shift+Enter` | Commit + create a sibling below + edit it |
+| `Cmd/Ctrl+Shift+Enter` | Caret-aware: at col 0 → create a sibling *before* (vim `O`); past col 0 → commit + create a sibling *below* + edit it |
 | `Cmd/Ctrl+T` / `Cmd/Ctrl+Enter` | Toggle TODO / DONE on this block |
 | `Cmd/Ctrl+X` | Run the code block (mirrors TUI's `g x`) |
 | `Tab` / `Shift-Tab` | Indent / outdent |
@@ -221,6 +221,8 @@ This section captures only the **architectural decisions** a contributor needs t
 - **Visual highlight uses a memoised `Set<id>` at the parent, not a per-row predicate.** `<OutlineView />` builds `visualSet = createMemo(() => visualRangeSet(...))` once per outline/anchor/cursor/mode change and passes it down as a prop; `<BlockRow />` answers `props.visualSet?.has(id) ?? false` in O(1). The earlier shape called `isInVisualRange(id, anchor, cursor, outline)` per row, which rebuilt `flattenVisible(blocks)` from scratch each call — N rows × N DFS = O(N²) per Visual extension keystroke (visibly laggy from ~500 blocks on). The predicate `isInVisualRange` still exists in `lib/outline-walk.ts` but only for the unit-test suite; **no render path should call it**. Outside vim-visual mode, `visualSet` is `null` so every row short-circuits before touching the Set.
 
 - **Char-cursor nudge is one shared handler.** All 10 char-cursor catalog entries (`x` `X` `D` `C` `s` `r` `~` `e` `f` `F`) point at `charCursorNudge`. One source of truth means the message can't drift between catalog entries.
+
+- **`NewBlockAbove` (`O`) uses `beforeId`, not a post-creation move walk.** The handler calls `createBlock(pageId, { beforeId: anchor, text: "" })` directly — `outl_actions::block::create_before` handles the floor-slot swap internally when the anchor is the first child. The previous workaround (create at page tail, then loop `moveBlockDown`) was broken: the loop condition fired false immediately so the new block always landed at the bottom. Do not reintroduce the move-walk approach. While editing, `Cmd/Ctrl+Shift+Enter` is intercepted in `BlockRow`'s textarea keydown (not the global catalog) because it is caret-position aware — at column 0 it creates a sibling *before* (vim `O`), past column 0 it creates a sibling *below* (`onEnter`). That caret split is only knowable at the textarea level. `stopImmediatePropagation` there preempts the catalog's `Cmd/Ctrl+Shift+Enter` create-below binding (which still applies in Normal mode, where there is no caret).
 
 - **`p` / `P` paste handlers are not wired yet.** `Y` / `YankRange` fill `appState.yankRegister`, but pasting N blocks has a design call (siblings? children? after / before?) that's deliberately deferred.
 

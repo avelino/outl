@@ -429,31 +429,19 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
       const pageId = appState.page?.id;
       const anchor = appState.selectedBlockId;
       if (!pageId) return;
+      // `beforeId` lands the new block as the sibling immediately
+      // before the selected one (vim `O`); with nothing selected it
+      // falls back to appending at the page root.
       const reply = await safeCall(
-        createBlock(pageId, {
-          afterId: null,
-          parentId: null,
-          text: "",
-        }),
+        createBlock(
+          pageId,
+          anchor ? { beforeId: anchor, text: "" } : { parentId: null, text: "" },
+        ),
       );
       if (!reply) return;
       deps.applyView(reply.view);
-      const newId = reply.new_id;
-      // Walk it up until it sits immediately before the anchor.
-      let cursorOutline = reply.view.outline;
-      while (anchor) {
-        const visible = flattenVisible(cursorOutline);
-        const newIdx = visible.indexOf(newId);
-        const anchorIdx = visible.indexOf(anchor);
-        if (newIdx < 0 || anchorIdx < 0) break;
-        if (newIdx + 1 >= anchorIdx) break;
-        const stepped = await safeCall(moveBlockDown(pageId, newId));
-        if (!stepped) break;
-        deps.applyView(stepped);
-        cursorOutline = stepped.outline;
-      }
-      setAppState("selectedBlockId", newId);
-      setAppState("editingBlockId", newId);
+      setAppState("selectedBlockId", reply.new_id);
+      setAppState("editingBlockId", reply.new_id);
     },
 
     // ── block structure ops on the selected block ────────────────

@@ -25,7 +25,9 @@ use serde::{Deserialize, Serialize};
 use crate::error::ActionError;
 use crate::quote::toggle_quote as toggle_quote_prefix;
 use crate::todo::cycle_todo;
-use crate::tree::{next_sibling, position_after, position_for_new_last_child, previous_sibling};
+use crate::tree::{
+    next_sibling, position_after, position_before, position_for_new_last_child, previous_sibling,
+};
 
 /// Recursive spec for building a block + its descendants in one
 /// shot. The shape is what agents naturally produce ("write me a
@@ -149,6 +151,56 @@ pub fn create_after(
     let position = position_after(workspace, after)
         .ok_or_else(|| ActionError::MissingPosition(after.to_string()))?;
     create_with_position(workspace, hlc, parent, position, text)
+}
+
+/// Insert a new sibling immediately before `before`, sharing the same
+/// parent.
+///
+/// Mirror of [`create_after`] for the "open a block above this one"
+/// gesture (vim `O`, the desktop's `Cmd+Shift+Tab` at column 0). The
+/// new block lands between `before` and its preceding sibling, so the
+/// fractional index is computed by [`position_before`].
+pub fn create_before(
+    workspace: &mut Workspace,
+    hlc: &HlcGenerator,
+    before: NodeId,
+    text: Option<&str>,
+) -> Result<NodeId, ActionError> {
+    ensure_in_tree(workspace, before)?;
+    let parent = workspace
+        .tree()
+        .parent(before)
+        .ok_or_else(|| ActionError::NotInTree(before.to_string()))?;
+
+    if let Some(position) = position_before(workspace, before) {
+        return create_with_position(workspace, hlc, parent, position, text);
+    }
+
+    // `before` is the first child sitting at the fractional floor
+    // (`Fractional::first()`) — there is no representable slot beneath
+    // it. Mirror what `move_up` does: shift `before` up into the gap
+    // toward its next sibling, then drop the new block into the freed
+    // floor slot so it lands ahead of `before` while every sibling
+    // keeps its relative order.
+    let floor = workspace
+        .tree()
+        .position(before)
+        .cloned()
+        .ok_or_else(|| ActionError::MissingPosition(before.to_string()))?;
+    let next_pos =
+        next_sibling(workspace, before).and_then(|n| workspace.tree().position(n).cloned());
+    let shifted = Fractional::between(Some(&floor), next_pos.as_ref());
+    workspace.apply(wrap(
+        hlc,
+        Op::Move {
+            node: before,
+            new_parent: parent,
+            position: shifted,
+            old_parent: parent,
+            old_position: floor.clone(),
+        },
+    ))?;
+    create_with_position(workspace, hlc, parent, floor, text)
 }
 
 /// Append a new block as the last child of `parent`. Synonym for
@@ -588,6 +640,63 @@ mod tests {
             "new block must be a sibling of the anchor (same parent)"
         );
         assert_eq!(ws.block_text(new_id).as_deref(), Some("sibling"));
+    }
+
+    #[test]
+    fn create_before_inserts_sibling_directly_ahead_of_anchor() {
+        let (mut ws, hlc) = new_workspace();
+        let a = append_block(&mut ws, &hlc, None, Some("a")).unwrap();
+        let b = append_block(&mut ws, &hlc, None, Some("b")).unwrap();
+
+        let new_id = create_before(&mut ws, &hlc, b, Some("between")).unwrap();
+
+        assert_eq!(
+            ws.tree().parent(new_id),
+            ws.tree().parent(b),
+            "new block must be a sibling of the anchor (same parent)"
+        );
+        let order: Vec<_> = crate::tree::children_of(&ws, NodeId::root())
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(order, vec![a, new_id, b], "new block lands between a and b");
+        assert_eq!(ws.block_text(new_id).as_deref(), Some("between"));
+    }
+
+    #[test]
+    fn create_before_first_child_lands_at_the_front() {
+        let (mut ws, hlc) = new_workspace();
+        let a = append_block(&mut ws, &hlc, None, Some("a")).unwrap();
+
+        let new_id = create_before(&mut ws, &hlc, a, Some("head")).unwrap();
+
+        let order: Vec<_> = crate::tree::children_of(&ws, NodeId::root())
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(
+            order,
+            vec![new_id, a],
+            "new block becomes the first sibling"
+        );
+    }
+
+    #[test]
+    fn create_before_first_of_many_reorders_via_floor_shift() {
+        let (mut ws, hlc) = new_workspace();
+        let a = append_block(&mut ws, &hlc, None, Some("a")).unwrap();
+        let b = append_block(&mut ws, &hlc, None, Some("b")).unwrap();
+        let c = append_block(&mut ws, &hlc, None, Some("c")).unwrap();
+
+        // `a` sits at the fractional floor; inserting before it must
+        // shift `a` up and keep b / c in order.
+        let new_id = create_before(&mut ws, &hlc, a, Some("head")).unwrap();
+
+        let order: Vec<_> = crate::tree::children_of(&ws, NodeId::root())
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(order, vec![new_id, a, b, c]);
     }
 
     #[test]

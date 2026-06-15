@@ -89,7 +89,7 @@ The desktop honours `Normal`/`Visual` only while `editor.vim_mode = true`. The T
 | Yank current block (`Y`, alias of `y y`) | `Y` | `Y` | — |
 | Open `[[ref]]` / `#tag` / `((blk-…))` under cursor | `Enter` | `Enter` | tap |
 | New block below + Insert | `o` | `o` | toolbar `+` |
-| New block above + Insert | `O` | `O` | — |
+| New block above + Insert (creates a sibling *before* the selected block) | `O` | `O` | — |
 | Indent block | `Tab` | `Tab` | drag right |
 | Outdent block | `Shift+Tab` | `Shift+Tab` | drag left |
 | Move block up | `K` | `K` | drag |
@@ -138,7 +138,7 @@ The TUI ships it natively; the desktop has only a selected block id, so the char
 |---|---|---|---|
 | Commit + exit Insert | `Esc` | `Esc` / blur | blur |
 | Newline inside the block (multi-line text) | `Shift+Enter` | `Enter` | `Enter` |
-| Commit + new block below | `Enter` | `Cmd/Ctrl+Shift+Enter` | `Enter` |
+| Commit + new block (desktop is caret-aware: caret at col 0 → *before* the block / vim `O`; past col 0 → *below*) | `Enter` | `Cmd/Ctrl+Shift+Enter` | `Enter` |
 | Indent (stay in Insert) | `Tab` | `Tab` | drag |
 | Outdent (stay in Insert) | `Shift+Tab` | `Shift+Tab` | drag |
 | Delete block on empty | `Backspace` on empty | `Backspace` on empty | — |
