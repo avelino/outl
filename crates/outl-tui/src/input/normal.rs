@@ -126,8 +126,12 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                 PendingInputOp::FindCharForward => app.find_char_forward(ch),
                 PendingInputOp::FindCharBackward => app.find_char_backward(ch),
             }
+        } else {
+            // Non-char (Esc, arrows, …) cancels the pending op. Clear
+            // the prompt status so a stale `r… (replace)` / `f… (find →)`
+            // doesn't linger in the footer until the next status write.
+            app.status.clear();
         }
-        // Any non-char (Esc, arrows, etc) simply cancels.
         return Ok(false);
     }
 

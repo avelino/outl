@@ -300,6 +300,17 @@ export function BlockRow(props: {
       queueMicrotask(() => {
         textareaRef?.focus();
         autoSize();
+        // Apply pending caret intent (set by `EnterInsertAtEnd` etc.).
+        // We do it here, after focus, because the textarea ref is
+        // guaranteed populated by this point — `<Show>` mounted it
+        // synchronously and the microtask fence drained any pending
+        // Solid commits.
+        const intent = appState.caretIntent;
+        if (intent && textareaRef) {
+          const pos = intent === "end" ? textareaRef.value.length : 0;
+          textareaRef.setSelectionRange(pos, pos);
+          setAppState("caretIntent", null);
+        }
       });
     }
   });

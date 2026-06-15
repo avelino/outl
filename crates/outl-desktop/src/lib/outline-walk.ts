@@ -37,6 +37,28 @@ export function flattenVisible(blocks: BlockNode[]): string[] {
 }
 
 /**
+ * IDs of **every** block on the page, in flat DFS order, including
+ * blocks hidden under collapsed parents. Use this when an operation
+ * needs to act on the whole outline regardless of the fold state
+ * (vim `zR` / `zM`, full-page reindex, "select all", …).
+ *
+ * Distinct from [`flattenVisible`] precisely because `zR` must
+ * expand subtrees that are currently hidden — the visible-only walk
+ * would silently no-op on every descendant of a collapsed parent.
+ */
+export function flattenAll(blocks: BlockNode[]): string[] {
+  const out: string[] = [];
+  const walk = (bs: BlockNode[]) => {
+    for (const b of bs) {
+      out.push(b.id);
+      if (b.children.length > 0) walk(b.children);
+    }
+  };
+  walk(blocks);
+  return out;
+}
+
+/**
  * Return the next visible id after `current`, or `current` itself
  * when already at the bottom (clamps; no wrap). When `current` is
  * `null` or not in the outline, returns the first visible id.
@@ -93,8 +115,14 @@ export function visualRangeIds(
 
 /**
  * Predicate variant of [`visualRangeIds`] used by `<BlockRow />` to
- * decide whether to apply the Visual highlight. Hot path — runs for
+ * decide whether to apply the Visual highlight. Hot path: runs for
  * every block in the page on every Visual selection change.
+ *
+ * Walks the outline **once** (vs. the naive `visualRangeIds(...)` +
+ * `flattenVisible(...)` pair, which used to walk it twice — one
+ * round trip wasted per render). Solid's reactivity already caches
+ * `appState.outline` reference identity, so the cost per row is
+ * dominated by the single DFS walk + three `indexOf`s here.
  */
 export function isInVisualRange(
   id: string,
@@ -102,11 +130,13 @@ export function isInVisualRange(
   cursor: string | null,
   blocks: BlockNode[],
 ): boolean {
-  const range = visualRangeIds(anchor, cursor, blocks);
-  if (!range) return false;
+  if (!anchor || !cursor) return false;
   const ids = flattenVisible(blocks);
-  const lo = ids.indexOf(range.lo);
-  const hi = ids.indexOf(range.hi);
+  const a = ids.indexOf(anchor);
+  const c = ids.indexOf(cursor);
+  if (a === -1 || c === -1) return false;
+  const lo = Math.min(a, c);
+  const hi = Math.max(a, c);
   const me = ids.indexOf(id);
   return me >= lo && me <= hi;
 }

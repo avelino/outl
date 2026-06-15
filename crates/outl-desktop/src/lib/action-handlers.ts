@@ -40,6 +40,7 @@ import type { BlockNode, PageView } from "@outl/shared/api/types";
 import { runCodeBlock } from "./api";
 import { insertLink, wrapSelection } from "./markdown-wrap";
 import {
+  flattenAll,
   flattenVisible,
   nextVisibleId,
   previousVisibleId,
@@ -141,12 +142,16 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
   }
 
   /** Walk every block on the current page and set its `collapsed`
-   *  flag to `value`. The backend no-ops when the value matches, so
-   *  we don't have to filter client-side. */
+   *  flag to `value`. **Uses `flattenAll`**, not `flattenVisible`,
+   *  because the whole point of `zR` is to expand subtrees currently
+   *  hidden under a collapsed parent — the visible-only walk would
+   *  silently no-op on every descendant of a folded node. The
+   *  backend no-ops when the value already matches, so the loop
+   *  doesn't bloat the op log on already-expanded blocks. */
   async function applyCollapsedToAll(value: boolean) {
     const pageId = appState.page?.id;
     if (!pageId) return;
-    const ids = flattenVisible(appState.outline);
+    const ids = flattenAll(appState.outline);
     let lastView: PageView | undefined;
     for (const id of ids) {
       const view = await safeCall(setBlockCollapsed(pageId, id, value));
@@ -171,6 +176,19 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
     const seed = block.text.trim().split(/\s+/).slice(0, 4).join(" ");
     setAppState("pickerSeed", seed);
     setAppState("pickerOpen", true);
+  }
+
+  /** Shared status-line nudge fired by every char-cursor vim op
+   *  (`x` `X` `D` `C` `s` `r` `~` `e` `f` `F`). Desktop Normal mode
+   *  has only a selected block id, not a character cursor inside the
+   *  block, so these ops can't act locally — the user has to enter
+   *  Insert (`i`) and edit inside the textarea. One handler shared
+   *  by all 10 entries so the message stays in lockstep across the
+   *  catalog. */
+  function charCursorNudge() {
+    deps.setError(
+      "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
+    );
   }
 
   return {
@@ -313,26 +331,17 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
       if (!id) return;
       setAppState("editingBlockId", id);
     },
-    // `A` — Insert with caret jumped to end of block. The textarea
-    // mounts via `editingBlockId`; we then poke its `selectionStart`
-    // on the next microtask once it's in the DOM.
+    // `A` — Insert with caret jumped to end of block. We can't poke
+    // the textarea from here because `<Show>` hasn't necessarily
+    // mounted it yet; instead we hand the row a `caretIntent: "end"`
+    // signal and the row's own `createEffect` applies it the moment
+    // the ref is populated. See `store.ts` → `caretIntent` for the
+    // reasoning (racey microtask vs Solid render pipeline).
     EnterInsertAtEnd: () => {
       const id = appState.selectedBlockId;
       if (!id) return;
+      setAppState("caretIntent", "end");
       setAppState("editingBlockId", id);
-      // Defer to next tick so `<BlockRow />` had time to mount the
-      // textarea (Solid runs `<Show />` synchronously but ref
-      // assignment lands on the next microtask).
-      queueMicrotask(() => {
-        const el = document.querySelector<HTMLTextAreaElement>(
-          `textarea[data-block-id="${id}"]`,
-        );
-        if (el) {
-          const end = el.value.length;
-          el.focus();
-          el.setSelectionRange(end, end);
-        }
-      });
     },
     // `S` — clear the block's text and enter Insert at column 0.
     // Vim's "substitute line" / outline's "rewrite this block".
@@ -597,13 +606,23 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
         appState.outline,
       );
       if (!range) return;
+      // Snapshot the range as ids (NOT indices) up front. NodeIds are
+      // stable across the CRDT — `deleteBlock` is `Move(node, TRASH)`,
+      // not a re-keying — so we don't have to re-resolve them after
+      // each round-trip. We DO have to tolerate individual failures:
+      // if the range straddles a parent + descendants, deleting the
+      // parent moves the whole subtree to trash, and the follow-up
+      // delete on a descendant fails with "block already in trash"
+      // (or a peer's concurrent delete won the race). `safeCall`
+      // captures the error in the status line; we keep iterating so
+      // a single bad id doesn't strand the rest of the range.
       const ids = flattenVisible(appState.outline);
       const loIdx = ids.indexOf(range.lo);
       const hiIdx = ids.indexOf(range.hi);
-      // Delete bottom-up so each delete's id is still resolvable —
-      // top-down would invalidate ids when the backend re-projects
-      // the outline after each call.
       const targets: string[] = [];
+      // Bottom-up: when the range covers both a parent and its
+      // children, the children go first so the parent's move-to-trash
+      // doesn't pull a still-targeted descendant from under us.
       for (let i = hiIdx; i >= loIdx; i--) targets.push(ids[i]);
       let lastView: PageView | undefined;
       for (const id of targets) {
@@ -660,61 +679,21 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
 
     // ── Char-cursor ops (Normal) — TUI-only ──────────────────────
     //
-    // These need a character cursor inside the selected block —
+    // These need a character cursor inside the selected block,
     // something the desktop's Normal mode does not have (only a
     // selected block id). The catalog entries stay so vim users
-    // see them in the help overlay, but firing them surfaces a
-    // status-line nudge pointing the user at `i` + textarea edits.
-    DeleteCharUnderCursor: () => {
-      deps.setError(
-        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
-      );
-    },
-    DeleteCharBeforeCursor: () => {
-      deps.setError(
-        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
-      );
-    },
-    DeleteToEndOfBlock: () => {
-      deps.setError(
-        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
-      );
-    },
-    ChangeToEndOfBlock: () => {
-      deps.setError(
-        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
-      );
-    },
-    SubstituteChar: () => {
-      deps.setError(
-        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
-      );
-    },
-    ReplaceChar: () => {
-      deps.setError(
-        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
-      );
-    },
-    FindCharForward: () => {
-      deps.setError(
-        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
-      );
-    },
-    FindCharBackward: () => {
-      deps.setError(
-        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
-      );
-    },
-    ToggleCharCase: () => {
-      deps.setError(
-        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
-      );
-    },
-    CursorWordEnd: () => {
-      deps.setError(
-        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
-      );
-    },
+    // see them in the help overlay; firing any of them surfaces
+    // the same nudge via `charCursorNudge` (one source of truth).
+    DeleteCharUnderCursor: charCursorNudge,
+    DeleteCharBeforeCursor: charCursorNudge,
+    DeleteToEndOfBlock: charCursorNudge,
+    ChangeToEndOfBlock: charCursorNudge,
+    SubstituteChar: charCursorNudge,
+    ReplaceChar: charCursorNudge,
+    FindCharForward: charCursorNudge,
+    FindCharBackward: charCursorNudge,
+    ToggleCharCase: charCursorNudge,
+    CursorWordEnd: charCursorNudge,
 
     // ── inline markdown wrappers (Insert mode) ───────────────────
     //

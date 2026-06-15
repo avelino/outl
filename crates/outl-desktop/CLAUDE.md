@@ -212,7 +212,15 @@ This section captures only the **architectural decisions** a contributor needs t
 
 - **`*` / `#` is not vim-pure.** Without a char cursor, "word under cursor" isn't defined — we seed the picker with the first 4 words of the selected block's text instead. Document this in `docs/shortcuts.md` so users aren't surprised.
 
-- **Range ops walk bottom-up.** `DeleteRange` iterates `[hi → lo]` so each `deleteBlock` call's id is still resolvable — top-down would invalidate ids the moment the backend re-projects the outline.
+- **Range ops walk bottom-up + tolerate id-already-gone.** `DeleteRange` iterates `[hi → lo]` so children go before parents (the parent's move-to-trash would otherwise pull a still-targeted descendant out from under us). NodeIds are stable across the CRDT (`deleteBlock` is `Move(node, TRASH)`, not a re-keying), so the id snapshot taken before the loop stays valid; we only have to swallow individual failures (`safeCall` writes them to the status line) when a peer ate the same id concurrently or the range straddled a parent + descendants.
+
+- **`UnfoldAll` / `FoldAll` walk via `flattenAll`, not `flattenVisible`.** The whole point of `zR` is to expand subtrees currently hidden under a collapsed parent. The visible-only walk would silently no-op on every descendant of a folded node, so this is a real bug if `applyCollapsedToAll` reaches for the wrong helper. `flattenAll` lives in `lib/outline-walk.ts` next to `flattenVisible` so future "act on every block" ops have an obvious home.
+
+- **`A` (`EnterInsertAtEnd`) routes through `appState.caretIntent`.** The textarea is mounted by Solid's `<Show>` swap; poking it via `queueMicrotask` + `document.querySelector` after flipping `editingBlockId` was racey (the DOM node wasn't guaranteed to exist by the next microtask). The handler now sets `caretIntent: "end"` *before* `editingBlockId`; `<BlockRow />`'s own `createEffect` reads the intent on mount, applies `setSelectionRange`, and clears the signal. Same hook applies for any future caret-intent gestures (`B`/`b`-style "land at start of word", etc).
+
+- **`isInVisualRange` walks the outline once.** Hot path during Visual selection extension. The earlier `visualRangeIds(...)` + `flattenVisible(...)` pair walked the tree twice per block per render; the predicate now inlines both into a single DFS pass. Solid memoises by `appState.outline` reference, but per-block we still pay the walk — keep it cheap.
+
+- **Char-cursor nudge is one shared handler.** All 10 char-cursor catalog entries (`x` `X` `D` `C` `s` `r` `~` `e` `f` `F`) point at `charCursorNudge`. One source of truth means the message can't drift between catalog entries.
 
 - **`p` / `P` paste handlers are not wired yet.** `Y` / `YankRange` fill `appState.yankRegister`, but pasting N blocks has a design call (siblings? children? after / before?) that's deliberately deferred.
 

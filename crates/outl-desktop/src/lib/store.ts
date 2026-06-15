@@ -123,6 +123,22 @@ export interface AppStateShape {
    * an open default costs nothing on pages with no references.
    */
   backlinksOpen: boolean;
+  /**
+   * Caret intent the next mounting `<BlockRow />` textarea consumes
+   * the moment it lands in the DOM. Set by vim-style entry actions
+   * that need the caret somewhere other than where the click would
+   * leave it — today only `EnterInsertAtEnd` (`A` in vim) uses
+   * `"end"`. Cleared by `<BlockRow />` as soon as it applies the
+   * intent so a subsequent regular click doesn't get hijacked.
+   *
+   * Why a signal and not `queueMicrotask` + `document.querySelector`:
+   * the textarea is mounted by Solid's `<Show>` swap, which doesn't
+   * guarantee the DOM node exists by the next microtask. A signal
+   * lets the row itself apply the intent inside its own
+   * `createEffect` — same tick the textarea ref is populated, every
+   * time.
+   */
+  caretIntent: "end" | "start" | null;
   /** Picker overlay open state. `Cmd/Ctrl+P` toggles. */
   pickerOpen: boolean;
   /**
@@ -156,6 +172,7 @@ const [state, setState] = createStore<AppStateShape>({
   yankRegister: [],
   sidebarOpen: false,
   backlinksOpen: true,
+  caretIntent: null,
   pickerOpen: false,
   pickerSeed: null,
   settingsOpen: false,
