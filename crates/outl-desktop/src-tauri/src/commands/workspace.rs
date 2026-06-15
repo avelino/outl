@@ -2,8 +2,7 @@
 
 use std::path::PathBuf;
 
-use outl_actions::{open_today, render_page_md};
-use outl_core::id::NodeId;
+use outl_actions::open_today;
 use tauri::{Emitter, State};
 use tracing::warn;
 
@@ -158,26 +157,14 @@ pub(crate) fn reload_workspace(
     // capped `Cmd+Z` at one step whenever the TUI was open on the same
     // workspace: every TUI write fires `peer-ops-changed` → reload,
     // and the only snapshot surviving was the one recorded after the
-    // last reload.
-    let stale: Vec<NodeId> = {
-        let ws_guard = state.workspace.lock();
-        let history = state.history.lock();
-        match ws_guard.as_ref() {
-            Some(old) => history
-                .keys()
-                .filter(|id| render_page_md(old, **id) != render_page_md(&fresh, **id))
-                .copied()
-                .collect(),
-            None => history.keys().copied().collect(),
-        }
-    };
-    *state.workspace.lock() = Some(fresh);
+    // last reload. The rule lives in `helpers::invalidate_changed_history`
+    // so it stays unit-testable without a Tauri `AppHandle`.
     {
+        let old_guard = state.workspace.lock();
         let mut history = state.history.lock();
-        for id in stale {
-            history.remove(&id);
-        }
+        crate::helpers::invalidate_changed_history(old_guard.as_ref(), &fresh, &mut history);
     }
+    *state.workspace.lock() = Some(fresh);
     // Same split as `set_workspace` and the boot opener — reconcile
     // legacy / peer-pushed `.md` files in the background so the
     // frontend doesn't wait.

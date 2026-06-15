@@ -140,7 +140,7 @@ The Vite dev server runs on **port 1421** so it can coexist with `outl-mobile` (
 
 | Layer | Tool | What it covers |
 |-------|------|----------------|
-| Rust commands | `cargo test -p outl-desktop` | command shims, settings IO, fs_watcher (Phases 1+) |
+| Rust commands | `cargo test -p outl-desktop` | command shims, settings IO, fs_watcher (Phases 1+), surgical undo invalidation across a peer reload (`helpers::invalidate_changed_history` — only pages whose projection changed lose their stacks) |
 | Frontend logic | `bun --filter outl-desktop test` | scaffold smoke (today), components + helpers (Phases 1+) |
 
 Frontend suites today: `src/setup.test.ts` (scaffold smoke — `@outl/shared` alias resolves), `src/lib/chord-format.test.ts`, `src/lib/markdown-wrap.test.ts`, `src/lib/outline-walk.test.ts`, and `src/lib/action-handlers.test.ts` (regression tests for the `OpenRefUnderCursor` handler — Normal-mode `Enter` enters Insert on the selected block even when it carries a `[[ref]]`, and only a backlink-row selection opens the source page; pins #70).
