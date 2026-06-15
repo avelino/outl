@@ -29,44 +29,26 @@ The buffer carries the working text; on commit we replace the AST node's `.text`
 
 ## Navigation (Normal)
 
-| Key | Action |
-|-----|--------|
-| `t` / `Home` | journal of today |
-| `[` | previous journal |
-| `]` | next journal |
-| `g j` | jump to today (chord) |
-| `Ctrl+P` | quick switcher (pages + journals, fuzzy) |
-| `Tab` | indent current block |
-| `Shift-Tab` | outdent current |
-| `j` / `k` / arrows | move selection |
-| `Enter` | open `[[ref]]` / `#tag` / journal / block ref (`((blk-X))` / `!((blk-X))`) under cursor, else Insert. On a block ref it jumps to the source page and positions the cursor on the referenced block; orphan handles surface a status message and stay put. |
-| `i` / `Enter` | enter Insert at end of current block |
-| `I` | enter Insert at start of current block |
-| `o` | new block below + Insert |
-| `O` | new block above + Insert |
-| `dd` | delete current block (chord) |
-| `c` | fold / unfold the current block. Bullet row shows `▼ `/`▶ ` for parents (two-space gap on leaves so columns stay flush). Hidden subtrees are skipped by `j`/`k`. Persisted as `Op::SetCollapsed` in the op log — converges across devices through the CRDT, no per-file last-write-wins. |
-| `y r` | copy current block's ref handle (`((blk-XXXXXX))`) to OS clipboard (via `arboard`) + `last_yanked_ref` (chord). Status flips to `yanked … (clipboard unavailable)` on headless / no-display environments. |
-| `?` | toggle help popup |
-| `q q` | quit (chord — single `q` arms; second `q` confirms) |
-| `Ctrl-C` | quit (commits pending Insert first) |
+The full chord catalog (TUI + desktop side-by-side) lives in [`docs/shortcuts.md`](../../docs/shortcuts.md).
+This section captures only the **architectural / TUI-specific behaviour** a contributor needs before touching `input/normal.rs`:
 
-## Insert mode keys
+- **`c` is fold, not vim's "change".** Bullet row shows `▼ `/`▶ ` for parents (two-space gap on leaves so columns stay flush). Hidden subtrees are skipped by `j`/`k`. Persisted as `Op::SetCollapsed` in the op log — converges across devices through the CRDT, no per-file last-write-wins.
+- **`y r` clipboard fallback.** `y r` (chord) copies `((blk-XXXXXX))` to the OS clipboard via `arboard` **and** stashes it in `last_yanked_ref`. Status flips to `yanked … (clipboard unavailable)` on headless / no-display environments — the in-app yank register still works.
+- **`Enter` is overloaded.** Open `[[ref]]` / `#tag` / journal / block ref (`((blk-X))` / `!((blk-X))`) under cursor, else enter Insert. On a block ref it jumps to the source page and positions the cursor on the referenced block; orphan handles surface a status message and stay put.
+- **Quit is chord-only.** `q q` arms + confirms (single `q` is too easy to hit by accident). `Z Z` is the vim "save and quit" alias — outl auto-commits on every Normal boundary, so it reduces to `q q`. `Ctrl+C` commits any in-flight Insert before quitting.
+- **`r` / `f` / `F` use `state.pending_input_op`.** A one-shot enum (mutually exclusive with `pending_chord`) consumed by the next `Char(c)` keystroke. Any other keystroke cancels.
+- **`*` / `#` reuse the workspace search.** `search_word_under_cursor` extracts the word the cursor sits on (whitespace-bounded), opens the `/` overlay machinery, accepts the first hit, persists the rest into `last_search` so `n` / `N` walk them.
+- **Visual range capture.** Every Visual exit (`Esc`, `y`, `d`) routes through `remember_visual_range` so `g v` can restore the last range.
 
-| Key | Action |
-|-----|--------|
-| `Esc` | commit (write buffer → AST → disk) |
-| `Enter` | commit + new block below + continue editing |
-| `Tab` | indent block (stay in Insert) |
-| `Shift-Tab` | outdent block (stay in Insert) |
-| `Backspace` on empty | delete block, move to previous |
-| `Backspace` otherwise | delete previous char |
-| chars / arrows / Home / End | normal text editing |
-| `(`, `[`, `{` | auto-pair with closing |
-| `[[` | page-ref autocomplete (title fuzzy match) |
-| `#` | tag autocomplete |
-| `((` | block-ref autocomplete (block text fuzzy match → inserts `((blk-XXXXXX))`) |
-| `/` | slash command autocomplete (same registry as `:` palette) |
+## Insert mode
+
+Full Insert key list is in [`docs/shortcuts.md`](../../docs/shortcuts.md).
+TUI-specific contracts worth remembering:
+
+- **`Esc` commits** through `commit_insert` (writes buffer → AST → disk via `outl_md::reconcile_md`). Aborting without commit is `abort_insert` — wired to nothing today; we never lose user keystrokes silently.
+- **`Enter` always commits and continues.** It's commit + new block below + park in Insert on the new block. The Insert-mode commit path also drains `pending_reload` (peer-ops poller held it back during the edit).
+- **`Backspace` on an empty block deletes the block** and moves selection to the previous one — the only structural mutation that can happen from Insert.
+- **Autocomplete triggers** are pure trigger-detection inside the buffer (`[[`, `#`, `((`, `/`); they own the keystream while their popup is open. See `actions/autocomplete.rs` for the trigger detector contract.
 
 ## Visual conventions
 

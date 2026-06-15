@@ -96,7 +96,7 @@ pub(super) fn cross_block_step(app: &mut App, delta: i32) {
         return;
     }
     app.cursor_col = pref_col;
-    app.enter_insert(false);
+    app.enter_insert(crate::actions::block::InsertCursor::AtCursor);
 }
 
 /// Is `cursor` (char index) sitting inside an *open* fenced code block?

@@ -47,6 +47,23 @@ No characters insert themselves — every key is a command.
 |-----|--------|
 | `i` | Edit current block (Insert mode) |
 | `I` | Edit, cursor at start of block |
+| `a` | Edit, cursor one char to the right (vim "append"). Clamps at end of block so `a` at end-of-line behaves like `i`. |
+| `A` | Edit, cursor at end of block (vim "append at end") |
+| `x` | Delete char under cursor (Normal mode) |
+| `X` | Delete char before cursor (Normal-mode Backspace) |
+| `D` | Delete from cursor to end of block (vim `d$`) |
+| `C` | Delete to end of block + enter Insert (vim `c$`) |
+| `S` | Clear block + enter Insert at column 0 (vim "substitute line") |
+| `s` | Delete char under cursor + enter Insert (vim "substitute char") |
+| `r{ch}` | Replace char under cursor with next typed char, stays in Normal (vim `r`) |
+| `f{ch}` / `F{ch}` | Find next / previous occurrence of the next typed char on the current block |
+| `~` | Toggle case of char under cursor; cursor advances one position |
+| `Y` | Yank current block (alias of `y y`) |
+| `e` | Cursor to the end of the current / next word (vim `e`; pairs with `w`) |
+| `*` / `#` | Search workspace for the word under cursor (forward / backward). Walk results with `n` / `N`. |
+| `z R` / `z M` | Unfold all / fold all blocks on the current page (chord) |
+| `z z` | Center viewport vertically on the cursor (chord) |
+| `g v` | Re-enter Visual mode at the last captured range (chord) |
 | `o` / `O` | New block below / above |
 | `Enter` | Open `[[ref]]` / `#tag` / journal / block ref (`((blk-X))` / `!((blk-X))`) under cursor (otherwise edit). On a block ref it opens the source page and lands the cursor on the referenced block; orphan handles surface a status message and stay put. |
 | `j` / `k` / `↑` / `↓` | Move between blocks |
@@ -70,6 +87,7 @@ No characters insert themselves — every key is a command.
 | `B` | Toggle the inline backlinks section below the outline |
 | `?` | Toggle this help popup |
 | `q q` / `Ctrl+C` | Quit — `q` alone arms a chord, second `q` confirms |
+| `Z Z` | Quit (vim's "save and quit"). outl already commits Insert on every Normal boundary, so this is equivalent to `q q`; kept distinct so vim muscle memory works. |
 
 ### Insert
 
@@ -131,7 +149,9 @@ A range of blocks is highlighted.
 | `Esc` / `v` / `V` | Cancel, back to Normal |
 | `j` / `k` / `↑` / `↓` | Extend the range |
 | `d` / `x` | Delete the selected range |
-| `Tab` / `Shift-Tab` | Batch indent / outdent the selected range |
+| `y` | Yank the selected range to the register |
+| `Tab` / `>` | Batch indent the selected range |
+| `Shift-Tab` / `<` | Batch outdent the selected range |
 
 ## Overlays
 

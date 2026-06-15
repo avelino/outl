@@ -120,7 +120,8 @@ function eventToChord(e: KeyboardEvent): Chord | null {
 function keyEq(a: Key, b: Key): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === "Char" && b.kind === "Char") return a.value === b.value;
-  if (a.kind === "Function" && b.kind === "Function") return a.value === b.value;
+  if (a.kind === "Function" && b.kind === "Function")
+    return a.value === b.value;
   return true;
 }
 
@@ -133,7 +134,9 @@ function seqEq(a: Chord[], b: Chord[]): boolean {
 }
 
 function isPrefix(prefix: Chord[], full: Chord[]): boolean {
-  return prefix.length < full.length && prefix.every((c, i) => chordEq(c, full[i]));
+  return (
+    prefix.length < full.length && prefix.every((c, i) => chordEq(c, full[i]))
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -141,9 +144,11 @@ function isPrefix(prefix: Chord[], full: Chord[]): boolean {
 // ---------------------------------------------------------------------------
 
 function detectMode(): ShortcutMode {
-  if (appState.pickerOpen || appState.settingsOpen || appState.helpOpen) return "overlay";
+  if (appState.pickerOpen || appState.settingsOpen || appState.helpOpen)
+    return "overlay";
   // `appState.mode` already tracks Normal/Insert/Visual when set
   // explicitly by handlers (e.g. EnterVisual / ExitInsert).
+  if (appState.mode === "vim-visual") return "visual";
   if (appState.mode === "vim-normal") return "normal";
   if (appState.mode === "vim-insert") return "insert";
   // DOM fallback for the no-vim-mode user: focus in textarea =
@@ -165,7 +170,9 @@ function detectMode(): ShortcutMode {
  * fall back to a `console.warn` so the user sees which actions
  * still need wiring during development.
  */
-export type ActionHandlers = Partial<Record<Action["kind"], () => void | Promise<void>>>;
+export type ActionHandlers = Partial<
+  Record<Action["kind"], () => void | Promise<void>>
+>;
 
 async function dispatch(action: Action, handlers: ActionHandlers) {
   const h = handlers[action.kind];
@@ -250,12 +257,8 @@ export async function installShortcuts(
     // (Insert), and inside a textarea the Insert binding has to win
     // even though Global is declared first in `defaults.rs`.
     const hit =
-      bindings.find(
-        (b) => b.mode === mode && seqEq(b.chord, sequence),
-      ) ??
-      bindings.find(
-        (b) => b.mode === "global" && seqEq(b.chord, sequence),
-      );
+      bindings.find((b) => b.mode === mode && seqEq(b.chord, sequence)) ??
+      bindings.find((b) => b.mode === "global" && seqEq(b.chord, sequence));
     if (hit) {
       // Only preventDefault when we actually have a handler ready —
       // otherwise we'd swallow legitimate keystrokes (e.g. `Enter`

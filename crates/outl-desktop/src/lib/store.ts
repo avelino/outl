@@ -18,7 +18,12 @@ import type {
   WorkspaceSummary,
 } from "@outl/shared/api/types";
 
-export type Mode = "normal" | "edit" | "vim-normal" | "vim-insert";
+export type Mode =
+  | "normal"
+  | "edit"
+  | "vim-normal"
+  | "vim-insert"
+  | "vim-visual";
 
 export interface AppStateShape {
   /** `null` until the user picks a workspace or boot opener finishes. */
@@ -74,6 +79,29 @@ export interface AppStateShape {
   /** Editor mode. `edit` while a block's textarea is mounted. */
   mode: Mode;
   /**
+   * Block id where the current Visual selection was anchored. Set by
+   * `EnterVisual`, cleared on exit. The Visual range covers every
+   * block from this id to `selectedBlockId` in DFS order — direction
+   * doesn't matter, the renderer picks `[lo, hi]` itself.
+   */
+  visualAnchorId: string | null;
+  /**
+   * Last Visual range captured the moment the user left Visual mode
+   * (Esc, yank, delete). `gv` re-enters Visual with the same range.
+   * `null` until the first Visual session of the app instance.
+   *
+   * Stores both endpoints by id so an outline mutation between the
+   * exit and the `gv` re-entry doesn't shift the range (block ids are
+   * stable; flat indices aren't).
+   */
+  lastVisualRange: { lo: string; hi: string } | null;
+  /**
+   * Yank register — list of block texts copied via `yy` (Y) or `y`
+   * in Visual. `p` / `P` paste these (handlers TBD). One register
+   * cross-block (vim convention).
+   */
+  yankRegister: string[];
+  /**
    * Sidebar (left pane) visibility. Toggled with `Cmd/Ctrl+Shift+E`
    * (mirrors VS Code's "Show Explorer" — see `outl-shortcuts`).
    *
@@ -97,6 +125,13 @@ export interface AppStateShape {
   backlinksOpen: boolean;
   /** Picker overlay open state. `Cmd/Ctrl+P` toggles. */
   pickerOpen: boolean;
+  /**
+   * Optional pre-fill query consumed by `<Picker />` the moment it
+   * opens. Set by `*` / `#` (Normal mode "search inside the selected
+   * block") before flipping `pickerOpen`. The picker clears this on
+   * close so the next manual `Cmd+P` opens blank.
+   */
+  pickerSeed: string | null;
   /** Settings modal open state. `Cmd/Ctrl+,` toggles. */
   settingsOpen: boolean;
   /** Help overlay open state. `?` in Normal mode toggles. */
@@ -116,9 +151,13 @@ const [state, setState] = createStore<AppStateShape>({
   selectedBacklinkBlockId: null,
   editingBlockId: null,
   mode: "normal",
+  visualAnchorId: null,
+  lastVisualRange: null,
+  yankRegister: [],
   sidebarOpen: false,
   backlinksOpen: true,
   pickerOpen: false,
+  pickerSeed: null,
   settingsOpen: false,
   helpOpen: false,
   lastError: null,

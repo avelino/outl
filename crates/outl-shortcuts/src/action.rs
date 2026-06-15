@@ -54,6 +54,58 @@ pub enum Action {
     EnterInsert,
     /// Enter Insert at start of current block (TUI `I`).
     EnterInsertAtStart,
+    /// Enter Insert one char past the cursor (vim's `a` — "append"). Clamps at
+    /// end of buffer so `a` at the last position behaves like `i`.
+    EnterInsertAfter,
+    /// Enter Insert with the cursor jumped to end of block (vim's `A`).
+    EnterInsertAtEnd,
+    /// Delete the char under the cursor in Normal mode (vim `x`).
+    DeleteCharUnderCursor,
+    /// Delete the char before the cursor in Normal mode (vim `X`).
+    DeleteCharBeforeCursor,
+    /// Delete from cursor to end of block (vim `D` / `d$`).
+    DeleteToEndOfBlock,
+    /// `D` + enter Insert at the new EOL (vim `C` / `c$`).
+    ChangeToEndOfBlock,
+    /// Clear the current block's text and enter Insert at column 0
+    /// (vim `S` / `cc`).
+    SubstituteBlock,
+    /// Delete the char under cursor and enter Insert (vim `s` / `xi`).
+    SubstituteChar,
+    /// Replace the char under the cursor with the next typed char
+    /// without entering Insert (vim `r{ch}`). The TUI implements this
+    /// via a one-shot "pending input op" — the desktop wires it to a
+    /// modal prompt or simply doesn't expose it outside vim_mode.
+    ReplaceChar,
+    /// Find next occurrence of the next typed char on the current
+    /// block, forward (vim `f{ch}`).
+    FindCharForward,
+    /// Find previous occurrence of the next typed char (vim `F{ch}`).
+    FindCharBackward,
+    /// Toggle the case of the char under the cursor and advance one
+    /// position (vim `~`).
+    ToggleCharCase,
+    /// Move the cursor to the end of the current / next word
+    /// (vim `e`). Distinct from `w` which lands at word *start*.
+    CursorWordEnd,
+    /// Unfold every block on the current page (vim `zR`).
+    UnfoldAll,
+    /// Fold every block on the current page (vim `zM`).
+    FoldAll,
+    /// Center the viewport vertically on the selected block
+    /// (vim `zz`).
+    CenterViewport,
+    /// Search the workspace for the word under cursor, forward
+    /// (vim `*`). `n` / `N` then walk through the results.
+    SearchWordForward,
+    /// Same as `SearchWordForward` but backward (vim `#`).
+    SearchWordBackward,
+    /// Re-enter Visual mode at the last captured range (vim `gv`).
+    ReselectLastVisual,
+    /// Indent every block in the Visual range (vim `>` in Visual).
+    IndentVisualRange,
+    /// Outdent every block in the Visual range (vim `<` in Visual).
+    OutdentVisualRange,
     /// New block below + Insert (TUI `o`; desktop `Enter` in Insert).
     NewBlockBelow,
     /// New block above + Insert (TUI `O`).
@@ -86,6 +138,8 @@ pub enum Action {
     // ── visual / range ───────────────────────────────────────────
     /// Enter Visual mode (TUI `v`).
     EnterVisual,
+    /// Yank the currently selected block to the register (vim `yy` / `Y`).
+    YankCurrentBlock,
     /// Yank the visual range to register.
     YankRange,
     /// Delete the visual range.

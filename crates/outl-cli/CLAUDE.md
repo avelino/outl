@@ -30,6 +30,10 @@ A path stored in `config.toml` that no longer exists on disk is **skipped silent
 
 ## Commands
 
+> Full subcommand surface (every flag, JSON envelope shape, MCP mapping) lives in [`docs/cli.md`](../../docs/cli.md).
+> The lists below are a navigable index for contributors — one line each, by intent.
+> Don't add full flag tables here; they belong in `docs/cli.md` (root `CLAUDE.md` → "One owner per fact").
+
 ### Lifecycle / one-shot
 
 - `outl` — open TUI in current directory (also `outl tui [<path>]`).

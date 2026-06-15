@@ -41,7 +41,9 @@ export function WorkspacePicker(props: { onPicked: () => void }) {
     <div class="flex h-full flex-col items-center justify-center gap-6 p-8">
       <div class="text-center">
         <h1 class="text-3xl font-semibold">outl</h1>
-        <p class="mt-2 opacity-70">Local-first outliner — pick a folder to begin.</p>
+        <p class="mt-2 opacity-70">
+          Local-first outliner — pick a folder to begin.
+        </p>
       </div>
 
       <button
@@ -54,9 +56,9 @@ export function WorkspacePicker(props: { onPicked: () => void }) {
       </button>
 
       <div class="max-w-md text-center text-xs opacity-50">
-        Suggestion: a folder inside iCloud Drive (macOS), Dropbox, or
-        Syncthing. outl writes per-actor op log files that any of
-        those file syncs propagate cleanly between devices.
+        Suggestion: a folder inside iCloud Drive (macOS), Dropbox, or Syncthing.
+        outl writes per-actor op log files that any of those file syncs
+        propagate cleanly between devices.
       </div>
 
       {error() && (

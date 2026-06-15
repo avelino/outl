@@ -147,6 +147,19 @@ pub(crate) enum Focus {
     },
 }
 
+/// An armed Normal-mode op waiting for a follow-up character. Armed
+/// by `r`, `f`, `F`; consumed by the next `Char(_)` keystroke. The
+/// follow-up resolution lives in `input::normal`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PendingInputOp {
+    /// `r{ch}` — replace the char under the cursor with `ch`.
+    ReplaceChar,
+    /// `f{ch}` — find next `ch` on the current block, forward.
+    FindCharForward,
+    /// `F{ch}` — find previous `ch`, backward.
+    FindCharBackward,
+}
+
 /// One reversible step.
 #[derive(Debug, Clone)]
 pub(crate) struct HistorySnapshot {
@@ -381,7 +394,18 @@ pub(crate) struct App {
     /// content starts from the top, not at a stale offset.
     pub(crate) help_scroll: u16,
     pub(crate) pending_chord: Option<char>,
+    /// Armed Normal-mode op waiting for the next keystroke. `r`, `f`,
+    /// `F` arm this; the next `Char(c)` consumes it and applies the
+    /// corresponding action. Mutually exclusive with `pending_chord`
+    /// — both are armed by a single keystroke and the next key
+    /// resolves exactly one of them.
+    pub(crate) pending_input_op: Option<PendingInputOp>,
     pub(crate) status: String,
+
+    /// Last Visual range, captured every time the user leaves Visual
+    /// mode. vim's `gv` re-enters Visual with this range. `None` means
+    /// no Visual session has happened yet in this app instance.
+    pub(crate) last_visual: Option<(usize, usize)>,
 
     /// Non-fatal parser recoveries for the currently-loaded `.md`.
     ///

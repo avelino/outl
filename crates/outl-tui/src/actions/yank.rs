@@ -126,6 +126,7 @@ impl App {
         }
         let n = grabbed.len();
         self.yank_register = grabbed;
+        self.remember_visual_range();
         self.mode = Mode::Normal;
         self.status = format!("yanked {n} block{}", if n == 1 { "" } else { "s" });
     }

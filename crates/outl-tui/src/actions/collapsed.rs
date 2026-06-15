@@ -102,6 +102,60 @@ impl App {
         }
         self.recompute_hidden_by_collapse();
     }
+
+    /// `zR` — unfold every block on the current page. Emits one
+    /// `Op::SetCollapsed(false)` per id that's currently collapsed;
+    /// `outl_actions::set_block_collapsed` no-ops when the value
+    /// matches, so we don't bloat the log with redundant ops.
+    pub(crate) fn unfold_all(&mut self) {
+        self.set_all_collapsed(false, "unfolded all");
+    }
+
+    /// `zM` — fold every block on the current page that has children.
+    /// Same emit-only-on-change discipline as `unfold_all`.
+    pub(crate) fn fold_all(&mut self) {
+        self.set_all_collapsed(true, "folded all");
+    }
+
+    /// Shared body for `unfold_all` / `fold_all`. Iterates
+    /// `id_by_flat`, asks the workspace to set each block's collapsed
+    /// flag to `value`, and resyncs the local mirror at the end.
+    /// Errors are aggregated into a single toast — partial progress
+    /// stands so the user doesn't get a half-folded outline.
+    fn set_all_collapsed(&mut self, value: bool, success_msg: &str) {
+        if !matches!(self.focus, Focus::Outline) {
+            return;
+        }
+        if !matches!(self.mode, Mode::Normal) {
+            return;
+        }
+        if self.id_by_flat.is_empty() {
+            return;
+        }
+        let ids: Vec<_> = self.id_by_flat.clone();
+        let mut errors = 0usize;
+        let mut changed = 0usize;
+        for id in ids {
+            match outl_actions::set_block_collapsed(&mut self.workspace, &self.hlc, id, value) {
+                Ok(true) => changed += 1,
+                Ok(false) => {}
+                Err(_) => errors += 1,
+            }
+        }
+        // Resync the mirror from the authoritative tree state.
+        self.collapsed.clear();
+        for &id in &self.id_by_flat {
+            if self.workspace.tree().is_collapsed(id) {
+                self.collapsed.insert(id);
+            }
+        }
+        self.recompute_hidden_by_collapse();
+        self.status = if errors > 0 {
+            format!("{success_msg} ({changed} ok, {errors} failed)")
+        } else {
+            format!("{success_msg} ({changed})")
+        };
+    }
 }
 
 /// DFS walk over `blocks` populating `hidden` (in flat preorder).

@@ -65,3 +65,48 @@ export function previousVisibleId(
   if (idx === -1) return ids[0];
   return ids[Math.max(idx - 1, 0)];
 }
+
+/**
+ * Resolve a Visual range to the inclusive `[lo, hi]` pair of ids in
+ * DFS visible order. Caller passes anchor + cursor; this function
+ * orders them so the rest of the codebase doesn't have to care about
+ * direction (anchor below cursor or above).
+ *
+ * Returns `null` when either endpoint isn't visible (e.g. collapsed
+ * subtree shifted the outline between Visual entry and the current
+ * read). Caller should treat that as "no range".
+ */
+export function visualRangeIds(
+  anchor: string | null,
+  cursor: string | null,
+  blocks: BlockNode[],
+): { lo: string; hi: string } | null {
+  if (!anchor || !cursor) return null;
+  const ids = flattenVisible(blocks);
+  const a = ids.indexOf(anchor);
+  const c = ids.indexOf(cursor);
+  if (a === -1 || c === -1) return null;
+  const lo = Math.min(a, c);
+  const hi = Math.max(a, c);
+  return { lo: ids[lo], hi: ids[hi] };
+}
+
+/**
+ * Predicate variant of [`visualRangeIds`] used by `<BlockRow />` to
+ * decide whether to apply the Visual highlight. Hot path — runs for
+ * every block in the page on every Visual selection change.
+ */
+export function isInVisualRange(
+  id: string,
+  anchor: string | null,
+  cursor: string | null,
+  blocks: BlockNode[],
+): boolean {
+  const range = visualRangeIds(anchor, cursor, blocks);
+  if (!range) return false;
+  const ids = flattenVisible(blocks);
+  const lo = ids.indexOf(range.lo);
+  const hi = ids.indexOf(range.hi);
+  const me = ids.indexOf(id);
+  return me >= lo && me <= hi;
+}

@@ -35,8 +35,7 @@ export function OutlineView() {
   // `o`, `i`, `j/k`, …) without prop-drilling callbacks. Local
   // shorthand here keeps the JSX readable.
   const editingId = () => appState.editingBlockId;
-  const setEditingId = (id: string | null) =>
-    setAppState("editingBlockId", id);
+  const setEditingId = (id: string | null) => setAppState("editingBlockId", id);
 
   /**
    * Auto-select the first visible block whenever the *page itself*
@@ -289,38 +288,38 @@ export function OutlineView() {
 
       <div class="min-w-0 flex-1 overflow-y-auto px-12 py-6">
         <div class="mx-auto w-full max-w-3xl">
-        <ParseWarningsBanner warnings={appState.parseWarnings} />
-        <Show
-          when={appState.outline.length > 0}
-          fallback={
-            <button
-              type="button"
-              onClick={addFirstBlock}
-              class="rounded px-3 py-2 text-sm opacity-60 hover:bg-(--color-outl-fg)/5 hover:opacity-100"
-            >
-              {appState.page ? "Click to add the first block" : "Loading…"}
-            </button>
-          }
-        >
-          <For each={appState.outline}>
-            {(block) => (
-              <BlockRow
-                block={block}
-                depth={0}
-                editingId={editingId()}
-                cb={cb}
-              />
-            )}
-          </For>
-        </Show>
+          <ParseWarningsBanner warnings={appState.parseWarnings} />
+          <Show
+            when={appState.outline.length > 0}
+            fallback={
+              <button
+                type="button"
+                onClick={addFirstBlock}
+                class="rounded px-3 py-2 text-sm opacity-60 hover:bg-(--color-outl-fg)/5 hover:opacity-100"
+              >
+                {appState.page ? "Click to add the first block" : "Loading…"}
+              </button>
+            }
+          >
+            <For each={appState.outline}>
+              {(block) => (
+                <BlockRow
+                  block={block}
+                  depth={0}
+                  editingId={editingId()}
+                  cb={cb}
+                />
+              )}
+            </For>
+          </Show>
 
-        {/*
-         * Backlinks render inline below the outline (TUI parity),
-         * separated by a soft full-width rule. Hidden when the
-         * section is toggled off (Cmd+Shift+B) or when the current
-         * page has no incoming refs.
-         */}
-        <InlineBacklinks />
+          {/*
+           * Backlinks render inline below the outline (TUI parity),
+           * separated by a soft full-width rule. Hidden when the
+           * section is toggled off (Cmd+Shift+B) or when the current
+           * page has no incoming refs.
+           */}
+          <InlineBacklinks />
         </div>
       </div>
 

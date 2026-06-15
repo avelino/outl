@@ -64,6 +64,8 @@ impl App {
             help_tab: 0,
             help_scroll: 0,
             pending_chord: None,
+            pending_input_op: None,
+            last_visual: None,
             status: String::new(),
             parse_warnings: Vec::new(),
             overlay: None,

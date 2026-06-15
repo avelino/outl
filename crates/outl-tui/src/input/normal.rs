@@ -8,7 +8,8 @@
 //! the chord accumulator (`d`/`g`/`y`/`q` arm for a follow-up key).
 //! Everything past the chord block is bare-key handling.
 
-use crate::state::App;
+use crate::actions::block::InsertCursor;
+use crate::state::{App, PendingInputOp};
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -115,6 +116,21 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         }
     }
 
+    // Pending input op: `r` / `f` / `F` armed a one-shot waiting for
+    // the next char. Resolves before chord/bare matching so a literal
+    // `r{q}` doesn't trip the `qq` chord arm.
+    if let Some(op) = app.pending_input_op.take() {
+        if let KeyCode::Char(ch) = key.code {
+            match op {
+                PendingInputOp::ReplaceChar => app.replace_char_under_cursor(ch),
+                PendingInputOp::FindCharForward => app.find_char_forward(ch),
+                PendingInputOp::FindCharBackward => app.find_char_backward(ch),
+            }
+        }
+        // Any non-char (Esc, arrows, etc) simply cancels.
+        return Ok(false);
+    }
+
     // Chord handling: a previous 'd' / 'g' / 'y' is pending.
     if let Some(pending) = app.pending_chord.take() {
         match (pending, key.code) {
@@ -164,6 +180,38 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                 // second within one keystroke window seals the deal.
                 return Ok(true);
             }
+            ('Z', KeyCode::Char('Z')) => {
+                // `ZZ` — vim's "save and quit". The TUI commits Insert
+                // on every boundary already (Esc, structural ops), so
+                // by the time we land in Normal mode the on-disk state
+                // is current. `ZZ` therefore reduces to "quit" here —
+                // alias for `qq`. Kept distinct so muscle memory from
+                // vim users works without surprise.
+                return Ok(true);
+            }
+            ('g', KeyCode::Char('v')) => {
+                // `gv` — re-enter Visual at the last range. No-op (with
+                // a status message) when no Visual session has happened.
+                app.reselect_last_visual();
+                return Ok(false);
+            }
+            ('z', KeyCode::Char('R')) => {
+                // `zR` — unfold every block on the page (vim "reduce
+                // folding to nothing").
+                app.unfold_all();
+                return Ok(false);
+            }
+            ('z', KeyCode::Char('M')) => {
+                // `zM` — fold every block on the page (vim "more
+                // folding").
+                app.fold_all();
+                return Ok(false);
+            }
+            ('z', KeyCode::Char('z')) => {
+                // `zz` — center the viewport on the cursor.
+                app.center_viewport_on_selection();
+                return Ok(false);
+            }
             _ => {} // fall through to normal handling
         }
     }
@@ -176,6 +224,16 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             // (or `:quit` / `Ctrl+C`) closes the TUI.
             app.pending_chord = Some('q');
             app.status = "press q again to quit".into();
+            return Ok(false);
+        }
+        KeyCode::Char('Z') => {
+            // Vim's `ZZ` ("save and quit"). Arms a chord; a second
+            // capital `Z` confirms. Saving is implicit — every Insert
+            // commit already flushes the buffer to disk before we get
+            // back to Normal, so by the time the chord matters there
+            // is nothing left to save.
+            app.pending_chord = Some('Z');
+            app.status = "press Z again to save and quit".into();
             return Ok(false);
         }
         KeyCode::Char('?') => app.show_help = !app.show_help,
@@ -191,6 +249,13 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         KeyCode::Char('[') => app.shift_journal(-1)?,
         KeyCode::Char(']') => app.shift_journal(1)?,
         KeyCode::Char('g') => app.pending_chord = Some('g'),
+        // `z` arms the fold-control chord family (`zR`, `zM`, `zz`).
+        // Single `z` does nothing on its own; the next key resolves
+        // it in the chord block above.
+        KeyCode::Char('z') => {
+            app.pending_chord = Some('z');
+            app.status = "z…".into();
+        }
         // Half-page jumps must be matched *before* the plain `d`/`u`
         // chord arms — match guards are tried in order and a guard-less
         // `Char('d')` arm would win otherwise.
@@ -226,13 +291,55 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         // / `#tag` / journal date, open it. Otherwise enter Insert
         // mode (the original behavior).
         KeyCode::Enter if !app.try_open_under_cursor()? => {
-            app.enter_insert(false);
+            app.enter_insert(InsertCursor::AtCursor);
         }
         KeyCode::Enter => {}
-        KeyCode::Char('i') => app.enter_insert(false),
-        KeyCode::Char('I') => app.enter_insert(true),
+        KeyCode::Char('i') => app.enter_insert(InsertCursor::AtCursor),
+        KeyCode::Char('I') => app.enter_insert(InsertCursor::Start),
+        // `a` (append) — enter Insert one char to the right of the
+        // cursor, vim-style. Clamped at end of buffer so `a` at the
+        // last position behaves identically to `i` there.
+        KeyCode::Char('a') => app.enter_insert(InsertCursor::AfterCursor),
+        // `A` (append at end) — `$` then `i`. Single keypress for the
+        // common "jump to end and start typing" gesture.
+        KeyCode::Char('A') => app.enter_insert_at_end(),
         KeyCode::Char('o') => app.create_block_below(),
         KeyCode::Char('O') => app.create_block_above(),
+        // ── Vim char / line ops ──────────────────────────────────────
+        // Each one mutates `page.blocks` directly and routes through
+        // `save()` — same write path as structural ops.
+        KeyCode::Char('x') => app.delete_char_under_cursor(),
+        KeyCode::Char('X') => app.delete_char_before_cursor(),
+        KeyCode::Char('D') => app.delete_to_end_of_block(),
+        KeyCode::Char('C') => app.change_to_end_of_block(),
+        KeyCode::Char('S') => app.substitute_block(),
+        KeyCode::Char('s') => app.substitute_char(),
+        // `r{ch}` — arm a one-shot: the next char replaces the char
+        // under the cursor without entering Insert.
+        KeyCode::Char('r') if key.modifiers.is_empty() => {
+            app.pending_input_op = Some(PendingInputOp::ReplaceChar);
+            app.status = "r… (replace)".into();
+        }
+        KeyCode::Char('f') if key.modifiers.is_empty() => {
+            app.pending_input_op = Some(PendingInputOp::FindCharForward);
+            app.status = "f… (find →)".into();
+        }
+        KeyCode::Char('F') => {
+            app.pending_input_op = Some(PendingInputOp::FindCharBackward);
+            app.status = "F… (find ←)".into();
+        }
+        KeyCode::Char('~') => app.toggle_case_under_cursor(),
+        // `Y` — alias of `yy`. vim's "yank line" / outl's "yank block".
+        KeyCode::Char('Y') => app.yank_current_alias(),
+        // `e` — cursor to the end of the next word. Guarded so it
+        // doesn't shadow `Ctrl+E` (sidebar toggle) below.
+        KeyCode::Char('e') if key.modifiers.is_empty() => app.cursor_word_end(),
+        // `*` / `#` — search the workspace for the word under cursor,
+        // forward / backward. `n` / `N` walk through the results
+        // afterwards (the same persisted `last_search` the `/` overlay
+        // populates).
+        KeyCode::Char('*') => app.search_word_under_cursor(true)?,
+        KeyCode::Char('#') => app.search_word_under_cursor(false)?,
         // Vertical navigation: blocks. `j`/`k` are vim conventions.
         // Alt + arrows drag the current block (more discoverable than capital K/J).
         KeyCode::Up if key.modifiers.contains(KeyModifiers::ALT) => app.move_block_up(),

@@ -76,7 +76,12 @@ export function InlineBacklinks() {
    * blocks with no enclosing page) collapse under a synthetic
    * `(orphan)` header.
    */
-  function groupedBySource(): Array<{ key: string; title: string; icon: string; entries: Backlink[] }> {
+  function groupedBySource(): Array<{
+    key: string;
+    title: string;
+    icon: string;
+    entries: Backlink[];
+  }> {
     const groups = new Map<
       string,
       { key: string; title: string; icon: string; entries: Backlink[] }
@@ -100,7 +105,8 @@ export function InlineBacklinks() {
         <div class="border-t border-(--color-outl-border) opacity-60" />
 
         <header class="mt-3 mb-2 text-xs font-semibold uppercase tracking-wide opacity-60">
-          Backlinks · {appState.backlinks.length} ref{appState.backlinks.length === 1 ? "" : "s"}
+          Backlinks · {appState.backlinks.length} ref
+          {appState.backlinks.length === 1 ? "" : "s"}
         </header>
 
         <div class="space-y-4">
@@ -109,7 +115,11 @@ export function InlineBacklinks() {
               <div>
                 <button
                   type="button"
-                  onClick={() => void jumpTo(group.key === "__orphan__" ? undefined : group.key)}
+                  onClick={() =>
+                    void jumpTo(
+                      group.key === "__orphan__" ? undefined : group.key,
+                    )
+                  }
                   class="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left text-sm font-semibold hover:bg-(--color-outl-fg)/5"
                 >
                   <span aria-hidden="true">{group.icon}</span>

@@ -11,23 +11,38 @@ use crate::outline_ops::{node_at_path, node_at_path_mut};
 use crate::state::{App, EditTarget, Focus, Mode};
 use outl_md::parse::{parse, OutlineNode};
 
+/// Where to drop the Insert-mode cursor when entering Insert from
+/// Normal. Mirrors vim's three entry points: `I` (start of line),
+/// `i` (at cursor), `a` (one char after cursor).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InsertCursor {
+    /// `I` — jump to the start of the block.
+    Start,
+    /// `i` / `Enter` — land at `cursor_col`.
+    AtCursor,
+    /// `a` — land one char past `cursor_col` (append after the char
+    /// under the cursor). Clamps at end of buffer.
+    AfterCursor,
+}
+
 impl App {
-    /// Enter Insert mode at the currently focused block (cursor at end).
+    /// Enter Insert mode at the currently focused block.
     ///
     /// Dispatches by `Focus`: outline blocks edit `App.page`; backlink
     /// blocks load the source page from disk and edit it in place via
-    /// `EditTarget::SourcePage`.
-    pub(crate) fn enter_insert(&mut self, at_start: bool) {
+    /// `EditTarget::SourcePage`. The `pos` argument controls where the
+    /// Insert cursor lands (`I` / `i` / `a` semantics).
+    pub(crate) fn enter_insert(&mut self, pos: InsertCursor) {
         if let Focus::Backlink { .. } = self.focus.clone() {
-            self.enter_insert_backlink(at_start);
+            self.enter_insert_backlink(pos);
             return;
         }
-        self.enter_insert_outline(at_start);
+        self.enter_insert_outline(pos);
     }
 
     /// Insert path for the current page. Mutations land on `app.page`
     /// and commit through the usual `save()`.
-    fn enter_insert_outline(&mut self, at_start: bool) {
+    fn enter_insert_outline(&mut self, pos: InsertCursor) {
         if self.flat_len == 0 {
             // No blocks yet — create one and start editing.
             self.page.blocks.push(OutlineNode::default());
@@ -42,15 +57,7 @@ impl App {
             return;
         };
         let mut buf = EditBuffer::from_text(&node.text);
-        // Preserve the column the user was on in Normal mode (vim:
-        // `i` lands *at* the cursor, not at end of line). `I` still
-        // forces home via `at_start`. Clamp because `cursor_col` can
-        // sit one past the last char after `$`.
-        buf.cursor = if at_start {
-            0
-        } else {
-            self.cursor_col.min(buf.chars.len())
-        };
+        buf.cursor = insert_cursor_for(pos, self.cursor_col, buf.chars.len());
         self.mode = Mode::Insert {
             target: EditTarget::CurrentPage,
             block_path: path,
@@ -64,7 +71,7 @@ impl App {
     /// absolute path inside that AST, and stashes both in the
     /// `EditTarget::SourcePage` so `commit_insert` knows where to
     /// write back.
-    fn enter_insert_backlink(&mut self, at_start: bool) {
+    fn enter_insert_backlink(&mut self, pos: InsertCursor) {
         let (source_path, abs_path) = {
             let Focus::Backlink { idx, sub_path } = &self.focus else {
                 return;
@@ -95,13 +102,7 @@ impl App {
         };
         let original_text = node.text.clone();
         let mut buf = EditBuffer::from_text(&original_text);
-        // Same vim convention as the outline path: `i` keeps the
-        // cursor where it was in Normal, `I` jumps home.
-        buf.cursor = if at_start {
-            0
-        } else {
-            self.cursor_col.min(buf.chars.len())
-        };
+        buf.cursor = insert_cursor_for(pos, self.cursor_col, buf.chars.len());
         self.mode = Mode::Insert {
             target: EditTarget::SourcePage {
                 path: source_path,
@@ -198,5 +199,47 @@ impl App {
         {
             node.text = original_text;
         }
+    }
+}
+
+/// Map the Normal-mode `cursor_col` into the Insert-mode buffer
+/// cursor, applying vim semantics. Clamps `AfterCursor` at `buf_len`
+/// so `a` at end-of-line is a no-op (cursor stays where `i` would
+/// land).
+fn insert_cursor_for(pos: InsertCursor, cursor_col: usize, buf_len: usize) -> usize {
+    match pos {
+        InsertCursor::Start => 0,
+        InsertCursor::AtCursor => cursor_col.min(buf_len),
+        InsertCursor::AfterCursor => cursor_col.saturating_add(1).min(buf_len),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{insert_cursor_for, InsertCursor};
+
+    #[test]
+    fn start_is_always_zero() {
+        assert_eq!(insert_cursor_for(InsertCursor::Start, 5, 10), 0);
+        assert_eq!(insert_cursor_for(InsertCursor::Start, 0, 0), 0);
+    }
+
+    #[test]
+    fn at_cursor_clamps_to_buf_len() {
+        assert_eq!(insert_cursor_for(InsertCursor::AtCursor, 3, 10), 3);
+        assert_eq!(insert_cursor_for(InsertCursor::AtCursor, 20, 10), 10);
+        assert_eq!(insert_cursor_for(InsertCursor::AtCursor, 0, 0), 0);
+    }
+
+    #[test]
+    fn after_cursor_advances_one_then_clamps() {
+        // mid-buffer: lands one char to the right
+        assert_eq!(insert_cursor_for(InsertCursor::AfterCursor, 3, 10), 4);
+        // last char (cursor at N-1 of N): lands at end
+        assert_eq!(insert_cursor_for(InsertCursor::AfterCursor, 9, 10), 10);
+        // already at end: stays at end
+        assert_eq!(insert_cursor_for(InsertCursor::AfterCursor, 10, 10), 10);
+        // empty buffer: stays at 0
+        assert_eq!(insert_cursor_for(InsertCursor::AfterCursor, 0, 0), 0);
     }
 }

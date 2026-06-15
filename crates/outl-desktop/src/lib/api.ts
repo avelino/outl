@@ -136,7 +136,12 @@ export const MOD_ALT = 0b0010;
 export const MOD_SHIFT = 0b0100;
 export const MOD_META = 0b1000;
 
-export type ShortcutMode = "global" | "normal" | "insert" | "visual" | "overlay";
+export type ShortcutMode =
+  | "global"
+  | "normal"
+  | "insert"
+  | "visual"
+  | "overlay";
 
 /** Chord key — tagged union mirror of `outl_shortcuts::chord::Key`. */
 export type Key =
@@ -180,6 +185,27 @@ export type Action =
   | { kind: "OpenRefUnderCursor" }
   | { kind: "EnterInsert" }
   | { kind: "EnterInsertAtStart" }
+  | { kind: "EnterInsertAfter" }
+  | { kind: "EnterInsertAtEnd" }
+  | { kind: "DeleteCharUnderCursor" }
+  | { kind: "DeleteCharBeforeCursor" }
+  | { kind: "DeleteToEndOfBlock" }
+  | { kind: "ChangeToEndOfBlock" }
+  | { kind: "SubstituteBlock" }
+  | { kind: "SubstituteChar" }
+  | { kind: "ReplaceChar" }
+  | { kind: "FindCharForward" }
+  | { kind: "FindCharBackward" }
+  | { kind: "ToggleCharCase" }
+  | { kind: "CursorWordEnd" }
+  | { kind: "UnfoldAll" }
+  | { kind: "FoldAll" }
+  | { kind: "CenterViewport" }
+  | { kind: "SearchWordForward" }
+  | { kind: "SearchWordBackward" }
+  | { kind: "ReselectLastVisual" }
+  | { kind: "IndentVisualRange" }
+  | { kind: "OutdentVisualRange" }
   | { kind: "NewBlockBelow" }
   | { kind: "NewBlockAbove" }
   | { kind: "IndentBlock" }
@@ -194,6 +220,7 @@ export type Action =
   | { kind: "CommitAndContinue" }
   | { kind: "DeleteEmptyBlock" }
   | { kind: "EnterVisual" }
+  | { kind: "YankCurrentBlock" }
   | { kind: "YankRange" }
   | { kind: "DeleteRange" }
   | { kind: "RunCodeBlock" }

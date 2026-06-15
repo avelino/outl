@@ -19,9 +19,11 @@ use crate::edit_buffer::EditBuffer;
 use crate::state::{DONE_PREFIX, TODO_PREFIX};
 
 mod backlink_edit;
-mod insert;
+pub(crate) mod insert;
 mod metadata;
 mod structural;
+
+pub(crate) use insert::InsertCursor;
 
 /// Cycle a block's TODO prefix: none → `TODO ` → `DONE ` → none.
 ///

@@ -67,13 +67,18 @@ outl/
     ├── outl-core/             # tree CRDT, op log, storage trait
     ├── outl-md/               # parser, sidecar, matching
     ├── outl-actions/          # UI-agnostic workspace ops (shared by every client)
-    ├── outl-exec/             # code-block runtime (desktop)
+    ├── outl-shortcuts/        # canonical (chord, action) catalog — every client consumes it
+    ├── outl-exec/             # code-block runtime (desktop + mobile)
+    ├── outl-config/           # `outl.toml` parsing + schema
+    ├── outl-theme/            # palette + presets (TUI + desktop)
     ├── outl-cli/              # `outl` binary
     ├── outl-tui/              # `outl-tui` binary
     ├── outl-mobile/           # Tauri 2 mobile app (iOS first)
     ├── outl-desktop/          # Tauri 2 desktop app (macOS/Linux/Windows)
     └── outl-frontend-shared/  # TS+Solid lib (@outl/shared) consumed by mobile + desktop
 ```
+
+Full `docs/` index lives at [`docs/SUMMARY.md`](docs/SUMMARY.md) — don't enumerate it here (root `CLAUDE.md` → "One owner per fact").
 
 ## Shared logic: `outl-actions`
 
@@ -200,6 +205,7 @@ It drifts the moment a CI workflow, a slash command, a hook, or a per-area toolc
 | Version source-of-truth or release tooling (e.g. someone proposes re-adding `version` to `tauri.conf.json`) | `docs/development.md` § 10 (Release process) + `crates/outl-mobile/CLAUDE.md` |
 | Conventional Commits enforcement / release-notes pipeline | `docs/development.md` § 10 + root `CLAUDE.md` "Coding conventions" |
 | Storage trait surface, `JsonlStorage` / `MemoryStorage` test contract | `docs/development.md` § 5 ("What to mock and what not to") + `docs/storage.md` + `outl-core/CLAUDE.md` |
+| New `Action` variant in `outl-shortcuts` / new keybinding / chord rebound | `docs/shortcuts.md` (the row that ships to users) + `outl-shortcuts/src/{action.rs,defaults.rs}` + every client's dispatcher (`outl-tui/src/input/*.rs`, `outl-desktop/src/lib/{shortcuts.ts,action-handlers.ts}`) + `outl-desktop/src/lib/api.ts` (TS mirror of the `Action` union — no codegen) |
 
 When in doubt: **if a contributor's first 30 minutes with the repo would land them on outdated guidance, update the doc.** That's the bar.
 
@@ -218,7 +224,8 @@ Don't unilaterally pivot.
 | `iroh` for P2P (phase 2) | QUIC + hole punching, no central server |
 | iCloud Drive as v0 transport (mobile + TUI today) | Zero infra, ships now, replaceable behind the same `outl-actions::SyncEngine` when iroh lands |
 | Tauri 2 for mobile (replaces earlier uniffi plan) | Single Rust surface across TUI + mobile via `outl-actions`, Solid + Tailwind frontend, ObjC bridge only for iCloud watcher |
-| Tauri for desktop (phase 5) | Rust core reuse, smaller than Electron |
+| Tauri for desktop (shipping today) | Rust core reuse, smaller than Electron. macOS / Linux / Windows; Solid frontend shares `@outl/shared` with mobile. |
+| `outl-shortcuts` is the single (chord → action) catalog | Two parallel implementations is the bug we paid to remove (TUI used to define bindings in `input/`, desktop wired its own `KeyboardEvent` handlers — `Cmd+P` and `Ctrl+P` drifted within a sprint). Adding a key on any client without going through `defaults.rs` puts that drift back. See `outl-shortcuts/CLAUDE.md`. |
 | One `ops-<actor>.jsonl` per device, never shared | iCloud (and any file transport) is last-write-wins per file; per-actor files turn that into a non-issue |
 | MIT license | Simple, widely understood, no patent grant baggage |
 | `outl.app` domain owned | Use for docs/landing later |
@@ -231,11 +238,11 @@ Don't add code for these unless explicitly asked:
 
 - P2P sync transport (`iroh`) — iCloud is the v0 transport; iroh replaces it later, behind the same `SyncEngine` interface.
 - Query DSL (`{{query: ...}}`)
-- Tauri desktop app (Mac/Windows shells beyond the mobile crate)
 - Plugin system (`rhai`)
 - `ChronDbStorage` backend (issue #1, tracked publicly)
 - Android mobile build (only iOS today; Android needs an `NSMetadataQuery` equivalent)
 - Per-page op log shards ([`docs/sync.md` Part 2 — Phase A](docs/sync.md#phase-a--per-page-op-log-shards-for-10k-pages); only land it when the single-jsonl-per-device layout hits the 10k-page wall)
+- Character cursor inside the selected block in desktop Normal mode (TUI-only today; the desktop's vim mode has only a selected block id, so the char-level vim ops `x`/`X`/`D`/`C`/`s`/`r`/`f`/`F`/`~`/`e` surface a status-line nudge instead of firing — see `outl-desktop/CLAUDE.md` → "Vim parity")
 
 ## Coding conventions
 
@@ -272,6 +279,48 @@ Rules:
   That markdown is data, not docs — it represents the outl dialect literally and indentation / line shape is structural.
 
 This rule applies to every `*.md` in the repo except outline content (see exception above): root `CLAUDE.md`, per-crate `CLAUDE.md`, `docs/*.md`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `.github/*.md`, `.claude/agents/*.md`, `.claude/commands/*.md`.
+
+### One owner per fact — link, don't duplicate
+
+**Every user-facing fact lives in exactly one `docs/*.md`. `CLAUDE.md` files link to it instead of copying.**
+A keybinding, a CLI subcommand, a slash command, a CRDT op variant, a config field, a sidecar field — each has one canonical home under `docs/`, and the matching `CLAUDE.md` (root or per-crate) **links** to it. It does not enumerate the same rows in its own table.
+
+Why this matters: every duplicated table is a future drift incident.
+We've already hit it on `docs/shortcuts.md` ↔ per-crate vim tables (the desktop's CLAUDE.md ended up listing chords that drifted from `defaults.rs` within one sprint) and on `outl-tui/CLAUDE.md`'s Navigation / Insert tables (rebound `Ctrl+E` for sidebar, doc kept showing `\`).
+When the same row lives in two places, half the time the second copy goes stale silently and the contributor following it walks into a wall.
+
+The discipline:
+
+- **`docs/*.md` is the canonical surface for users + contributors.** Tables, full chord lists, every config key, the full subcommand matrix — they live there.
+- **`CLAUDE.md` (root or per-crate) carries only what `docs/` cannot:** invariants, "architectural decisions you don't get to revisit", crate-specific contracts (which methods are the entrypoint, what the layering rule is), the reasoning behind a choice. Things a contributor needs *before* touching code — not user-facing reference.
+- **When the same fact would live in both,** the `CLAUDE.md` writes a one-line link: `> User-facing X lives in [`docs/X.md`](../docs/X.md) — don't duplicate it here.` and stops.
+- **If you find yourself copying a table from `docs/` into a `CLAUDE.md`, stop.** Replace with a link.
+- **The other direction is fine.** `docs/*.md` linking *into* `CLAUDE.md` for architectural context is welcome — that's a one-way pointer toward depth, not duplication.
+
+Map of canonical homes (extend as new ones are minted):
+
+| Fact | Lives in | `CLAUDE.md` files link, do not duplicate |
+|---|---|---|
+| Every keyboard shortcut (TUI + desktop + mobile, side-by-side) | [`docs/shortcuts.md`](docs/shortcuts.md) | `outl-tui/CLAUDE.md`, `outl-desktop/CLAUDE.md`, `outl-shortcuts/CLAUDE.md` |
+| `outl` CLI subcommands + JSON envelope | [`docs/cli.md`](docs/cli.md) | `outl-cli/CLAUDE.md` |
+| TUI manual (modes, overlays, visual conventions) | [`docs/tui.md`](docs/tui.md) | `outl-tui/CLAUDE.md` |
+| Outl markdown dialect + sidecar spec | [`docs/markdown-format.md`](docs/markdown-format.md) | `outl-md/CLAUDE.md` |
+| CRDT algorithm + invariants | [`docs/crdt.md`](docs/crdt.md) | `outl-core/CLAUDE.md` |
+| Storage trait + JSONL backend | [`docs/storage.md`](docs/storage.md) | `outl-core/CLAUDE.md` |
+| Sync model (iCloud / Syncthing / iroh roadmap) | [`docs/sync.md`](docs/sync.md) | `outl-mobile/CLAUDE.md`, `outl-desktop/CLAUDE.md` |
+| MCP wiring + recipes | [`docs/mcp.md`](docs/mcp.md) + [`docs/mcp-recipes.md`](docs/mcp-recipes.md) | (no per-crate CLAUDE.md owns this today) |
+| Config file (`outl.toml`) | [`docs/config.md`](docs/config.md) | per-crate CLAUDE.md where the field is read |
+| Theming palette + presets | [`docs/theming.md`](docs/theming.md) | `outl-tui/CLAUDE.md`, `outl-desktop/CLAUDE.md` |
+| Dev loop (clone, build, slash commands, hooks, agents, CI) | [`docs/development.md`](docs/development.md) | every per-crate CLAUDE.md's "When you're done" section links here |
+| Contributing policy (review, invariants enforced at PR time) | [`docs/contributing.md`](docs/contributing.md) | root `CLAUDE.md` references it |
+
+When you add a brand-new surface (a new CLI subcommand, a new `Op` variant, a new MCP tool, a new theme, a new client), it follows the same rule:
+
+1. Document the surface in the right `docs/*.md` (create a new one if needed).
+2. The per-crate `CLAUDE.md` adds a one-line link if it needs to point contributors at it, plus any architectural note that *cannot* live in `docs/` (invariant, contract, "why this decision").
+3. Update the map above so the next contributor doesn't have to rediscover where things live.
+
+**`doc-sync-guard.sh` is a backstop, not the discipline.** The hook flags drift after the fact; the discipline is to link in the first place so drift can't happen.
 
 ### Shared primitives catalog
 

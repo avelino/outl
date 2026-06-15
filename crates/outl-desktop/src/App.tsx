@@ -97,7 +97,10 @@ function App() {
 
   return (
     <div class="h-full">
-      <Show when={checked()} fallback={<div class="p-8 opacity-50">Loading…</div>}>
+      <Show
+        when={checked()}
+        fallback={<div class="p-8 opacity-50">Loading…</div>}
+      >
         <Show when={ready()} fallback={<WorkspacePicker onPicked={refresh} />}>
           <AppShell />
         </Show>

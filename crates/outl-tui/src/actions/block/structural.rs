@@ -7,6 +7,7 @@
 //! `apply_to_backlink_source` so the change lands in the source
 //! page's `.md` instead.
 
+use crate::actions::block::insert::InsertCursor;
 use crate::edit_buffer::EditBuffer;
 use crate::outline_ops::{
     delete_at_path, descendants_count_at_path, flat_count, indent_at_path, index_for_path,
@@ -86,7 +87,7 @@ impl App {
         if matches!(self.mode, Mode::Insert { .. }) {
             self.commit_insert();
         }
-        self.enter_insert(false);
+        self.enter_insert(InsertCursor::AtCursor);
     }
 
     /// Create a new block above the current selection, then enter Insert.
@@ -134,7 +135,7 @@ impl App {
         insert_sibling_before(&mut self.page.blocks, &path);
         self.flat_len = flat_count(&self.page.blocks);
         // Selection stays at `self.selected` — the new block now occupies it.
-        self.enter_insert(false);
+        self.enter_insert(InsertCursor::AtCursor);
     }
 
     pub(crate) fn indent_current(&mut self) -> bool {

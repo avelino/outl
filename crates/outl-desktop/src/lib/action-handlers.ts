@@ -43,6 +43,7 @@ import {
   flattenVisible,
   nextVisibleId,
   previousVisibleId,
+  visualRangeIds,
 } from "./outline-walk";
 import { type ActionHandlers } from "./shortcuts";
 import { appState, setAppState } from "./store";
@@ -104,16 +105,72 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
   /** Common pattern: await a Tauri command that returns a
    *  `PageView`, apply it, and leave selection on `nextSelectedId`
    *  (or keep current when `undefined`). */
-  async function runOn(
-    cmd: Promise<PageView>,
-    nextSelectedId?: string | null,
-  ) {
+  async function runOn(cmd: Promise<PageView>, nextSelectedId?: string | null) {
     const view = await safeCall(cmd);
     if (!view) return;
     deps.applyView(view);
     if (nextSelectedId !== undefined) {
       setAppState("selectedBlockId", nextSelectedId);
     }
+  }
+
+  /** Walk every block in the current Visual range and fire `op` for
+   *  each. Used by `>` / `<` so the multi-block indent ops share one
+   *  body. Range stays selected after the op (vim convention) so the
+   *  user can press `>` repeatedly. */
+  async function applyVisualBlockOp(
+    op: (pageId: string, id: string) => Promise<PageView>,
+  ) {
+    const pageId = appState.page?.id;
+    if (!pageId) return;
+    const range = visualRangeIds(
+      appState.visualAnchorId,
+      appState.selectedBlockId,
+      appState.outline,
+    );
+    if (!range) return;
+    const ids = flattenVisible(appState.outline);
+    const loIdx = ids.indexOf(range.lo);
+    const hiIdx = ids.indexOf(range.hi);
+    let lastView: PageView | undefined;
+    for (let i = loIdx; i <= hiIdx; i++) {
+      const view = await safeCall(op(pageId, ids[i]));
+      if (view) lastView = view;
+    }
+    if (lastView) deps.applyView(lastView);
+  }
+
+  /** Walk every block on the current page and set its `collapsed`
+   *  flag to `value`. The backend no-ops when the value matches, so
+   *  we don't have to filter client-side. */
+  async function applyCollapsedToAll(value: boolean) {
+    const pageId = appState.page?.id;
+    if (!pageId) return;
+    const ids = flattenVisible(appState.outline);
+    let lastView: PageView | undefined;
+    for (const id of ids) {
+      const view = await safeCall(setBlockCollapsed(pageId, id, value));
+      if (view) lastView = view;
+    }
+    if (lastView) deps.applyView(lastView);
+  }
+
+  /** Pre-fill the picker with the selected block's text, then open
+   *  it. Powers `*` / `#` — vim's "search the word under cursor"
+   *  collapses to "search for something inside this block" on the
+   *  desktop because Normal mode has no character cursor.
+   *
+   *  We can't poke the picker's input ref from here (it lives inside
+   *  `<Picker />`), so we stash the seed in a transient store field
+   *  the picker reads on open. */
+  function seedPickerWithCurrentBlock() {
+    const id = appState.selectedBlockId;
+    if (!id) return;
+    const block = lookupBlock(id);
+    if (!block) return;
+    const seed = block.text.trim().split(/\s+/).slice(0, 4).join(" ");
+    setAppState("pickerSeed", seed);
+    setAppState("pickerOpen", true);
   }
 
   return {
@@ -236,7 +293,7 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
       if (prev) setAppState("selectedBlockId", prev);
     },
 
-    // ── enter Insert (i / Shift+I / Enter) ───────────────────────
+    // ── enter Insert (i / Shift+I / a / A / Enter) ───────────────
     EnterInsert: () => {
       const id = appState.selectedBlockId;
       if (!id) return;
@@ -246,6 +303,56 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
       const id = appState.selectedBlockId;
       if (!id) return;
       setAppState("editingBlockId", id);
+    },
+    // `a` — vim append. On the desktop without a char cursor in
+    // Normal mode this collapses to `EnterInsert` (the textarea's
+    // own click-or-keyboard caret lands inside the buffer). The
+    // catalog entry stays so muscle memory matches.
+    EnterInsertAfter: () => {
+      const id = appState.selectedBlockId;
+      if (!id) return;
+      setAppState("editingBlockId", id);
+    },
+    // `A` — Insert with caret jumped to end of block. The textarea
+    // mounts via `editingBlockId`; we then poke its `selectionStart`
+    // on the next microtask once it's in the DOM.
+    EnterInsertAtEnd: () => {
+      const id = appState.selectedBlockId;
+      if (!id) return;
+      setAppState("editingBlockId", id);
+      // Defer to next tick so `<BlockRow />` had time to mount the
+      // textarea (Solid runs `<Show />` synchronously but ref
+      // assignment lands on the next microtask).
+      queueMicrotask(() => {
+        const el = document.querySelector<HTMLTextAreaElement>(
+          `textarea[data-block-id="${id}"]`,
+        );
+        if (el) {
+          const end = el.value.length;
+          el.focus();
+          el.setSelectionRange(end, end);
+        }
+      });
+    },
+    // `S` — clear the block's text and enter Insert at column 0.
+    // Vim's "substitute line" / outline's "rewrite this block".
+    SubstituteBlock: async () => {
+      const pageId = appState.page?.id;
+      const id = targetBlockId();
+      if (!pageId || !id) return;
+      const view = await safeCall(editBlock(pageId, id, ""));
+      if (view) deps.applyView(view);
+      setAppState("editingBlockId", id);
+    },
+    // `Y` — yank the currently selected block's text into the
+    // app's yank register. Mirror the TUI's "yank block" register;
+    // `p` / `P` handlers (TBD) will read from it.
+    YankCurrentBlock: () => {
+      const id = appState.selectedBlockId;
+      if (!id) return;
+      const block = lookupBlock(id);
+      if (!block) return;
+      setAppState("yankRegister", [block.text]);
     },
     OpenRefUnderCursor: async () => {
       // Normal-mode `Enter`. Two branches in priority order:
@@ -265,9 +372,7 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
       // (`onRefClick` in OutlineView).
       const curBacklink = appState.selectedBacklinkBlockId;
       if (curBacklink) {
-        const link = appState.backlinks.find(
-          (b) => b.block_id === curBacklink,
-        );
+        const link = appState.backlinks.find((b) => b.block_id === curBacklink);
         const target = link?.source_page?.slug;
         if (!target) return;
         const view = await safeCall(openRef(target));
@@ -384,7 +489,9 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
       if (!pageId) return;
       const id = targetBlockId();
       if (!id) {
-        deps.setError("Select or click a block first, then ⌘T toggles its TODO");
+        deps.setError(
+          "Select or click a block first, then ⌘T toggles its TODO",
+        );
         return;
       }
       const view = await safeCall(toggleTodoCmd(pageId, id));
@@ -411,10 +518,202 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
         setAppState("settingsOpen", false);
         return;
       }
+      // Leaving Visual via Esc — capture the range for `gv`, drop
+      // back to Normal. Must come before the textarea-blur branch
+      // (Visual mode has no focused textarea, so the blur is a no-op
+      // anyway; the explicit return keeps the mode flip atomic).
+      if (appState.mode === "vim-visual") {
+        const range = visualRangeIds(
+          appState.visualAnchorId,
+          appState.selectedBlockId,
+          appState.outline,
+        );
+        if (range) setAppState("lastVisualRange", range);
+        setAppState("visualAnchorId", null);
+        setAppState("mode", "vim-normal");
+        return;
+      }
       const el = document.activeElement;
       if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
         el.blur();
       }
+    },
+
+    // ── Vim Visual mode ──────────────────────────────────────────
+    //
+    // The desktop's Visual mode covers a contiguous range of outline
+    // blocks (vim's `V` line-visual semantics). `j` / `k` extend the
+    // range, `y` yanks, `d` deletes, `>` / `<` shift indent, `Esc`
+    // exits + captures `lastVisualRange` so `gv` can restore.
+    EnterVisual: () => {
+      const id = appState.selectedBlockId;
+      if (!id) return;
+      setAppState("visualAnchorId", id);
+      setAppState("mode", "vim-visual");
+    },
+    ReselectLastVisual: () => {
+      const range = appState.lastVisualRange;
+      if (!range) {
+        deps.setError("no previous selection");
+        return;
+      }
+      // Verify both ids still exist in the outline (a peer might
+      // have deleted them between sessions). Drop gracefully.
+      const ids = flattenVisible(appState.outline);
+      if (!ids.includes(range.lo) || !ids.includes(range.hi)) {
+        deps.setError("previous selection no longer exists");
+        return;
+      }
+      setAppState("visualAnchorId", range.lo);
+      setAppState("selectedBlockId", range.hi);
+      setAppState("mode", "vim-visual");
+    },
+    YankRange: () => {
+      const range = visualRangeIds(
+        appState.visualAnchorId,
+        appState.selectedBlockId,
+        appState.outline,
+      );
+      if (!range) return;
+      const ids = flattenVisible(appState.outline);
+      const loIdx = ids.indexOf(range.lo);
+      const hiIdx = ids.indexOf(range.hi);
+      const texts: string[] = [];
+      for (let i = loIdx; i <= hiIdx; i++) {
+        const block = lookupBlock(ids[i]);
+        if (block) texts.push(block.text);
+      }
+      setAppState("yankRegister", texts);
+      setAppState("lastVisualRange", range);
+      setAppState("visualAnchorId", null);
+      setAppState("mode", "vim-normal");
+    },
+    DeleteRange: async () => {
+      const pageId = appState.page?.id;
+      if (!pageId) return;
+      const range = visualRangeIds(
+        appState.visualAnchorId,
+        appState.selectedBlockId,
+        appState.outline,
+      );
+      if (!range) return;
+      const ids = flattenVisible(appState.outline);
+      const loIdx = ids.indexOf(range.lo);
+      const hiIdx = ids.indexOf(range.hi);
+      // Delete bottom-up so each delete's id is still resolvable —
+      // top-down would invalidate ids when the backend re-projects
+      // the outline after each call.
+      const targets: string[] = [];
+      for (let i = hiIdx; i >= loIdx; i--) targets.push(ids[i]);
+      let lastView: PageView | undefined;
+      for (const id of targets) {
+        const view = await safeCall(deleteBlock(pageId, id));
+        if (view) lastView = view;
+      }
+      if (lastView) deps.applyView(lastView);
+      // Land selection on the block above the deleted range, or the
+      // first block if the range was at the top.
+      const prev = ids[Math.max(loIdx - 1, 0)];
+      setAppState("lastVisualRange", range);
+      setAppState("visualAnchorId", null);
+      setAppState("mode", "vim-normal");
+      setAppState("selectedBlockId", prev ?? null);
+    },
+    IndentVisualRange: async () => {
+      await applyVisualBlockOp((pageId, id) => indentBlock(pageId, id));
+    },
+    OutdentVisualRange: async () => {
+      await applyVisualBlockOp((pageId, id) => outdentBlock(pageId, id));
+    },
+
+    // ── Fold control over the whole page (zR / zM) ───────────────
+    UnfoldAll: async () => {
+      await applyCollapsedToAll(false);
+    },
+    FoldAll: async () => {
+      await applyCollapsedToAll(true);
+    },
+
+    // ── Viewport (zz) ────────────────────────────────────────────
+    CenterViewport: () => {
+      const id = appState.selectedBlockId;
+      if (!id) return;
+      const el = document.querySelector<HTMLElement>(`[data-block-id="${id}"]`);
+      if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+    },
+
+    // ── Search the workspace for the selected block's text (* / #) ──
+    //
+    // Vim's `*` / `#` are "search the word under the cursor". The
+    // desktop's Normal mode has no character cursor — only a
+    // selected block — so the closest useful gesture is "search for
+    // something in this block's text". We pre-fill the picker; the
+    // user can refine the query before accepting.
+    SearchWordForward: () => {
+      seedPickerWithCurrentBlock();
+    },
+    SearchWordBackward: () => {
+      // `#` (backward) collapses to the same gesture on the desktop —
+      // the picker is bidirectional (fuzzy match, not directional).
+      seedPickerWithCurrentBlock();
+    },
+
+    // ── Char-cursor ops (Normal) — TUI-only ──────────────────────
+    //
+    // These need a character cursor inside the selected block —
+    // something the desktop's Normal mode does not have (only a
+    // selected block id). The catalog entries stay so vim users
+    // see them in the help overlay, but firing them surfaces a
+    // status-line nudge pointing the user at `i` + textarea edits.
+    DeleteCharUnderCursor: () => {
+      deps.setError(
+        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
+      );
+    },
+    DeleteCharBeforeCursor: () => {
+      deps.setError(
+        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
+      );
+    },
+    DeleteToEndOfBlock: () => {
+      deps.setError(
+        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
+      );
+    },
+    ChangeToEndOfBlock: () => {
+      deps.setError(
+        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
+      );
+    },
+    SubstituteChar: () => {
+      deps.setError(
+        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
+      );
+    },
+    ReplaceChar: () => {
+      deps.setError(
+        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
+      );
+    },
+    FindCharForward: () => {
+      deps.setError(
+        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
+      );
+    },
+    FindCharBackward: () => {
+      deps.setError(
+        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
+      );
+    },
+    ToggleCharCase: () => {
+      deps.setError(
+        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
+      );
+    },
+    CursorWordEnd: () => {
+      deps.setError(
+        "char-cursor ops (x/X/D/C/s/r/~/e/f/F) — use `i` and edit inside the textarea on the desktop",
+      );
     },
 
     // ── inline markdown wrappers (Insert mode) ───────────────────
@@ -442,9 +741,7 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
       if (!pageId) return;
       const id = targetBlockId();
       if (!id) {
-        deps.setError(
-          "Select or focus a code block first, then ⌘X runs it",
-        );
+        deps.setError("Select or focus a code block first, then ⌘X runs it");
         return;
       }
       const reply = await safeCall(runCodeBlock(pageId, id));

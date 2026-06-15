@@ -3,6 +3,10 @@
 Single source of truth for outl's keyboard bindings.
 **Every client that resolves a key → action goes through this catalog** — TUI today, desktop today, any future GUI tomorrow.
 
+> User-facing chord list (TUI + desktop + mobile side-by-side) lives in [`docs/shortcuts.md`](../../docs/shortcuts.md).
+> This file carries only architectural rules: how the catalog is structured, how clients consume it, what to do when adding a binding.
+> Don't duplicate the chord table here — root `CLAUDE.md` → "One owner per fact" has the policy.
+
 ## Why this crate exists
 
 Before this crate, the TUI defined its bindings in `outl-tui/src/input/` and the desktop wired its own `KeyboardEvent` handlers in `lib/shortcuts.ts`.
@@ -16,6 +20,10 @@ Every binding lives in `src/defaults.rs::default_bindings`; clients consume it v
 
 If a client needs a new shortcut, it goes here first.
 A binding that only the TUI cares about still lives here (with `Mode::Normal` / `Mode::Insert` / `Mode::Visual` / `Mode::Overlay`) — the desktop just won't subscribe to it unless `settings.vim_mode == true`.
+
+> **Pending-input ops.** Three actions — `ReplaceChar` (vim `r{ch}`), `FindCharForward` (`f{ch}`), `FindCharBackward` (`F{ch}`) — are bound to a single key but **read a second character before they apply**.
+> The TUI implements this with `state::PendingInputOp` (consumed in the next `handle_normal_key` call); a GUI client without that machinery should either prompt modally or skip the binding outside `vim_mode`.
+> The catalog still owns the `(chord, action)` pair so the help overlay stays consistent across clients; the second-char read is a client concern.
 
 ## What this crate owns
 

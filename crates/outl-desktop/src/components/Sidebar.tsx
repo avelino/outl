@@ -66,7 +66,8 @@ export function Sidebar(props: {
       const raw = window.localStorage.getItem(RECENT_KEY);
       if (!raw) return [];
       const parsed = JSON.parse(raw) as unknown;
-      if (Array.isArray(parsed)) return parsed.filter((x) => typeof x === "string");
+      if (Array.isArray(parsed))
+        return parsed.filter((x) => typeof x === "string");
       return [];
     } catch {
       return [];
@@ -320,8 +321,7 @@ export function Sidebar(props: {
         <div class="grid grid-cols-7 gap-[2px] text-center text-[11px]">
           <For each={cells()}>
             {(cell) => {
-              if (!cell)
-                return <div class="h-6" aria-hidden="true" />;
+              if (!cell) return <div class="h-6" aria-hidden="true" />;
               const hasJournal = () => journalSlugSet().has(cell.slug);
               const isToday = () => cell.slug === todaySlug;
               const isViewing = () =>
@@ -411,9 +411,7 @@ export function Sidebar(props: {
           </section>
         </Show>
 
-        <Show
-          when={pinned().length === 0 && recentMetas().length === 0}
-        >
+        <Show when={pinned().length === 0 && recentMetas().length === 0}>
           <div class="px-3 py-2 text-[11px] text-(--color-outl-fg-dimmer)">
             Open a journal day or pin a page (<code>pinned:: true</code>) to
             populate this column.

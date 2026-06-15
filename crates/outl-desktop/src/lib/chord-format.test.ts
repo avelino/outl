@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  type Chord,
-  MOD_ALT,
-  MOD_CTRL,
-  MOD_META,
-  MOD_SHIFT,
-} from "./api";
+import { type Chord, MOD_ALT, MOD_CTRL, MOD_META, MOD_SHIFT } from "./api";
 import { formatChord, formatSequence } from "./chord-format";
 
 function chord(mods: number, key: Chord["key"]): Chord {
@@ -21,10 +15,10 @@ describe("formatChord", () => {
   });
 
   it("emits modifier order Cmd → Ctrl → Alt → Shift", () => {
-    const c = chord(
-      MOD_META | MOD_CTRL | MOD_ALT | MOD_SHIFT,
-      { kind: "Char", value: "k" },
-    );
+    const c = chord(MOD_META | MOD_CTRL | MOD_ALT | MOD_SHIFT, {
+      kind: "Char",
+      value: "k",
+    });
     expect(formatChord(c)).toBe("Cmd+Ctrl+Alt+Shift+K");
   });
 
@@ -60,16 +54,17 @@ describe("formatChord", () => {
     expect(formatChord(chord(MOD_META, { kind: "Char", value: "/" }))).toBe(
       "Cmd+/",
     );
-    expect(formatChord(chord(MOD_META | MOD_SHIFT, { kind: "Char", value: "?" })))
-      .toBe("Cmd+Shift+?");
+    expect(
+      formatChord(chord(MOD_META | MOD_SHIFT, { kind: "Char", value: "?" })),
+    ).toBe("Cmd+Shift+?");
   });
 });
 
 describe("formatSequence", () => {
   it("formats a single-chord sequence as the chord itself", () => {
-    expect(formatSequence([chord(MOD_META, { kind: "Char", value: "p" })])).toBe(
-      "Cmd+P",
-    );
+    expect(
+      formatSequence([chord(MOD_META, { kind: "Char", value: "p" })]),
+    ).toBe("Cmd+P");
   });
 
   it("space-separates vim-style chord sequences", () => {

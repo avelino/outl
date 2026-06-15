@@ -198,6 +198,26 @@ Implementation lives in `lib/markdown-wrap.ts`: each handler reads `document.act
 | `(` / `[` / `{` | Auto-pair with the matching closer, caret between (`autoPairBracket`, TUI parity); typing `)` / `]` / `}` over an identical closer steps past it instead of doubling |
 | `Backspace` inside an empty pair | Collapses the whole pair — `[[]]` / `(())` (4 chars) and `()` / `[]` / `{}` (2 chars) — via `autoDeletePair` |
 
+### Vim parity (Normal + Visual)
+
+User-facing chord list lives in [`docs/shortcuts.md`](../../docs/shortcuts.md) — don't duplicate it here.
+This section captures only the **architectural decisions** a contributor needs to know before touching `lib/action-handlers.ts`.
+
+- **Three categories of vim ops**, by what they need from the cursor model:
+  1. **Block-level** (`a`, `A`, `S`, `Y`, `*`, `#`, `z R`, `z M`, `z z`, `V`, `g v`, `>` / `<` in Visual, `y` / `d` in Visual) — work on `selectedBlockId` or a range of block ids. **Implemented.**
+  2. **Char-cursor in Normal** (`x` `X` `D` `C` `s` `r{ch}` `f{ch}` `F{ch}` `~` `e`) — need a character cursor inside the selected block. The desktop has no such cursor (only an id), so these handlers **surface a status-line nudge** pointing the user at `i` + textarea edits. Catalog entries stay so the help overlay shows them.
+  3. **Pending-input** (`r{ch}`, `f{ch}`, `F{ch}`) — read a second character before applying. The dispatcher has no machinery for this today; categorised as char-cursor since they're blocked anyway.
+
+- **Visual mode is real**: `Mode::"vim-visual"` in the store with `visualAnchorId` + `lastVisualRange`. `<BlockRow />`'s `isInVisualRange()` paints the range at 18% accent opacity (distinct from the 6% single-row selection tint). Every Visual exit (`Esc`, `y`, `d`) captures the range to `lastVisualRange` so `g v` can restore it.
+
+- **`*` / `#` is not vim-pure.** Without a char cursor, "word under cursor" isn't defined — we seed the picker with the first 4 words of the selected block's text instead. Document this in `docs/shortcuts.md` so users aren't surprised.
+
+- **Range ops walk bottom-up.** `DeleteRange` iterates `[hi → lo]` so each `deleteBlock` call's id is still resolvable — top-down would invalidate ids the moment the backend re-projects the outline.
+
+- **`p` / `P` paste handlers are not wired yet.** `Y` / `YankRange` fill `appState.yankRegister`, but pasting N blocks has a design call (siblings? children? after / before?) that's deliberately deferred.
+
+- **Path to enable char-cursor ops.** Add a visible Normal-mode caret painted by `<BlockRow />` (model change), then move the 10 blocked handlers to real implementations. Separate PR.
+
 ### `Enter` outside a textarea (Normal mode)
 
 With a block selected and no textarea focused (the DOM fallback puts the dispatcher in Normal mode even with `vim_mode == false`), `Enter` resolves to the shared `OpenRefUnderCursor` action — but the desktop handler **always enters Insert on the selected block**.

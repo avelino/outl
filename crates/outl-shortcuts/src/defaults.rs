@@ -45,6 +45,12 @@ fn ctrl_key(k: Key) -> ChordSequence {
 fn pair(a: char, b: char) -> ChordSequence {
     ChordSequence::pair(Chord::ch(a), Chord::ch(b))
 }
+fn shift_pair(a: char, b: char) -> ChordSequence {
+    ChordSequence::pair(
+        Chord::new(Modifiers::SHIFT, Key::char(a)),
+        Chord::new(Modifiers::SHIFT, Key::char(b)),
+    )
+}
 
 /// Every binding outl ships with by default.
 ///
@@ -196,6 +202,17 @@ pub fn default_bindings() -> Vec<Binding> {
             "Command palette",
         ),
         Binding::new(pair('q', 'q'), Normal, Action::Quit, "Quit (chord)"),
+        // Vim's `ZZ` — "save and quit". outl auto-commits Insert on
+        // every Normal-mode boundary, so by the time the chord
+        // resolves the buffer is already on disk. Effectively `qq`
+        // with a different muscle memory; both stay alive so users
+        // arriving from vim don't trip.
+        Binding::new(
+            shift_pair('z', 'z'),
+            Normal,
+            Action::Quit,
+            "Save and quit (vim ZZ chord)",
+        ),
         Binding::new(ch('j'), Normal, Action::SelectionDown, "Selection down"),
         Binding::new(
             key(Key::Down),
@@ -216,6 +233,125 @@ pub fn default_bindings() -> Vec<Binding> {
             Normal,
             Action::EnterInsertAtStart,
             "Insert at start",
+        ),
+        // Vim's `a` — Insert one char past the cursor ("append").
+        // Clamps at end of buffer so `a` at end-of-line behaves
+        // like `i` there (no off-by-one cursor past the buffer).
+        Binding::new(
+            ch('a'),
+            Normal,
+            Action::EnterInsertAfter,
+            "Insert after cursor (append)",
+        ),
+        // Vim `A` — append at end of block.
+        Binding::new(
+            shift_ch('a'),
+            Normal,
+            Action::EnterInsertAtEnd,
+            "Insert at end of block (append)",
+        ),
+        // ── Vim char / line ops in Normal mode ────────────────────
+        Binding::new(
+            ch('x'),
+            Normal,
+            Action::DeleteCharUnderCursor,
+            "Delete char under cursor",
+        ),
+        Binding::new(
+            shift_ch('x'),
+            Normal,
+            Action::DeleteCharBeforeCursor,
+            "Delete char before cursor",
+        ),
+        Binding::new(
+            shift_ch('d'),
+            Normal,
+            Action::DeleteToEndOfBlock,
+            "Delete to end of block",
+        ),
+        Binding::new(
+            shift_ch('c'),
+            Normal,
+            Action::ChangeToEndOfBlock,
+            "Change to end of block",
+        ),
+        Binding::new(
+            shift_ch('s'),
+            Normal,
+            Action::SubstituteBlock,
+            "Substitute block (clear + Insert)",
+        ),
+        Binding::new(ch('s'), Normal, Action::SubstituteChar, "Substitute char"),
+        Binding::new(
+            ch('r'),
+            Normal,
+            Action::ReplaceChar,
+            "Replace char (arms r{ch})",
+        ),
+        Binding::new(
+            ch('f'),
+            Normal,
+            Action::FindCharForward,
+            "Find char forward (arms f{ch})",
+        ),
+        Binding::new(
+            shift_ch('f'),
+            Normal,
+            Action::FindCharBackward,
+            "Find char backward (arms F{ch})",
+        ),
+        Binding::new(
+            ch('~'),
+            Normal,
+            Action::ToggleCharCase,
+            "Toggle case of char under cursor",
+        ),
+        Binding::new(
+            shift_ch('y'),
+            Normal,
+            Action::YankCurrentBlock,
+            "Yank current block (Y alias of yy)",
+        ),
+        Binding::new(ch('e'), Normal, Action::CursorWordEnd, "Cursor to word end"),
+        Binding::new(
+            ch('*'),
+            Normal,
+            Action::SearchWordForward,
+            "Search word under cursor (forward)",
+        ),
+        Binding::new(
+            ch('#'),
+            Normal,
+            Action::SearchWordBackward,
+            "Search word under cursor (backward)",
+        ),
+        // Fold-control chord family.
+        Binding::new(pair('z', 'R'), Normal, Action::UnfoldAll, "Unfold all (zR)"),
+        Binding::new(pair('z', 'M'), Normal, Action::FoldAll, "Fold all (zM)"),
+        Binding::new(
+            pair('z', 'z'),
+            Normal,
+            Action::CenterViewport,
+            "Center viewport on cursor (zz)",
+        ),
+        // Visual re-select + range indent / outdent.
+        Binding::new(
+            pair('g', 'v'),
+            Normal,
+            Action::ReselectLastVisual,
+            "Reselect last Visual range (gv)",
+        ),
+        Binding::new(
+            ch('>'),
+            Visual,
+            Action::IndentVisualRange,
+            "Indent visual range",
+        ),
+        Binding::new(
+            ch('<'),
+            Visual,
+            Action::OutdentVisualRange,
+            "Outdent visual range",
         ),
         Binding::new(
             key(Key::Enter),

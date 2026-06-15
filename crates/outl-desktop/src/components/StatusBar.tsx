@@ -16,9 +16,11 @@ import { appState, setAppState } from "../lib/store";
 type Mode = "normal" | "insert" | "visual" | "overlay";
 
 function detectMode(): Mode {
-  if (appState.pickerOpen || appState.settingsOpen || appState.helpOpen) return "overlay";
+  if (appState.pickerOpen || appState.settingsOpen || appState.helpOpen)
+    return "overlay";
   const el = document.activeElement;
-  if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) return "insert";
+  if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement)
+    return "insert";
   return "normal";
 }
 
@@ -114,7 +116,9 @@ export function StatusBar() {
   return (
     <footer class="flex h-7 shrink-0 items-center gap-3 overflow-hidden border-t border-(--color-outl-border) bg-(--color-outl-bg) px-2 text-[11px]">
       {/* Mode badge — bold, accent background. */}
-      <span class={`rounded px-1.5 py-[1px] font-mono text-[10px] font-semibold uppercase tracking-wider ${badgeClass(mode())}`}>
+      <span
+        class={`rounded px-1.5 py-[1px] font-mono text-[10px] font-semibold uppercase tracking-wider ${badgeClass(mode())}`}
+      >
         {modeLabel(mode())}
       </span>
 

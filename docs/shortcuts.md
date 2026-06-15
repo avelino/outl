@@ -38,7 +38,7 @@ If a row below disagrees with what you observe in the app, **the code is right a
 | Toggle backlinks panel | `Ctrl+B` | `Cmd/Ctrl+Shift+B` | inline below outline |
 | Open settings | _via `:settings`_ | `Cmd/Ctrl+,` | gear icon |
 | Toggle help overlay | `?` | `Cmd/Ctrl+/` | help button |
-| Quit | `q q` (chord) / `Ctrl+C` | `Cmd/Ctrl+Q` (OS) | — |
+| Quit | `q q` (chord) / `Z Z` (vim alias) / `Ctrl+C` | `Cmd/Ctrl+Q` (OS) | — |
 
 > **Why `Cmd+J` and not `Cmd+T` for today's journal?** Every outliner ecosystem uses `T` for *task* / TODO — TUI's `Ctrl+T`, Logseq's `Cmd+T`, the universal Markdown checkbox shortcut. Re-training that muscle memory would be hostile. `J` for **journal** is unambiguous and lines up with the TUI's `g j` chord.
 
@@ -82,6 +82,11 @@ The desktop honours `Normal`/`Visual` only while `editor.vim_mode = true`. The T
 | Selection up | `k` / `↑` | `k` / `↑` | tap block |
 | Enter Insert at end of block | `i` | `i` | tap block |
 | Enter Insert at start of block | `I` | `I` | tap at start |
+| Enter Insert one char past cursor (vim append) | `a` | `a` *(= `i`, no char cursor)* | — |
+| Enter Insert at end of block (vim `A`) | `A` | `A` | — |
+| Substitute block (clear + Insert at col 0; `S` / `cc`) | `S` | `S` | — |
+| Substitute char under cursor (= `xi`) | `s` | — *(char cursor only)* | — |
+| Yank current block (`Y`, alias of `y y`) | `Y` | `Y` | — |
 | Open `[[ref]]` / `#tag` / `((blk-…))` under cursor | `Enter` | `Enter` | tap |
 | New block below + Insert | `o` | `o` | toolbar `+` |
 | New block above + Insert | `O` | `O` | — |
@@ -91,8 +96,14 @@ The desktop honours `Normal`/`Visual` only while `editor.vim_mode = true`. The T
 | Move block down | `J` | `J` | drag |
 | Delete block (chord) | `d d` | `d d` | swipe left |
 | Fold / unfold (toggle collapsed) | `c` | `c` | tap bullet |
+| Unfold all on the page (chord) | `z R` | `z R` | — |
+| Fold all on the page (chord) | `z M` | `z M` | — |
+| Center viewport on cursor (chord) | `z z` | `z z` | — |
 | Last block (jump) | `G` | `G` | — |
 | First block (chord) | `g g` | `g g` | — |
+| Reselect last Visual range (chord) | `g v` | `g v` | — |
+| Search workspace for word / block text — forward | `*` | `*` *(seeds picker)* | — |
+| Search workspace for word / block text — backward | `#` | `#` *(seeds picker)* | — |
 | Undo | `u` | `u` / `Cmd+Z` | toolbar |
 | Redo | `Ctrl+R` | `Ctrl+R` / `Cmd+Shift+Z` | toolbar |
 | Yank block ref → clipboard (chord) | `y r` | `y r` | — |
@@ -100,13 +111,24 @@ The desktop honours `Normal`/`Visual` only while `editor.vim_mode = true`. The T
 | Open command palette | `:` | `:` | — |
 | Open slash menu | `/` | `/` | `/` |
 
+> **About `a` / `*` / `#` on the desktop.** The desktop's Normal mode has only a selected block id — no character cursor inside the block. So `a` collapses to `i` (the textarea's own caret takes over), and `*` / `#` seed the picker with the first few words of the selected block's text instead of doing a word-under-cursor search. The catalog still ships these chords so muscle memory from the TUI carries over.
+
 ### Cursor inside a block (Normal)
+
+These rely on a **character cursor inside the selected block**.
+The TUI ships it natively; the desktop has only a selected block id, so the char-cursor ops surface a status-line nudge instead of firing.
 
 | Action | TUI | Desktop (vim on) |
 |---|---|---|
 | Char left / right | `h` / `l` (or arrows) | `h` / `l` |
 | Word right / left | `w` / `b` | `w` / `b` |
+| Word end forward (vim `e`) | `e` | — |
 | Start / end of block text | `0` / `$` (or Home/End) | `0` / `$` |
+| Find char forward / backward (next typed char) | `f{ch}` / `F{ch}` | — |
+| Delete char under / before cursor | `x` / `X` | — |
+| Delete to end of block (`D`) / change to end (`C`) | `D` / `C` | — |
+| Replace char under cursor with next typed char | `r{ch}` | — |
+| Toggle case of char under cursor; advance | `~` | — |
 
 ---
 
@@ -139,8 +161,10 @@ TUI + desktop (vim on); mobile has no Visual equivalent yet.
 | Extend selection down | `j` / `↓` | `j` / `↓` |
 | Extend selection up | `k` / `↑` | `k` / `↑` |
 | Yank range | `y` | `y` |
-| Delete range | `d` | `d` |
-| Leave Visual | `Esc` | `Esc` |
+| Delete range | `d` / `x` | `d` / `x` |
+| Indent range (vim `>`) | `Tab` / `>` | `>` |
+| Outdent range (vim `<`) | `Shift+Tab` / `<` | `<` |
+| Leave Visual (captures range so a follow-up `g v` restores it) | `Esc` | `Esc` |
 
 ---
 

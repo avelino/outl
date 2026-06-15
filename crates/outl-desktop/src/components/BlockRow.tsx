@@ -28,6 +28,7 @@ import { HighlightedCode } from "@outl/shared/highlight";
 import { looksLikeOutline, utf16OffsetToCharOffset } from "@outl/shared/paste";
 
 import { detectFence } from "@outl/shared/highlight";
+import { isInVisualRange } from "../lib/outline-walk";
 import { appState, setAppState } from "../lib/store";
 
 export interface BlockCallbacks {
@@ -65,7 +66,6 @@ function rawTextWithTodo(block: BlockNode): string {
   if (!block.todo) return block.text;
   return `${block.todo} ${block.text}`;
 }
-
 
 /**
  * One outline block. Renders read-only by default; flips to a
@@ -457,7 +457,11 @@ export function BlockRow(props: {
     const ta = textareaRef;
     if (!ta) return;
     if (ta.selectionStart !== ta.selectionEnd) return; // typing over a selection
-    const completion = autoPairBracket(ta.value, ta.selectionStart ?? 0, e.data ?? "");
+    const completion = autoPairBracket(
+      ta.value,
+      ta.selectionStart ?? 0,
+      e.data ?? "",
+    );
     if (!completion) return;
     e.preventDefault();
     setDraft(completion.value);
@@ -474,7 +478,10 @@ export function BlockRow(props: {
     const text = e.clipboardData?.getData("text/plain") ?? "";
     if (!text || !looksLikeOutline(text)) return;
     e.preventDefault();
-    const caretChars = utf16OffsetToCharOffset(ta.value, ta.selectionStart ?? 0);
+    const caretChars = utf16OffsetToCharOffset(
+      ta.value,
+      ta.selectionStart ?? 0,
+    );
     await props.cb.onPasteMarkdown(props.block.id, caretChars, text);
   }
 
@@ -512,6 +519,18 @@ export function BlockRow(props: {
   }
 
   const isSelected = () => appState.selectedBlockId === props.block.id;
+  /** Vim Visual range covers this block. Mutually exclusive with
+   *  `isSelected()` rendering-wise: when both are true we apply the
+   *  Visual style so the user sees the contiguous band, not a single
+   *  bright row at the cursor. */
+  const isInVisual = () =>
+    appState.mode === "vim-visual" &&
+    isInVisualRange(
+      props.block.id,
+      appState.visualAnchorId,
+      appState.selectedBlockId,
+      appState.outline,
+    );
   const isInteractive = () => isEditing() || props.block.todo !== null;
 
   /** Outer row click — select without entering Insert. Lets the
@@ -531,11 +550,14 @@ export function BlockRow(props: {
     <div>
       <div
         class={`outl-row group relative flex items-start rounded-sm py-[3px] pr-2 ${
-          isSelected()
-            ? "bg-(--color-outl-accent)/[0.06]"
-            : "hover:bg-(--color-outl-bg-elev)/30"
+          isInVisual()
+            ? "bg-(--color-outl-accent)/[0.18]"
+            : isSelected()
+              ? "bg-(--color-outl-accent)/[0.06]"
+              : "hover:bg-(--color-outl-bg-elev)/30"
         }`}
         data-selected={isSelected() ? "true" : "false"}
+        data-visual={isInVisual() ? "true" : "false"}
         data-editing={isEditing() ? "true" : "false"}
         onClick={selectRow}
       >
@@ -574,7 +596,10 @@ export function BlockRow(props: {
           onClick={(e) => {
             e.stopPropagation();
             if (props.block.children.length === 0) return;
-            void props.cb.onToggleCollapsed(props.block.id, !props.block.collapsed);
+            void props.cb.onToggleCollapsed(
+              props.block.id,
+              !props.block.collapsed,
+            );
           }}
           aria-label={props.block.collapsed ? "Expand" : "Collapse"}
         >
@@ -634,7 +659,9 @@ export function BlockRow(props: {
           const body = (
             <div class={`min-w-0 flex-1 leading-snug ${bodyClass()}`}>
               {(() => {
-                const fence = !isEditing() ? detectFence(props.block.text) : null;
+                const fence = !isEditing()
+                  ? detectFence(props.block.text)
+                  : null;
                 return (
                   <Show
                     when={isEditing()}
@@ -672,11 +699,15 @@ export function BlockRow(props: {
                               }}
                             >
                               <Show
-                                when={renderedTokens && renderedTokens.length > 0}
+                                when={
+                                  renderedTokens && renderedTokens.length > 0
+                                }
                                 fallback={
                                   <span class={!hasContent ? "opacity-30" : ""}>
                                     {hasContent
-                                      ? (split.quoted ? split.body : props.block.text)
+                                      ? split.quoted
+                                        ? split.body
+                                        : props.block.text
                                       : "Click to add text…"}
                                   </span>
                                 }
@@ -694,42 +725,42 @@ export function BlockRow(props: {
                       )
                     }
                   >
-            <div class="relative">
-              <textarea
-                ref={textareaRef}
-                value={draft()}
-                autofocus
-                rows={1}
-                spellcheck={false}
-                data-block-id={props.block.id}
-                class="w-full resize-none overflow-hidden bg-transparent text-current outline-none"
-                onInput={(e) => {
-                  setDraft(e.currentTarget.value);
-                  refreshSuggest();
-                }}
-                onSelect={() => refreshSuggest()}
-                onBlur={() => void commit()}
-                onKeyDown={handleKeydown}
-                onBeforeInput={handleBeforeInput}
-                onPaste={handlePaste}
-              />
-              <RefSuggestPopup
-                items={suggestions()}
-                activeIndex={suggestIndex()}
-                onHover={setSuggestIndex}
-                onPick={acceptSuggestion}
-              />
-              <EmojiSuggestPopup
-                items={emojiSuggestions()}
-                activeIndex={emojiIndex()}
-                onHover={setEmojiIndex}
-                onPick={acceptEmojiSuggestion}
-              />
+                    <div class="relative">
+                      <textarea
+                        ref={textareaRef}
+                        value={draft()}
+                        autofocus
+                        rows={1}
+                        spellcheck={false}
+                        data-block-id={props.block.id}
+                        class="w-full resize-none overflow-hidden bg-transparent text-current outline-none"
+                        onInput={(e) => {
+                          setDraft(e.currentTarget.value);
+                          refreshSuggest();
+                        }}
+                        onSelect={() => refreshSuggest()}
+                        onBlur={() => void commit()}
+                        onKeyDown={handleKeydown}
+                        onBeforeInput={handleBeforeInput}
+                        onPaste={handlePaste}
+                      />
+                      <RefSuggestPopup
+                        items={suggestions()}
+                        activeIndex={suggestIndex()}
+                        onHover={setSuggestIndex}
+                        onPick={acceptSuggestion}
+                      />
+                      <EmojiSuggestPopup
+                        items={emojiSuggestions()}
+                        activeIndex={emojiIndex()}
+                        onHover={setEmojiIndex}
+                        onPick={acceptEmojiSuggestion}
+                      />
+                    </div>
+                  </Show>
+                );
+              })()}
             </div>
-          </Show>
-            );
-          })()}
-        </div>
           );
           // Tailwind classes are passed as **string literals** so the
           // JIT discovers them at build time — the shared
@@ -893,7 +924,9 @@ function CodeFenceView(props: {
   return (
     <div class="rounded-md border border-(--color-outl-fg)/10 bg-(--color-outl-bg-elev)/60">
       <div class="flex items-center justify-between border-b border-(--color-outl-fg)/10 px-2 py-1">
-        <span class="font-mono text-[10px] uppercase opacity-60">{props.language}</span>
+        <span class="font-mono text-[10px] uppercase opacity-60">
+          {props.language}
+        </span>
         <button
           type="button"
           onClick={(e) => {

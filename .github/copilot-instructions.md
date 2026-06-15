@@ -136,6 +136,33 @@ What to leave alone:
 Scope: root `CLAUDE.md`, per-crate `CLAUDE.md`, `docs/*.md`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `.github/*.md`, `.claude/agents/*.md`, `.claude/commands/*.md`.
 Root `CLAUDE.md` has the canonical rule under "Markdown / documentation style".
 
+### 3.2 One owner per fact — link, don't duplicate
+
+Every user-facing fact lives in exactly one `docs/*.md`. `CLAUDE.md` files **link** to it instead of copying the table or chord list.
+
+When reviewing a PR, flag duplication of these surfaces between `docs/*.md` and any `CLAUDE.md`:
+
+| Fact | Canonical home |
+|---|---|
+| Every keyboard shortcut (TUI + desktop + mobile) | `docs/shortcuts.md` |
+| `outl` CLI subcommands | `docs/cli.md` |
+| TUI manual (modes, overlays) | `docs/tui.md` |
+| Outl markdown dialect + sidecar | `docs/markdown-format.md` |
+| CRDT algorithm + invariants | `docs/crdt.md` |
+| Storage trait + JSONL backend | `docs/storage.md` |
+| Sync model | `docs/sync.md` |
+| MCP wiring + recipes | `docs/mcp.md` + `docs/mcp-recipes.md` |
+| Config file | `docs/config.md` |
+| Theming palette | `docs/theming.md` |
+| Dev loop | `docs/development.md` |
+| Contributing policy | `docs/contributing.md` |
+
+What a `CLAUDE.md` *should* carry: invariants, architectural decisions you don't get to revisit, crate-specific contracts, the reasoning behind a choice — things a contributor needs *before* touching code, not user reference.
+
+When you spot a PR copying a `docs/` table (or row of it) into a `CLAUDE.md`, **request a change**: replace with a link. Reverse direction is fine — `docs/*.md` linking *into* a `CLAUDE.md` for architectural depth is welcome.
+
+Canonical rule lives at root `CLAUDE.md` → "One owner per fact — link, don't duplicate".
+
 ---
 
 ## 4. Performance — hot paths only
@@ -453,6 +480,7 @@ A stale onramp is **worse than no onramp** because it sends contributors confide
 | Version source-of-truth or release tooling (e.g. someone re-adds `version` to `tauri.conf.json`) | `docs/development.md` § 10 + `crates/outl-mobile/CLAUDE.md` (and reject re-adding the `version` field — it's an invariant) |
 | Conventional Commits enforcement or release-notes pipeline | `docs/development.md` § 10 + root `CLAUDE.md` "Coding conventions" |
 | Storage trait surface, `JsonlStorage` / `MemoryStorage` test contract | `docs/development.md` § 5 + `docs/storage.md` + `outl-core/CLAUDE.md` |
+| New `Action` variant in `outl-shortcuts` / new keybinding / chord rebound | `docs/shortcuts.md` (the row that ships to users) + `outl-shortcuts/src/{action.rs,defaults.rs}` + every client's dispatcher (`outl-tui/src/input/*.rs`, `outl-desktop/src/lib/{shortcuts.ts,action-handlers.ts}`) + `outl-desktop/src/lib/api.ts` (TS mirror of the `Action` union — no codegen, drift here is silent until runtime) |
 | Public API of a shared primitive listed in `CLAUDE.md` § 5.1 catalog | The same catalog row, **plus** mirror the change in this file's § 5.1 |
 
 Phrase the comment so the author knows exactly which file and section to move.

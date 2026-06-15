@@ -7,6 +7,7 @@
 //! `Backspace` on empty) still commit through the regular `App`
 //! methods so the op log stays the single source of truth.
 
+use crate::actions::block::insert::InsertCursor;
 use crate::actions::cycle_todo_inline;
 use crate::state::{App, Mode};
 use anyhow::Result;
@@ -154,7 +155,7 @@ pub(crate) fn handle_insert_key(app: &mut App, key: KeyEvent) -> Result<()> {
             if at_start && app.selected > 0 {
                 app.commit_insert();
                 app.move_selection(-1);
-                app.enter_insert(false); // cursor lands at end
+                app.enter_insert(InsertCursor::AtCursor); // cursor lands at end
             } else if let Mode::Insert { buffer, .. } = &mut app.mode {
                 buffer.move_left();
             }
@@ -168,7 +169,7 @@ pub(crate) fn handle_insert_key(app: &mut App, key: KeyEvent) -> Result<()> {
             if at_end && app.selected < last_idx {
                 app.commit_insert();
                 app.move_selection(1);
-                app.enter_insert(true); // cursor at start
+                app.enter_insert(InsertCursor::Start); // cursor at start
             } else if let Mode::Insert { buffer, .. } = &mut app.mode {
                 buffer.move_right();
             }

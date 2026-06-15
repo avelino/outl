@@ -4,8 +4,10 @@ import type { BlockNode } from "@outl/shared/api/types";
 
 import {
   flattenVisible,
+  isInVisualRange,
   nextVisibleId,
   previousVisibleId,
+  visualRangeIds,
 } from "./outline-walk";
 
 function block(
@@ -114,3 +116,34 @@ describe("previousVisibleId", () => {
   });
 });
 
+describe("visualRangeIds / isInVisualRange", () => {
+  const tree: BlockNode[] = [block("a"), block("b"), block("c"), block("d")];
+
+  it("orders anchor + cursor regardless of direction", () => {
+    expect(visualRangeIds("b", "d", tree)).toEqual({ lo: "b", hi: "d" });
+    expect(visualRangeIds("d", "b", tree)).toEqual({ lo: "b", hi: "d" });
+  });
+
+  it("returns null when either endpoint is missing or invisible", () => {
+    expect(visualRangeIds(null, "a", tree)).toBeNull();
+    expect(visualRangeIds("a", null, tree)).toBeNull();
+    expect(visualRangeIds("ghost", "a", tree)).toBeNull();
+  });
+
+  it("highlights every block in [lo, hi]", () => {
+    expect(isInVisualRange("a", "b", "d", tree)).toBe(false);
+    expect(isInVisualRange("b", "b", "d", tree)).toBe(true);
+    expect(isInVisualRange("c", "b", "d", tree)).toBe(true);
+    expect(isInVisualRange("d", "b", "d", tree)).toBe(true);
+  });
+
+  it("single-block range still includes the anchor", () => {
+    expect(isInVisualRange("b", "b", "b", tree)).toBe(true);
+    expect(isInVisualRange("a", "b", "b", tree)).toBe(false);
+  });
+
+  it("returns false when range is invalid", () => {
+    expect(isInVisualRange("a", null, "b", tree)).toBe(false);
+    expect(isInVisualRange("a", "ghost", "b", tree)).toBe(false);
+  });
+});

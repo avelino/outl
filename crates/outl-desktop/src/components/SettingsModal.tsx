@@ -86,7 +86,10 @@ export function SettingsModal() {
             <h2 class="text-lg font-semibold">Settings</h2>
           </header>
 
-          <Show when={draft()} fallback={<div class="px-5 py-6 opacity-60">Loading…</div>}>
+          <Show
+            when={draft()}
+            fallback={<div class="px-5 py-6 opacity-60">Loading…</div>}
+          >
             <div class="space-y-4 px-5 py-4">
               <label class="flex items-center justify-between gap-4">
                 <div>

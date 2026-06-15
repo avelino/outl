@@ -30,7 +30,8 @@ function kebab(snake: string): string {
 
 export function applyPaletteToRoot(palette: Palette) {
   const root = document.documentElement;
-  const set = (prop: string, value: string) => root.style.setProperty(prop, value);
+  const set = (prop: string, value: string) =>
+    root.style.setProperty(prop, value);
 
   // Canonical --color-outl-* tokens. Walk every field so new keys
   // added to Palette propagate without extra wiring here.

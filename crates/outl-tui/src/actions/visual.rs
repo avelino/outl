@@ -14,6 +14,42 @@ impl App {
         };
     }
 
+    /// `gv` — re-enter Visual mode at the last range. No-op when no
+    /// Visual session has ever happened in this app instance (the
+    /// status line surfaces "no previous selection").
+    pub(crate) fn reselect_last_visual(&mut self) {
+        let Some((lo, hi)) = self.last_visual else {
+            self.status = "no previous selection".into();
+            return;
+        };
+        let max_idx = self.flat_len.saturating_sub(1);
+        let lo = lo.min(max_idx);
+        let hi = hi.min(max_idx);
+        // Re-anchor at `lo` and move selection to `hi` so the range
+        // re-renders identically — `visual_range()` swaps them on
+        // demand so direction doesn't matter.
+        self.mode = Mode::Visual { anchor: lo };
+        self.selected = hi;
+    }
+
+    /// Snapshot the current Visual range into `last_visual` so a
+    /// future `gv` can restore it. Call this right before leaving
+    /// Visual mode — every exit path (Esc, yank, delete, indent,
+    /// outdent) goes through here.
+    pub(crate) fn remember_visual_range(&mut self) {
+        if let Some(range) = self.visual_range() {
+            self.last_visual = Some(range);
+        }
+    }
+
+    /// `Esc` from Visual — capture the range, drop back to Normal.
+    /// The renderer already shows Normal-mode chrome once `Mode`
+    /// changes; nothing else to do.
+    pub(crate) fn exit_visual(&mut self) {
+        self.remember_visual_range();
+        self.mode = Mode::Normal;
+    }
+
     /// Return the (lo, hi) flat indices of the Visual selection,
     /// inclusive on both sides. `None` if not in Visual mode.
     pub(crate) fn visual_range(&self) -> Option<(usize, usize)> {
@@ -32,6 +68,7 @@ impl App {
             return;
         };
         self.snapshot_for_undo();
+        self.remember_visual_range();
         // Delete from hi down to lo so flat indices don't shift mid-loop.
         for idx in (lo..=hi).rev() {
             if let Some(path) = path_for_index(&self.page.blocks, idx) {

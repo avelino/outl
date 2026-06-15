@@ -1,6 +1,10 @@
 import { For, Show, createResource, onCleanup, onMount } from "solid-js";
 
-import { listShortcutBindings, type Binding, type ShortcutMode } from "../lib/api";
+import {
+  listShortcutBindings,
+  type Binding,
+  type ShortcutMode,
+} from "../lib/api";
 import { formatSequence } from "../lib/chord-format";
 import { appState, setAppState } from "../lib/store";
 
@@ -53,7 +57,11 @@ export function HelpOverlay() {
       }
     };
     window.addEventListener("keydown", onKey, { capture: true });
-    onCleanup(() => window.removeEventListener("keydown", onKey, { capture: true } as EventListenerOptions));
+    onCleanup(() =>
+      window.removeEventListener("keydown", onKey, {
+        capture: true,
+      } as EventListenerOptions),
+    );
   });
 
   return (
@@ -113,7 +121,8 @@ export function HelpOverlay() {
           </div>
 
           <footer class="border-t border-(--color-outl-border) px-5 py-2 text-xs opacity-50">
-            From <span class="font-mono">outl-shortcuts</span> · shared with the TUI · `?` (Normal) or ⌘/ toggles
+            From <span class="font-mono">outl-shortcuts</span> · shared with the
+            TUI · `?` (Normal) or ⌘/ toggles
           </footer>
         </div>
       </div>

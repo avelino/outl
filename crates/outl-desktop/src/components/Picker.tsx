@@ -34,6 +34,7 @@ export function Picker(props: { onPicked: (view: PageView) => void }) {
 
   function close() {
     setAppState("pickerOpen", false);
+    setAppState("pickerSeed", null);
     setQuery("");
     setHighlight(0);
   }
@@ -105,7 +106,19 @@ export function Picker(props: { onPicked: (view: PageView) => void }) {
    */
   createEffect(() => {
     if (appState.pickerOpen) {
-      queueMicrotask(() => inputRef?.focus());
+      // Pre-fill from `pickerSeed` if a handler stashed one (e.g. `*`
+      // / `#` in vim Normal mode). Cleared on close so the next manual
+      // `Cmd+P` opens blank.
+      const seed = appState.pickerSeed;
+      if (seed && query() === "") {
+        setQuery(seed);
+      }
+      queueMicrotask(() => {
+        inputRef?.focus();
+        // Select all so the user can either accept the seed or type
+        // a fresh query without an extra Backspace.
+        inputRef?.select();
+      });
     }
   });
 
@@ -152,7 +165,11 @@ export function Picker(props: { onPicked: (view: PageView) => void }) {
                   }`}
                 >
                   <div>
-                    {p.icon ? `${p.icon} ` : p.kind === "journal" ? "📅 " : "📄 "}
+                    {p.icon
+                      ? `${p.icon} `
+                      : p.kind === "journal"
+                        ? "📅 "
+                        : "📄 "}
                     {p.title}
                   </div>
                   <div class="font-mono text-[10px] opacity-50">{p.slug}</div>
