@@ -20,10 +20,50 @@ describe("buildShowMessage", () => {
     expect(buildShowMessage(pages)).toEqual({
       action: "show",
       items: [
-        { slug: "avelino", title: "Avelino", kind: "page" },
+        // Page pick value is the title (matches desktop refReplacement).
+        { slug: "Avelino", title: "Avelino", kind: "page" },
+        // Journal pick value stays the ISO slug.
         { slug: "2026-05-28", title: "2026-05-28", kind: "journal" },
       ],
     });
+  });
+
+  it("inserts the title, not the slug, for a page whose slug differs (#88)", () => {
+    // Regression: the chip showed "avelino/outl" but tapping wrote the
+    // slug `avelino-outl`. The picked value (the `slug` wire field) must
+    // be the human-readable title so the ref renders verbatim and still
+    // resolves via the slugified-match arm of open_or_create_by_ref.
+    const pages: PageMeta[] = [
+      { id: "a", slug: "avelino-outl", title: "avelino/outl", kind: "page" },
+    ];
+    const item = buildShowMessage(pages).items[0];
+    expect(item.slug).toBe("avelino/outl");
+    expect(item.title).toBe("avelino/outl");
+  });
+
+  it("keeps inserting the journal's ISO slug, not its long title", () => {
+    const pages: PageMeta[] = [
+      {
+        id: "j1",
+        slug: "2026-05-28",
+        title: "Thursday, May 28, 2026",
+        kind: "journal",
+      },
+    ];
+    const item = buildShowMessage(pages).items[0];
+    expect(item.slug).toBe("2026-05-28");
+    expect(item.title).toBe("2026-05-28");
+  });
+
+  it("inserts the person's title verbatim for an @ mention", () => {
+    const pages: PageMeta[] = [
+      { id: "p1", slug: "avelino", title: "Avelino", kind: "page" },
+    ];
+    // mention=true → pick value is the title (applySuggestion wraps it
+    // as `[[@Avelino]]`).
+    expect(buildShowMessage(pages, { mention: true }).items[0].slug).toBe(
+      "Avelino",
+    );
   });
 
   it("replaces a journal's human title with its ISO slug", () => {
