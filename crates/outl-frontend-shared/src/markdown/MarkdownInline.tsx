@@ -113,19 +113,35 @@ export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
               </code>
             );
           case "link": {
-            const openLink = (e: MouseEvent) => {
+            const fire = () => props.onLinkClick?.(tok.href);
+            const onClick = (e: MouseEvent) => {
               if (!props.onLinkClick) return;
               e.stopPropagation();
-              props.onLinkClick(tok.href);
+              fire();
             };
+            const onKeyDown = (e: KeyboardEvent) => {
+              if (!props.onLinkClick) return;
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                e.stopPropagation();
+                fire();
+              }
+            };
+            // Only expose the button affordances (role / tabindex /
+            // handlers / pointer cursor) when a handler is actually
+            // wired. An inert link is a plain `<span>`, not a fake
+            // button — otherwise screen readers announce a control that
+            // does nothing and keyboard users land on a dead tab stop.
+            const a11y: JSX.HTMLAttributes<HTMLSpanElement> = props.onLinkClick
+              ? { role: "button", tabindex: 0, onClick, onKeyDown }
+              : {};
             return (
               <Show
                 when={variant() === "inline"}
                 fallback={
                   <span
-                    role="button"
+                    {...a11y}
                     title={tok.href}
-                    onClick={openLink}
                     class="text-(--color-ios-accent) underline active:opacity-60 dark:text-(--color-iosd-accent)"
                     classList={{ "cursor-pointer": !!props.onLinkClick }}
                   >
@@ -134,9 +150,8 @@ export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
                 }
               >
                 <span
-                  role="button"
+                  {...a11y}
                   title={tok.href}
-                  onClick={openLink}
                   class="text-(--color-outl-md-link-fg) underline decoration-(--color-outl-md-link-fg)/40 underline-offset-2 hover:decoration-(--color-outl-md-link-fg)"
                   classList={{ "cursor-pointer": !!props.onLinkClick }}
                 >

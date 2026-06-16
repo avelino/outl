@@ -81,7 +81,7 @@ When in doubt, ship in the client; promote later when the second client appears.
 
 | Concept | Entry | Mirrors (Rust) |
 |---|---|---|
-| `<MarkdownInline />` (refs/tags fire `onRefClick`/`onTagClick`; external `[label](url)` links fire the optional `onLinkClick(href)` — omit it and links render as inert text) | `@outl/shared/markdown` | output of `outl_md::tokenize_owned` |
+| `<MarkdownInline />` (refs/tags fire `onRefClick`/`onTagClick`; external `[label](url)` links fire the optional `onLinkClick(href)` — when wired, the link is a keyboard-operable button (`role`/`tabindex`/Enter+Space); when omitted it's a plain inert `<span>`, no fake button) | `@outl/shared/markdown` | output of `outl_md::tokenize_owned` |
 | `splitQuote`, `isQuote`, `QUOTE_PREFIX`, `stripQuoteFromTokens` | `@outl/shared/markdown` (re-exported) | `outl_actions::quote::{split_quote, is_quote, QUOTE_PREFIX}` |
 | `<QuoteWrap />`, `isBlockQuoted` | `@outl/shared/markdown` | Wraps `bullet + body` in the blockquote chrome (left border + faint tint) so mobile and desktop don't duplicate the conditional wrapper. Each client passes its theme tokens via `baseClass` + `chromeClass` props (Tailwind string literals for JIT discovery). |
 | `looksLikeOutline` | `@outl/shared/paste` | `outl_actions::paste::looks_like_outline` |

@@ -278,10 +278,27 @@ export async function openExternalUrl(href: string): Promise<void> {
   try {
     scheme = new URL(href).protocol.replace(/:$/, "").toLowerCase();
   } catch {
-    throw new Error(`refusing to open malformed URL: ${href}`);
+    // `href` comes from synced / remote markdown — strip control chars
+    // and cap length before it reaches the status line so a hostile
+    // `.md` can't flood or corrupt the UI with the error string.
+    throw new Error(`refusing to open malformed URL: ${describeHref(href)}`);
   }
   if (scheme !== "http" && scheme !== "https" && scheme !== "mailto") {
     throw new Error(`refusing to open non-web URL scheme: ${scheme}:`);
   }
   await openUrl(href);
+}
+
+/** Make an untrusted `href` safe to show in an error/status message:
+ *  drop control characters and truncate to a sane length. */
+function describeHref(href: string): string {
+  // Drop control characters (charCode < 0x20 or DEL) and truncate so a
+  // hostile `href` can't flood or corrupt the status line.
+  const cleaned = Array.from(href)
+    .filter((c) => {
+      const code = c.charCodeAt(0);
+      return code >= 0x20 && code !== 0x7f;
+    })
+    .join("");
+  return cleaned.length > 100 ? `${cleaned.slice(0, 100)}…` : cleaned;
 }

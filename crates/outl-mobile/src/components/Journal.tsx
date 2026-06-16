@@ -20,6 +20,7 @@ import {
   nextDay,
   openJournalFor,
   openPageBySlug,
+  openExternalUrl,
   openRef,
   openTodayJournal,
   outdentBlock,
@@ -816,6 +817,17 @@ export function Journal() {
     if (next) applyView(next);
   }
 
+  function handleLinkClick(href: string) {
+    // External `[label](url)` → open in the system browser via the
+    // shared opener wrapper (scheme-guarded to http(s)/mailto). Mirrors
+    // desktop; errors surface on the same status line as everything
+    // else instead of throwing into the tap handler.
+    haptic("light");
+    void openExternalUrl(href).catch((e) => {
+      setError(e instanceof Error ? e.message : String(e));
+    });
+  }
+
   async function handlePickPage(slug: string, kind: "page" | "journal") {
     setSwitcherOpen(false);
     haptic("light");
@@ -1101,6 +1113,7 @@ export function Journal() {
                   onContextMenu={(id) => setContextMenuBlockId(id)}
                   onRefClick={handleRefClick}
                   onTagClick={handleTagClick}
+                  onLinkClick={handleLinkClick}
                   onPasteMarkdown={handlePasteMarkdown}
                   onTextareaMount={(el) => {
                     activeTextarea = el;

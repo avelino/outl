@@ -78,16 +78,36 @@ describe("MarkdownInline — external link rendering", () => {
     const span = m.host.querySelector('[role="button"]') as HTMLElement;
     expect(span).not.toBeNull();
     expect(span.textContent).toBe("site");
+    expect(span.getAttribute("tabindex")).toBe("0");
     span.click();
     expect(opened).toEqual(["https://example.com"]);
     m.dispose();
   });
 
-  it("renders the label as inert text when no onLinkClick is supplied", () => {
+  it("fires onLinkClick on Enter / Space for keyboard users", () => {
+    const opened: string[] = [];
+    const m = mount(linkTok, "inline", (href) => opened.push(href));
+    const span = m.host.querySelector('[role="button"]') as HTMLElement;
+    span.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    span.dispatchEvent(
+      new KeyboardEvent("keydown", { key: " ", bubbles: true }),
+    );
+    expect(opened).toEqual([
+      "https://example.com",
+      "https://example.com",
+    ]);
+    m.dispose();
+  });
+
+  it("renders the label as inert text (no fake button) when no onLinkClick", () => {
     const m = mount(linkTok, "inline");
     expect(m.host.textContent).toBe("site");
+    // a11y: an inert link must NOT masquerade as a button or be a tab stop.
+    expect(m.host.querySelector('[role="button"]')).toBeNull();
     const span = m.host.querySelector("span") as HTMLElement;
-    // No handler → clicking must not throw and must not be cursor-pointer.
+    expect(span.getAttribute("tabindex")).toBeNull();
     expect(() => span.click()).not.toThrow();
     expect(span.className).not.toContain("cursor-pointer");
     m.dispose();
