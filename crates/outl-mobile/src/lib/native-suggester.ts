@@ -56,12 +56,17 @@ export function buildShowMessage(
   return {
     action: "show",
     items: items.map((p) => ({
-      // For the `@` mention popup, the picked value handed back to JS
-      // must be the **title** — `applySuggestion` wraps it in
-      // `[[@<title>]]`, and the page slug carries no `@`. For normal
-      // page refs, the slug is still the canonical identifier so
-      // navigation and ref-resolution match the picker.
-      slug: opts.mention ? p.title : p.slug,
+      // `slug` is the value handed back to JS on tap and spliced into
+      // the document. It must match desktop's `refReplacement`
+      // (BlockRow.tsx): journals insert their ISO slug; every other
+      // page inserts its **title**, which renders verbatim inside
+      // `[[…]]` and still resolves through the slugified-match arm of
+      // `open_or_create_by_ref` (so `[[avelino/outl]]` finds the page
+      // stored as `avelino-outl`). Inserting the slug here was the bug
+      // (#88): the chip showed the title but the tap wrote the slug.
+      // `@` mentions always insert the title — `applySuggestion` wraps
+      // it as `[[@<title>]]` and the page identity carries no `@`.
+      slug: p.kind === "journal" && !opts.mention ? p.slug : p.title,
       // Journal pages render under a human-readable title server-side
       // ("Thursday, May 28, 2026"). The mobile UI is anchored on ISO
       // slugs (`2026-05-28`), so show the slug in the chip strip
