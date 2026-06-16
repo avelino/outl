@@ -73,7 +73,10 @@ pub struct PageMeta {
     pub id: String,
     /// Stable slug identifying the page (filename-safe).
     pub slug: String,
-    /// Human-readable title (the page node's text).
+    /// Human-readable title. Resolved most-specific-first: the
+    /// `title::` page property (where ingest / reconcile park the name),
+    /// then the page node's own text (set by in-app creation), then the
+    /// slug as a last resort. See `page_meta`.
     pub title: String,
     /// `page` or `journal`.
     pub kind: PageKind,
@@ -138,7 +141,23 @@ pub fn page_meta(workspace: &Workspace, id: NodeId) -> Option<PageMeta> {
         _ => return None,
     };
     let kind = PageKind::parse(workspace.tree().property(id, KIND_KEY));
-    let title = workspace.block_text(id).unwrap_or_else(|| slug.clone());
+    // Title resolution, most-specific first:
+    //   1. the `title::` page property — where ingest / reconcile parks
+    //      the human-readable name (`diff_to_ops_with_page_props` emits
+    //      it as `Op::SetProp` key `"title"`, and the page root's text
+    //      stays empty for disk-sourced pages);
+    //   2. the page node's own text — set when a page is created
+    //      in-app via `open_or_create_by_name` (the typed name);
+    //   3. the slug — last resort so a title is never empty.
+    // Reading `block_text` alone (the old behaviour) made every
+    // ingested page surface its slug in pickers / autocomplete.
+    let title = match workspace.tree().property(id, "title") {
+        Some(PropValue::Text(s)) if !s.trim().is_empty() => s.trim().to_string(),
+        _ => workspace
+            .block_text(id)
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or_else(|| slug.clone()),
+    };
     // `icon::` is a free-form page property. It survives as a
     // `PropValue::Text` after `reconcile_md` applies the page's
     // properties; we surface only the textual variant so the wire
@@ -669,6 +688,40 @@ mod tests {
         // same node (idempotent on the slugified form, not the raw input).
         let second = open_or_create_by_name(&mut w, &hlc, "avelino/outl", PageKind::Page).unwrap();
         assert_eq!(id, second);
+    }
+
+    #[test]
+    fn page_meta_prefers_title_property_over_node_text() {
+        // Regression (issue #88): disk-sourced / ingested pages park the
+        // human-readable name in the `title::` property
+        // (`diff_to_ops_with_page_props` emits it as `Op::SetProp` key
+        // "title") while the page root node's text stays empty. The
+        // mobile / desktop autocomplete then rendered the slug because
+        // `page_meta` read `block_text` only. `title::` must win.
+        let (mut w, hlc) = ws();
+        // Create with an empty node text, mimicking an ingested page.
+        let id = open_or_create(&mut w, &hlc, "avelino-outl", "", PageKind::Page).unwrap();
+        set_prop(
+            &mut w,
+            &hlc,
+            id,
+            "title",
+            PropValue::Text("avelino/outl".to_string()),
+        )
+        .unwrap();
+        let meta = page_meta(&w, id).unwrap();
+        assert_eq!(meta.title, "avelino/outl");
+        assert_eq!(meta.slug, "avelino-outl");
+    }
+
+    #[test]
+    fn page_meta_falls_back_to_slug_when_no_title_or_text() {
+        // No `title::` property and empty node text → slug is the last
+        // resort so a title is never blank.
+        let (mut w, hlc) = ws();
+        let id = open_or_create(&mut w, &hlc, "orphan", "", PageKind::Page).unwrap();
+        let meta = page_meta(&w, id).unwrap();
+        assert_eq!(meta.title, "orphan");
     }
 
     #[test]
