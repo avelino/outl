@@ -46,15 +46,12 @@ targets:
         LSRequiresIPhoneOS: true
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]
+        # iPhone-only, portrait-only. Universal (iPad) support is
+        # deliberately off until the layout is tested on a 13" canvas
+        # and screenshots are captured — declaring iPad support without
+        # the 13"/12.9" assets triggers an automatic App Store reject.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
-        UISupportedInterfaceOrientations~ipad:
-          - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationPortraitUpsideDown
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
         CFBundleShortVersionString: 0.3.1
         CFBundleVersion: "0.3.1"
     entitlements:

@@ -29,9 +29,13 @@ impl RuntimeRegistry {
     ///
     /// Each language ships behind a feature (`lang-lisp`, `lang-js`,
     /// `lang-python`, `lang-lua`) so binaries can strip what they don't
-    /// need. `echo` is always present — it's the smoke-test runtime.
+    /// need. `echo` is the smoke-test runtime — gated behind
+    /// `debug_assertions` / `test` so release builds (notably the iOS
+    /// IPA) don't surface an "echo" language to the App Store
+    /// reviewer; it has no production value and reads as a dev hook.
     pub fn with_builtins() -> Self {
         let mut r = Self::new();
+        #[cfg(any(test, debug_assertions))]
         r.register(runtimes::echo::EchoRuntime);
         #[cfg(feature = "lang-lisp")]
         r.register(runtimes::lisp::LispRuntime);

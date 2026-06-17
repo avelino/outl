@@ -66,3 +66,5 @@ __pycache__/
 # Versioned scripts live elsewhere; anything matching `local-*` is
 # treated as personal scratch and never goes to the repo.
 scripts/local-*.sh
+
+docs/app-store-*

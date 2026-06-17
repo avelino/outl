@@ -1412,15 +1412,29 @@ function buildContextActions(
   const canMoveUp = index > 0;
   const canMoveDown = siblings ? index < siblings.length - 1 : false;
   // `Run code` only shows up when the long-pressed block is a fenced
-  // `` ```lang …``` ``. The same detector the read-mode renderer
-  // uses (`@outl/shared/highlight::detectFence`); the backend
-  // re-validates on `run_code_block`, so a false-positive here would
-  // just surface a runtime error in the toast instead of doing
-  // damage.
+  // `` ```lang …``` `` AND the fence language is one we actually ship
+  // a runtime for. The backend re-validates via `run_block_at_index`
+  // (`UnknownLanguage` error path), so this is a UX guard — a long
+  // press on a `swift`/`shell`/`ruby` fence shouldn't offer a "Run"
+  // button that then errors out, and the narrower set is also
+  // cleaner to defend against App Review 2.5.2 if the reviewer
+  // browses the contextual menu.
+  // Stays in sync with the `outl-exec` features enabled for the
+  // mobile IPA (`crates/outl-mobile/src-tauri/Cargo.toml`).
   const block = findBlock(pageView.outline, blockId);
   const fence = block ? detectFence(block.text) : null;
+  const fenceLang = fence?.language.toLowerCase() ?? "";
+  const canRun =
+    fence &&
+    (fenceLang === "lisp" ||
+      fenceLang === "js" ||
+      fenceLang === "javascript" ||
+      fenceLang === "node" ||
+      fenceLang === "py" ||
+      fenceLang === "python" ||
+      fenceLang === "lua");
   return [
-    ...(fence
+    ...(canRun && fence
       ? [
           {
             id: "runCode",

@@ -2,9 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <!-- maximum-scale + user-scalable=no were removed: blocking zoom
+         violates WCAG 1.4.4 / Apple HIG accessibility guidance, and
+         iOS Safari already suppresses focus-zoom on inputs whose
+         font-size is >= 16px (body is 17px, see styles.css). -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no, interactive-widget=resizes-content"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <!-- Status bar / browser chrome adapt to the OS color scheme.
          Dark: brand purple #0c0814 + white text. Light: brand cream
@@ -23,16 +27,23 @@
       /*
        * Boot paint. iOS hands off from LaunchScreen to the Tauri
        * WebView; the WebView's default canvas is white, which flashed
-       * before Tailwind hydrated. We paint everything brand-dark here
-       * so the LaunchScreen and the first HTML frame look identical.
-       * Tailwind / theme tokens take over right after; users in light
-       * mode just see the brand dark for a fraction of a second.
+       * before Tailwind hydrated. We paint the brand cream in light
+       * mode and brand dark in dark mode so the LaunchScreen and the
+       * first HTML frame look identical regardless of system theme.
+       * Tailwind / theme tokens take over right after.
        */
       html,
       body,
       #root {
         margin: 0;
-        background: #0c0814;
+        background: #f6f4fb;
+      }
+      @media (prefers-color-scheme: dark) {
+        html,
+        body,
+        #root {
+          background: #0c0814;
+        }
       }
 
       /*
@@ -48,9 +59,14 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: #0c0814;
+        background: #f6f4fb;
         animation: boot-splash-out 240ms cubic-bezier(0.4, 0, 0.2, 1) 380ms
           forwards;
+      }
+      @media (prefers-color-scheme: dark) {
+        #boot-splash {
+          background: #0c0814;
+        }
       }
       #boot-splash img {
         width: 128px;
