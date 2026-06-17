@@ -33,6 +33,7 @@
 
 * [Architecture](architecture.md)
 * [Storage trait](storage.md)
+* [Shared primitives catalog](shared-primitives.md)
 
 ## Project
 
