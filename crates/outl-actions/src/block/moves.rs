@@ -423,4 +423,56 @@ mod tests {
             .collect();
         assert_eq!(order, vec![a, b]);
     }
+
+    /// A cut → paste moves the whole subtree, at every depth, in one
+    /// `Op::Move`. The CRDT re-parents the node by id, so descendants
+    /// ride along untouched — we never walk the subtree to move it
+    /// child-by-child, and nothing is left behind under the old parent.
+    ///
+    /// Tree before (under root):
+    /// ```text
+    /// - src
+    ///   - c1
+    ///     - c1a
+    ///       - c1a_i
+    ///     - c1b
+    ///   - c2
+    /// - dest
+    /// ```
+    /// After `move_after(src, dest)` the entire `src` subtree hangs off
+    /// root after `dest`, with every parent/child edge preserved.
+    #[test]
+    fn move_after_carries_full_deep_subtree() {
+        let (mut ws, hlc) = new_workspace();
+        let src = append_block(&mut ws, &hlc, None, Some("src")).unwrap();
+        let c1 = append_block(&mut ws, &hlc, Some(src), Some("c1")).unwrap();
+        let c1a = append_block(&mut ws, &hlc, Some(c1), Some("c1a")).unwrap();
+        let c1a_i = append_block(&mut ws, &hlc, Some(c1a), Some("c1a_i")).unwrap();
+        let c1b = append_block(&mut ws, &hlc, Some(c1), Some("c1b")).unwrap();
+        let c2 = append_block(&mut ws, &hlc, Some(src), Some("c2")).unwrap();
+        let dest = append_block(&mut ws, &hlc, None, Some("dest")).unwrap();
+
+        move_after(&mut ws, &hlc, src, dest).unwrap();
+
+        // `src` re-parented to root, sitting right after `dest`.
+        let roots: Vec<NodeId> = children_of(&ws, NodeId::root())
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(roots, vec![dest, src]);
+
+        // Every descendant edge survived the move at all four levels.
+        assert_eq!(ws.tree().parent(c1), Some(src));
+        assert_eq!(ws.tree().parent(c2), Some(src));
+        assert_eq!(ws.tree().parent(c1a), Some(c1));
+        assert_eq!(ws.tree().parent(c1b), Some(c1));
+        assert_eq!(ws.tree().parent(c1a_i), Some(c1a));
+
+        // Sibling order under each parent is unchanged.
+        let src_kids: Vec<NodeId> = children_of(&ws, src)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(src_kids, vec![c1, c2]);
+    }
 }

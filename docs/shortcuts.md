@@ -154,8 +154,8 @@ The TUI ships it natively; the desktop has only a selected block id, so the char
 | Block ref autocomplete | `((` triggers picker | `((` triggers picker | — |
 | Slash command autocomplete | `/` | `/` | — |
 | Toggle TODO/DONE on current | `Ctrl+T` / `Ctrl+Enter` | `Cmd/Ctrl+T` / `Cmd/Ctrl+Enter` | tap checkbox / long-press menu |
-| Cut / copy / paste **text** (native) | — | `Cmd/Ctrl+X` / `C` / `V` | native |
-| Run code block | `g x` chord | _(commit with `Esc`, then `Cmd+Shift+X`)_ | tap "Run" |
+| Cut / copy / paste **text** (native) | — | `Cmd/Ctrl+X` / `Cmd/Ctrl+C` / `Cmd/Ctrl+V` | native |
+| Run code block | `g x` chord | _(commit with `Esc`, then `Cmd/Ctrl+Shift+X`)_ | tap "Run" |
 
 ---
 

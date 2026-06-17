@@ -387,10 +387,9 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
     // survive). Copy snapshots the subtree as markdown; its paste
     // duplicates with fresh ids.
     CutBlock: () => {
-      const pageId = appState.page?.id;
       const id = appState.selectedBlockId;
-      if (!pageId || !id) return;
-      setAppState("blockClipboard", { kind: "cut", nodeId: id, pageId });
+      if (!id) return;
+      setAppState("blockClipboard", { kind: "cut", nodeId: id });
     },
     CopyBlock: async () => {
       const id = appState.selectedBlockId;

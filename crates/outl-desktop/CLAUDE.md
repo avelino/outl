@@ -189,7 +189,7 @@ Implementation lives in `lib/markdown-wrap.ts`: each handler reads `document.act
 | `Enter` | Insert a `\n` inside the current block (multi-line text) |
 | `Cmd/Ctrl+Shift+Enter` | Commit + create a sibling below + edit it |
 | `Cmd/Ctrl+T` / `Cmd/Ctrl+Enter` | Toggle TODO / DONE on this block |
-| `Cmd/Ctrl+X` / `C` / `V` | Native text cut / copy / paste — these chords are deliberately absent from the catalog in Insert mode, so the webview handles them. The **block** clipboard (cut/copy/paste a whole block) only fires in view mode; run-code moved to `Cmd+Shift+X` in view mode. |
+| `Cmd/Ctrl+X` / `Cmd/Ctrl+C` / `Cmd/Ctrl+V` | Native text cut / copy / paste — these chords are deliberately absent from the catalog in Insert mode, so the webview handles them. The **block** clipboard (cut/copy/paste a whole block) only fires in view mode; run-code moved to `Cmd/Ctrl+Shift+X` in view mode. |
 | `Tab` / `Shift-Tab` | Indent / outdent |
 | `Esc` / blur | Commit |
 | `Backspace` on empty | Delete the block |

@@ -416,6 +416,32 @@ mod tests {
         assert_eq!(md, "- first\n- second\n");
     }
 
+    /// Copy (`Cmd+C` in view mode) snapshots a block via
+    /// `render_block_md`. It must capture the **whole** subtree — every
+    /// descendant at every depth — so a paste reproduces the block in
+    /// full. This pins the "are we grabbing all the sub-blocks?" review
+    /// concern: the renderer walks `build_outline` recursively, so a
+    /// four-level-deep subtree round-trips with its indentation intact.
+    #[test]
+    fn render_block_md_captures_the_full_deep_subtree() {
+        let actor = ActorId::new();
+        let hlc = HlcGenerator::new(actor);
+        let mut ws = Workspace::open_in_memory(actor).unwrap();
+        let page = open_or_create(&mut ws, &hlc, "ideas", "Ideas", PageKind::Page).unwrap();
+        let src = append_block(&mut ws, &hlc, Some(page), Some("src")).unwrap();
+        let c1 = append_block(&mut ws, &hlc, Some(src), Some("c1")).unwrap();
+        let c1a = append_block(&mut ws, &hlc, Some(c1), Some("c1a")).unwrap();
+        append_block(&mut ws, &hlc, Some(c1a), Some("c1a_i")).unwrap();
+        append_block(&mut ws, &hlc, Some(c1), Some("c1b")).unwrap();
+        append_block(&mut ws, &hlc, Some(src), Some("c2")).unwrap();
+
+        let md = render_block_md(&ws, src);
+        assert_eq!(
+            md,
+            "- src\n  - c1\n    - c1a\n      - c1a_i\n    - c1b\n  - c2\n"
+        );
+    }
+
     #[test]
     fn render_page_md_emits_page_level_properties() {
         // Regression for the silent divergence between the op log
