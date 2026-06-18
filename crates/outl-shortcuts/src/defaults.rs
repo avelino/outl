@@ -373,6 +373,21 @@ pub fn default_bindings() -> Vec<Binding> {
             "Open ref / enter Insert",
         ),
         Binding::new(ch('o'), Normal, Action::NewBlockBelow, "New block below"),
+        // View-mode counterpart of the Insert-mode `Cmd+Shift+Enter`
+        // (`CommitAndContinue`): in Normal mode there's no in-flight
+        // edit to commit, so it just creates the sibling below and
+        // drops into Insert on it — same `NewBlockBelow` action as vim
+        // `o`, but reachable without `vim_mode` (the desktop falls into
+        // Normal dispatch whenever no textarea is focused). Distinct
+        // mode from the Insert binding, so `lookup`'s mode-specific
+        // resolution keeps both: Insert → `CommitAndContinue`, Normal →
+        // `NewBlockBelow`.
+        Binding::new(
+            shift_meta_key(Key::Enter),
+            Normal,
+            Action::NewBlockBelow,
+            "New block below (Cmd+Shift+Enter)",
+        ),
         Binding::new(
             shift_ch('o'),
             Normal,

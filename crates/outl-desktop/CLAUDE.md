@@ -181,7 +181,7 @@ The cluster floats over the main pane on an elevated, bordered surface (clear co
 | `Cmd/Ctrl+J` | Open today's **j**ournal |
 | `Cmd/Ctrl+T` | Toggle TODO / DONE on the focused / selected block (T for **t**ask) |
 | `Cmd/Ctrl+Enter` | Toggle TODO / DONE on the focused / selected block (alt) |
-| `Cmd/Ctrl+Shift+Enter` | Commit + create a sibling block below |
+| `Cmd/Ctrl+Shift+Enter` | Create a sibling block below + edit it. In a block editor (Insert) it commits the current edit first (`CommitAndContinue`); in view mode (Normal — no textarea focused, works without `vim_mode`) it's the `NewBlockBelow` action, same as vim `o`. |
 | `Cmd/Ctrl+Shift+X` | E**x**ecute the focused / selected code block (mirrors the TUI's `g x` chord). Inside a textarea the Insert-mode strikethrough binding wins (mode-specific beats Global) — commit first or use the per-block run button. |
 | `Cmd/Ctrl+[` / `]` | Previous / next journal day |
 | `Cmd/Ctrl+Shift+E` | Toggle sidebar (mirrors VS Code's explorer chord) |
