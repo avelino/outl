@@ -54,9 +54,9 @@ use crate::commands::{
     get_settings, get_theme, indent_block, list_all_pages, list_shortcut_bindings, list_themes,
     move_block_after, move_block_down, move_block_up, next_day, open_journal_for,
     open_page_by_slug, open_ref, open_today_journal, outdent_block, outl_emoji_search,
-    paste_block_after, paste_markdown_at, previous_day, reload_workspace, resolve_ref,
+    paste_block_after, paste_markdown_at, previous_day, redo_page, reload_workspace, resolve_ref,
     run_code_block, search_pages, search_persons, set_block_collapsed, set_workspace,
-    today_slug_cmd, toggle_quote, toggle_todo, update_settings, workspace_stats,
+    today_slug_cmd, toggle_quote, toggle_todo, undo_page, update_settings, workspace_stats,
 };
 use crate::state::AppState;
 use crate::workspace_open::{load_or_create_actor, spawn_workspace_opener};
@@ -65,6 +65,7 @@ use crate::workspace_open::{load_or_create_actor, spawn_workspace_opener};
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| -> Result<(), Box<dyn std::error::Error>> {
             // Local-only state (the per-device `actor` ULID and the
             // `config.toml`) lives at `~/.config/outl/` — the XDG
@@ -107,6 +108,7 @@ pub fn run() {
                 app_config_dir,
                 registry,
                 fs_watcher,
+                history: Mutex::new(std::collections::HashMap::new()),
             });
 
             Ok(())
@@ -154,6 +156,9 @@ pub fn run() {
             paste_block_after,
             set_block_collapsed,
             paste_markdown_at,
+            // Undo / redo
+            undo_page,
+            redo_page,
             // Code execution
             run_code_block,
         ])

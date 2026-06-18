@@ -9,7 +9,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 
-import type { WorkspaceSummary } from "@outl/shared/api/types";
+import type { PageView, WorkspaceSummary } from "@outl/shared/api/types";
 
 // ---------------------------------------------------------------------------
 // Workspace lifecycle (desktop-only)
@@ -50,6 +50,24 @@ export async function workspaceStats(): Promise<WorkspaceSummary> {
 // ---------------------------------------------------------------------------
 // Code execution (desktop-only)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Undo / redo (desktop-only)
+// ---------------------------------------------------------------------------
+
+/**
+ * Revert the last committed block mutation on the page. Rejects with
+ * `"nothing to undo"` when the page's history stack is empty — the
+ * handler surfaces that as a status message, not a crash.
+ */
+export function undoPage(pageId: string): Promise<PageView> {
+  return invoke<PageView>("undo_page", { pageId });
+}
+
+/** Re-apply the mutation the last {@link undoPage} reverted. */
+export function redoPage(pageId: string): Promise<PageView> {
+  return invoke<PageView>("redo_page", { pageId });
+}
 
 // ---------------------------------------------------------------------------
 // Settings (desktop-only)

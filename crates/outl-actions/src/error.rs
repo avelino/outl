@@ -61,6 +61,11 @@ pub enum ActionError {
     #[error("sidecar: {0}")]
     Sidecar(#[from] outl_md::sidecar::SidecarError),
 
+    /// `.md` ↔ ops reconcile failure while restoring an undo / redo
+    /// snapshot (`history::restore_page_md`).
+    #[error("reconcile: {0}")]
+    Reconcile(#[from] outl_md::ReconcileError),
+
     /// Code-block execution orchestration failed (sidecar IO, op log
     /// apply, `.md` reconcile during the run). Runtime-level failures
     /// (`unknown language`, timeout) come back through the success

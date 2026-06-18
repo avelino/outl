@@ -33,6 +33,9 @@ fn shift_ch(c: char) -> ChordSequence {
 fn shift_meta_ch(c: char) -> ChordSequence {
     ChordSequence::chord(Chord::new(Modifiers::META | Modifiers::SHIFT, Key::char(c)))
 }
+fn shift_ctrl_ch(c: char) -> ChordSequence {
+    ChordSequence::chord(Chord::new(Modifiers::CTRL | Modifiers::SHIFT, Key::char(c)))
+}
 fn meta_key(k: Key) -> ChordSequence {
     ChordSequence::chord(Chord::new(Modifiers::META, k))
 }
@@ -131,22 +134,22 @@ pub fn default_bindings() -> Vec<Binding> {
             "Toggle TODO / DONE (TUI alt)",
         ),
         // Run the fenced code block under the cursor / focused
-        // block. Desktop: `Cmd+Shift+X` in **Normal** (view) mode —
-        // you run the block you have selected, not one you're
-        // mid-edit on. `Cmd+X` used to live here ("X for execute"),
-        // but in a text-editing app the OS-wide *cut* semantics have
-        // to win: `Cmd+X` is now `CutBlock` (Normal) / native text
-        // cut (Insert). Binding RunCodeBlock to Normal (not Global)
-        // keeps it from shadowing the native cut inside a textarea
-        // and leaves `Cmd+Shift+X` = `WrapStrike` untouched in Insert
-        // (mode-specific resolution: Insert wins there, Normal here).
+        // block. Desktop: `Cmd+Shift+X`, bound **Global** so it fires
+        // in view mode and in Visual — inside a textarea the
+        // Insert-mode `WrapStrike` binding below wins (mode-specific
+        // beats Global), so running a block you're editing means
+        // committing first or using the per-block run button. See
+        // issue #80. Plain `Cmd+X` used to run code ("X for execute")
+        // but in a text-editing app the OS-wide *cut* has to win: it is
+        // now `CutBlock` in Normal (view) mode and native text cut in
+        // Insert, so it never reaches RunCodeBlock.
         // The TUI uses the `g x` chord which lives in
         // `outl-tui/input/` for now — `Cmd` doesn't exist in
         // crossterm so the catalog can't drive both surfaces with a
         // single binding.
         Binding::new(
             shift_meta_ch('x'),
-            Normal,
+            Global,
             Action::RunCodeBlock,
             "Run code block (Cmd+Shift+X)",
         ),
@@ -430,6 +433,28 @@ pub fn default_bindings() -> Vec<Binding> {
         Binding::new(ch('v'), Normal, Action::EnterVisual, "Enter Visual mode"),
         Binding::new(ch('u'), Normal, Action::Undo, "Undo"),
         Binding::new(ctrl('r'), Normal, Action::Redo, "Redo"),
+        // OS-standard undo / redo chords (desktop). Deliberately
+        // **Normal**, not Global: with a textarea focused the chord
+        // must fall through to the webview (in-flight draft editing
+        // is the textarea's own undo domain), and a Global binding
+        // would `preventDefault` it away. Outside a textarea they
+        // revert / re-apply the last committed block mutation.
+        // `Ctrl` variants cover Windows / Linux (same pattern as the
+        // `Cmd+P` / `Ctrl+P` pair above).
+        Binding::new(meta('z'), Normal, Action::Undo, "Undo (Cmd+Z)"),
+        Binding::new(ctrl('z'), Normal, Action::Undo, "Undo (Ctrl+Z)"),
+        Binding::new(
+            shift_meta_ch('z'),
+            Normal,
+            Action::Redo,
+            "Redo (Cmd+Shift+Z)",
+        ),
+        Binding::new(
+            shift_ctrl_ch('z'),
+            Normal,
+            Action::Redo,
+            "Redo (Ctrl+Shift+Z)",
+        ),
         // ── Insert mode ───────────────────────────────────────────
         //
         // Only `Esc` and `Cmd+Enter` land in the catalog. Every

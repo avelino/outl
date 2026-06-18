@@ -20,6 +20,7 @@ import {
   nextDay,
   openJournalFor,
   openPageBySlug,
+  openExternalUrl,
   openRef,
   openTodayJournal,
   outdentBlock,
@@ -816,6 +817,17 @@ export function Journal() {
     if (next) applyView(next);
   }
 
+  function handleLinkClick(href: string) {
+    // External `[label](url)` → open in the system browser via the
+    // shared opener wrapper (scheme-guarded to http(s)/mailto). Mirrors
+    // desktop; errors surface on the same status line as everything
+    // else instead of throwing into the tap handler.
+    haptic("light");
+    void openExternalUrl(href).catch((e) => {
+      setError(e instanceof Error ? e.message : String(e));
+    });
+  }
+
   async function handlePickPage(slug: string, kind: "page" | "journal") {
     setSwitcherOpen(false);
     haptic("light");
@@ -1101,6 +1113,7 @@ export function Journal() {
                   onContextMenu={(id) => setContextMenuBlockId(id)}
                   onRefClick={handleRefClick}
                   onTagClick={handleTagClick}
+                  onLinkClick={handleLinkClick}
                   onPasteMarkdown={handlePasteMarkdown}
                   onTextareaMount={(el) => {
                     activeTextarea = el;
@@ -1399,15 +1412,29 @@ function buildContextActions(
   const canMoveUp = index > 0;
   const canMoveDown = siblings ? index < siblings.length - 1 : false;
   // `Run code` only shows up when the long-pressed block is a fenced
-  // `` ```lang …``` ``. The same detector the read-mode renderer
-  // uses (`@outl/shared/highlight::detectFence`); the backend
-  // re-validates on `run_code_block`, so a false-positive here would
-  // just surface a runtime error in the toast instead of doing
-  // damage.
+  // `` ```lang …``` `` AND the fence language is one we actually ship
+  // a runtime for. The backend re-validates via `run_block_at_index`
+  // (`UnknownLanguage` error path), so this is a UX guard — a long
+  // press on a `swift`/`shell`/`ruby` fence shouldn't offer a "Run"
+  // button that then errors out, and the narrower set is also
+  // cleaner to defend against App Review 2.5.2 if the reviewer
+  // browses the contextual menu.
+  // Stays in sync with the `outl-exec` features enabled for the
+  // mobile IPA (`crates/outl-mobile/src-tauri/Cargo.toml`).
   const block = findBlock(pageView.outline, blockId);
   const fence = block ? detectFence(block.text) : null;
+  const fenceLang = fence?.language.toLowerCase() ?? "";
+  const canRun =
+    fence &&
+    (fenceLang === "lisp" ||
+      fenceLang === "js" ||
+      fenceLang === "javascript" ||
+      fenceLang === "node" ||
+      fenceLang === "py" ||
+      fenceLang === "python" ||
+      fenceLang === "lua");
   return [
-    ...(fence
+    ...(canRun && fence
       ? [
           {
             id: "runCode",

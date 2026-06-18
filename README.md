@@ -23,8 +23,9 @@ Tree CRDT sync ([Kleppmann et al. 2022][paper]), per-device append-only op log, 
 ```bash
 # macOS / Linux via Homebrew (beta channel — every push to main)
 brew tap avelino/outl https://github.com/avelino/outl
-brew install outl@beta # TUI/CLI/MCP
-brew install outl-desktop@beta # GUI
+brew trust avelino/outl # one-time, third-party tap
+brew install outl-beta # TUI/CLI/MCP
+brew install --cask outl-desktop-beta # GUI
 ```
 
 iOS beta on TestFlight: [join here](https://testflight.apple.com/join/P2GdWAMd). Point the TUI at the same iCloud Drive container _(`<container>/Documents/`)_ and both clients share a workspace.

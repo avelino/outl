@@ -87,6 +87,14 @@ single-sourced.
 land on `<page>`") but is **not** the navigation entry point — for
 that, always call `openRef`.
 
+## Opening an external `[label](url)` link
+
+Tapping an external markdown link opens it in the system browser via **`tauri-plugin-opener`** (registered in `src-tauri/src/lib.rs`; the capability grants a scoped `opener:allow-open-url` for `http`/`https`/`mailto` in `capabilities/default.json`).
+`Journal.tsx`'s `handleLinkClick` calls the shared `openExternalUrl` wrapper (`@outl/shared/api/commands`) — the same one desktop uses, so the scheme allow-list (`http(s)`/`mailto` only; `file:`/`javascript:` rejected) lives in one place.
+`<MarkdownInline />` gets `onLinkClick` threaded from `Journal.tsx` → `BlockRow` (recursively) → the renderer.
+`[[ref]]`/`#tag` taps are unchanged — they still route through `openRef` (see above).
+Backlink rows stay inert: the whole row is already a tap-to-source button.
+
 ## Blockquote chrome
 
 A block whose `text` starts with the CommonMark `"> "` marker renders with a left border (`border-l-2 border-(--color-ios-text-secondary)/40`), a very faint tint (`bg-(--color-ios-text-secondary)/[0.05]` light / `[0.07]` dark), a right-rounded corner (`rounded-r-md`), and **full body colour** — refs / bold / tags / code keep their normal palette so the styled-token affordance isn't lost.

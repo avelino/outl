@@ -14,9 +14,9 @@
 # `xattr -dr com.apple.quarantine /Applications/outl.app`) to dismiss
 # the warning. Once we wire an Apple Developer ID + notarisation
 # (release.yml step pending), this caveat goes away.
-cask "outl-desktop@beta" do
-  version "0.6.0-beta.67"
-  sha256 "0350f05ccd968b6ddb19629a4ecfb4352e5d95ae0887726aa491cafd1e28ba43" # anchor: macos
+cask "outl-desktop-beta" do
+  version "0.6.0-beta.72"
+  sha256 "a56355fff88eb2518726276e2bf96ba4504583d7dc9d278e4eb582729247b9d9" # anchor: macos
 
   url "https://github.com/avelino/outl/releases/download/v#{version}/outl-desktop-macos.dmg"
   name "outl Desktop"

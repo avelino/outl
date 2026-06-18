@@ -54,6 +54,10 @@ export interface BlockCallbacks {
   /** Ref / tag click handlers (forwarded to MarkdownInline). */
   onRefClick: (target: string) => void;
   onTagClick: (tag: string) => void;
+  /** External `[label](url)` link click — opens in the system browser.
+   *  Optional: contexts that keep links inert simply omit it (the
+   *  renderer then draws a plain, non-interactive span). */
+  onLinkClick?: (href: string) => void;
 }
 
 /** Wire format the block was stored as — TODO/DONE prefix included.
@@ -735,6 +739,7 @@ export function BlockRow(props: {
                                   variant="inline"
                                   onRefClick={props.cb.onRefClick}
                                   onTagClick={props.cb.onTagClick}
+                                  onLinkClick={props.cb.onLinkClick}
                                 />
                               </Show>
                             </div>

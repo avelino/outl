@@ -399,7 +399,7 @@ jobs:
           echo "::notice::Published ${TAG}"
 
   update_tap:
-    name: Bump outl@beta formula + desktop cask
+    name: Bump outl-beta formula + desktop cask
     needs: [prepare, publish_release]
     # Only beta releases for now. GA bumps `Formula/outl.rb` and the
     # GA cask by hand the first time; after that we can add a
@@ -413,7 +413,7 @@ jobs:
         with:
           ref: main
 
-      - name: Bump Formula/outl@beta.rb + Casks/outl-desktop@beta.rb
+      - name: Bump Formula/outl-beta.rb + Casks/outl-desktop-beta.rb
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.tag }}
@@ -431,14 +431,14 @@ jobs:
           set -euo pipefail
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.sha256' --dir shas
 
-          F=Formula/outl@beta.rb
+          F=Formula/outl-beta.rb
           sed -i "s|^  version .*|  version \"$VERSION\"|" "$F"
           for arch in macos-arm64 macos-x64 linux-x64; do
             sha=$(awk '{print $1}' "shas/outl-${arch}.tar.gz.sha256")
             sed -i "s|sha256 \"[a-f0-9]*\" # anchor: ${arch}|sha256 \"${sha}\" # anchor: ${arch}|" "$F"
           done
 
-          C=Casks/outl-desktop@beta.rb
+          C=Casks/outl-desktop-beta.rb
           sed -i "s|^  version .*|  version \"$VERSION\"|" "$C"
           # Single universal dmg → one anchor (`# anchor: macos`).
           # Previously we patched separate arm64/x64 anchors; the

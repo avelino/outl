@@ -31,7 +31,7 @@ If a row below disagrees with what you observe in the app, **the code is right a
 | Quick switcher (fuzzy pages + journals) | `Ctrl+P` | `Cmd/Ctrl+P` | tap toolbar |
 | Open today's **j**ournal | `t` / `Home` | `Cmd/Ctrl+J` | toolbar |
 | Toggle TODO / DONE on focused or selected block (T for **t**ask) | `Ctrl+T` / `Ctrl+Enter` | `Cmd/Ctrl+T` / `Cmd/Ctrl+Enter` | tap checkbox |
-| Run code block under cursor / inside focused block | `g x` chord / `:run` | `Cmd/Ctrl+Shift+X` *(view mode)* | tap "Run" button |
+| Run code block under cursor / selected block (X for e**x**ecute) | `g x` chord / `:run` | `Cmd/Ctrl+Shift+X` (inside a textarea the Insert-mode strikethrough wins — commit first or use the Run button; plain `Cmd+X` is the OS cut / block cut) | tap "Run" button |
 | Previous journal day | `[` | `Cmd/Ctrl+[` | swipe right |
 | Next journal day | `]` | `Cmd/Ctrl+]` | swipe left |
 | Toggle sidebar | `Ctrl+E` | `Cmd/Ctrl+Shift+E` | _(single pane)_ |
@@ -108,8 +108,8 @@ The desktop honours `Normal`/`Visual` only while `editor.vim_mode = true`. The T
 | Reselect last Visual range (chord) | `g v` | `g v` | — |
 | Search workspace for word / block text — forward | `*` | `*` *(seeds picker)* | — |
 | Search workspace for word / block text — backward | `#` | `#` *(seeds picker)* | — |
-| Undo | `u` | `u` / `Cmd+Z` | toolbar |
-| Redo | `Ctrl+R` | `Ctrl+R` / `Cmd+Shift+Z` | toolbar |
+| Undo last committed block mutation | `u` | `u` / `Cmd/Ctrl+Z` | toolbar |
+| Redo | `Ctrl+R` | `Ctrl+R` / `Cmd/Ctrl+Shift+Z` | toolbar |
 | Yank block ref → clipboard (chord) | `y r` | `y r` | — |
 | Enter Visual | `v` | `v` | — |
 | Open command palette | `:` | `:` | — |

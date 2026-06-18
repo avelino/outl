@@ -380,7 +380,7 @@ UI-agnostic; TUI and mobile both consume them.
 
 #### 13. Code-block execution (outl-actions::exec)
 
-Cross-client glue every UI uses to wire a "run this fence" gesture (TUI `g x`, desktop `Cmd+X`, mobile long-press) into `outl-exec` and back. `outl_actions::exec::run_code_block` is the **only** entry point a Tauri command / TUI action should call — never re-implement flat-DFS / `.md` path / DTO per client.
+Cross-client glue every UI uses to wire a "run this fence" gesture (TUI `g x`, desktop `Cmd+Shift+X`, mobile long-press) into `outl-exec` and back. `outl_actions::exec::run_code_block` is the **only** entry point a Tauri command / TUI action should call — never re-implement flat-DFS / `.md` path / DTO per client.
 
 | Intent | Use this | File |
 |---|---|---|
@@ -404,6 +404,18 @@ Runtime selection (which languages ship) is per-binary via `outl-exec` features 
 | Per-actor write lock | `outl_core::ActorWriteLock::try_acquire` | `crates/outl-core/src/lock.rs` |
 | Resolve which actor this process writes as | `outl_core::resolve_write_actor` | `crates/outl-core/src/lock.rs` |
 | The `Storage` trait every backend implements (invariant #5) | `outl_core::Storage` / `StorageError` | `crates/outl-core/src/storage/mod.rs` |
+
+#### 15. Undo / redo history (outl-actions::history)
+
+Bounded snapshot stacks with vim semantics (a new edit clears redo) shared by GUI clients — the desktop's `Cmd+Z` / `Cmd+Shift+Z` ride these.
+Restores route through `outl_md::reconcile_md`, so an undo is **new ops in the log**, never a rewrite (invariant #1 holds).
+Not per-keystroke undo inside an uncommitted draft — that belongs to the client's editor widget.
+
+| Intent | Use this | File |
+|---|---|---|
+| Bounded undo / redo stacks over any snapshot type (`record` / `undo` / `redo` / `can_undo` / `can_redo` / `clear`) | `outl_actions::history::HistoryStacks` | `crates/outl-actions/src/history.rs` |
+| Default per-stack bound (matches the TUI's session cap) | `outl_actions::DEFAULT_HISTORY_CAP` | `crates/outl-actions/src/history.rs` |
+| Restore a page to a previously-rendered `.md` snapshot (write + reconcile → min ops through `Workspace::apply`) | `outl_actions::restore_page_md` | `crates/outl-actions/src/history.rs` |
 
 **Review checklist on every PR that adds a helper:**
 

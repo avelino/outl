@@ -54,6 +54,7 @@ pub mod block;
 pub mod collapsed;
 pub mod error;
 pub mod exec;
+pub mod history;
 pub mod journal;
 pub mod outline;
 pub mod page;
@@ -73,6 +74,7 @@ pub use block::{
 pub use collapsed::{set_block_collapsed, toggle_block_collapsed};
 pub use error::ActionError;
 pub use exec::{run_code_block, ExecOutputDto, RunCodeBlockOutcome};
+pub use history::{restore_page_md, HistoryStacks, DEFAULT_HISTORY_CAP};
 pub use journal::{
     apply_all_pages_md, apply_page_md, apply_page_md_with_sidecar, journals_dir, mutate_page_md,
     page_md_path, pages_dir, render_block_md, render_page_md, write_md_atomic,

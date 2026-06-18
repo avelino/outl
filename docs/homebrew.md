@@ -6,39 +6,47 @@ Two surfaces live on `main`:
 | Path | What it ships |
 |---|---|
 | [`/Formula/outl.rb`](../Formula/outl.rb) | GA CLI / TUI, semver tag `vX.Y.Z`. |
-| [`/Formula/outl@beta.rb`](../Formula/outl@beta.rb) | Beta CLI / TUI, rebuilt on every push to `main`. |
-| [`/Casks/outl-desktop@beta.rb`](../Casks/outl-desktop@beta.rb) | Beta **desktop app** (.dmg), rebuilt on every push to `main`. |
+| [`/Formula/outl-beta.rb`](../Formula/outl-beta.rb) | Beta CLI / TUI, rebuilt on every push to `main`. |
+| [`/Casks/outl-desktop-beta.rb`](../Casks/outl-desktop-beta.rb) | Beta **desktop app** (.dmg), rebuilt on every push to `main`. |
 
 ## Install the CLI / TUI
 
 ```bash
 brew tap avelino/outl https://github.com/avelino/outl
-brew install outl@beta     # beta channel — every push to main
+brew trust avelino/outl    # one-time: required for third-party taps
+brew install outl-beta     # beta channel — every push to main
 # brew install outl        # GA channel — semver tags only
 ```
 
 The custom-URL form (`brew tap <name> <url>`) tells Homebrew to use this repo as the tap directly, without the usual `homebrew-<name>` naming convention.
 
-`outl` and `outl@beta` install the same `outl` binary and conflict by design.
+> `brew trust` is required since Homebrew 4.x for any tap outside `homebrew-core` / `homebrew-cask`. Without it, `brew install` fails with `Refusing to load formula avelino/outl/outl-beta from untrusted tap`. The trust is per-tap (not per-formula) and one-time; subsequent installs / upgrades don't ask again.
+>
+> If `brew trust` itself errors with `Refusing to write insecure trust store: target directory ... is not owned by the current user`, your `~/.config/homebrew` is a symlink to a read-only path (common on Nix-managed dotfiles). Replace the symlink with a writable directory before re-running.
+
+> Why `outl-beta` and not `outl@beta`? Homebrew's `Formulary.class_s` only converts `@<digits>` into a valid Ruby class name (`python@3.12` → `PythonAT312`). A non-numeric channel like `outl@beta` would generate the invalid class `Outl@beta`, so the dash form is the only one that works for an alphabetic channel.
+
+`outl` and `outl-beta` install the same `outl` binary and conflict by design.
 Switching channels:
 
 ```bash
-brew unlink outl@beta && brew install outl       # to GA
-brew unlink outl  && brew install outl@beta      # to beta
+brew unlink outl-beta && brew install outl       # to GA
+brew unlink outl      && brew install outl-beta  # to beta
 ```
 
 ## Install the desktop app
 
 ```bash
 brew tap avelino/outl https://github.com/avelino/outl   # same tap as the CLI
-brew install --cask outl-desktop@beta
+brew trust avelino/outl                                 # skip if already trusted for the CLI
+brew install --cask outl-desktop-beta
 ```
 
 That drops `outl.app` into `/Applications` via the **universal** dmg the release workflow builds on a single arm64 runner (`--target universal-apple-darwin` → `lipo` merge of arm64 + x86_64 into one binary).
 Both Apple Silicon and Intel Macs install the same dmg.
-The cask sits in [`/Casks/outl-desktop@beta.rb`](../Casks/outl-desktop@beta.rb) and is bumped automatically alongside the CLI formula on every push to `main`.
+The cask sits in [`/Casks/outl-desktop-beta.rb`](../Casks/outl-desktop-beta.rb) and is bumped automatically alongside the CLI formula on every push to `main`.
 
-The CLI formula (`outl@beta`) and the desktop cask coexist without conflicts — the formula installs `/usr/local/bin/outl`, the cask installs `/Applications/outl.app`.
+The CLI formula (`outl-beta`) and the desktop cask coexist without conflicts — the formula installs `/usr/local/bin/outl`, the cask installs `/Applications/outl.app`.
 Both point at the same workspace on disk if you configure the same path; the op log (`ops/ops-<actor>.jsonl`) reconciles edits made from either surface.
 
 ### First-launch Gatekeeper warning
@@ -74,7 +82,7 @@ Signing + notarisation will land with the first GA release (the cask's `caveats`
 
 ```bash
 brew update
-brew upgrade --cask outl-desktop@beta
+brew upgrade --cask outl-desktop-beta
 ```
 
 The `livecheck` block in the cask points Homebrew at the GitHub releases feed, so `brew outdated` knows when a new beta dmg lands.
@@ -87,16 +95,16 @@ It does four things:
 1. Checks out `main`.
 2. Downloads every `.sha256` sidecar from the GitHub release (CLI tarballs **and** desktop dmgs).
 3. Uses `sed` to bump the version + sha lines in both files in place:
-   - **`Formula/outl@beta.rb`** — `version` plus three `sha256` lines tagged `# anchor: macos-arm64`, `# anchor: macos-x64`, `# anchor: linux-x64`.
-   - **`Casks/outl-desktop@beta.rb`** — `version` plus one `sha256` line tagged `# anchor: macos` (universal dmg, both architectures in the same file).
+   - **`Formula/outl-beta.rb`** — `version` plus three `sha256` lines tagged `# anchor: macos-arm64`, `# anchor: macos-x64`, `# anchor: linux-x64`.
+   - **`Casks/outl-desktop-beta.rb`** — `version` plus one `sha256` line tagged `# anchor: macos` (universal dmg, both architectures in the same file).
 4. Commits the bumped formula + cask back to `main` with `[skip ci]` in the message — that prevents the commit from re-triggering the release workflow itself.
 
 The version comes from the `prepare` job, which reads `workspace.package.version` out of `Cargo.toml` and appends `-beta.<run_number>`.
 So the only source of truth for the base version is `Cargo.toml`; nothing is hardcoded in the formula.
 
-`Formula/outl@beta.rb` and `Casks/outl-desktop@beta.rb` are both **committed with bootstrap placeholders** (`version "0.0.0"`, zeroed SHAs).
+`Formula/outl-beta.rb` and `Casks/outl-desktop-beta.rb` are both **committed with bootstrap placeholders** (`version "0.0.0"`, zeroed SHAs).
 The first beta release after each lands bumps it to real values.
-Until then, `brew install outl@beta` and `brew install --cask outl-desktop@beta` both 404 on the download URL.
+Until then, `brew install outl-beta` and `brew install --cask outl-desktop-beta` both 404 on the download URL.
 
 `Formula/outl.rb` and `Casks/outl-desktop.rb` (the GA channels) don't exist yet.
 When the first non-prerelease tag (`vX.Y.Z` with no `-beta`) ships, bump them by hand the first time; after that we can add a GA-flavored `update_tap` job if it's worth automating.
@@ -110,7 +118,7 @@ No PAT, no extra secret to manage.
 
 **Tap update commits but `brew install` still pulls the old version** — run `brew update` first; Homebrew caches tap state.
 
-**`brew install outl@beta` fails with `SHA256 mismatch`** — the formula on `main` drifted from the release asset.
+**`brew install outl-beta` fails with `SHA256 mismatch`** — the formula on `main` drifted from the release asset.
 Usually means someone re-uploaded an asset on the GitHub release.
 Re-trigger the failed release via `workflow_dispatch` and `update_tap` will re-render with the current SHAs.
 

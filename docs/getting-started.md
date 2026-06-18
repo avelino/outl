@@ -8,13 +8,14 @@ A minute from clone to first journal entry.
 
 ```bash
 brew tap avelino/outl https://github.com/avelino/outl
+brew trust avelino/outl             # one-time: Homebrew 4.x requires it for third-party taps
 
 # CLI + TUI (Linux + macOS)
-brew install outl@beta              # latest beta — every push to main
+brew install outl-beta              # latest beta — every push to main
 # brew install outl                 # latest GA (when the first one ships)
 
 # Desktop app (macOS only, dmg)
-brew install --cask outl-desktop@beta
+brew install --cask outl-desktop-beta
 ```
 
 The desktop cask drops `outl.app` into `/Applications`.

@@ -86,7 +86,7 @@ The MINOR bump is the desktop addition; CRDT, sidecar, and existing CLI/TUI/mobi
 
 ### Added
 
-- **`outl-desktop`** — Tauri 2 client for macOS, Linux, Windows. 2-pane layout (Sidebar / OutlineView with inline backlinks at the bottom, mirroring the TUI), mini-calendar + pinned + recent in the sidebar, `outl-exec` code-block execution, cross-platform FS watcher (`notify`) that emits `peer-ops-changed` so the frontend reloads when iCloud / Syncthing / shared FS drops a peer's `ops-*.jsonl`. Distributed as a **universal macOS dmg** (arm64 + x86_64 lipo-merged) via `brew install --cask outl-desktop@beta`.
+- **`outl-desktop`** — Tauri 2 client for macOS, Linux, Windows. 2-pane layout (Sidebar / OutlineView with inline backlinks at the bottom, mirroring the TUI), mini-calendar + pinned + recent in the sidebar, `outl-exec` code-block execution, cross-platform FS watcher (`notify`) that emits `peer-ops-changed` so the frontend reloads when iCloud / Syncthing / shared FS drops a peer's `ops-*.jsonl`. Distributed as a **universal macOS dmg** (arm64 + x86_64 lipo-merged) via `brew install --cask outl-desktop-beta`.
 - **`outl-config`** — shared TOML config at `~/.config/outl/config.toml` (XDG on every OS — Windows routes through `dirs::config_dir()` to `%APPDATA%`). Read by TUI / CLI / desktop through the same `outl_config::load()` so a theme set in the desktop's Settings modal lights up in the TUI on the next launch.
 - **`outl-theme`** — palette catalog with the seven existing presets (`outl`, `default-dark`, `light`, `dracula`, `solarized-dark`, `nord`, `monokai`). TUI derives its `Theme::from_palette` from here; desktop ships the palette over the Tauri wire and writes CSS custom properties.
 - **`outl-shortcuts`** — `(chord → action)` catalog every client consumes. TUI translates `crossterm::KeyEvent` → `Chord`; desktop's `KeyboardEvent` adapter does the same. One binding change lights up on both clients.
@@ -112,7 +112,7 @@ The MINOR bump is the desktop addition; CRDT, sidecar, and existing CLI/TUI/mobi
 ### CI / Release
 
 - **`desktop.yml`** — split into `check` (Linux, runs Clippy + Rust tests + Vitest + tsc + tauri bundle once) + `build` matrix (macOS arm64 + Windows x86_64 just compile + bundle). macOS x86_64 dropped from the PR matrix because the `macos-13` Intel runner pool is consistently depleted; release-time x86_64 binaries still ship via the universal dmg.
-- **`release.yml`** — adds `build_desktop` (universal macOS dmg on `macos-latest`) and a single anchor in the bump-tap step so `Casks/outl-desktop@beta.rb` rides alongside `Formula/outl@beta.rb` on every push to main.
+- **`release.yml`** — adds `build_desktop` (universal macOS dmg on `macos-latest`) and a single anchor in the bump-tap step so `Casks/outl-desktop-beta.rb` rides alongside `Formula/outl-beta.rb` on every push to main.
 
 ## [0.5.3] — 2026-06-02
 

@@ -33,7 +33,7 @@ A binding that only the TUI cares about still lives here (with `Mode::Normal` / 
 - **[`Binding`]** — `(mode, chord, action, description)` row.
   The description is what the help overlay displays — keep it short and verb-led ("Open today's journal", not "This shortcut opens today's journal in the current window").
 - **[`default_bindings`]** — the canonical table. Hand-curated, ordered for help-overlay readability.
-- **[`bindings_for_mode`] / [`lookup`]** — query helpers. `lookup` is `O(n)` over the table; the table is small (under 100 entries today) so we don't bother with a hashmap.
+- **[`bindings_for_mode`] / [`lookup`]** — query helpers. `lookup` is `O(n)` over the table; the table is small (under 100 entries today) so we don't bother with a hashmap. **`lookup` prefers a mode-specific binding over a `Global` one** for the same chord — it can't rely on table order because the `Global` chrome rows are listed first for help-overlay readability, so a naive first-match would resolve every dual-bound chord (e.g. `Cmd+Shift+X` → `WrapStrike` in Insert vs. `RunCodeBlock` in Global) to its `Global` action even inside the overriding mode.
 
 ## What this crate does NOT own
 
@@ -85,6 +85,12 @@ A binding that only the TUI cares about still lives here (with `Mode::Normal` / 
 - `Normal` mode → no binding either (the desktop frontend used to wire it to "toggle sidebar"; that's `Cmd+Shift+E` now to avoid hijacking markdown's universal bold chord — see `crates/outl-desktop/CLAUDE.md` for the rationale).
 
 If you find yourself wanting two different actions on the same chord across modes, the catalog already supports it — just add two `Binding` rows with different `mode` fields and the `no_duplicate_chord_in_same_mode` test will let them through.
+`Cmd+Shift+X` ships exactly that split today: `WrapStrike` in Insert (textarea focused) and `RunCodeBlock` in Global — inside a textarea the mode-specific row wins, everywhere else the Global one fires.
+
+**`Cmd+Z` / `Cmd+X` are the canonical "don't shadow the OS" examples:**
+
+- Plain `Cmd+X` carries **no binding at all** — it used to be `RunCodeBlock` (Global), which `preventDefault`ed the OS-universal cut inside every desktop textarea (issue #80). Run-code lives on `Cmd+Shift+X` now.
+- `Cmd/Ctrl+Z` (Undo) and `Cmd/Ctrl+Shift+Z` (Redo) are bound in **Normal**, not Global, so a focused textarea keeps the chord for its own native undo instead of having the dispatcher swallow it. They sit next to the vim spellings (`u` / `Ctrl+R`) in the catalog.
 
 **`Cmd+X` / `Cmd+C` / `Cmd+V` are the "OS-native vs. structural" example:**
 
