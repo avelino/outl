@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use outl_config::{Config, EditorCfg, ThemeCfg, WorkspaceCfg};
+use outl_config::{CalendarCfg, Config, EditorCfg, ThemeCfg, WeekStart, WorkspaceCfg};
 
 /// Flat shape the Solid frontend's `Settings` interface
 /// (`crates/outl-desktop/src/lib/api.ts`) expects. Matches what
@@ -27,6 +27,30 @@ pub struct Settings {
     pub theme: String,
     /// Outline font size in pixels.
     pub font_size: u32,
+    /// Calendar week start: `"monday"` (default) or `"sunday"`.
+    /// String on the wire so the Solid `<SettingsModal>` can bind a
+    /// `<select>` without a codegen step; mapped to / from
+    /// `outl_config::WeekStart` here.
+    pub week_start: String,
+}
+
+/// Map the typed [`WeekStart`] to its wire string.
+fn week_start_str(w: WeekStart) -> String {
+    match w {
+        WeekStart::Monday => "monday",
+        WeekStart::Sunday => "sunday",
+    }
+    .to_string()
+}
+
+/// Parse the wire string back to [`WeekStart`]; anything other than
+/// `"sunday"` falls back to the Monday default (forgiving, like the
+/// rest of the config read path).
+fn week_start_from_str(s: &str) -> WeekStart {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "sunday" => WeekStart::Sunday,
+        _ => WeekStart::Monday,
+    }
 }
 
 impl Settings {
@@ -44,6 +68,7 @@ impl From<Config> for Settings {
             vim_mode: c.editor.vim_mode,
             theme: c.theme.preset,
             font_size: c.editor.font_size,
+            week_start: week_start_str(c.calendar.week_start),
         }
     }
 }
@@ -58,6 +83,9 @@ impl From<Settings> for Config {
             editor: EditorCfg {
                 vim_mode: s.vim_mode,
                 font_size: s.font_size,
+            },
+            calendar: CalendarCfg {
+                week_start: week_start_from_str(&s.week_start),
             },
         }
     }
@@ -97,6 +125,7 @@ mod tests {
         );
         assert_eq!(s.theme, "outl");
         assert_eq!(s.font_size, 15);
+        assert_eq!(s.week_start, "monday", "Monday-first is the default");
     }
 
     #[test]
@@ -106,6 +135,7 @@ mod tests {
             vim_mode: false,
             theme: "dracula".into(),
             font_size: 18,
+            week_start: "sunday".into(),
         };
         let cfg: Config = s.clone().into();
         let back: Settings = cfg.into();
@@ -113,5 +143,16 @@ mod tests {
         assert_eq!(back.vim_mode, s.vim_mode);
         assert_eq!(back.theme, s.theme);
         assert_eq!(back.font_size, s.font_size);
+        assert_eq!(back.week_start, "sunday");
+    }
+
+    #[test]
+    fn unknown_week_start_string_falls_back_to_monday() {
+        let s = Settings {
+            week_start: "garbage".into(),
+            ..Settings::fresh()
+        };
+        let cfg: Config = s.into();
+        assert_eq!(cfg.calendar.week_start, WeekStart::Monday);
     }
 }

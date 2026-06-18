@@ -155,11 +155,21 @@ export function Sidebar(props: {
   }
 
   /**
-   * 0 = Monday … 6 = Sunday — matches the TUI's Monday-first week
-   * (the `Mo Tu We Th Fr Sa Su` header).
+   * Column index (0–6) of a JS weekday (`Date.getDay()`, where
+   * `0 = Sunday`) within the grid, honouring the configured week
+   * start. Monday-first maps `Mon→0 … Sun→6`; Sunday-first is the
+   * identity (`Sun→0 … Sat→6`). Read from `appState.weekStart`, which
+   * mirrors `config.toml`'s `[calendar] week_start`.
    */
-  function mondayIndex(jsDay: number): number {
-    return (jsDay + 6) % 7;
+  function weekIndex(jsDay: number): number {
+    return appState.weekStart === "sunday" ? jsDay : (jsDay + 6) % 7;
+  }
+
+  /** Weekday header labels in the configured order. */
+  function weekdayLabels(): string[] {
+    return appState.weekStart === "sunday"
+      ? ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
+      : ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
   }
 
   async function openDay(year: number, monthIdx: number, day: number) {
@@ -270,7 +280,7 @@ export function Sidebar(props: {
      *  empty leading / trailing days. */
     function cells(): Array<{ day: number; slug: string } | null> {
       const first = new Date(year(), monthIdx(), 1);
-      const lead = mondayIndex(first.getDay());
+      const lead = weekIndex(first.getDay());
       const total = daysInMonth(year(), monthIdx());
       const out: Array<{ day: number; slug: string } | null> = [];
       for (let i = 0; i < lead; i++) out.push(null);
@@ -313,7 +323,7 @@ export function Sidebar(props: {
         </div>
 
         <div class="grid grid-cols-7 gap-[2px] text-center text-[9.5px] uppercase tracking-wider text-(--color-outl-fg-dimmer)">
-          <For each={["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]}>
+          <For each={weekdayLabels()}>
             {(d) => <div class="py-[2px]">{d}</div>}
           </For>
         </div>

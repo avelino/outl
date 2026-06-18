@@ -46,6 +46,9 @@ preset = "outl"                   # name from outl_theme::PRESETS
 [editor]
 vim_mode = true                   # default true
 font_size = 15                    # pixels, desktop-only
+
+[calendar]
+week_start = "monday"             # "monday" (default) | "sunday"
 ```
 
 Three sections, each modelled as its own struct ([`WorkspaceCfg`], [`ThemeCfg`], [`EditorCfg`]).
@@ -85,6 +88,7 @@ If the field **must converge between devices**, it doesn't belong in TOML at all
 | `theme.preset` | TUI palette resolver; desktop settings | `crates/outl-tui/src/runtime.rs::resolve_theme`, `crates/outl-desktop/src-tauri/src/commands/theme.rs` |
 | `editor.vim_mode` | Desktop only (TUI ignores) | `crates/outl-desktop/src-tauri/src/settings.rs` |
 | `editor.font_size` | Desktop only | `crates/outl-desktop/src-tauri/src/settings.rs` |
+| `calendar.week_start` | TUI sidebar calendar; desktop sidebar calendar (mobile does not read it — no `~/.config` on iOS) | `crates/outl-tui/src/runtime.rs` (→ `App::week_start` → `view/sidebar.rs`), `crates/outl-desktop/src-tauri/src/settings.rs` (→ `Settings.week_start` → `Sidebar.tsx`) |
 
 Update this table whenever a new reader appears.
 

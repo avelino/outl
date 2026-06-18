@@ -622,6 +622,11 @@ pub(crate) struct App {
     /// can swap it at runtime without restarting the binary.
     pub(crate) theme: Theme,
 
+    /// First column of the mini-calendar week grid, read from
+    /// `config.toml`'s `[calendar] week_start` (`outl_config::WeekStart`)
+    /// at startup. Defaults to `Monday` (the historical layout).
+    pub(crate) week_start: outl_config::WeekStart,
+
     /// Registered code-block runtimes (`lisp`, `echo`, …). Used by
     /// `gx` / `:run`. Built once at startup; cheap to clone but we keep
     /// one instance per App.

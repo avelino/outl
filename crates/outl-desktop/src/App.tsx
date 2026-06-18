@@ -50,6 +50,7 @@ function App() {
   async function hydrateTheme() {
     try {
       const s = await getSettings();
+      setAppState("weekStart", s.week_start === "sunday" ? "sunday" : "monday");
       const palette = await getTheme(s.theme || null);
       applyPaletteToRoot(palette);
     } catch {

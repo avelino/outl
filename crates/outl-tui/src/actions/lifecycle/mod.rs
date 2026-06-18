@@ -94,6 +94,10 @@ impl App {
             undo: Vec::new(),
             redo: Vec::new(),
             theme,
+            // Default to the historical Monday-first calendar; the
+            // runtime overrides this from `config.toml`'s
+            // `[calendar] week_start` right after construction.
+            week_start: outl_config::WeekStart::Monday,
             exec_registry: RuntimeRegistry::with_builtins(),
             command_registry: CommandRegistry::with_builtins(),
             collapsed: std::collections::HashSet::new(),

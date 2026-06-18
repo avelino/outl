@@ -47,14 +47,24 @@ fn render_calendar(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
         View::Page(_) => today,
     };
     let first = NaiveDate::from_ymd_opt(viewing.year(), viewing.month(), 1).unwrap_or(today);
-    // Weekday index, 0 = Monday — line up with the `Mo Tu …` header.
-    let weekday_offset = first.weekday().num_days_from_monday() as usize;
+    // Column of day 1, honouring the configured week start. Monday-first
+    // uses `num_days_from_monday` (`Mon→0`); Sunday-first uses
+    // `num_days_from_sunday` (`Sun→0`). Read from `config.toml`'s
+    // `[calendar] week_start`.
+    let sunday_first = matches!(app.week_start, outl_config::WeekStart::Sunday);
+    let weekday_offset = if sunday_first {
+        first.weekday().num_days_from_sunday() as usize
+    } else {
+        first.weekday().num_days_from_monday() as usize
+    };
     let days_in_month = days_in_month(viewing.year(), viewing.month());
 
-    let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
-        "Mo Tu We Th Fr Sa Su",
-        app.theme.dim,
-    ))];
+    let header = if sunday_first {
+        "Su Mo Tu We Th Fr Sa"
+    } else {
+        "Mo Tu We Th Fr Sa Su"
+    };
+    let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(header, app.theme.dim))];
 
     let mut row_spans: Vec<Span<'static>> = Vec::new();
     // Pad the first week with blanks so day 1 aligns with its weekday.

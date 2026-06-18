@@ -45,6 +45,11 @@ vim_mode = true
 # Outline font size in pixels (desktop only — the TUI uses your
 # terminal font).
 font_size = 15
+
+[calendar]
+# First column of the mini-calendar week grid: "monday" (default) or
+# "sunday". Honoured by the TUI sidebar and the desktop sidebar.
+week_start = "monday"
 ```
 
 ### Field reference
@@ -69,6 +74,12 @@ Available presets: `outl`, `default-dark`, `light`, `logseq-light`, `dracula`, `
 |---|---|---|---|---|
 | `vim_mode` | bool | `true` | desktop | When `false`, the desktop drops the modal `Normal / Insert / Visual` model and only listens to OS-standard chrome chords (`⌘P`, `⌘B`, …). The TUI is vim-style by definition and ignores this. |
 | `font_size` | integer (pixels) | `15` | desktop | Outline body font size. The TUI uses the user's terminal font; setting this has no effect there. |
+
+#### `[calendar]`
+
+| Field | Type | Default | Read by | Effect |
+|---|---|---|---|---|
+| `week_start` | `"monday"` \| `"sunday"` | `"monday"` | TUI, desktop | First column of the mini-calendar week grid. `"monday"` renders `Mo…Su`; `"sunday"` renders `Su…Sa`. Unknown values fall through to `"monday"`. The mobile calendar does not read this yet (iOS has no `~/.config/outl/config.toml`). |
 
 ---
 

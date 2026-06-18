@@ -65,6 +65,10 @@ export function SettingsModal() {
     try {
       const persisted = await updateSettings(d);
       setDraft(persisted);
+      setAppState(
+        "weekStart",
+        persisted.week_start === "sunday" ? "sunday" : "monday",
+      );
       close();
     } catch (e) {
       setAppState("lastError", e instanceof Error ? e.message : String(e));

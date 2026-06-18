@@ -152,6 +152,13 @@ export interface AppStateShape {
   settingsOpen: boolean;
   /** Help overlay open state. `?` in Normal mode toggles. */
   helpOpen: boolean;
+  /**
+   * First column of the mini-calendar week grid, mirrored from
+   * `config.toml`'s `[calendar] week_start` (`outl_config::WeekStart`)
+   * via `getSettings()` on boot. Defaults to `"monday"` (the
+   * historical layout) until settings hydrate.
+   */
+  weekStart: "monday" | "sunday";
   /** Last error surfaced to the user (status line). */
   lastError: string | null;
 }
@@ -177,6 +184,7 @@ const [state, setState] = createStore<AppStateShape>({
   pickerSeed: null,
   settingsOpen: false,
   helpOpen: false,
+  weekStart: "monday",
   lastError: null,
 });
 

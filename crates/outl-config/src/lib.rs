@@ -26,6 +26,9 @@
 //! [editor]
 //! vim_mode = true
 //! font_size = 15
+//!
+//! [calendar]
+//! week_start = "monday"   # "monday" (default) | "sunday"
 //! ```
 //!
 //! All fields are optional — missing values fall back to
@@ -47,7 +50,7 @@ mod paths;
 mod schema;
 
 pub use paths::{config_dir, config_path};
-pub use schema::{Config, EditorCfg, ThemeCfg, WorkspaceCfg};
+pub use schema::{CalendarCfg, Config, EditorCfg, ThemeCfg, WeekStart, WorkspaceCfg};
 
 use std::fs;
 use std::path::Path;

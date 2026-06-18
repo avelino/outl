@@ -25,6 +25,7 @@ pub struct Config {
     pub workspace: WorkspaceCfg,
     pub theme: ThemeCfg,
     pub editor: EditorCfg,
+    pub calendar: CalendarCfg,
 }
 
 /// Workspace section — primarily where the desktop remembers the
@@ -81,6 +82,31 @@ impl Default for EditorCfg {
     }
 }
 
+/// Calendar section — how the mini-calendar / week views lay out.
+/// Read by every client that renders a calendar (TUI sidebar, desktop
+/// sidebar; the mobile calendar has no `~/.config` to read on iOS and
+/// keeps its own default until it grows an in-app setting).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CalendarCfg {
+    /// Which day the week grid starts on.
+    pub week_start: WeekStart,
+}
+
+/// First column of a calendar week grid.
+///
+/// Defaults to [`WeekStart::Monday`] — the historical TUI / desktop
+/// behaviour — so an existing config keeps rendering identically.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WeekStart {
+    /// ISO week: Monday first (`Mon … Sun`).
+    #[default]
+    Monday,
+    /// US-style week: Sunday first (`Sun … Sat`).
+    Sunday,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,5 +118,18 @@ mod tests {
         assert!(c.editor.vim_mode);
         assert_eq!(c.editor.font_size, 15);
         assert!(c.workspace.last.is_none());
+        assert_eq!(c.calendar.week_start, WeekStart::Monday);
+    }
+
+    #[test]
+    fn week_start_parses_and_defaults_per_section() {
+        // Explicit value round-trips through the lowercase serde repr.
+        let c: Config = toml::from_str("[calendar]\nweek_start = \"sunday\"\n").unwrap();
+        assert_eq!(c.calendar.week_start, WeekStart::Sunday);
+
+        // A config that omits `[calendar]` entirely still falls back to
+        // the Monday default (the `#[serde(default)]` partial-section path).
+        let c: Config = toml::from_str("[theme]\npreset = \"dracula\"\n").unwrap();
+        assert_eq!(c.calendar.week_start, WeekStart::Monday);
     }
 }

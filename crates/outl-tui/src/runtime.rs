@@ -303,6 +303,9 @@ fn event_loop(
     shared_workspace: bool,
 ) -> Result<()> {
     let mut app = App::new(workspace_root, workspace, actor, theme, shared_workspace)?;
+    // Calendar week start comes from the same global `config.toml` the
+    // theme preset above is read from (`[calendar] week_start`).
+    app.week_start = outl_config::load().calendar.week_start;
     loop {
         // Pick up the background index build if it finished since the
         // last frame. Non-blocking; costs ~one channel try_recv.

@@ -83,6 +83,12 @@ export interface Settings {
    */
   theme: string;
   font_size: number;
+  /**
+   * Calendar week start, mirrored from `config.toml`'s
+   * `[calendar] week_start` (`outl_config::WeekStart`). `"monday"`
+   * (default) or `"sunday"`.
+   */
+  week_start: "monday" | "sunday";
 }
 
 /**
