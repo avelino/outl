@@ -193,4 +193,36 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn cmd_shift_enter_splits_between_insert_and_normal() {
+        // `Cmd+Shift+Enter` is dual-bound (issue #92): in Insert it
+        // commits the in-flight edit and starts the next block
+        // (`CommitAndContinue`); in view mode (Normal — the desktop's
+        // fallback whenever no textarea is focused) there's nothing to
+        // commit, so it creates a sibling below via `NewBlockBelow`.
+        // The two rows live in different modes, so `lookup`'s
+        // mode-specific resolution must keep them apart. No Global row
+        // backs this chord, so the remaining modes resolve to nothing.
+        let shift_meta_enter =
+            ChordSequence::chord(Chord::new(Modifiers::META | Modifiers::SHIFT, Key::Enter));
+
+        assert_eq!(
+            lookup(Mode::Insert, &shift_meta_enter),
+            Some(Action::CommitAndContinue),
+            "Cmd+Shift+Enter in Insert must commit + start the next block",
+        );
+        assert_eq!(
+            lookup(Mode::Normal, &shift_meta_enter),
+            Some(Action::NewBlockBelow),
+            "Cmd+Shift+Enter in Normal (view mode) must create a block below",
+        );
+        for mode in [Mode::Visual, Mode::Overlay, Mode::Global] {
+            assert_eq!(
+                lookup(mode, &shift_meta_enter),
+                None,
+                "Cmd+Shift+Enter has no binding in {mode:?}",
+            );
+        }
+    }
 }

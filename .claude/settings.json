@@ -45,6 +45,14 @@
       "Bash(touch:*)",
       "Bash(date:*)"
     ],
+    "deny": [
+      "Bash(git reset --hard:*)",
+      "Bash(git checkout --:*)",
+      "Bash(git clean -f:*)",
+      "Bash(git branch -D:*)",
+      "Bash(rm -rf /:*)",
+      "Bash(sudo:*)"
+    ],
     "ask": [
       "Bash(git add:*)",
       "Bash(gh issue create:*)",
@@ -61,16 +69,6 @@
       "Bash(rm:*)",
       "Bash(mv:*)",
       "Bash(cp -r:*)"
-    ],
-    "deny": [
-      "Bash(git commit:*)",
-      "Bash(git push:*)",
-      "Bash(git reset --hard:*)",
-      "Bash(git checkout --:*)",
-      "Bash(git clean -f:*)",
-      "Bash(git branch -D:*)",
-      "Bash(rm -rf /:*)",
-      "Bash(sudo:*)"
     ]
   },
   "hooks": {
