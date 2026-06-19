@@ -95,9 +95,11 @@ enum Command {
     },
     /// Import a graph from another outliner.
     Import {
-        /// Source format: `logseq` (directory) or `roam` (JSON file).
+        /// Source format: `logseq` (directory), `roam` (JSON file), or
+        /// `obsidian` (vault directory).
         format: String,
-        /// Path to the Logseq graph directory or the Roam backup file.
+        /// Path to the Logseq graph directory, the Roam backup file,
+        /// or the Obsidian vault directory.
         src: PathBuf,
         /// Destination workspace. Created if it doesn't exist yet.
         dst: PathBuf,

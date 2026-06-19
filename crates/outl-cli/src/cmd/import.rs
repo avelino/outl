@@ -1,9 +1,11 @@
-//! `outl import` — bring an existing graph in from Logseq or Roam.
+//! `outl import` — bring an existing graph in from Logseq, Roam, or
+//! Obsidian.
 //!
 //! Each source format has its own quirks (Logseq stores `id::` lines
-//! inline; Roam ships a JSON backup). The shared output is the same:
-//! a populated `pages/` and `journals/` directory in an outl
-//! workspace, plus an initial reconcile so sidecars are stamped.
+//! inline; Roam ships a JSON backup; Obsidian uses YAML frontmatter
+//! and wiki-link variants). The shared output is the same: a populated
+//! `pages/` and `journals/` directory in an outl workspace, plus an
+//! initial reconcile so sidecars are stamped.
 
 use crate::workspace_layout::{ensure_ops_dir, read_config, Paths};
 use anyhow::{Context, Result};
@@ -17,6 +19,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub mod logseq;
+pub mod obsidian;
 pub mod roam;
 
 /// Summary of what an import produced.
@@ -41,7 +44,7 @@ impl ImportReport {
         println!("  pages:                {}", self.pages);
         println!("  journals:             {}", self.journals);
         println!(
-            "  artifacts stripped:   {} (id::, block refs, embed comments)",
+            "  artifacts stripped:   {} (source-specific metadata: id::, block refs, embed markers, dropped frontmatter keys)",
             self.artifacts_stripped
         );
         if self.unresolved_block_refs > 0 {
@@ -64,9 +67,11 @@ pub fn run(source: &str, src: &Path, dst: &Path) -> Result<()> {
     let report = match source {
         "logseq" => logseq::import(src, &paths)
             .with_context(|| format!("logseq import from {}", src.display()))?,
+        "obsidian" => obsidian::import(src, &paths)
+            .with_context(|| format!("obsidian import from {}", src.display()))?,
         "roam" => roam::import(src, &paths)
             .with_context(|| format!("roam import from {}", src.display()))?,
-        other => anyhow::bail!("unknown import source: {other} (expected: logseq, roam)"),
+        other => anyhow::bail!("unknown import source: {other} (expected: logseq, obsidian, roam)"),
     };
 
     report.print();
@@ -88,13 +93,31 @@ pub(super) fn write_page_md(
     body: &str,
     is_journal: bool,
 ) -> Result<PathBuf> {
+    write_page_md_with_stem(paths, title, body, is_journal, None)
+}
+
+/// Same as [`write_page_md`] but the caller can override the on-disk
+/// filename stem. Used by importers that need to disambiguate slug
+/// collisions (e.g. two source files with the same H1 title) before
+/// writing — they compute a unique stem themselves and pass it here.
+/// `title` is still what gets written into the `title::` property, so
+/// the user-visible page name is unaffected.
+pub(super) fn write_page_md_with_stem(
+    paths: &Paths,
+    title: &str,
+    body: &str,
+    is_journal: bool,
+    stem_override: Option<&str>,
+) -> Result<PathBuf> {
     let dir = if is_journal {
         &paths.journals
     } else {
         &paths.pages
     };
     fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
-    let stem = if is_journal {
+    let stem = if let Some(s) = stem_override {
+        s.to_string()
+    } else if is_journal {
         // For journals the title is itself the ISO date — keep as-is.
         title.to_string()
     } else {

@@ -230,6 +230,7 @@ CLI exit code is `1` in that case; MCP returns the payload via the normal envelo
 | `outl mcp serve [--workspace=…]`             | —                       |
 | `outl workspace info [--json]`               | `outl_workspace_info`   |
 | `outl import logseq <src> <dst>`             | —                       |
+| `outl import obsidian <vault> <dst>`         | —                       |
 | `outl import roam <backup.json> <dst>`       | —                       |
 
 `init`, `serve`, `reconcile`, `import`, and `mcp serve` are CLI-only on purpose — they're either interactive, long-running, or bootstrap commands that don't fit a tool-call shape.
@@ -290,7 +291,7 @@ No business logic lives in either layer — they format input and output, that's
 
 Shipping today:
 
-- `outl init`, `outl serve`, `outl doctor`, `outl reconcile`, `outl import logseq|roam`, `outl theme`.
+- `outl init`, `outl serve`, `outl doctor`, `outl reconcile`, `outl import logseq|obsidian|roam`, `outl theme`.
 - `outl` (no subcommand) opens the TUI.
 - `outl page get|create|update|delete|list|rename|render` (`create` accepts `--content` to seed the outline in one call)
 - `outl block get|append|append-tree|insert|update|move|delete|toggle-todo|tree`
