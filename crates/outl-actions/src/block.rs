@@ -157,7 +157,8 @@ pub fn create_after(
 /// parent.
 ///
 /// Mirror of [`create_after`] for the "open a block above this one"
-/// gesture (vim `O`, the desktop's `Cmd+Shift+Tab` at column 0). The
+/// gesture (vim `O`, the desktop's `Cmd/Ctrl+Shift+Enter` with the
+/// caret at column 0). The
 /// new block lands between `before` and its preceding sibling, so the
 /// fractional index is computed by [`position_before`].
 pub fn create_before(

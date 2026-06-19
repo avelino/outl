@@ -63,7 +63,7 @@ pub fn position_after(workspace: &Workspace, node: NodeId) -> Option<Fractional>
 
 /// A fractional position strictly between `node` and the sibling that
 /// precedes it, for the "insert before this node" flow (vim `O`,
-/// `Cmd+Shift+Tab` at column 0 on the desktop).
+/// `Cmd/Ctrl+Shift+Enter` with the caret at column 0 on the desktop).
 ///
 /// Returns `None` when no such slot is representable — either `node`
 /// is not in the tree, or it is the first child sitting at the

@@ -31,7 +31,8 @@ pub(crate) fn create_block(
 ) -> Result<CreateBlockReply, String> {
     let page = parse_node_id(&page_id)?;
     let text_owned = text.clone();
-    // Precedence: `before_id` (vim `O` / `Cmd+Shift+Tab`) wins over
+    // Precedence: `before_id` (vim `O` / `Cmd/Ctrl+Shift+Enter` at col 0)
+    // wins over
     // `after_id` (vim `o` / `Enter`); falling back to "last child of
     // `parent_id`" (defaults to the page root) when neither is set.
     let (new_id, view) = finish_in_page_with(&state, page, |ws| {

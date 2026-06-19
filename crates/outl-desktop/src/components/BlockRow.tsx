@@ -38,8 +38,8 @@ export interface BlockCallbacks {
   /** Enter pressed → commit + create a sibling below + focus it. */
   onEnter: (id: string, text: string) => Promise<void>;
   /**
-   * `Cmd/Ctrl+Shift+Tab` at column 0 → commit + create a sibling
-   * *before* this one + focus it. The textarea mirror of vim `O`.
+   * `Cmd/Ctrl+Shift+Enter` with the caret at column 0 → commit + create
+   * a sibling *before* this one + focus it. The textarea mirror of vim `O`.
    */
   onCreateBefore: (id: string, text: string) => Promise<void>;
   /** Tab pressed inside the textarea. */
