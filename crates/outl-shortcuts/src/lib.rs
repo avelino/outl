@@ -68,14 +68,35 @@ pub fn bindings_for_mode(mode: Mode) -> Vec<Binding> {
 /// back to whatever its default key handling does (typing into a
 /// textarea, …).
 ///
+/// **Mode-specific bindings take precedence over `Global` ones.** A
+/// chord can be bound twice — once for a concrete mode, once for
+/// `Global` — and the concrete mode must win when the editor is in
+/// it. `Cmd+Shift+X` is the canonical case: `WrapStrike` in `Insert`
+/// (textarea focused), `RunCodeBlock` everywhere else via `Global`.
+/// We can't lean on table order here because the `Global` chrome rows
+/// are listed first for help-overlay readability, so a plain
+/// first-match `find` would resolve every dual-bound chord to its
+/// `Global` action even inside the mode that should override it.
+///
 /// Prefix matching is the caller's job: when a [`ChordSequence`]
 /// has two chords (e.g. `g j`), the caller buffers the first chord
 /// and re-queries with the full sequence on the second key.
 pub fn lookup(mode: Mode, seq: &ChordSequence) -> Option<Action> {
-    default_bindings()
-        .into_iter()
-        .find(|b| (b.mode == Mode::Global || b.mode == mode) && &b.chord == seq)
-        .map(|b| b.action)
+    let mut global_match = None;
+    for b in default_bindings() {
+        if &b.chord != seq {
+            continue;
+        }
+        if b.mode == mode {
+            // Exact-mode match wins outright, regardless of where it
+            // sits in the table relative to the Global row.
+            return Some(b.action);
+        }
+        if b.mode == Mode::Global {
+            global_match = Some(b.action);
+        }
+    }
+    global_match
 }
 
 #[cfg(test)]
@@ -140,6 +161,35 @@ mod tests {
                 lookup(mode, chord),
                 Some(Action::OpenPicker),
                 "OpenPicker not reachable in {mode:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn cmd_shift_x_splits_between_insert_and_global() {
+        // `Cmd+Shift+X` is the canonical "same chord, two actions
+        // across modes" case (see `defaults.rs` + the crate
+        // CLAUDE.md). Inside a textarea (Insert) the mode-specific
+        // `WrapStrike` row must win over the Global `RunCodeBlock`
+        // one; everywhere else the Global binding fires. If this
+        // split ever regresses, running a fenced block while editing
+        // it would clobber the user's selection with strikethrough.
+        let shift_meta_x = ChordSequence::chord(Chord::new(
+            Modifiers::META | Modifiers::SHIFT,
+            Key::char('x'),
+        ));
+
+        assert_eq!(
+            lookup(Mode::Insert, &shift_meta_x),
+            Some(Action::WrapStrike),
+            "Cmd+Shift+X in Insert must resolve to WrapStrike (mode-specific beats Global)",
+        );
+
+        for mode in [Mode::Normal, Mode::Visual, Mode::Overlay] {
+            assert_eq!(
+                lookup(mode, &shift_meta_x),
+                Some(Action::RunCodeBlock),
+                "Cmd+Shift+X must fall through to the Global RunCodeBlock in {mode:?}",
             );
         }
     }

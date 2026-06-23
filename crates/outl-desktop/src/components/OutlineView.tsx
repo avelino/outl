@@ -5,6 +5,7 @@ import {
   deleteBlock,
   editBlock,
   indentBlock,
+  openExternalUrl,
   openRef,
   outdentBlock,
   pasteMarkdown,
@@ -144,6 +145,15 @@ export function OutlineView() {
     void handleRefClick(tag);
   }
 
+  function handleLinkClick(href: string) {
+    // `[label](url)` → open in the system browser via the shared
+    // opener wrapper (scheme-guarded to http(s)/mailto). Errors land on
+    // the status line instead of throwing into the click handler.
+    void openExternalUrl(href).catch((e) => {
+      setAppState("lastError", e instanceof Error ? e.message : String(e));
+    });
+  }
+
   const cb: BlockCallbacks = {
     onStartEdit: (id) => {
       // Sync the selection cursor with whatever the user clicked so
@@ -242,6 +252,7 @@ export function OutlineView() {
     },
     onRefClick: handleRefClick,
     onTagClick: handleTagClick,
+    onLinkClick: handleLinkClick,
   };
 
   async function addFirstBlock() {

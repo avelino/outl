@@ -5,7 +5,9 @@ Solid + Tailwind frontend, Rust backend that **must stay thin** — every worksp
 
 ## Status
 
-**Phase 6 — feature-complete v0.** Outline edit, journal nav, picker (Cmd+P), backlinks panel, `outl-exec` code blocks, cross-platform FS watcher + auto-reload, settings modal, and the `desktop.yml` CI workflow are all in. Signed bundles, Homebrew cask, and graph view ride incrementally on top.
+**Phase 6 — feature-complete v0.**
+Outline edit, journal nav, picker (Cmd+P), backlinks panel, `outl-exec` code blocks, cross-platform FS watcher + auto-reload, settings modal, and the `desktop.yml` CI workflow are all in.
+Signed bundles, Homebrew cask, and graph view ride incrementally on top.
 
 ## Layering
 
@@ -21,17 +23,22 @@ outl-desktop (this crate)
 
 ## Hard rule
 
-**This crate adds no business logic.** If a Tauri command does something that involves the workspace shape (edit, move, todo, journal render), it delegates to `outl-actions`.
+**This crate adds no business logic.**
+If a Tauri command does something that involves the workspace shape (edit, move, todo, journal render), it delegates to `outl-actions`.
 If you find yourself writing a tree walk or an op-generating helper inside `src-tauri/src/lib.rs`, stop — move it to `outl-actions` instead.
 The TUI and mobile clients need it too.
 
-Same rule on the frontend: before writing a helper under `src/lib/`, check `@outl/shared` (see [`crates/outl-frontend-shared/CLAUDE.md`](../outl-frontend-shared/CLAUDE.md)). The renderer for inline tokens, paste detection, ref autocomplete, DTO types, and shared Tauri command wrappers all live there.
+Same rule on the frontend: before writing a helper under `src/lib/`, check `@outl/shared` (see [`crates/outl-frontend-shared/CLAUDE.md`](../outl-frontend-shared/CLAUDE.md)).
+The renderer for inline tokens, paste detection, ref autocomplete, DTO types, and shared Tauri command wrappers all live there.
 
 What this crate **does** own:
 
 - Path discovery (file picker via `tauri-plugin-dialog`; persisted in settings JSON; cross-platform default).
 - Cross-platform FS watcher (`notify` crate) that signals the frontend when peer `ops-*.jsonl` files grow — replaces the `NSMetadataQuery`/`NSFileCoordinator` dance the mobile crate has to do for iOS.
-- Desktop-only Tauri command surface (workspace picker, settings IO). The code-execution command (`run_code_block`) is a **thin adapter** — the orchestration (flat-DFS walk, `.md` path resolution, `outl-exec` invocation, DTO build) lives in `outl_actions::exec` so the mobile client shares the exact same flow. The desktop adapter only parses NodeIds, locks the workspace, calls the action, and wraps the outcome with a refreshed `PageView`. Adding behaviour to `commands/exec.rs` is almost always a smell — promote it to `outl-actions` instead.
+- Desktop-only Tauri command surface (workspace picker, settings IO).
+  The code-execution command (`run_code_block`) is a **thin adapter** — the orchestration (flat-DFS walk, `.md` path resolution, `outl-exec` invocation, DTO build) lives in `outl_actions::exec` so the mobile client shares the exact same flow.
+  The desktop adapter only parses NodeIds, locks the workspace, calls the action, and wraps the outcome with a refreshed `PageView`.
+  Adding behaviour to `commands/exec.rs` is almost always a smell — promote it to `outl-actions` instead.
 - Solid frontend with **3-pane layout** (Sidebar / OutlineView / BacklinksPanel) and **OS-standard keyboard shortcuts** (`Cmd+P`, `Cmd+J`, `Cmd+T`, `Cmd+Enter`, `Cmd+,`) plus optional vim mode.
 
 ## Layout
@@ -90,7 +97,10 @@ crates/outl-desktop/
 
 ## Blockquote chrome
 
-A block whose `text` starts with the CommonMark `"> "` marker renders with a left border (`border-l-2 border-(--color-outl-fg-dimmer)/50`), a very faint tint (`bg-(--color-outl-fg-dimmer)/[0.06]`), a right-rounded corner (`rounded-r-md`), and **full body colour** — refs, tags, bold, code keep their normal palette so the styled-token affordance isn't lost.
+A block whose `text` starts with the CommonMark `"> "` marker renders with a left border (`border-l-2 border-(--color-outl-fg-dimmer)/50`),
+a very faint tint (`bg-(--color-outl-fg-dimmer)/[0.06]`),
+a right-rounded corner (`rounded-r-md`),
+and **full body colour** — refs, tags, bold, code keep their normal palette so the styled-token affordance isn't lost.
 The tint is intentionally ~6% alpha: enough to read as a soft box at a glance, low enough to not fight with surrounding outline rows.
 
 The chrome wrapper sits one level above the bullet button — it envelops **both bullet *and* body** as one flex container.
@@ -99,10 +109,13 @@ The fold chevron and indent guides stay *outside* the chrome so the gutter chrom
 When the block isn't quoted, the wrapper degrades to a plain `flex min-w-0 flex-1 items-start` container, so non-quoted rows render byte-identical to before.
 
 TUI has no per-line background available in ratatui, so it stays with just the `│ ` bar — the tint is a desktop/mobile addition that costs nothing to omit on terminal.
-The detection uses `splitQuote` from `@outl/shared/markdown` (mirror of `outl_actions::quote::split_quote`); `stripQuoteFromTokens` drops the `> ` from the first `Plain` token before handing the list to `<MarkdownInline />` so the marker doesn't render twice.
+The detection uses `splitQuote` from `@outl/shared/markdown` (mirror of `outl_actions::quote::split_quote`);
+`stripQuoteFromTokens` drops the `> ` from the first `Plain` token before handing the list to `<MarkdownInline />` so the marker doesn't render twice.
 
 Composition: the marker stacks with TODO/DONE the same way the TUI does (`> TODO foo` → quote chrome + checkbox).
-Toggling the marker goes through the `toggleQuote(pageId, id)` wrapper in `@outl/shared/api/commands`, which calls the `toggle_quote` Tauri command (`src-tauri/src/commands/block.rs`), which delegates to `outl_actions::block::toggle_quote` — the same Rust function the mobile and TUI surfaces hit.
+Toggling the marker goes through the `toggleQuote(pageId, id)` wrapper in `@outl/shared/api/commands`,
+which calls the `toggle_quote` Tauri command (`src-tauri/src/commands/block.rs`),
+which delegates to `outl_actions::block::toggle_quote` — the same Rust function the mobile and TUI surfaces hit.
 **No string surgery on the TS side** — the prefix arithmetic owns the rule and stays in one place.
 
 ## Theme tokens
@@ -140,16 +153,25 @@ The Vite dev server runs on **port 1421** so it can coexist with `outl-mobile` (
 
 | Layer | Tool | What it covers |
 |-------|------|----------------|
-| Rust commands | `cargo test -p outl-desktop` | command shims, settings IO, fs_watcher (Phases 1+) |
+| Rust commands | `cargo test -p outl-desktop` | command shims, settings IO, fs_watcher (Phases 1+), surgical undo invalidation across a peer reload (`helpers::invalidate_changed_history` — only pages whose projection changed lose their stacks) |
 | Frontend logic | `bun --filter outl-desktop test` | scaffold smoke (today), components + helpers (Phases 1+) |
 
-Frontend suites today: `src/setup.test.ts` (scaffold smoke — `@outl/shared` alias resolves), `src/lib/chord-format.test.ts`, `src/lib/markdown-wrap.test.ts`, `src/lib/outline-walk.test.ts`, and `src/lib/action-handlers.test.ts` (regression tests for the `OpenRefUnderCursor` handler — Normal-mode `Enter` enters Insert on the selected block even when it carries a `[[ref]]`, and only a backlink-row selection opens the source page; pins #70).
+Frontend suites today: `src/setup.test.ts` (scaffold smoke — `@outl/shared` alias resolves),
+`src/lib/chord-format.test.ts`,
+`src/lib/markdown-wrap.test.ts`,
+`src/lib/outline-walk.test.ts`,
+and `src/lib/action-handlers.test.ts` (regression tests for the `OpenRefUnderCursor` handler — Normal-mode `Enter` enters Insert on the selected block even when it carries a `[[ref]]`,
+and only a backlink-row selection opens the source page; pins #70).
 
 ## Shortcuts
 
-The full catalog lives in **`crates/outl-shortcuts`** (single source of truth, also consumed by the TUI). The desktop fetches it via the `list_shortcut_bindings` Tauri command on boot and wires every `Action` through `lib/action-handlers.ts`.
+The full catalog lives in **`crates/outl-shortcuts`** (single source of truth, also consumed by the TUI).
+The desktop fetches it via the `list_shortcut_bindings` Tauri command on boot and wires every `Action` through `lib/action-handlers.ts`.
 
-Two of these chords also have **visible icon affordances** in a fixed bottom-left cluster (`components/ChromeToggleBar.tsx`, mounted by `AppShell`, VS Code activity-bar convention): the **sidebar toggle** (`◫`, mirrors `Cmd/Ctrl+Shift+E`) and the **shortcuts-help toggle** (`?`, mirrors `?` / `Cmd/Ctrl+/`). They carry no business logic — clicking flips the same `appState.sidebarOpen` / `appState.helpOpen` store signal the dispatcher flips, so button and keyboard stay in sync. The cluster floats over the main pane on an elevated, bordered surface (clear contrast against page content; active toggle inverts to the accent color), so the sidebar button stays reachable even after the left pane is hidden.
+Two of these chords also have **visible icon affordances** in a fixed bottom-left cluster (`components/ChromeToggleBar.tsx`, mounted by `AppShell`, VS Code activity-bar convention):
+the **sidebar toggle** (`◫`, mirrors `Cmd/Ctrl+Shift+E`) and the **shortcuts-help toggle** (`?`, mirrors `?` / `Cmd/Ctrl+/`).
+They carry no business logic — clicking flips the same `appState.sidebarOpen` / `appState.helpOpen` store signal the dispatcher flips, so button and keyboard stay in sync.
+The cluster floats over the main pane on an elevated, bordered surface (clear contrast against page content; active toggle inverts to the accent color), so the sidebar button stays reachable even after the left pane is hidden.
 
 ### OS-standard chrome (Global mode — fire in any context)
 
@@ -160,7 +182,7 @@ Two of these chords also have **visible icon affordances** in a fixed bottom-lef
 | `Cmd/Ctrl+T` | Toggle TODO / DONE on the focused / selected block (T for **t**ask) |
 | `Cmd/Ctrl+Enter` | Toggle TODO / DONE on the focused / selected block (alt) |
 | `Cmd/Ctrl+Shift+Enter` | Commit + create a sibling block below |
-| `Cmd/Ctrl+X` | E**x**ecute the focused / selected code block (mirrors the TUI's `g x` chord) |
+| `Cmd/Ctrl+Shift+X` | E**x**ecute the focused / selected code block (mirrors the TUI's `g x` chord). Inside a textarea the Insert-mode strikethrough binding wins (mode-specific beats Global) — commit first or use the per-block run button. |
 | `Cmd/Ctrl+[` / `]` | Previous / next journal day |
 | `Cmd/Ctrl+Shift+E` | Toggle sidebar (mirrors VS Code's explorer chord) |
 | `Cmd/Ctrl+Shift+B` | Toggle backlinks panel |
@@ -168,6 +190,25 @@ Two of these chords also have **visible icon affordances** in a fixed bottom-lef
 
 > **Why `Cmd+J` for the journal and not `Cmd+T`?** `T` is universally "task" in outliners (TUI's `Ctrl+T`, Logseq's `Cmd+T`, every Markdown task list shortcut). We don't make the user re-learn that. `J` for **journal** is unambiguous and lines up with the `g j` chord the TUI uses.
 > **Why not `Cmd+B` / `Cmd+\`?** `Cmd+B` is **reserved for bold** in every popular markdown editor (Notion, Obsidian, Discord, Slack) — retraining users on a non-standard meaning is hostile. `Cmd+\` is **1Password's** global autofill chord on macOS; hijacking it breaks every user with 1Password installed.
+> **Why did `Cmd+X` stop running code blocks?** It shadowed the OS-universal **cut** inside every textarea (the dispatcher `preventDefault`s matched Global chords even in Insert mode). Clipboard muscle memory beats the e**x**ecute mnemonic in a text-editing app, so run-code moved to `Cmd+Shift+X` and plain `Cmd+X` now falls through to the webview's native cut. See issue #80.
+
+### Undo / redo (Normal mode — fire when no textarea is focused)
+
+| Chord | Action |
+|---|---|
+| `Cmd/Ctrl+Z` | Undo the last committed block mutation on the current page |
+| `Cmd/Ctrl+Shift+Z` | Redo it |
+| `u` / `Ctrl+R` | Same actions, vim spelling (TUI parity) |
+
+Deliberately **Normal**, not Global: with a textarea focused the chord falls through to the webview (the in-flight draft is the textarea's own undo domain), and a Global binding would `preventDefault` it away.
+History is **block-level**: each mutation that goes through `finish_in_page` (edit, create, indent / outdent, move, delete, TODO / quote toggle, paste)
+pushes the page's pre-mutation `.md` render onto a bounded per-page stack (`outl_actions::history::HistoryStacks`);
+undo restores the snapshot through `outl_md::reconcile_md`, so the restore is itself ops in the log — the op log stays the source of truth, nothing is rewritten.
+Fold toggles (`set_block_collapsed`) bypass `finish_in_page` and are not undoable, matching their "view state, not content" semantics.
+Invalidation is **surgical**: a workspace **switch** clears every stack,
+but a peer-driven **reload** (`peer-ops-changed` → `reload_workspace`) drops only the stacks of pages whose projection actually changed across the reload — restoring one of those would silently revert the peer's edits.
+Pages the peer didn't touch keep their full undo depth.
+(The first cut cleared everything on every reload, which capped `Cmd+Z` at one step whenever the TUI was open on the same workspace — every TUI write fires `peer-ops-changed`.)
 
 ### Inline markdown (Insert mode — fire when a textarea is focused)
 
@@ -190,7 +231,8 @@ Implementation lives in `lib/markdown-wrap.ts`: each handler reads `document.act
 | `Enter` | Insert a `\n` inside the current block (multi-line text) |
 | `Cmd/Ctrl+Shift+Enter` | Caret-aware: at col 0 → create a sibling *before* (vim `O`); past col 0 → commit + create a sibling *below* + edit it |
 | `Cmd/Ctrl+T` / `Cmd/Ctrl+Enter` | Toggle TODO / DONE on this block |
-| `Cmd/Ctrl+X` | Run the code block (mirrors TUI's `g x`) |
+| `Cmd/Ctrl+X` | Native cut — falls through to the webview (no catalog binding matches inside a textarea) |
+| `Cmd/Ctrl+Z` | Falls through to the webview too, but native per-keystroke undo is still broken: the controlled `value={draft()}` binding resets the textarea's undo stack on every keystroke (tracked as follow-up in issue #80) |
 | `Tab` / `Shift-Tab` | Indent / outdent |
 | `Esc` / blur | Commit |
 | `Backspace` on empty | Delete the block |
@@ -204,33 +246,66 @@ User-facing chord list lives in [`docs/shortcuts.md`](../../docs/shortcuts.md) �
 This section captures only the **architectural decisions** a contributor needs to know before touching `lib/action-handlers.ts`.
 
 - **Three categories of vim ops**, by what they need from the cursor model:
-  1. **Block-level** (`a`, `A`, `S`, `Y`, `*`, `#`, `z R`, `z M`, `z z`, `V`, `g v`, `>` / `<` in Visual, `y` / `d` in Visual) — work on `selectedBlockId` or a range of block ids. **Implemented.**
-  2. **Char-cursor in Normal** (`x` `X` `D` `C` `s` `r{ch}` `f{ch}` `F{ch}` `~` `e`) — need a character cursor inside the selected block. The desktop has no such cursor (only an id), so these handlers **surface a status-line nudge** pointing the user at `i` + textarea edits. Catalog entries stay so the help overlay shows them.
-  3. **Pending-input** (`r{ch}`, `f{ch}`, `F{ch}`) — read a second character before applying. The dispatcher has no machinery for this today; categorised as char-cursor since they're blocked anyway.
+  1. **Block-level** (`a`, `A`, `S`, `Y`, `*`, `#`, `z R`, `z M`, `z z`, `V`, `g v`, `>` / `<` in Visual, `y` / `d` in Visual) — work on `selectedBlockId` or a range of block ids.
+     **Implemented.**
+  2. **Char-cursor in Normal** (`x` `X` `D` `C` `s` `r{ch}` `f{ch}` `F{ch}` `~` `e`) — need a character cursor inside the selected block.
+     The desktop has no such cursor (only an id), so these handlers **surface a status-line nudge** pointing the user at `i` + textarea edits.
+     Catalog entries stay so the help overlay shows them.
+  3. **Pending-input** (`r{ch}`, `f{ch}`, `F{ch}`) — read a second character before applying.
+     The dispatcher has no machinery for this today; categorised as char-cursor since they're blocked anyway.
 
-- **Visual mode is real**: `Mode::"vim-visual"` in the store with `visualAnchorId` + `lastVisualRange`. `<BlockRow />`'s `isInVisualRange()` paints the range at 18% accent opacity (distinct from the 6% single-row selection tint). Every Visual exit (`Esc`, `y`, `d`) captures the range to `lastVisualRange` so `g v` can restore it.
+- **Visual mode is real**: `Mode::"vim-visual"` in the store with `visualAnchorId` + `lastVisualRange`.
+  `<BlockRow />`'s `isInVisualRange()` paints the range at 18% accent opacity (distinct from the 6% single-row selection tint).
+  Every Visual exit (`Esc`, `y`, `d`) captures the range to `lastVisualRange` so `g v` can restore it.
 
-- **`*` / `#` is not vim-pure.** Without a char cursor, "word under cursor" isn't defined — we seed the picker with the first 4 words of the selected block's text instead. Document this in `docs/shortcuts.md` so users aren't surprised.
+- **`*` / `#` is not vim-pure.**
+  Without a char cursor, "word under cursor" isn't defined — we seed the picker with the first 4 words of the selected block's text instead.
+  Document this in `docs/shortcuts.md` so users aren't surprised.
 
-- **Range ops walk bottom-up + tolerate id-already-gone.** `DeleteRange` iterates `[hi → lo]` so children go before parents (the parent's move-to-trash would otherwise pull a still-targeted descendant out from under us). NodeIds are stable across the CRDT (`deleteBlock` is `Move(node, TRASH)`, not a re-keying), so the id snapshot taken before the loop stays valid; we only have to swallow individual failures (`safeCall` writes them to the status line) when a peer ate the same id concurrently or the range straddled a parent + descendants.
+- **Range ops walk bottom-up + tolerate id-already-gone.**
+  `DeleteRange` iterates `[hi → lo]` so children go before parents (the parent's move-to-trash would otherwise pull a still-targeted descendant out from under us).
+  NodeIds are stable across the CRDT (`deleteBlock` is `Move(node, TRASH)`, not a re-keying), so the id snapshot taken before the loop stays valid;
+  we only have to swallow individual failures (`safeCall` writes them to the status line) when a peer ate the same id concurrently or the range straddled a parent + descendants.
 
-- **`UnfoldAll` / `FoldAll` walk via `flattenAll` / `flattenParents`, never `flattenVisible`.** The whole point of `zR` is to expand subtrees currently hidden under a collapsed parent. The visible-only walk would silently no-op on every descendant of a folded node, so this is a real bug if `applyCollapsedToAll` reaches for the wrong helper. **`zM` (fold-all) uses `flattenParents`**: foldar leaf hoje é invisível, mas `outl_actions::set_block_collapsed` **sempre** escreve `Op::SetCollapsed` no log (a CRDT precisa de cada flip pra convergir), então adicionar children embaixo de uma "leaf que foi foldada" faz eles aparecerem colapsados — future-surprise real. **`zR` (unfold-all) usa `flattenAll`**: descolapsar leaf não tem efeito futuro. Mirror exato de `outl-tui`'s `collect_collapse_candidates` pra a contagem de ops bater entre os clients.
+- **`UnfoldAll` / `FoldAll` walk via `flattenAll` / `flattenParents`, never `flattenVisible`.**
+  The whole point of `zR` is to expand subtrees currently hidden under a collapsed parent.
+  The visible-only walk would silently no-op on every descendant of a folded node, so this is a real bug if `applyCollapsedToAll` reaches for the wrong helper.
+  **`zM` (fold-all) uses `flattenParents`**: foldar leaf hoje é invisível,
+  mas `outl_actions::set_block_collapsed` **sempre** escreve `Op::SetCollapsed` no log (a CRDT precisa de cada flip pra convergir),
+  então adicionar children embaixo de uma "leaf que foi foldada" faz eles aparecerem colapsados — future-surprise real.
+  **`zR` (unfold-all) usa `flattenAll`**: descolapsar leaf não tem efeito futuro.
+  Mirror exato de `outl-tui`'s `collect_collapse_candidates` pra a contagem de ops bater entre os clients.
 
-- **`A` (`EnterInsertAtEnd`) routes through `appState.caretIntent`.** The textarea is mounted by Solid's `<Show>` swap; poking it via `queueMicrotask` + `document.querySelector` after flipping `editingBlockId` was racey (the DOM node wasn't guaranteed to exist by the next microtask). The handler now sets `caretIntent: "end"` *before* `editingBlockId`; `<BlockRow />`'s own `createEffect` reads the intent on mount, applies `setSelectionRange`, and clears the signal. Same hook applies for any future caret-intent gestures (`B`/`b`-style "land at start of word", etc).
+- **`A` (`EnterInsertAtEnd`) routes through `appState.caretIntent`.**
+  The textarea is mounted by Solid's `<Show>` swap;
+  poking it via `queueMicrotask` + `document.querySelector` after flipping `editingBlockId` was racey (the DOM node wasn't guaranteed to exist by the next microtask).
+  The handler now sets `caretIntent: "end"` *before* `editingBlockId`;
+  `<BlockRow />`'s own `createEffect` reads the intent on mount, applies `setSelectionRange`, and clears the signal.
+  Same hook applies for any future caret-intent gestures (`B`/`b`-style "land at start of word", etc).
 
-- **Visual highlight uses a memoised `Set<id>` at the parent, not a per-row predicate.** `<OutlineView />` builds `visualSet = createMemo(() => visualRangeSet(...))` once per outline/anchor/cursor/mode change and passes it down as a prop; `<BlockRow />` answers `props.visualSet?.has(id) ?? false` in O(1). The earlier shape called `isInVisualRange(id, anchor, cursor, outline)` per row, which rebuilt `flattenVisible(blocks)` from scratch each call — N rows × N DFS = O(N²) per Visual extension keystroke (visibly laggy from ~500 blocks on). The predicate `isInVisualRange` still exists in `lib/outline-walk.ts` but only for the unit-test suite; **no render path should call it**. Outside vim-visual mode, `visualSet` is `null` so every row short-circuits before touching the Set.
+- **Visual highlight uses a memoised `Set<id>` at the parent, not a per-row predicate.**
+  `<OutlineView />` builds `visualSet = createMemo(() => visualRangeSet(...))` once per outline/anchor/cursor/mode change and passes it down as a prop;
+  `<BlockRow />` answers `props.visualSet?.has(id) ?? false` in O(1).
+  The earlier shape called `isInVisualRange(id, anchor, cursor, outline)` per row, which rebuilt `flattenVisible(blocks)` from scratch each call — N rows × N DFS = O(N²) per Visual extension keystroke (visibly laggy from ~500 blocks on).
+  The predicate `isInVisualRange` still exists in `lib/outline-walk.ts` but only for the unit-test suite; **no render path should call it**.
+  Outside vim-visual mode, `visualSet` is `null` so every row short-circuits before touching the Set.
 
-- **Char-cursor nudge is one shared handler.** All 10 char-cursor catalog entries (`x` `X` `D` `C` `s` `r` `~` `e` `f` `F`) point at `charCursorNudge`. One source of truth means the message can't drift between catalog entries.
+- **Char-cursor nudge is one shared handler.**
+  All 10 char-cursor catalog entries (`x` `X` `D` `C` `s` `r` `~` `e` `f` `F`) point at `charCursorNudge`.
+  One source of truth means the message can't drift between catalog entries.
 
 - **`NewBlockAbove` (`O`) uses `beforeId`, not a post-creation move walk.** The handler calls `createBlock(pageId, { beforeId: anchor, text: "" })` directly — `outl_actions::block::create_before` handles the floor-slot swap internally when the anchor is the first child. The previous workaround (create at page tail, then loop `moveBlockDown`) was broken: the loop condition fired false immediately so the new block always landed at the bottom. Do not reintroduce the move-walk approach. While editing, `Cmd/Ctrl+Shift+Enter` is intercepted in `BlockRow`'s textarea keydown (not the global catalog) because it is caret-position aware — at column 0 it creates a sibling *before* (vim `O`), past column 0 it creates a sibling *below* (`onEnter`). That caret split is only knowable at the textarea level. `stopImmediatePropagation` there preempts the catalog's `Cmd/Ctrl+Shift+Enter` create-below binding (which still applies in Normal mode, where there is no caret).
 
 - **`p` / `P` paste handlers are not wired yet.** `Y` / `YankRange` fill `appState.yankRegister`, but pasting N blocks has a design call (siblings? children? after / before?) that's deliberately deferred.
 
-- **Path to enable char-cursor ops.** Add a visible Normal-mode caret painted by `<BlockRow />` (model change), then move the 10 blocked handlers to real implementations. Separate PR.
+- **Path to enable char-cursor ops.**
+  Add a visible Normal-mode caret painted by `<BlockRow />` (model change), then move the 10 blocked handlers to real implementations.
+  Separate PR.
 
 ### `Enter` outside a textarea (Normal mode)
 
-With a block selected and no textarea focused (the DOM fallback puts the dispatcher in Normal mode even with `vim_mode == false`), `Enter` resolves to the shared `OpenRefUnderCursor` action — but the desktop handler **always enters Insert on the selected block**.
+With a block selected and no textarea focused (the DOM fallback puts the dispatcher in Normal mode even with `vim_mode == false`),
+`Enter` resolves to the shared `OpenRefUnderCursor` action — but the desktop handler **always enters Insert on the selected block**.
 The one exception: when the selection sits on a **backlink row** (read-only), `Enter` opens the source page and lands the cursor on the referencing block.
 
 Why the divergence from the TUI: the TUI's Normal mode has a character cursor, so "open the ref under the cursor" is well-defined (`ref_at_cursor`) and falls back to Insert when the cursor isn't on a ref.
@@ -239,11 +314,36 @@ On the desktop, **following a ref is the click on the token** (`onRefClick` in `
 
 ### `:shortcode:` emoji autocomplete
 
-While the caret sits inside an open `:shortcode` trigger, `BlockRow` shows a floating popup (`EmojiSuggestPopup`, anchored under the textarea — same pattern as `RefSuggestPopup`). It reuses `detectEmojiContext` / `applyEmojiSuggestion` from `@outl/shared/autocomplete` and the `searchEmojis` command (`outl_emoji_search` Tauri side, backed by `outl_md::emoji::search`). `↑`/`↓` move the highlight, `Enter`/`Tab` accept (inserting the canonical `:shortcode:` form into the buffer — the `.md` stores the shortcode literal, never the codepoint), `Esc` closes the popup (a second `Esc` then commits the block), and clicking a row picks it (via `onMouseDown` + `preventDefault`). The emoji popup takes precedence over the ref popup at the same caret; the two never co-exist because `detectEmojiContext` only triggers on word-initial `:[a-z]`. No keyboard shortcut lives in `outl-shortcuts` for this — it's pure trigger-detection inside the textarea.
+While the caret sits inside an open `:shortcode` trigger, `BlockRow` shows a floating popup (`EmojiSuggestPopup`, anchored under the textarea — same pattern as `RefSuggestPopup`).
+It reuses `detectEmojiContext` / `applyEmojiSuggestion` from `@outl/shared/autocomplete` and the `searchEmojis` command (`outl_emoji_search` Tauri side, backed by `outl_md::emoji::search`).
+`↑`/`↓` move the highlight,
+`Enter`/`Tab` accept (inserting the canonical `:shortcode:` form into the buffer — the `.md` stores the shortcode literal, never the codepoint),
+`Esc` closes the popup (a second `Esc` then commits the block),
+and clicking a row picks it (via `onMouseDown` + `preventDefault`).
+The emoji popup takes precedence over the ref popup at the same caret;
+the two never co-exist because `detectEmojiContext` only triggers on word-initial `:[a-z]`.
+No keyboard shortcut lives in `outl-shortcuts` for this — it's pure trigger-detection inside the textarea.
 
 ### `[[page]]` ref autocomplete
 
-While the caret sits inside an open `[[…]]`, `BlockRow` shows a floating page-suggestion popup (`RefSuggestPopup`, anchored under the textarea). It reuses the shared `detectRefContext` / `applySuggestion` helpers (`@outl/shared/autocomplete`) and the `search_pages` command the `Cmd+P` picker already calls — no parallel implementation. `↑`/`↓` move the highlight, `Enter`/`Tab` accept (inserting the page title, or the ISO slug for journals), `Esc` closes the popup (a second `Esc` then commits the block), and clicking a row picks it (via `onMouseDown` + `preventDefault` so the textarea's blur-commit doesn't fire first). Block refs (`((…))`) are intentionally not suggested yet — separate feature.
+While the caret sits inside an open `[[…]]`, `BlockRow` shows a floating page-suggestion popup (`RefSuggestPopup`, anchored under the textarea).
+It reuses the shared `detectRefContext` / `applySuggestion` helpers (`@outl/shared/autocomplete`) and the `search_pages` command the `Cmd+P` picker already calls — no parallel implementation.
+`↑`/`↓` move the highlight,
+`Enter`/`Tab` accept (inserting the page title, or the ISO slug for journals),
+`Esc` closes the popup (a second `Esc` then commits the block),
+and clicking a row picks it (via `onMouseDown` + `preventDefault` so the textarea's blur-commit doesn't fire first).
+Block refs (`((…))`) are intentionally not suggested yet — separate feature.
+
+### Clicking external `[label](url)` links
+
+`<MarkdownInline />` renders external markdown links clickable when given an `onLinkClick(href)` prop.
+`OutlineView` wires it to `openExternalUrl` (`@outl/shared/api/commands`),
+which scheme-guards to `http(s)`/`mailto` and opens in the system browser via **`tauri-plugin-opener`** (registered in `src-tauri/src/lib.rs`;
+the capability grants a scoped `opener:allow-open-url` for `http`/`https`/`mailto` in `capabilities/default.json`).
+Failures (malformed URL, disallowed scheme) land on the status line via `appState.lastError`.
+The `[[ref]]` / `#tag` click handlers are unchanged (they navigate the workspace, not the browser).
+The opener call lives in the shared wrapper — not a custom Tauri command — so mobile can opt in later by registering the same plugin and passing `onLinkClick`.
+Backlink rows stay inert (the whole row is already a navigate-to-source button; nesting a second click target would conflict).
 
 ## Settings
 
@@ -264,8 +364,8 @@ Schema (`crates/outl-desktop/src-tauri/src/settings.rs::Settings`):
 }
 ```
 
-The actor id (one per device) lives next to it as `actor` — a plain
-ULID. Switching workspaces does not rotate it.
+The actor id (one per device) lives next to it as `actor` — a plain ULID.
+Switching workspaces does not rotate it.
 
 ## When you're done
 

@@ -30,9 +30,12 @@ If a new client needs a different shape on the wire, do the same — adapt, don'
 - macOS / Linux: respects `$XDG_CONFIG_HOME` first, else `~/.config/outl/`.
 - Windows: `$XDG_CONFIG_HOME\outl\` when set, else `%APPDATA%\outl\` (whatever `dirs::config_dir()` returns, typically `C:\Users\<user>\AppData\Roaming\outl`).
 - **Not** `~/Library/Application Support/…` on macOS — deliberate (see lib doc).
-- **Not** `%USERPROFILE%\.config\outl\` on Windows either. The `~/.config` layout is not a Windows convention, and dropping the config under `%USERPROFILE%` directly would surprise PowerShell users and tools that expect Roaming. The `cfg(windows)` branch in `config_dir()` routes through `dirs::config_dir()` to honour that.
+- **Not** `%USERPROFILE%\.config\outl\` on Windows either.
+  The `~/.config` layout is not a Windows convention, and dropping the config under `%USERPROFILE%` directly would surprise PowerShell users and tools that expect Roaming.
+  The `cfg(windows)` branch in `config_dir()` routes through `dirs::config_dir()` to honour that.
 
-The `actor` file next to `config.toml` is **not** part of this crate's schema; it's the desktop's device identity (a ULID) and is read directly by `outl-desktop/src-tauri/src/lib.rs`. Don't add `actor` to `Config` — actors belong with the workspace they write to, not with user preferences.
+The `actor` file next to `config.toml` is **not** part of this crate's schema; it's the desktop's device identity (a ULID) and is read directly by `outl-desktop/src-tauri/src/lib.rs`.
+Don't add `actor` to `Config` — actors belong with the workspace they write to, not with user preferences.
 
 ## Schema
 
@@ -90,10 +93,14 @@ Update this table whenever a new reader appears.
 
 ## What this crate does NOT do
 
-- ❌ Parse the **per-workspace** `<workspace>/.outl/config.toml`. That belongs to `outl-cli::cmd::init` and the workspace-open path; it's a different schema (per-device `actor_id`, workspace-only overrides).
-- ❌ Hold the actor ULID. Lives next to `config.toml` as a separate file, owned by the consumer.
-- ❌ Provide a settings UI / form schema. Each client renders its own.
-- ❌ Validate semantic correctness (does the theme name exist? is the path readable?). Validation is the consumer's job — this crate just round-trips bytes.
+- ❌ Parse the **per-workspace** `<workspace>/.outl/config.toml`.
+  That belongs to `outl-cli::cmd::init` and the workspace-open path; it's a different schema (per-device `actor_id`, workspace-only overrides).
+- ❌ Hold the actor ULID.
+  Lives next to `config.toml` as a separate file, owned by the consumer.
+- ❌ Provide a settings UI / form schema.
+  Each client renders its own.
+- ❌ Validate semantic correctness (does the theme name exist? is the path readable?).
+  Validation is the consumer's job — this crate just round-trips bytes.
 
 ## Verify before "done"
 

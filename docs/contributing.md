@@ -213,9 +213,9 @@ If you're unsure whether code is on a hot path, ask in the PR — we'd rather a 
 
 This is where review earns its keep:
 
-- **Reuse-first.** Before adding a helper, grep upstream crates (`outl-core` → `outl-md` → `outl-actions`) for what already does the same thing.
+- **Reuse-first.** Before adding a helper, scan the [shared primitives catalog](shared-primitives.md) and grep upstream crates (`outl-core` → `outl-md` → `outl-actions`).
   Two implementations of "compute backlinks" eventually disagree, and the user is the one who notices.
-  The fix is to call or extend the existing function.
+  See the [Reuse-first](#reuse-first-no-parallel-implementations) section below for the rule, past incidents, and what to do when the primitive doesn't exist yet.
 - **New `Op` variants come with the full checklist.** A new variant touches `apply_op`, `undo_op` (the inverse must be exact), the sidecar serializer, the markdown projection, replay tests, and per-crate docs.
   See `/new-op` for the walkthrough.
 - **Trait surface stays implementable.** A `Storage` method that assumes file semantics (paths, flock) locks out ChronDB.
@@ -243,6 +243,144 @@ This is where review earns its keep:
 - **Tests assert behaviour, not implementation.** A test that breaks on any refactor is a maintenance tax.
   Assert against the public surface (op log contents, materialized tree shape, rendered markdown), not internal helpers.
 - **Integration tests use the real backend.** Mocked storage in a path that should hit `JsonlStorage` hides exactly the bugs that matter.
+
+---
+
+## Reuse-first (no parallel implementations)
+
+Before adding a helper, struct, or constant, **scan the [shared primitives catalog](shared-primitives.md)** and **grep the workspace** for what already does the same thing.
+Duplication here is a real hazard: two implementations of the same logic drift apart over time, and the user is the one who hits the divergence.
+
+Past incidents:
+
+- `outl_md::index::Backlink` and `outl_actions::Backlink` were two parallel "backlinks" pipelines that started identical and ended up disagreeing on self-references — a bug the user had to spot because each surface looked fine in isolation.
+  Collapsed into `outl_actions::backlinks_for_page` in 0.5.3.
+- `outl-mobile`'s `run_code_block` Tauri shim was opened as a copy of `outl-desktop/src-tauri/src/commands/exec.rs` — same `flat_index_for` walk, same `journals/<slug>.md || pages/<slug>.md` probe (which already existed as `outl_actions::page_md_path`), same DTO shape.
+  The catalog at the time did not list code execution as a cross-client primitive, and the desktop's per-crate `CLAUDE.md` filed `commands/exec.rs` under "owned by the desktop", so nothing pointed at the right home.
+  Caught by the user mid-PR: "do que fizemos de rodar code block no mobile, não conseguimos compartilhar?"
+  Collapsed into `outl_actions::exec::run_code_block` in 0.6.x — clients now own only the AppState lookup and the `view` wrapper.
+  Lesson: if you're staring at a Tauri shim that's mostly `parse_node_id` → outline walk → `outl-exec` call → DTO, **the walk and the DTO belong in `outl-actions`** — every time.
+- The Logseq importer's `crates/outl-cli/src/cmd/import/normalize.rs` was opened reimplementing `\r\n` handling, `id::` stripping, and long-form date rewriting — every one of which `outl_actions::paste::normalize_external_syntax` already owned.
+  Caught in PR #47 review.
+  Lesson: a "normalize markdown from outside" need always starts at `paste::normalize_external_syntax`; outline-level restructuring (headings → bullets, multi-paragraph merge, fence dedent) is the only thing the importer adds on top.
+
+The rule:
+
+1. **Grep before writing.** `rg "fn foo"` / `rg "struct Foo"` across `crates/`.
+   Look in **upstream crates first** — `outl-core`, `outl-md`, `outl-actions` are where shared primitives live.
+2. **Prefer evolving the existing API** over duplicating, even if that means a small refactor (rename, generalize a parameter, move into a sibling module).
+   One owner per concept; many callers.
+3. **Duplication is OK only when the platforms are genuinely different.** `outl-tui::EditBuffer` and the mobile `<textarea>` are both "cursor + text" — but one is a terminal widget Rust has to render itself, the other is a browser primitive.
+   Same role, different runtime; not duplication.
+   **Recalculating** `(line, col)` from `cursor` in both places, though, would be — extract to `outl_md::view::char_to_line_col` and let both wrap it.
+4. **Refactor *into* the shared crate, not *around* it.** If a TUI helper feels like it could live in `outl-actions`, move it there *now* (the mobile client will need it soon).
+   The `flatten_subtree_paths` migration is the canonical pattern.
+
+When in doubt, name the would-be helper, search for it, then ask yourself: "is the existing thing one rename away?"
+If yes, rename.
+
+---
+
+## Keep docs in sync with code
+
+`docs/development.md` is the engineer onramp.
+It drifts the moment a CI workflow, a slash command, a hook, or a per-area toolchain step changes — and a stale onramp is **worse than no onramp** because a new contributor follows it confidently into a wall.
+
+**Treat the table below as a checklist.**
+If your PR touches any row on the left, update the doc on the right **in the same PR** — not "later", not "in a follow-up".
+The `doc-keeper` agent runs at the end of a feature to catch what slipped through; the discipline is to not let it slip in the first place.
+
+| If your PR changes... | Update |
+|---|---|
+| `.github/workflows/ci.yml` (jobs, matrix, excluded crates, `RUSTDOCFLAGS`, paths-ignore) | `docs/development.md` § 9 (CI walkthrough) |
+| `.github/workflows/release.yml`, `mobile.yml`, `desktop.yml`, `testflight.yml`, `bench.yml`, `cleanup-tags.yml` | `docs/development.md` § 9 (CI table) + § 10 (Release process) |
+| `.claude/settings.json` hooks, `.claude/agents/*.md`, `.claude/commands/*.md` (any slash command behavior) | `docs/development.md` § 4 (Dev loop) — slash command table + hooks list + agents list |
+| `rust-toolchain.toml` version bump | `docs/development.md` § 1 (Quick start) + `CONTRIBUTING.md` (Quick start) |
+| Required system deps for a crate (Tauri, GTK, Bun, Xcode, hyperfine, etc.) | `docs/development.md` § 1 ("Optional toolchains by area" table) |
+| New crate added to `crates/` | `docs/development.md` § 2 (Repository tour table) + root `CLAUDE.md` repo layout + per-crate `CLAUDE.md` |
+| New native iOS surface (file added to `crates/outl-mobile/swift/OutlKit/Sources/`, `crates/outl-mobile/src-tauri/gen/apple/Sources/outl-mobile/`, or `main.mm`) | `docs/development.md` § 3 ("Why the mobile crate has native Swift / ObjC code" table) + § 5 (Testing — Swift rows) + § 6 (Cookbook: Touch the iOS native bridge) + `crates/outl-mobile/CLAUDE.md` if the bridge contract changes |
+| New entry point pattern (e.g. new MCP tool family, new TUI overlay class, new theme registration path) | `docs/development.md` § 2 ("Entry points by intent" table) + § 6 (Cookbooks) if it's a recurring shape |
+| New `Op` variant, sidecar field, op-log format change | `docs/development.md` § 6 (Cookbook: Add a new `Op` variant) + `docs/crdt.md` + `outl-md/CLAUDE.md` |
+| `/check` / `/check-invariants` / `/roundtrip` / `/coverage` / `/new-op` / `/init-playground` semantics | `docs/development.md` § 4 (Dev loop slash command table) |
+| Benchmark layout (new bench file, new size tier, hyperfine recipe) | `docs/development.md` § 8 (Performance) |
+| Version source-of-truth or release tooling (e.g. someone proposes re-adding `version` to `tauri.conf.json`) | `docs/development.md` § 10 (Release process) + `crates/outl-mobile/CLAUDE.md` |
+| Conventional Commits enforcement / release-notes pipeline | `docs/development.md` § 10 + root `CLAUDE.md` "Coding conventions" |
+| Storage trait surface, `JsonlStorage` / `MemoryStorage` test contract | `docs/development.md` § 5 ("What to mock and what not to") + `docs/storage.md` + `outl-core/CLAUDE.md` |
+| New `Action` variant in `outl-shortcuts` / new keybinding / chord rebound | `docs/shortcuts.md` (the row that ships to users) + `outl-shortcuts/src/{action.rs,defaults.rs}` + every client's dispatcher (`outl-tui/src/input/*.rs`, `outl-desktop/src/lib/{shortcuts.ts,action-handlers.ts}`) + `outl-desktop/src/lib/api.ts` (TS mirror of the `Action` union — no codegen) |
+| New helper / DTO promoted into `outl-core` / `outl-md` / `outl-actions` (anything that should be reused across clients) | `docs/shared-primitives.md` + mirror at `.github/copilot-instructions.md` §5.1 |
+
+When in doubt: **if a contributor's first 30 minutes with the repo would land them on outdated guidance, update the doc.** That's the bar.
+
+### One owner per fact — link, don't duplicate
+
+**Every user-facing fact lives in exactly one `docs/*.md`.
+`CLAUDE.md` files link to it instead of copying.**
+A keybinding, a CLI subcommand, a slash command, a CRDT op variant, a config field, a sidecar field — each has one canonical home under `docs/`, and the matching `CLAUDE.md` (root or per-crate) **links** to it.
+It does not enumerate the same rows in its own table.
+
+Why this matters: every duplicated table is a future drift incident.
+We've already hit it on `docs/shortcuts.md` ↔ per-crate vim tables (the desktop's CLAUDE.md ended up listing chords that drifted from `defaults.rs` within one sprint) and on `outl-tui/CLAUDE.md`'s Navigation / Insert tables (rebound `Ctrl+E` for sidebar, doc kept showing `\`).
+When the same row lives in two places, half the time the second copy goes stale silently and the contributor following it walks into a wall.
+
+The discipline:
+
+- **`docs/*.md` is the canonical surface for users + contributors.**
+  Tables, full chord lists, every config key, the full subcommand matrix — they live there.
+- **`CLAUDE.md` (root or per-crate) carries only what `docs/` cannot:** invariants, "architectural decisions you don't get to revisit", crate-specific contracts (which methods are the entrypoint, what the layering rule is), the reasoning behind a choice.
+  Things a contributor needs *before* touching code — not user-facing reference.
+- **When the same fact would live in both,** the `CLAUDE.md` writes a one-line link: `> User-facing X lives in [docs/X.md](../docs/X.md) — don't duplicate it here.` and stops.
+- **If you find yourself copying a table from `docs/` into a `CLAUDE.md`, stop.** Replace with a link.
+- **The other direction is fine.** `docs/*.md` linking *into* `CLAUDE.md` for architectural context is welcome — that's a one-way pointer toward depth, not duplication.
+
+Map of canonical homes (extend as new ones are minted):
+
+| Fact | Lives in | `CLAUDE.md` files link, do not duplicate |
+|---|---|---|
+| Every keyboard shortcut (TUI + desktop + mobile, side-by-side) | [`docs/shortcuts.md`](shortcuts.md) | `outl-tui/CLAUDE.md`, `outl-desktop/CLAUDE.md`, `outl-shortcuts/CLAUDE.md` |
+| `outl` CLI subcommands + JSON envelope | [`docs/cli.md`](cli.md) | `outl-cli/CLAUDE.md` |
+| TUI manual (modes, overlays, visual conventions) | [`docs/tui.md`](tui.md) | `outl-tui/CLAUDE.md` |
+| Outl markdown dialect + sidecar spec | [`docs/markdown-format.md`](markdown-format.md) | `outl-md/CLAUDE.md` |
+| CRDT algorithm + invariants | [`docs/crdt.md`](crdt.md) | `outl-core/CLAUDE.md` |
+| Storage trait + JSONL backend | [`docs/storage.md`](storage.md) | `outl-core/CLAUDE.md` |
+| Sync model (iCloud / Syncthing / iroh roadmap) | [`docs/sync.md`](sync.md) | `outl-mobile/CLAUDE.md`, `outl-desktop/CLAUDE.md` |
+| MCP wiring + recipes | [`docs/mcp.md`](mcp.md) + [`docs/mcp-recipes.md`](mcp-recipes.md) | (no per-crate CLAUDE.md owns this today) |
+| Config file (`outl.toml`) | [`docs/config.md`](config.md) | per-crate CLAUDE.md where the field is read |
+| Theming palette + presets | [`docs/theming.md`](theming.md) | `outl-tui/CLAUDE.md`, `outl-desktop/CLAUDE.md` |
+| Dev loop (clone, build, slash commands, hooks, agents, CI) | [`docs/development.md`](development.md) | every per-crate CLAUDE.md's "When you're done" section links here |
+| Shared Rust primitives (catalogue of reusable APIs) | [`docs/shared-primitives.md`](shared-primitives.md) + mirror at `.github/copilot-instructions.md` §5.1 | root `CLAUDE.md` references it |
+| Contributing policy (review, invariants enforced at PR time) | [`docs/contributing.md`](contributing.md) | root `CLAUDE.md` references it |
+
+When you add a brand-new surface (a new CLI subcommand, a new `Op` variant, a new MCP tool, a new theme, a new client), it follows the same rule:
+
+1. Document the surface in the right `docs/*.md` (create a new one if needed).
+2. The per-crate `CLAUDE.md` adds a one-line link if it needs to point contributors at it, plus any architectural note that *cannot* live in `docs/` (invariant, contract, "why this decision").
+3. Update the map above so the next contributor doesn't have to rediscover where things live.
+
+**`doc-sync-guard.sh` is a backstop, not the discipline.** The hook flags drift after the fact; the discipline is to link in the first place so drift can't happen.
+
+---
+
+## Markdown / documentation style
+
+**Never hard-wrap prose at an arbitrary column.**
+We use [semantic line breaks](https://sembr.org/): one sentence per line, breaking after sentence-ending punctuation (`.`, `!`, `?`) and sometimes after `:` when followed by a substantial clause.
+Lines stay as long as the sentence is — no 70/80/100-column reflow.
+
+Why: hard-wrapping at ~70 chars breaks lines mid-thought, makes diffs noisier on edits, and renders ugly in editors that already soft-wrap.
+Semantic line breaks keep diffs minimal (an edit touches one line, not a paragraph block) and read naturally on every surface (GitHub, mdBook, terminal pagers).
+
+Rules:
+
+- **Prose**: one sentence per line.
+  Don't break inside a sentence.
+- **Lists**: each list item on its own line; if a single item contains multiple sentences, break those sentences too.
+- **Code fences, tables, YAML frontmatter, ASCII tree diagrams**: preserve **exactly**.
+  Tables especially must stay one row per line, no matter how wide.
+- **Headings, HRs, link references**: one line, as always.
+- **Outline / `.md` content** (anything under `note-example/`, real workspace pages, fixtures): **do not touch**.
+  That markdown is data, not docs — it represents the outl dialect literally and indentation / line shape is structural.
+
+This rule applies to every `*.md` in the repo except outline content (see exception above): root `CLAUDE.md`, per-crate `CLAUDE.md`, `docs/*.md`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `.github/*.md`, `.claude/agents/*.md`, `.claude/commands/*.md`.
 
 ---
 

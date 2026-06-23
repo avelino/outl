@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # PostToolUse hook: warn when the "Shared primitives catalog" gets
-# edited in one place (root CLAUDE.md OR .github/copilot-instructions.md)
-# without the other being touched in the same working-tree change.
+# edited in one place (docs/shared-primitives.md OR
+# .github/copilot-instructions.md) without the other being touched in
+# the same working-tree change.
 #
 # The catalog is intentionally duplicated because it has two audiences:
-# - root CLAUDE.md drives Claude Code (and human contributors)
-# - .github/copilot-instructions.md drives GitHub Copilot PR review
+# - docs/shared-primitives.md drives Claude Code + human contributors
+# - .github/copilot-instructions.md §5.1 drives GitHub Copilot PR review
 #
 # Both must stay in sync or one of them goes stale and the LLM on that
 # side starts approving (or generating) duplicate helpers the other
@@ -25,23 +26,21 @@ file_path=$(printf '%s' "$event_json" | sed -n 's/.*"file_path"[[:space:]]*:[[:s
 
 # Only act on the two mirrored files.
 case "$file_path" in
-  */CLAUDE.md|*/copilot-instructions.md) ;;
+  */docs/shared-primitives.md|*/copilot-instructions.md) ;;
   *) exit 0 ;;
 esac
 
-# Root CLAUDE.md only (per-crate CLAUDE.md don't carry the full catalog).
-# We accept the root one specifically by checking it's at the repo root.
 repo_root="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}"
 if [ -z "$repo_root" ] || [ ! -d "$repo_root" ]; then
   exit 0
 fi
 
-root_claude="${repo_root}/CLAUDE.md"
+primitives="${repo_root}/docs/shared-primitives.md"
 copilot="${repo_root}/.github/copilot-instructions.md"
 
 # The thing being edited must be one of the two mirrors.
 case "$file_path" in
-  "$root_claude"|"$copilot") ;;
+  "$primitives"|"$copilot") ;;
   *) exit 0 ;;
 esac
 
@@ -71,8 +70,8 @@ touched_catalog() {
 
 # Determine which file is the mirror of what was just edited.
 case "$file_path" in
-  "$root_claude") mirror="$copilot" ;;
-  "$copilot")     mirror="$root_claude" ;;
+  "$primitives") mirror="$copilot" ;;
+  "$copilot")    mirror="$primitives" ;;
 esac
 
 # If the edit didn't touch the catalog itself, no sync needed.
@@ -94,7 +93,7 @@ printf 'WARNING: %s edited the "Shared primitives catalog" table\n' "$rel_edited
 printf 'but its mirror at %s has no matching working-tree change.\n' "$rel_mirror" >&2
 printf '\n' >&2
 printf 'The catalog is intentionally duplicated for two audiences:\n' >&2
-printf '  - %s drives Claude Code + human contributors\n' "CLAUDE.md" >&2
+printf '  - %s drives Claude Code + human contributors\n' "docs/shared-primitives.md" >&2
 printf '  - %s drives GitHub Copilot PR review\n' ".github/copilot-instructions.md" >&2
 printf '\n' >&2
 printf 'Drift between them is exactly how PR #47 slipped through (paste::normalize\n' >&2

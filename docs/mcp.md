@@ -131,7 +131,7 @@ Use a path without spaces (`~/notes`, `~/Documents/outl`) — easier than fighti
 By design:
 
 - `outl init`, `outl serve`, `outl reconcile` — interactive or long-running, wrong shape for a tool call.
-- `outl import logseq|roam` — one-time migration, not a workspace op.
+- `outl import logseq|obsidian|roam` — one-time migration, not a workspace op.
 - `outl mcp serve` itself — the host already booted you.
 
 These stay CLI-only.

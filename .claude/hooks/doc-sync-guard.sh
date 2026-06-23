@@ -15,8 +15,8 @@
 #
 #   1. CATALOG. A new top-level `pub fn|struct|enum|const` in any
 #      shared crate (outl-core / outl-md / outl-actions) must appear
-#      by name in root CLAUDE.md § "Shared primitives catalog". The
-#      symbol is the canonical reuse handle for the workspace.
+#      by name in docs/shared-primitives.md. The symbol is the
+#      canonical reuse handle for the workspace.
 #
 #   2. PER-CRATE. Any non-test edit in `crates/<crate>/src/` should
 #      reflect in `crates/<crate>/CLAUDE.md` when it touches the
@@ -135,19 +135,18 @@ case "$crate_dir" in
   crates/outl-core|crates/outl-md|crates/outl-actions)
     new_syms=$(new_symbols_of "$file_path")
     if [ -n "$new_syms" ]; then
-      catalog="$repo_root/CLAUDE.md"
-      copilot="$repo_root/.github/copilot-instructions.md"
+      catalog="$repo_root/docs/shared-primitives.md"
       missing=()
       while IFS= read -r sym; do
         [ -z "$sym" ] && continue
         grep -qE "\b${sym}\b" "$catalog" 2>/dev/null || missing+=("$sym")
       done <<< "$new_syms"
       if [ ${#missing[@]} -gt 0 ]; then
-        msg="rule 1 — Shared primitives catalog: %s added new public symbol(s) missing from CLAUDE.md catalog:\n"
+        msg="rule 1 — Shared primitives catalog: %s added new public symbol(s) missing from docs/shared-primitives.md:\n"
         for sym in "${missing[@]}"; do
           msg+="    - pub ${sym}\n"
         done
-        msg+="  fix: add an entry under the matching sub-table in CLAUDE.md AND .github/copilot-instructions.md §5.1.\n"
+        msg+="  fix: add an entry under the matching sub-table in docs/shared-primitives.md AND .github/copilot-instructions.md §5.1.\n"
         msg+="       (catalog-sync-guard.sh verifies the two stay in sync.)"
         warnings+=("$(printf "$msg" "$rel")")
       fi

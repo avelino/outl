@@ -32,7 +32,8 @@ This is what lets every other crate cheaply depend on us.
 ## What this crate owns
 
 - [`Palette`] — the struct of named hex strings (one per semantic surface).
-  Field naming follows "what the surface IS", not "what it looks like" (`ref_link_fg`, not `purple_underline`). Two surfaces that genuinely share a style share the field.
+  Field naming follows "what the surface IS", not "what it looks like" (`ref_link_fg`, not `purple_underline`).
+  Two surfaces that genuinely share a style share the field.
 - The eight built-in presets in `src/presets.rs`: `outl`, `default-dark`, `light`, `logseq-light`, `dracula`, `solarized-dark`, `nord`, `monokai`.
 - [`PRESETS`] — the canonical user-visible order (alphabetical-ish, brand first).
 - [`by_name`] — case- and separator-insensitive lookup so `"Solarized Dark"`, `"solarized_dark"`, and `"solarized-dark"` all resolve.
@@ -40,10 +41,14 @@ This is what lets every other crate cheaply depend on us.
 
 ## What this crate does NOT own
 
-- ❌ Renderer-specific style flags (`BOLD`, `UNDERLINED`). Those live with the renderer that knows what "bold" means in its medium.
-- ❌ CSS variable names. The desktop chooses its prefix; this crate only ships hex strings.
-- ❌ Theme overrides / per-workspace customization. That's `outl-config`'s job — this crate is just the catalog.
-- ❌ Color manipulation (lighten, darken). Add hand-tuned variants as new fields, not as runtime derivations — a runtime-derived shade looks different on a CRT than on an OLED.
+- ❌ Renderer-specific style flags (`BOLD`, `UNDERLINED`).
+  Those live with the renderer that knows what "bold" means in its medium.
+- ❌ CSS variable names.
+  The desktop chooses its prefix; this crate only ships hex strings.
+- ❌ Theme overrides / per-workspace customization.
+  That's `outl-config`'s job — this crate is just the catalog.
+- ❌ Color manipulation (lighten, darken).
+  Add hand-tuned variants as new fields, not as runtime derivations — a runtime-derived shade looks different on a CRT than on an OLED.
 
 ## Adding a preset
 
@@ -70,8 +75,10 @@ The `every_listed_preset_resolves` test catches forgetting step 4; the `name_mat
 A new field on `Palette` is a **coordinated change** across every consumer.
 Steps:
 
-1. Add the field to `Palette` in `src/palette.rs`. Name it after the surface, not the color.
-2. Add a value in **every** preset in `src/presets.rs`. Don't ship a `String::new()` placeholder — `every_palette_field_is_hex` will fail.
+1. Add the field to `Palette` in `src/palette.rs`.
+   Name it after the surface, not the color.
+2. Add a value in **every** preset in `src/presets.rs`.
+   Don't ship a `String::new()` placeholder — `every_palette_field_is_hex` will fail.
 3. Update the TUI's `Theme::from_palette` (`crates/outl-tui/src/theme.rs`) to render the new field with its modifier of choice.
 4. Update the desktop's CSS variable wiring (`crates/outl-desktop/src/styles.css` or `lib/palette.ts`) — pick a `--color-outl-<field>` name and use it in the relevant Tailwind class.
 5. Document the field's intent in the doc comment.

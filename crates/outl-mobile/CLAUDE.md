@@ -27,21 +27,32 @@ outl-mobile (this crate)
    └── (frontend in ../src)        (Solid components, Tailwind, Tauri bridge)
 ```
 
-The split mirrors **`crates/outl-desktop/src-tauri/`** 1:1 — `commands/{workspace,page,block,exec}.rs` + `helpers.rs` + `state.rs` + `workspace_open.rs` — so a contributor who knows one crate's layout immediately knows the other. The intentional divergences (mobile's `storage_root: PathBuf` instead of `Arc<Mutex<Option<PathBuf>>>`, the inline orphan reconcile in `spawn_workspace_opener`, no `settings.rs` / `fs_watcher.rs` / `commands/{shortcuts,theme}.rs`) live entirely inside `workspace_open.rs` + `state.rs` so the command files read identically.
+The split mirrors **`crates/outl-desktop/src-tauri/`** 1:1 — `commands/{workspace,page,block,exec}.rs` + `helpers.rs` + `state.rs` + `workspace_open.rs` — so a contributor who knows one crate's layout immediately knows the other.
+The intentional divergences (mobile's `storage_root: PathBuf` instead of `Arc<Mutex<Option<PathBuf>>>`,
+the inline orphan reconcile in `spawn_workspace_opener`,
+no `settings.rs` / `fs_watcher.rs` / `commands/{shortcuts,theme}.rs`) live entirely inside `workspace_open.rs` + `state.rs`,
+so the command files read identically.
 
-The op log backend is the shared `outl_core::storage::JsonlStorage`; there is no `icloud_storage.rs` because the only iCloud-specific work is resolving the ubiquity container path (via `icloud_path.rs`) and forcing peer-file materialisation before reads (via `main.mm`).
+The op log backend is the shared `outl_core::storage::JsonlStorage`;
+there is no `icloud_storage.rs` because the only iCloud-specific work is resolving the ubiquity container path (via `icloud_path.rs`) and forcing peer-file materialisation before reads (via `main.mm`).
 The storage trait stays generic; the transport gets handled outside it.
 
 ## Hard rule
 
-**This crate adds no business logic.** If a Tauri command does something that involves the workspace shape (edit, move, todo, journal render), it delegates to `outl-actions`.
+**This crate adds no business logic.**
+If a Tauri command does something that involves the workspace shape (edit, move, todo, journal render), it delegates to `outl-actions`.
 If you find yourself writing a tree walk or an op-generating helper inside `lib.rs`, stop — move it to `outl-actions` instead.
 The TUI will need it too.
 
 The same rule extends to the **Solid frontend** (`src/`).
 Before adding a helper that walks blocks, normalises text, or maps a cursor across `\n`, check:
 
-1. **`@outl/shared`** (`crates/outl-frontend-shared/`) — the cross-client TS lib already owns `<MarkdownInline />`, `looksLikeOutline`, `utf16OffsetToCharOffset`, the autocomplete helpers (`detectRefContext`, `autoClose/DeletePair`, `insertPair/Text`, `applySuggestion`), every shared DTO (`@outl/shared/api/types`), and the `invoke()` wrappers for the Tauri commands every client calls (`@outl/shared/api/commands`).
+1. **`@outl/shared`** (`crates/outl-frontend-shared/`) — the cross-client TS lib already owns `<MarkdownInline />`,
+   `looksLikeOutline`,
+   `utf16OffsetToCharOffset`,
+   the autocomplete helpers (`detectRefContext`, `autoClose/DeletePair`, `insertPair/Text`, `applySuggestion`),
+   every shared DTO (`@outl/shared/api/types`),
+   and the `invoke()` wrappers for the Tauri commands every client calls (`@outl/shared/api/commands`).
    If you find yourself reimplementing one of these in `src/lib/`, stop — the desktop client will need the identical behaviour, and a parallel TS copy is exactly the drift we paid to delete.
 2. **`outl-md` / `outl-actions` / `outl-core`** — the Rust side likely already exposes the data through a Tauri command (or could with a tiny addition).
 
@@ -59,14 +70,8 @@ What this crate **does** own:
 
 ## Opening a ref that may not exist yet
 
-`[[avelino/outl]]`, `[[2026-06-04]]`, `#code-review`, picker entries
-— every "tap a ref → see a page" path on the frontend goes through
-**one** Tauri command, `open_ref(target)`, which wraps
-`outl_actions::page::open_or_create_by_ref`. The single decision
-tree (date → journal, else literal/slugified/title match → existing
-page, else create as page) lives in the shared crate so a frontend
-regex cannot drift from a backend parser the way it did before
-`open_ref` existed.
+`[[avelino/outl]]`, `[[2026-06-04]]`, `#code-review`, picker entries — every "tap a ref → see a page" path on the frontend goes through **one** Tauri command, `open_ref(target)`, which wraps `outl_actions::page::open_or_create_by_ref`.
+The single decision tree (date → journal, else literal/slugified/title match → existing page, else create as page) lives in the shared crate so a frontend regex cannot drift from a backend parser the way it did before `open_ref` existed.
 
 What used to be wrong: the frontend split the journal-vs-page
 decision with `/^\d{4}-\d{2}-\d{2}$/` and routed to one of two
@@ -75,21 +80,28 @@ strict-validating commands (`open_journal_for` / `open_page_by_slug`).
 surfaced an `invalid date slug` toast — even though falling through
 to "create a regular page" was clearly the right behaviour.
 
-`open_page_by_slug` is kept for the picker (the picker already
-hands the command a clean slug from a known page). `open_journal_for`
-stays for date-navigation commands (`previousDay` / `nextDay`) whose
-input is derived from controlled state, not from a user tap. Every
-**ref-click** code path on the frontend (`handleRefClick`,
-`handleTagClick`) must call `openRef` so the decision tree is
-single-sourced.
+`open_page_by_slug` is kept for the picker (the picker already hands the command a clean slug from a known page).
+`open_journal_for` stays for date-navigation commands (`previousDay` / `nextDay`) whose input is derived from controlled state, not from a user tap.
+Every **ref-click** code path on the frontend (`handleRefClick`, `handleTagClick`) must call `openRef` so the decision tree is single-sourced.
 
 `resolve_ref` survives for autocomplete previews ("this ref will
 land on `<page>`") but is **not** the navigation entry point — for
 that, always call `openRef`.
 
+## Opening an external `[label](url)` link
+
+Tapping an external markdown link opens it in the system browser via **`tauri-plugin-opener`** (registered in `src-tauri/src/lib.rs`; the capability grants a scoped `opener:allow-open-url` for `http`/`https`/`mailto` in `capabilities/default.json`).
+`Journal.tsx`'s `handleLinkClick` calls the shared `openExternalUrl` wrapper (`@outl/shared/api/commands`) — the same one desktop uses, so the scheme allow-list (`http(s)`/`mailto` only; `file:`/`javascript:` rejected) lives in one place.
+`<MarkdownInline />` gets `onLinkClick` threaded from `Journal.tsx` → `BlockRow` (recursively) → the renderer.
+`[[ref]]`/`#tag` taps are unchanged — they still route through `openRef` (see above).
+Backlink rows stay inert: the whole row is already a tap-to-source button.
+
 ## Blockquote chrome
 
-A block whose `text` starts with the CommonMark `"> "` marker renders with a left border (`border-l-2 border-(--color-ios-text-secondary)/40`), a very faint tint (`bg-(--color-ios-text-secondary)/[0.05]` light / `[0.07]` dark), a right-rounded corner (`rounded-r-md`), and **full body colour** — refs / bold / tags / code keep their normal palette so the styled-token affordance isn't lost.
+A block whose `text` starts with the CommonMark `"> "` marker renders with a left border (`border-l-2 border-(--color-ios-text-secondary)/40`),
+a very faint tint (`bg-(--color-ios-text-secondary)/[0.05]` light / `[0.07]` dark),
+a right-rounded corner (`rounded-r-md`),
+and **full body colour** — refs / bold / tags / code keep their normal palette so the styled-token affordance isn't lost.
 The tint is intentionally ~5% alpha: enough to read as a soft box at a glance, low enough to not fight with surrounding outline rows.
 
 The chrome wrapper sits one level above the bullet — it envelops **both `<BulletOrCheckbox />` *and* the body** in a single flex container.
@@ -97,15 +109,19 @@ That order (`│ ☐ body`) matches the TUI exactly and reads as "this is a quot
 The `<CollapseTriangle />` stays outside the chrome so the gutter isn't double-boxed.
 When the block isn't quoted, the wrapper degrades to a plain `flex min-w-0 flex-1 items-start gap-2.5` container, so non-quoted rows render byte-identical.
 
-The earlier `italic text-(--color-ios-text-secondary)` body styling (suggested by issue #64's mock) was dropped after testing: the muted body erased the cyan of `[[ref]]` underlines and the bold weight of `**abc**` against the background, which hurts more than it helps when the user is scanning a quoted excerpt.
+The earlier `italic text-(--color-ios-text-secondary)` body styling (suggested by issue #64's mock) was dropped after testing:
+the muted body erased the cyan of `[[ref]]` underlines and the bold weight of `**abc**` against the background,
+which hurts more than it helps when the user is scanning a quoted excerpt.
 
-The check uses **`splitQuote`** from `@outl/shared/markdown` (the TS mirror of `outl_actions::quote::split_quote`) and **`stripQuoteFromTokens`** to remove the `> ` from the first `Plain` token before handing the list to `<MarkdownInline />` — otherwise the marker would render once in the body and once in the chrome.
+The check uses **`splitQuote`** from `@outl/shared/markdown` (the TS mirror of `outl_actions::quote::split_quote`) and **`stripQuoteFromTokens`** to remove the `> ` from the first `Plain` token before handing the list to `<MarkdownInline />`
+— otherwise the marker would render once in the body and once in the chrome.
 The two pieces compose with the existing TODO/DONE checkbox: a `> TODO foo` row paints the checkbox **and** the left border.
 
 Toggling the marker goes through the same Tauri pipeline as TODO/DONE: a `toggleQuote(id)` wrapper in `@outl/shared/api/commands` calls the `toggle_quote` command on each client's `src-tauri`, which delegates to `outl_actions::block::toggle_quote`.
 There is **no string surgery on the TS side** — the prefix arithmetic owns the rule and stays in one place.
 
-The TUI applies the same "chrome only, body full colour" policy via `│ ` in `view::inline::render_pretty_block_text_impl` and `view/outline.rs::BlockRowKind::Bullet`. Three surfaces, one policy.
+The TUI applies the same "chrome only, body full colour" policy via `│ ` in `view::inline::render_pretty_block_text_impl` and `view/outline.rs::BlockRowKind::Bullet`.
+Three surfaces, one policy.
 
 ## Paste from external apps
 
@@ -115,14 +131,19 @@ Plain text falls through to the browser's default splice so a one-off URL or cod
 ## Code execution (`run_code_block`)
 
 Long-press a `` ```lang …``` `` block → the contextual menu shows a `Run <lang>` action that fires `runCodeBlock` (`@outl/shared/api/commands`).
-The backend command is in `src-tauri/src/exec.rs` and is a **thin adapter** — the orchestration (flat-DFS walk, `.md` path resolution, `outl-exec` invocation, DTO build) lives in `outl_actions::exec::run_code_block` so the desktop client shares the exact same flow.
-The mobile adapter only parses NodeIds, locks the workspace, calls the action, and wraps the outcome with a refreshed `PageView`. Adding behaviour to `src-tauri/src/exec.rs` is almost always a smell — promote it to `outl-actions` instead.
+The backend command is in `src-tauri/src/exec.rs` and is a **thin adapter**
+— the orchestration (flat-DFS walk, `.md` path resolution, `outl-exec` invocation, DTO build) lives in `outl_actions::exec::run_code_block` so the desktop client shares the exact same flow.
+The mobile adapter only parses NodeIds, locks the workspace, calls the action, and wraps the outcome with a refreshed `PageView`.
+Adding behaviour to `src-tauri/src/exec.rs` is almost always a smell — promote it to `outl-actions` instead.
 
 Runtimes shipped on iOS: **Lisp, JS, Python, Lua**.
 `lang-rust` is deliberately disabled in `outl-mobile/src-tauri/Cargo.toml` — the wasmtime + Cranelift stack adds tens of MB to the IPA and runs into iOS code-signing restrictions on dynamic code generation.
 The dependency is declared with `path = "../../outl-exec"` (not `workspace = true`) so we can opt out of the workspace dep's default features without changing them for every other consumer (CLI / TUI / desktop, which all keep Rust).
 
-The "Run code" action only shows up when `@outl/shared/highlight::detectFence` matches the block's raw text — same detector the read-mode renderer uses, and the backend re-validates inside `run_block_at_index`, so a false-positive surfaces as a runtime toast instead of doing damage.
+The "Run code" action only shows up when `@outl/shared/highlight::detectFence` matches the block's raw text
+— same detector the read-mode renderer uses,
+and the backend re-validates inside `run_block_at_index`,
+so a false-positive surfaces as a runtime toast instead of doing damage.
 
 ## Cross-runtime contracts (now in `@outl/shared`)
 
@@ -137,7 +158,8 @@ They were extracted to **`crates/outl-frontend-shared/`** so mobile and desktop 
 | `autoPairBracket` (auto-pair `(`/`[`/`{` + step over auto-inserted closers; wired through `BlockRow`'s `onBeforeInput` because iOS soft keyboards don't emit reliable per-char `keydown`) | `@outl/shared/autocomplete` | `outl_tui::input::insert` (`insert_pair`) + `EditBuffer::delete_pair_back` |
 | `utf16OffsetToCharOffset` | `@outl/shared/paste` | runtime gap, no Rust mirror — `textarea.selectionStart` is UTF-16; the backend expects codepoints. Skipping this conversion shifts the splice by one per supplementary-plane character |
 
-**Adding a new cross-runtime contract = add it in `@outl/shared` from day one.** Never add it under `outl-mobile/src/lib/` first — the next time desktop catches up to the feature, it has to consume from the same file.
+**Adding a new cross-runtime contract = add it in `@outl/shared` from day one.**
+Never add it under `outl-mobile/src/lib/` first — the next time desktop catches up to the feature, it has to consume from the same file.
 
 ## iCloud layout
 
@@ -224,7 +246,8 @@ After the first run, the iCloud capability must be confirmed in Xcode (Signing &
 
 ## Versioning + TestFlight release
 
-**Single source of truth: `Cargo.toml` workspace `version`.** To bump the app version, edit `[workspace.package].version` at the repo root and that's it.
+**Single source of truth: `Cargo.toml` workspace `version`.**
+To bump the app version, edit `[workspace.package].version` at the repo root and that's it.
 Everywhere else inherits:
 
 | Field | Where it lives | How it's resolved |
@@ -234,7 +257,8 @@ Everywhere else inherits:
 | `CFBundleShortVersionString` | iOS `Info.plist` | Tauri propagates from `--config` during `cargo tauri ios build` |
 | `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` | `gen/apple/.../project.pbxproj` | Same — Tauri regenerates from the merged config every build |
 
-**Why `--config` and not just rely on Tauri's `Cargo.toml` fallback?** The docs say Tauri uses `Cargo.toml` when `version` is missing, but the iOS code path doesn't honor that — it falls back to `1.0.0` instead.
+**Why `--config` and not just rely on Tauri's `Cargo.toml` fallback?**
+The docs say Tauri uses `Cargo.toml` when `version` is missing, but the iOS code path doesn't honor that — it falls back to `1.0.0` instead.
 So CI reads the workspace version itself (`awk` against `Cargo.toml` in the `Compute build metadata` step) and passes it via `--config`.
 That keeps `Cargo.toml` as the only place a human bumps, and the `Patch archive CFBundleVersion` step has a sanity check that aborts the build if the propagated short version doesn't match what was passed in.
 

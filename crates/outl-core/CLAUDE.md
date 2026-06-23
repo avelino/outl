@@ -34,11 +34,14 @@ You're in the wrong crate.
 This crate exists to maintain these.
 They are properties of the algorithm proven in Kleppmann et al. 2022.
 
-1. **Convergence (SEC).** All replicas applying the same set of ops in any order produce the same materialized tree.
+1. **Convergence (SEC).**
+   All replicas applying the same set of ops in any order produce the same materialized tree.
 2. **Commutativity after reordering.** `apply(a, b, c)` == any permutation.
 3. **Idempotency.** `apply(op); apply(op)` == `apply(op)`.
-4. **Tree invariant.** Materialized state is always a valid tree.
-5. **No silent loss.** Every op stays in the log, even ones turned into no-ops by cycle detection.
+4. **Tree invariant.**
+   Materialized state is always a valid tree.
+5. **No silent loss.**
+   Every op stays in the log, even ones turned into no-ops by cycle detection.
 
 ## Op log is the only sync surface
 

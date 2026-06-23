@@ -14,7 +14,8 @@ That's the spec; don't change it.
 - Block references and embeds: `((blk-XXXXXX))` resolves to the source block's text + page icon.
   `!((blk-XXXXXX))` (when the block contains a single embed token) expands the source block **and its children** read-only below the carrying block.
   `Enter` on either form opens the source page and lands the cursor on the referenced block.
-  The `y r` chord plus `/refer` and `/refer-embed` slash commands copy the current block's handle to the **OS clipboard** (via `arboard`) and stash it in `App::last_yanked_ref` for in-app paste; the `((` autocomplete fuzzy-matches block text in Insert.
+  The `y r` chord plus `/refer` and `/refer-embed` slash commands copy the current block's handle to the **OS clipboard** (via `arboard`) and stash it in `App::last_yanked_ref` for in-app paste;
+  the `((` autocomplete fuzzy-matches block text in Insert.
 - Help popup.
 
 ## Modes
@@ -32,31 +33,61 @@ The buffer carries the working text; on commit we replace the AST node's `.text`
 The full chord catalog (TUI + desktop side-by-side) lives in [`docs/shortcuts.md`](../../docs/shortcuts.md).
 This section captures only the **architectural / TUI-specific behaviour** a contributor needs before touching `input/normal.rs`:
 
-- **`c` is fold, not vim's "change".** Bullet row shows `▼ `/`▶ ` for parents (two-space gap on leaves so columns stay flush). Hidden subtrees are skipped by `j`/`k`. Persisted as `Op::SetCollapsed` in the op log — converges across devices through the CRDT, no per-file last-write-wins.
-- **`z M` / `z R` skip-leaves contract.** `z M` (fold-all) walks the AST in DFS and only emits `Op::SetCollapsed(true)` for blocks with `!children.is_empty()`. Foldar leaf é invisível hoje, mas o op fica no log: adicionar children embaixo depois faria eles aparecerem colapsados (future-surprise). `z R` (unfold-all) caminha todos os ids porque descolapsar leaf não tem efeito futuro. `outl_actions::set_block_collapsed` **sempre** escreve op no log (mesmo quando o valor já bate) — o `Ok(false)` retornado é só telemetria pra UI, não "log untouched". A CRDT precisa de cada flip pra convergir flips concorrentes via HLC.
-- **`y r` clipboard fallback.** `y r` (chord) copies `((blk-XXXXXX))` to the OS clipboard via `arboard` **and** stashes it in `last_yanked_ref`. Status flips to `yanked … (clipboard unavailable)` on headless / no-display environments — the in-app yank register still works.
-- **`Enter` is overloaded.** Open `[[ref]]` / `#tag` / journal / block ref (`((blk-X))` / `!((blk-X))`) under cursor, else enter Insert. On a block ref it jumps to the source page and positions the cursor on the referenced block; orphan handles surface a status message and stay put.
-- **Quit is chord-only.** `q q` arms + confirms (single `q` is too easy to hit by accident). `Z Z` is the vim "save and quit" alias — outl auto-commits on every Normal boundary, so it reduces to `q q`. `Ctrl+C` commits any in-flight Insert before quitting.
-- **`r` / `f` / `F` use `state.pending_input_op`.** A one-shot enum (mutually exclusive with `pending_chord`) consumed by the next `Char(c)` keystroke. Any other keystroke cancels.
+- **`c` is fold, not vim's "change".**
+  Bullet row shows `▼ `/`▶ ` for parents (two-space gap on leaves so columns stay flush).
+  Hidden subtrees are skipped by `j`/`k`.
+  Persisted as `Op::SetCollapsed` in the op log — converges across devices through the CRDT, no per-file last-write-wins.
+- **`z M` / `z R` skip-leaves contract.**
+  `z M` (fold-all) walks the AST in DFS and only emits `Op::SetCollapsed(true)` for blocks with `!children.is_empty()`.
+  Foldar leaf é invisível hoje, mas o op fica no log: adicionar children embaixo depois faria eles aparecerem colapsados (future-surprise).
+  `z R` (unfold-all) caminha todos os ids porque descolapsar leaf não tem efeito futuro.
+  `outl_actions::set_block_collapsed` **sempre** escreve op no log (mesmo quando o valor já bate) — o `Ok(false)` retornado é só telemetria pra UI, não "log untouched".
+  A CRDT precisa de cada flip pra convergir flips concorrentes via HLC.
+- **`y r` clipboard fallback.**
+  `y r` (chord) copies `((blk-XXXXXX))` to the OS clipboard via `arboard` **and** stashes it in `last_yanked_ref`.
+  Status flips to `yanked … (clipboard unavailable)` on headless / no-display environments — the in-app yank register still works.
+- **`Enter` is overloaded.**
+  Open `[[ref]]` / `#tag` / journal / block ref (`((blk-X))` / `!((blk-X))`) under cursor, else enter Insert.
+  On a block ref it jumps to the source page and positions the cursor on the referenced block; orphan handles surface a status message and stay put.
+- **Quit is chord-only.**
+  `q q` arms + confirms (single `q` is too easy to hit by accident).
+  `Z Z` is the vim "save and quit" alias — outl auto-commits on every Normal boundary, so it reduces to `q q`.
+  `Ctrl+C` commits any in-flight Insert before quitting.
+- **`r` / `f` / `F` use `state.pending_input_op`.**
+  A one-shot enum (mutually exclusive with `pending_chord`) consumed by the next `Char(c)` keystroke.
+  Any other keystroke cancels.
 - **`*` / `#` reuse the workspace search.** `search_word_under_cursor` extracts the word the cursor sits on (whitespace-bounded), opens the `/` overlay machinery, accepts the first hit, persists the rest into `last_search` so `n` / `N` walk them.
-- **Visual range capture.** Every Visual exit (`Esc`, `y`, `d`) routes through `remember_visual_range` so `g v` can restore the last range.
+- **Visual range capture.**
+  Every Visual exit (`Esc`, `y`, `d`) routes through `remember_visual_range` so `g v` can restore the last range.
 
 ## Insert mode
 
 Full Insert key list is in [`docs/shortcuts.md`](../../docs/shortcuts.md).
 TUI-specific contracts worth remembering:
 
-- **`Esc` commits** through `commit_insert` (writes buffer → AST → disk via `outl_md::reconcile_md`). Aborting without commit is `abort_insert` — wired to nothing today; we never lose user keystrokes silently.
-- **`Enter` always commits and continues.** It's commit + new block below + park in Insert on the new block. The Insert-mode commit path also drains `pending_reload` (peer-ops poller held it back during the edit).
+- **`Esc` commits** through `commit_insert` (writes buffer → AST → disk via `outl_md::reconcile_md`).
+  Aborting without commit is `abort_insert` — wired to nothing today; we never lose user keystrokes silently.
+- **`Enter` always commits and continues.**
+  It's commit + new block below + park in Insert on the new block.
+  The Insert-mode commit path also drains `pending_reload` (peer-ops poller held it back during the edit).
 - **`Backspace` on an empty block deletes the block** and moves selection to the previous one — the only structural mutation that can happen from Insert.
-- **Autocomplete triggers** are pure trigger-detection inside the buffer (`[[`, `#`, `((`, `/`); they own the keystream while their popup is open. See `actions/autocomplete.rs` for the trigger detector contract.
+- **Autocomplete triggers** are pure trigger-detection inside the buffer (`[[`, `#`, `((`, `/`); they own the keystream while their popup is open.
+  See `actions/autocomplete.rs` for the trigger detector contract.
 
 ## Visual conventions
 
 - Selected block is highlighted with a colored bullet.
 - In Insert mode, a `▏` caret marks cursor position inside the block.
 - In Normal mode on the selected block, a block cursor (white bg) sits on the character under `cursor_col`.
-- Other (non-focused) blocks render markdown prettily: `**bold**` shows as bold without asterisks, `*italic*` as italic, `~~strike~~` struck through, `` `code` `` in green, `[text](url)` blue-underlined, `[[ref]]` cyan-underlined (no brackets), `#tag` magenta-underlined, `((blk-XXXXXX))` resolves to the source block's text + page icon (orphan handles render dimmed), `:shortcode:` renders as the unicode glyph (`:tada:` → 🎉; unknown shortcodes never tokenize so the literal stays visible).
+- Other (non-focused) blocks render markdown prettily: `**bold**` shows as bold without asterisks,
+  `*italic*` as italic,
+  `~~strike~~` struck through,
+  `` `code` `` in green,
+  `[text](url)` blue-underlined,
+  `[[ref]]` cyan-underlined (no brackets),
+  `#tag` magenta-underlined,
+  `((blk-XXXXXX))` resolves to the source block's text + page icon (orphan handles render dimmed),
+  `:shortcode:` renders as the unicode glyph (`:tada:` → 🎉; unknown shortcodes never tokenize so the literal stays visible).
 - The selected/editing block keeps `:` (dim) + shortcode (raw) + `:` (dim) so cursor columns match source bytes 1:1 — the pretty render is the only place the glyph appears.
 - `!((blk-XXXXXX))` — when a block contains a single embed token (whitespace OK around it) — expands the source block **and its children** read-only below the carrying block.
   Conventions:
@@ -67,7 +98,11 @@ TUI-specific contracts worth remembering:
   - Recursion is capped at depth 4 to break embed cycles.
   - Expansion runs in every render mode — but the carrying block's first row keeps the raw `!((…))` literal under the cursor so column-byte alignment holds.
 - The selected/editing block renders **raw** (delimiters visible, dimmed) so cursor columns map 1:1 to source bytes — including the literal `((blk-XXXXXX))` and `!((blk-XXXXXX))` forms.
-- A block whose text starts with the CommonMark `"> "` prefix renders with a left `│ ` bar (dimmed, `theme.dim`) and full body colour — the `│` is enough of a cue, dimming refs / tags / bold would erase their affordance. Same affordance as `TODO`/`DONE`. The chrome lives in **`view::inline::render_pretty_block_text_impl`** and is the **only owner** of the bar + checkbox + token rendering pipeline; the outline view's `BlockRowKind::Bullet if single_line_pretty` branch delegates to it directly (one owner, every caller wraps). The bar composes with the TODO checkbox (`│ ☐ foo`) and `view::inline::split_block_prefixes` accepts the prefixes in **either order**, so `"> TODO foo"` and `"TODO > foo"` render the same.
+- A block whose text starts with the CommonMark `"> "` prefix renders with a left `│ ` bar (dimmed, `theme.dim`) and full body colour — the `│` is enough of a cue, dimming refs / tags / bold would erase their affordance.
+  Same affordance as `TODO`/`DONE`.
+  The chrome lives in **`view::inline::render_pretty_block_text_impl`** and is the **only owner** of the bar + checkbox + token rendering pipeline;
+  the outline view's `BlockRowKind::Bullet if single_line_pretty` branch delegates to it directly (one owner, every caller wraps).
+  The bar composes with the TODO checkbox (`│ ☐ foo`) and `view::inline::split_block_prefixes` accepts the prefixes in **either order**, so `"> TODO foo"` and `"TODO > foo"` render the same.
 - IDs are **never** shown.
 - Mode tag (`NORMAL`/`INSERT`) appears in the header.
 
@@ -87,7 +122,8 @@ Every piece of logic that's not strictly about ratatui rendering lives in `outl-
 
 Pattern when adding a new feature:
 
-1. **Grep first.** Before writing a helper here, `rg "fn <name>"` / `rg "struct <Name>"` across `crates/outl-core`, `crates/outl-md`, `crates/outl-actions`.
+1. **Grep first.**
+   Before writing a helper here, `rg "fn <name>"` / `rg "struct <Name>"` across `crates/outl-core`, `crates/outl-md`, `crates/outl-actions`.
    The thing you're about to write probably exists upstream — wrap it instead of cloning the logic.
 2. If it's data or pure logic → put in `outl-md` (or `outl-core`).
 3. If it's a workspace mutation two clients would call the same way → put it in `outl-actions`.
@@ -95,7 +131,8 @@ Pattern when adding a new feature:
 5. Never write a function in `outl-tui` that a Tauri/mobile client would also need byte-for-byte.
    Extract upstream first.
 
-**Concrete example:** `EditBuffer::move_up` / `move_down` (cursor nav across `\n` inside a multi-line block) are TUI-specific primitives, but the `(line, col) ↔ char_idx` math underneath isn't — it's shared with how the renderer maps a cursor onto a [`outl_md::view::BlockRow`].
+**Concrete example:** `EditBuffer::move_up` / `move_down` (cursor nav across `\n` inside a multi-line block) are TUI-specific primitives,
+but the `(line, col) ↔ char_idx` math underneath isn't — it's shared with how the renderer maps a cursor onto a [`outl_md::view::BlockRow`].
 Both directions live in `outl_md::view::{char_to_line_col, line_col_to_char}` and the `EditBuffer` methods are thin wrappers.
 **Don't** add a `line_start_and_column` helper here; extract the inverse to `outl-md` if it's missing and wrap from here.
 

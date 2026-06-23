@@ -15,6 +15,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 import type {
   CreateBlockReply,
@@ -265,4 +266,46 @@ export function runCodeBlock(
   blockId: string,
 ): Promise<RunCodeBlockReply> {
   return invoke<RunCodeBlockReply>("run_code_block", { pageId, blockId });
+}
+
+/**
+ * Open an external `[label](url)` link in the user's default browser
+ * via `tauri-plugin-opener`. Shared by every client's `onLinkClick`
+ * handler so the scheme allow-list lives in one place.
+ *
+ * Only `http(s)` and `mailto` are allowed — anything else (`file:`,
+ * `javascript:`, …) is rejected so a crafted link inside a synced
+ * `.md` can't trigger an arbitrary local action. The promise rejects
+ * on a malformed or disallowed URL; callers surface it on the status
+ * line. The host must register the opener plugin and grant
+ * `opener:allow-open-url` for the call to succeed.
+ */
+export async function openExternalUrl(href: string): Promise<void> {
+  let scheme: string;
+  try {
+    scheme = new URL(href).protocol.replace(/:$/, "").toLowerCase();
+  } catch {
+    // `href` comes from synced / remote markdown — strip control chars
+    // and cap length before it reaches the status line so a hostile
+    // `.md` can't flood or corrupt the UI with the error string.
+    throw new Error(`refusing to open malformed URL: ${describeHref(href)}`);
+  }
+  if (scheme !== "http" && scheme !== "https" && scheme !== "mailto") {
+    throw new Error(`refusing to open non-web URL scheme: ${scheme}:`);
+  }
+  await openUrl(href);
+}
+
+/** Make an untrusted `href` safe to show in an error/status message:
+ *  drop control characters and truncate to a sane length. */
+function describeHref(href: string): string {
+  // Drop control characters (charCode < 0x20 or DEL) and truncate so a
+  // hostile `href` can't flood or corrupt the status line.
+  const cleaned = Array.from(href)
+    .filter((c) => {
+      const code = c.charCodeAt(0);
+      return code >= 0x20 && code !== 0x7f;
+    })
+    .join("");
+  return cleaned.length > 100 ? `${cleaned.slice(0, 100)}…` : cleaned;
 }

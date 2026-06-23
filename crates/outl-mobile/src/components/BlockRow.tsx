@@ -54,6 +54,8 @@ interface BlockRowProps {
   onToggleCollapse: (id: string, next: boolean) => void;
   onRefClick?: (target: string) => void;
   onTagClick?: (tag: string) => void;
+  /** External `[label](url)` link tap — opens in the system browser. */
+  onLinkClick?: (href: string) => void;
   onTextareaMount?: (el: HTMLTextAreaElement) => void;
   /**
    * Called when the user pastes outline-shaped markdown into this
@@ -115,6 +117,7 @@ export function BlockRow(props: BlockRowProps): JSX.Element {
           }}
           onRefClick={props.onRefClick}
           onTagClick={props.onTagClick}
+          onLinkClick={props.onLinkClick}
           onTextareaMount={props.onTextareaMount}
           onPasteMarkdown={
             props.onPasteMarkdown
@@ -152,6 +155,7 @@ export function BlockRow(props: BlockRowProps): JSX.Element {
                 onContextMenu={props.onContextMenu}
                 onRefClick={props.onRefClick}
                 onTagClick={props.onTagClick}
+                onLinkClick={props.onLinkClick}
                 onTextareaMount={props.onTextareaMount}
               />
             )}
@@ -182,6 +186,8 @@ function BlockBody(props: {
   onLongPress: () => void;
   onRefClick?: (target: string) => void;
   onTagClick?: (tag: string) => void;
+  /** External `[label](url)` link tap — opens in the system browser. */
+  onLinkClick?: (href: string) => void;
   onTextareaMount?: (el: HTMLTextAreaElement) => void;
   /** See `BlockRowProps.onPasteMarkdown`. The parent has already
    *  injected `blockId`; this variant gets the caret + text. */
@@ -334,6 +340,7 @@ function BlockBody(props: {
                         tokens={tokens}
                         onRefClick={props.onRefClick}
                         onTagClick={props.onTagClick}
+                        onLinkClick={props.onLinkClick}
                       />
                     </Show>
                   </p>

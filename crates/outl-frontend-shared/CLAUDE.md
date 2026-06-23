@@ -55,7 +55,8 @@ import { autoClosePair, detectRefContext } from "@outl/shared/autocomplete";
 
 Resolution happens through:
 
-1. **Bun workspaces** (root `package.json` lists `crates/outl-frontend-shared` first). Bun dedupes `solid-js` and `@tauri-apps/api` across all clients — **critical for Solid**, because two copies of the framework in different `node_modules` directories silently break reactivity (signals diverge).
+1. **Bun workspaces** (root `package.json` lists `crates/outl-frontend-shared` first).
+   Bun dedupes `solid-js` and `@tauri-apps/api` across all clients — **critical for Solid**, because two copies of the framework in different `node_modules` directories silently break reactivity (signals diverge).
 2. **`paths` in each client's `tsconfig.json`**:
    ```jsonc
    "paths": {
@@ -69,10 +70,14 @@ Resolution happens through:
 
 Decision rule (in order):
 
-1. **Does the OTHER client also need it identically?** If yes, it goes here.
-2. **Is it a pure function or stateless component?** If yes, it can go here.
-3. **Is it the wire shape of something the Rust backend serialises?** If yes, it goes here as a type.
-4. **Is the client shell tightly coupled to it (touch handlers, OS chrome, modes)?** Stays in the client.
+1. **Does the OTHER client also need it identically?**
+   If yes, it goes here.
+2. **Is it a pure function or stateless component?**
+   If yes, it can go here.
+3. **Is it the wire shape of something the Rust backend serialises?**
+   If yes, it goes here as a type.
+4. **Is the client shell tightly coupled to it (touch handlers, OS chrome, modes)?**
+   Stays in the client.
 
 When in doubt, ship in the client; promote later when the second client appears.
 **Never** add something here speculatively — premature shared code becomes harder to evolve than two parallel copies.
@@ -81,7 +86,7 @@ When in doubt, ship in the client; promote later when the second client appears.
 
 | Concept | Entry | Mirrors (Rust) |
 |---|---|---|
-| `<MarkdownInline />` | `@outl/shared/markdown` | output of `outl_md::tokenize_owned` |
+| `<MarkdownInline />` (refs/tags fire `onRefClick`/`onTagClick`; external `[label](url)` links fire the optional `onLinkClick(href)` — when wired, the link is a keyboard-operable button (`role`/`tabindex`/Enter+Space); when omitted it's a plain inert `<span>`, no fake button) | `@outl/shared/markdown` | output of `outl_md::tokenize_owned` |
 | `splitQuote`, `isQuote`, `QUOTE_PREFIX`, `stripQuoteFromTokens` | `@outl/shared/markdown` (re-exported) | `outl_actions::quote::{split_quote, is_quote, QUOTE_PREFIX}` |
 | `<QuoteWrap />`, `isBlockQuoted` | `@outl/shared/markdown` | Wraps `bullet + body` in the blockquote chrome (left border + faint tint) so mobile and desktop don't duplicate the conditional wrapper. Each client passes its theme tokens via `baseClass` + `chromeClass` props (Tailwind string literals for JIT discovery). |
 | `looksLikeOutline` | `@outl/shared/paste` | `outl_actions::paste::looks_like_outline` |
@@ -91,15 +96,23 @@ When in doubt, ship in the client; promote later when the second client appears.
 | `<ParseWarningsBanner />` + `@outl/shared/warnings/styles` CSS | `@outl/shared/warnings` | TUI `view::warnings_banner` (visual parity, neutral chrome). Clients **must** `@import "@outl/shared/warnings/styles"` from their root stylesheet — without it the banner renders with unstyled neutral classes and looks invisible against the page. |
 | `ParseWarning` / `ParseWarningKind` (DTO of `PageView.warnings`) | `@outl/shared/api/types` | `outl_md::ParseWarning` / `ParseWarningKind` |
 | DTOs (`PageMeta`, `OutlineNode`, `BlockNode`, `Backlink`, `InlineToken`, `PageView`, `CreateBlockReply`, `WorkspaceSummary`, …) | `@outl/shared/api/types` | the corresponding `serde`-serialised Rust structs |
-| `invoke<T>()` wrappers (navigation: `listPages`, `searchPages`, `searchPersons`, `searchEmojis` → `EmojiHit[]` (powers the `:shortcode:` autocomplete in every client; backed by `outl_md::emoji::search` so TUI / mobile / desktop rank identically), `openTodayJournal`, `openJournalFor`, `openPageBySlug`, `openRef`, `previousDay`, `nextDay`, `todaySlug`, `dateTitle`, `resolveRef`, `workspaceStats`; mutation: `createBlock` → `CreateBlockReply` (returns `{ view, new_id }` so the client puts the new block straight into edit mode without diffing the outline), `editBlock`, `toggleTodo`, `deleteBlock`, `indentBlock`, `outdentBlock`, `moveBlockUp`, `moveBlockDown`, `reloadWorkspace`, `pasteMarkdown`, `setBlockCollapsed`; execution: `runCodeBlock` → `RunCodeBlockReply` (refreshed `PageView` + stdout/stderr/exit so the caller swaps the outline in one round-trip)) | `@outl/shared/api/commands` | the matching Tauri command in each client's `src-tauri/src/lib.rs` |
+| `invoke<T>()` wrappers (navigation: `listPages`, `searchPages`, `searchPersons`, `searchEmojis` → `EmojiHit[]` (powers the `:shortcode:` autocomplete in every client; backed by `outl_md::emoji::search` so TUI / mobile / desktop rank identically), `openTodayJournal`, `openJournalFor`, `openPageBySlug`, `openRef`, `previousDay`, `nextDay`, `todaySlug`, `dateTitle`, `resolveRef`, `workspaceStats`; mutation: `createBlock` → `CreateBlockReply` (returns `{ view, new_id }` so the client puts the new block straight into edit mode without diffing the outline), `editBlock`, `toggleTodo`, `deleteBlock`, `indentBlock`, `outdentBlock`, `moveBlockUp`, `moveBlockDown`, `reloadWorkspace`, `pasteMarkdown`, `setBlockCollapsed`; execution: `runCodeBlock` → `RunCodeBlockReply` (refreshed `PageView` + stdout/stderr/exit so the caller swaps the outline in one round-trip); external links: `openExternalUrl(href)` (opens `http(s)`/`mailto` in the system browser via `tauri-plugin-opener`; rejects other schemes — the host must register the opener plugin + grant `opener:allow-open-url`)) | `@outl/shared/api/commands` | the matching Tauri command in each client's `src-tauri/src/lib.rs` (`openExternalUrl` wraps the `@tauri-apps/plugin-opener` JS API, not a custom command) |
 
 ## What does NOT enter the library
 
 - **Chrome.** `<Sidebar />`, `<Picker />`, `<BacklinksPanel />`, `<BlockRow />`, app shells — they diverge between mobile (single-pane, touch) and desktop (3-pane, mouse + vim mode).
-- **Stateful stores.** Each client's Solid `createStore()` carries client-specific shape (mobile has swipe state, desktop has panel collapse state).
-- **Keybindings.** Cmd-based on desktop, gesture-based on mobile.
-- **Client-specific Tauri commands.** `pick_workspace_dir` belongs to `outl-desktop`; the iCloud peer-files watcher and gestures glue belong to `outl-mobile`. Wrap those in the client's own `lib/api.ts`. (`run_code_block` *used* to live here too; mobile picked up the same command in v0.6.x — long-press → "Run code" — so the wrapper is now in `@outl/shared/api/commands`. Desktop's `lib/api.ts` re-exports it for backward-compatible imports.)
-- **Tailwind config.** Each client has its own theme; could be shared later if the palettes converge. Low priority.
+- **Stateful stores.**
+  Each client's Solid `createStore()` carries client-specific shape (mobile has swipe state, desktop has panel collapse state).
+- **Keybindings.**
+  Cmd-based on desktop, gesture-based on mobile.
+- **Client-specific Tauri commands.**
+  `pick_workspace_dir` belongs to `outl-desktop`; the iCloud peer-files watcher and gestures glue belong to `outl-mobile`.
+  Wrap those in the client's own `lib/api.ts`.
+  (`run_code_block` *used* to live here too; mobile picked up the same command in v0.6.x — long-press → "Run code" — so the wrapper is now in `@outl/shared/api/commands`.
+  Desktop's `lib/api.ts` re-exports it for backward-compatible imports.)
+- **Tailwind config.**
+  Each client has its own theme; could be shared later if the palettes converge.
+  Low priority.
 
 ## Theming note
 
@@ -109,9 +122,11 @@ If desktop's palette diverges first, introduce the abstraction in this library a
 
 ## Adding a new piece
 
-1. **Search first.** Before writing a helper in any client `lib/`, `rg` here and in `outl-mobile/src/lib/` for a comparable name or symbol.
+1. **Search first.**
+   Before writing a helper in any client `lib/`, `rg` here and in `outl-mobile/src/lib/` for a comparable name or symbol.
 2. **If the other client has it locally**, promote in the same PR (move to `src/<area>/`, update both clients' imports, delete the local copy).
-3. **If it's a brand-new concept that only one client needs today**, write it in the client. When the second client wants it, promote in the move PR.
+3. **If it's a brand-new concept that only one client needs today**, write it in the client.
+   When the second client wants it, promote in the move PR.
 4. **Update the table above** when promoting.
 
 ## Running tests

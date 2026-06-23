@@ -35,6 +35,22 @@ use crate::runtime::{ExecContext, ExecError, ExecOutput};
 
 /// Default per-run timeout. UIs can override by building an
 /// [`ExecContext`] manually and going around this helper.
+/// Wall-clock budget for a single fence execution.
+///
+/// iOS gets a tighter 2-second budget: the UI is fully blocked during
+/// execution (sync call from the Tauri command) and a longer wait
+/// makes the app feel hung on a touch device. The narrative also
+/// helps with App Review — a bounded, sub-second-typical timeout is
+/// easier to defend under Guideline 2.5.2 than "user can queue
+/// arbitrary workloads". Desktop / TUI keep 5s where the user has
+/// keyboard interrupt and a real terminal mental model.
+#[cfg(target_os = "ios")]
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
+/// Wall-clock budget for a single fence execution (non-iOS targets).
+///
+/// See the iOS-specific entry above for the rationale on the
+/// per-platform split.
+#[cfg(not(target_os = "ios"))]
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Errors that can happen *around* execution — before we ever reach
