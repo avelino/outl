@@ -220,6 +220,7 @@ Skim headings, then drill in.
 | Wrap an `Op` into a `LogOp` (timestamp + actor) for `apply` | `outl_core::Op` + `outl_core::LogOp` | `crates/outl-core/src/op.rs` |
 | Sentinel node ids (`root`, `trash`) | `outl_core::NodeId::root()` / `trash()` | `crates/outl-core/src/id.rs` |
 | Per-device identity for ops | `outl_core::ActorId` | `crates/outl-core/src/id.rs` |
+| Stable, shared workspace identity (read/generate, persist, pairing-adoption) — the gossip-topic key, NOT the path | `outl_core::WorkspaceId::read_or_create` / `write` / `from_raw` (errors: `outl_core::WorkspaceIdError`) | `crates/outl-core/src/workspace_id.rs` |
 | Fractional index for sibling ordering | `outl_core::Fractional` | `crates/outl-core/src/fractional.rs` |
 
 #### 2. Tree reads (outl-core + outl-actions::tree)
@@ -398,6 +399,7 @@ Runtime selection (which languages ship) is per-binary via `outl-exec` features 
 | Re-project a page's `.md` + sidecar / reload + reproject in one call | `SyncEngine::reproject_page` / `refresh_page` | `crates/outl-actions/src/sync.rs` |
 | Snapshot every / peer-only `ops-*.jsonl` | `SyncEngine::snapshot` / `snapshot_peers` (`OpsFileSnapshot`) | `crates/outl-actions/src/sync.rs` |
 | Scan for orphan `.md` (no sidecar / stale hash) | `SyncEngine::scan_for_orphans` | `crates/outl-actions/src/sync.rs` |
+| Per-peer reachability snapshot from the transport's own dials (GUI status; never bind a probe endpoint) | `SyncTransport::peer_health` → `outl_actions::PeerHealthSnapshot` | `crates/outl-actions/src/sync.rs` |
 | Cross-process workspace lock | `outl_core::WorkspaceLock::acquire` | `crates/outl-core/src/lock.rs` |
 | Per-actor write lock | `outl_core::ActorWriteLock::try_acquire` | `crates/outl-core/src/lock.rs` |
 | Resolve which actor this process writes as | `outl_core::resolve_write_actor` | `crates/outl-core/src/lock.rs` |

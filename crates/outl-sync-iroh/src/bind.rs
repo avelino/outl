@@ -1,0 +1,64 @@
+//! Endpoint binding — single owner of the iroh 1.0.0 IPv4-only STOPGAP.
+//!
+//! # STOPGAP: IPv4-only bind (iroh 1.0.0 multipath workaround)
+//!
+//! iroh 1.0.0's QUIC-multipath stack opens paths to **all** of a peer's
+//! candidate addresses concurrently. When a peer's `EndpointAddr` includes a
+//! global IPv6 direct address that is "No route to host" on a LAN-only device,
+//! multipath stalls on that dead path (`PTO expired`,
+//! `failed closing path err=MultipathNotNegotiated`) and the whole
+//! connect/accept times out (~30s) instead of converging on the working
+//! LAN-IPv4 or relay path. iroh 1.0.0 exposes **no** public knob to disable
+//! multipath (`max_concurrent_multipath_paths` clamps to >= 9; `path_selector`
+//! is behind an unstable feature and only picks among already-opened paths;
+//! no env var), and downgrade is blocked because `iroh-gossip 0.101.0`
+//! requires `iroh = "1"`.
+//!
+//! The fix is to **reduce the candidate paths to only reachable ones** on BOTH
+//! the dial side and the accept side, so multipath never opens a dead IPv6
+//! path. We do this by binding an **IPv4-only** UDP socket: the endpoint then
+//! never discovers/advertises a global IPv6 direct addr, so neither side ever
+//! dials or accepts one. LAN-IPv4 direct connectivity and the n0 relay fallback
+//! are both preserved (`clear_ip_transports` only drops IP transports; the
+//! `presets::N0` relay transport stays).
+//!
+//! By default `Endpoint::builder` pre-configures **both** a `0.0.0.0` IPv4 and
+//! a `[::]` IPv6 unspecified socket. `clear_ip_transports()` removes both, then
+//! `bind_addr("0.0.0.0:0")` re-adds IPv4 only. See iroh-1.0.0
+//! `src/endpoint.rs` `Builder::bind_addr` / `Builder::clear_ip_transports`.
+//!
+//! ## Revert condition
+//!
+//! When iroh ships the multipath fallback fix (track iroh > 1.0.0, where a
+//! stalled path no longer blocks convergence on a healthy path), delete this
+//! module and let every call site go back to the plain dual-stack
+//! `Endpoint::builder(presets::N0)` builder.
+
+use iroh::endpoint::presets;
+use iroh::endpoint::Builder;
+
+/// IPv4 unspecified bind address (random free port) used by the IPv4-only
+/// STOPGAP. `0.0.0.0:0` binds all IPv4 interfaces on an OS-assigned port —
+/// the same default the iroh builder would pick for IPv4, minus the IPv6 leg.
+const IPV4_UNSPECIFIED: &str = "0.0.0.0:0";
+
+/// Build an `Endpoint::builder(presets::N0)` constrained to **IPv4-only** direct
+/// transports (n0 relay preserved).
+///
+/// STOPGAP for the iroh 1.0.0 multipath stall on unreachable IPv6 paths — see
+/// the module docs for the full rationale and the revert condition.
+///
+/// Every endpoint in this crate (sync engine, pairing, status probe, and the
+/// test-support harness) MUST go through this builder so the dial side and the
+/// accept side stay consistent: if only one side dropped IPv6, the other could
+/// still advertise a dead IPv6 path and re-trigger the stall.
+pub(crate) fn n0_builder_ipv4_only() -> Builder {
+    // `clear_ip_transports()` drops the pre-configured 0.0.0.0 + [::] sockets;
+    // `bind_addr("0.0.0.0:0")` re-adds IPv4 only. `bind_addr` only errors on an
+    // unparseable socket address, and this constant is a valid literal, so the
+    // `expect` cannot fire.
+    iroh::Endpoint::builder(presets::N0)
+        .clear_ip_transports()
+        .bind_addr(IPV4_UNSPECIFIED)
+        .expect("0.0.0.0:0 is a valid IPv4 socket address")
+}

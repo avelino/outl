@@ -36,6 +36,7 @@
 mod commands;
 mod fs_watcher;
 mod helpers;
+mod iroh_sync;
 mod settings;
 mod state;
 mod workspace_open;
@@ -53,15 +54,37 @@ use crate::commands::{
     create_block, current_workspace, date_title, delete_block, edit_block, get_settings, get_theme,
     indent_block, list_all_pages, list_shortcut_bindings, list_themes, move_block_down,
     move_block_up, next_day, open_journal_for, open_page_by_slug, open_ref, open_today_journal,
-    outdent_block, outl_emoji_search, paste_markdown_at, previous_day, redo_page, reload_workspace,
-    resolve_ref, run_code_block, search_pages, search_persons, set_block_collapsed, set_workspace,
-    today_slug_cmd, toggle_quote, toggle_todo, undo_page, update_settings, workspace_stats,
+    outdent_block, outl_emoji_search, outl_peer_list, outl_peer_pair_host, outl_peer_pair_join,
+    outl_peer_remove, outl_peer_status, outl_sync_now, paste_markdown_at, previous_day, redo_page,
+    reload_workspace, resolve_ref, run_code_block, search_pages, search_persons,
+    set_block_collapsed, set_workspace, today_slug_cmd, toggle_quote, toggle_todo, undo_page,
+    update_settings, workspace_stats,
 };
 use crate::state::AppState;
 use crate::workspace_open::{load_or_create_actor, spawn_workspace_opener};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Install a log subscriber FIRST so the iroh P2P transport's
+    // `info!`/`warn!`/`debug!` lines are visible in the terminal running the
+    // app (stderr). Without this the transport runs blind. `RUST_LOG` overrides
+    // the default; `try_init` makes a double-init a no-op instead of a panic.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new("info,outl_sync_iroh=debug,iroh=info")
+            }),
+        )
+        .with_writer(std::io::stderr)
+        .try_init();
+
+    // rustls 0.23 needs a process-wide CryptoProvider before any rustls
+    // consumer builds a client. iroh pulls rustls with `default-features =
+    // false`, dropping the workspace-wide default provider — so reqwest
+    // (Tauri's webview asset protocol) panics in `ClientBuilder::build()` at
+    // boot. Install `ring` (the provider in our dep graph) explicitly.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -82,17 +105,31 @@ pub fn run() {
             let settings = settings::load(&app_config_dir);
             let last_workspace = settings.last_workspace.clone();
 
+            // The flat desktop `Settings` deliberately drops the
+            // `[sync]` section (see `settings.rs`), so read the
+            // transport choice straight from `outl_config` here. Default
+            // (`File`) leaves iroh off and the `notify` watcher handles
+            // detection on its own.
+            let sync_transport_kind = outl_config::load().sync.transport;
+
             let workspace: Arc<Mutex<Option<Workspace>>> = Arc::new(Mutex::new(None));
             let storage_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
 
             let registry = Arc::new(RuntimeRegistry::with_builtins());
             let fs_watcher = Arc::new(Mutex::new(None));
+            let iroh_transport: Arc<Mutex<Option<Arc<dyn outl_actions::SyncTransport>>>> =
+                Arc::new(Mutex::new(None));
+            let iroh_pairing: Arc<Mutex<Option<outl_sync_iroh::IrohSyncTransport>>> =
+                Arc::new(Mutex::new(None));
 
             if let Some(path) = last_workspace {
                 spawn_workspace_opener(
                     workspace.clone(),
                     storage_root.clone(),
                     fs_watcher.clone(),
+                    iroh_transport.clone(),
+                    iroh_pairing.clone(),
+                    sync_transport_kind,
                     path,
                     hlc.clone(),
                     app.handle().clone(),
@@ -107,6 +144,8 @@ pub fn run() {
                 app_config_dir,
                 registry,
                 fs_watcher,
+                iroh_transport,
+                iroh_pairing,
                 history: Mutex::new(std::collections::HashMap::new()),
             });
 
@@ -157,6 +196,13 @@ pub fn run() {
             redo_page,
             // Code execution
             run_code_block,
+            // Peer / device management
+            outl_peer_list,
+            outl_peer_remove,
+            outl_peer_status,
+            outl_sync_now,
+            outl_peer_pair_host,
+            outl_peer_pair_join,
         ])
         .run(tauri::generate_context!())
         .expect("error while running outl-desktop application");

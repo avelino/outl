@@ -27,6 +27,12 @@ outl-config = { workspace = true }
 outl-exec = { workspace = true }
 outl-shortcuts = { workspace = true }
 outl-theme = { workspace = true }
+outl-sync-iroh = { workspace = true }
+dirs = "5"
+# Pin the rustls crypto provider. iroh pulls rustls with default features off,
+# dropping the workspace-wide default provider, which makes reqwest (Tauri's
+# webview asset protocol) panic at boot. `run()` installs `ring` explicitly.
+rustls = { version = "0.23", features = ["ring"] }
 
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
@@ -39,5 +45,8 @@ parking_lot = { workspace = true }
 ulid = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
+# Installs an stderr log subscriber at boot so the iroh transport's
+# info!/warn!/debug! lines are visible in the terminal running the app.
+tracing-subscriber = { workspace = true }
 yrs = { workspace = true }
 anyhow = { workspace = true }

@@ -4,6 +4,7 @@ members = [
     "crates/outl-core",
     "crates/outl-md",
     "crates/outl-actions",
+    "crates/outl-sync-iroh",
     "crates/outl-config",
     "crates/outl-exec",
     "crates/outl-shortcuts",
@@ -30,6 +31,7 @@ readme = "README.md"
 outl-core = { path = "crates/outl-core", version = "0.6.0" }
 outl-md = { path = "crates/outl-md", version = "0.6.0" }
 outl-actions = { path = "crates/outl-actions", version = "0.6.0" }
+outl-sync-iroh = { path = "crates/outl-sync-iroh", version = "0.6.0" }
 outl-config = { path = "crates/outl-config", version = "0.6.0" }
 outl-exec = { path = "crates/outl-exec", version = "0.6.0" }
 outl-shortcuts = { path = "crates/outl-shortcuts", version = "0.6.0" }
@@ -51,10 +53,18 @@ anyhow = "1"
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # CRDT
 yrs = "0.26"
+
+# P2P sync (iroh)
+# `default-features` stays ON: iroh 1.0.0 ships its TLS backend (tls-ring) and
+# the n0 discovery stack behind the default feature set. Disabling it strips
+# TLS and the endpoint fails to bind. There is no `discovery-n0` feature in
+# 1.0.0 — discovery presets live in `iroh::endpoint::presets`.
+iroh = "1.0.0"
+iroh-gossip = "0.101.0"
 
 # Markdown
 comrak = { version = "0.52", default-features = false }
@@ -80,6 +90,7 @@ parking_lot = "0.12"
 sha2 = "0.11"
 hex = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+dirs = "5"
 
 # Dev
 proptest = "1"

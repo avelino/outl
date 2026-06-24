@@ -81,6 +81,20 @@ impl App {
         if path == self.current_path() {
             self.last_mtime = file_mtime(path);
         }
+        // Post-commit hook (cross-page save): same as `save()`. Without it a
+        // backlink edit committed locally but never woke peers, so the change
+        // only propagated on the catch-up re-sync instead of in real time.
+        // The payload slug is informational — the receiver pulls by vector
+        // clock — so deriving it from the saved path keeps it honest.
+        if let Some(transport) = &self.sync_transport {
+            let slug = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_string();
+            let hlc = self.hlc.next();
+            transport.announce_local_ops(&slug, hlc);
+        }
     }
 
     /// Render the in-memory `page` back to disk and reconcile.
@@ -122,5 +136,18 @@ impl App {
         // mistake our own save for an external edit.
         self.last_mtime = file_mtime(&path);
         self.last_saved_at = Some(std::time::Instant::now());
+        // Post-commit hook: tell the transport new local ops landed.
+        // No-op for FileSyncTransport (the file is already on disk and
+        // a peer's poller will notice it); IrohSyncTransport gossips
+        // the HLC so connected peers pull the new ops over QUIC.
+        if let Some(transport) = &self.sync_transport {
+            let workspace_id = self.current_slug();
+            // The committed ops carry HLCs already minted by
+            // `reconcile_md`; `next()` returns a fresh HLC that sorts
+            // after all of them, which is what peers need to know the
+            // high-water mark to pull up to.
+            let hlc = self.hlc.next();
+            transport.announce_local_ops(&workspace_id, hlc);
+        }
     }
 }

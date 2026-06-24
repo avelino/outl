@@ -15,13 +15,15 @@ outl-mobile (this crate)
    │   ├── lib.rs                  (mod decls + run())
    │   ├── state.rs                (AppState, PageView, WorkspaceSummary, CreateBlockReply, ERR_LOADING)
    │   ├── helpers.rs              (parse_node_id / parse_date / with_ws* / build_page_view / finish_in_page*)
-   │   ├── workspace_open.rs       (resolve_storage_root, spawn_workspace_opener, reconcile_orphan_md — iCloud-specific)
-   │   ├── icloud_path.rs          (NSFileManager bridge — iOS-only)
+   │   ├── workspace_open.rs       (resolve_storage_root, spawn_workspace_opener, reconcile_orphan_md, storage_is_icloud)
+   │   ├── workspace_picker.rs     (set_workspace / pick_in_icloud — folder choice + persistence; native picker deferred)
+   │   ├── icloud_path.rs          (NSFileManager bridge + is_inside_icloud — iOS-only, opt-in)
    │   └── commands/               (Tauri command surface — split mirrors outl-desktop)
    │       ├── mod.rs
    │       ├── workspace.rs        (workspace_stats, reload_workspace)
    │       ├── page.rs             (list_all_pages / search_pages / search_persons / outl_emoji_search / open_* / *_day / resolve_ref / legacy compat shims)
    │       ├── block.rs            (create_block / edit_block / toggle_todo / toggle_quote / delete_block / indent_block / outdent_block / move_block_* / set_block_collapsed / paste_markdown_at)
+   │       ├── peers.rs            (outl_peer_list / outl_peer_remove — read/edit the iroh peers.json, no workspace lock)
    │       └── exec.rs             (run_code_block — thin shim over outl_actions::exec::run_code_block)
    ├── gen/apple/.../main.mm       (NSMetadataQuery + NSFileCoordinator iCloud watcher)
    └── (frontend in ../src)        (Solid components, Tailwind, Tauri bridge)
@@ -34,8 +36,75 @@ no `settings.rs` / `fs_watcher.rs` / `commands/{shortcuts,theme}.rs`) live entir
 so the command files read identically.
 
 The op log backend is the shared `outl_core::storage::JsonlStorage`;
-there is no `icloud_storage.rs` because the only iCloud-specific work is resolving the ubiquity container path (via `icloud_path.rs`) and forcing peer-file materialisation before reads (via `main.mm`).
+there is no `icloud_storage.rs` because the only iCloud-specific work is resolving the ubiquity container path (via `icloud_path.rs`) and forcing peer-file materialisation before reads (via `OutlOpsWatcher.swift`).
 The storage trait stays generic; the transport gets handled outside it.
+
+## Storage is a chosen folder, not forced iCloud (Fase 2)
+
+**The workspace root is a folder the user picks.**
+It may live anywhere — the app's local data dir (the default), the Files app, or inside an iCloud container — and **iroh P2P is the primary sync**.
+iCloud is now just *a place the folder might be*, never a hard dependency.
+A fresh install works with **zero iCloud**.
+
+Boot resolution (`workspace_open::resolve_storage_root`):
+
+1. The persisted `WorkspaceCfg.last` path (from `outl-config`), when present and usable — survives restarts.
+2. Else the app-local default `<app-data-dir>/outl/` — synced by iroh, no iCloud.
+
+The old behaviour (force `<ubiquity-container>/Documents/`, fall back to local only if iCloud was unavailable) is gone.
+iCloud is reachable on demand via `workspace_open::icloud_workspace_root()` (used by `workspace_picker::pick_in_icloud`).
+
+**Folder selection.**
+`workspace_picker.rs` owns the choice.
+
+- `set_workspace(path)` validates, creates the dir, persists `WorkspaceCfg.last`, and emits `workspace-reopen-required`.
+  The reopen is **boot-read** today (next launch picks up `last`); a runtime swap would need `AppState.storage_root` to become an `Arc<Mutex<Option<PathBuf>>>` plus an iroh rebind, deliberately deferred.
+  Frontend wrapper: `setWorkspace(path) → Promise<boolean>` in `src/lib/api.ts` (returns `is_icloud`).
+- `pick_in_icloud()` resolves `<container>/Documents` for the "store in iCloud" opt-in, zero native code; returns `null` when the device isn't signed into iCloud.
+  Frontend wrapper: `pickInICloud() → Promise<string | null>` in `src/lib/api.ts`.
+
+> **Registration note:** both commands are registered in `lib.rs`'s `invoke_handler!` list (`workspace_picker::set_workspace`, `workspace_picker::pick_in_icloud`).
+
+## First-run onboarding
+
+`components/Onboarding.tsx` is the first-run flow.
+`App.tsx` gates it on a **per-install `localStorage` flag** (`outl.onboarded`) — pure UI state, **never** an Op (it must not converge across devices; each device onboards once).
+Mobile has no "is a workspace chosen?" backend gate (a fresh install always resolves *a* root — the local default), so this flag is the only signal that distinguishes a brand-new install from a returning one.
+
+Two honest steps, no filler:
+
+1. **Storage** — "Keep on this device" (the local default, recommended; just advances, no `setWorkspace` call) vs "Store in iCloud" (`setWorkspace(pickInICloud())`).
+   The iCloud option is **hidden** when `pickInICloud()` returns `null` (device not signed in) — never a dead button.
+   Because `set_workspace` is boot-read, choosing iCloud shows a one-line "active after you restart" note instead of pretending the swap is instant.
+   Arbitrary-folder picking stays deferred (native picker), so these two are the only choices today.
+2. **Sync (optional)** — the shared `SYNC_STEP` copy (`@outl/shared/onboarding`) + a button that opens the existing `<DevicesSheet />` (set its `open` prop — internals untouched).
+   Fully skippable.
+
+The onboarding **copy** lives in `@outl/shared/onboarding` (identical to desktop); the bottom-sheet chrome + haptics stay here.
+Pairing is **not** reimplemented — `Onboarding` opens the real `<DevicesSheet />`.
+
+**DEFERRED — native folder picker + security-scoped bookmark.**
+The native `UIDocumentPickerViewController` (folder mode) bridge is **not** implemented (and is not faked).
+Two real blockers: Tauri 2's iOS folder picker is incomplete (tauri-apps/plugins-workspace#3030), and a folder *outside* the app sandbox needs an `NSURL` security-scoped **bookmark** to be reopenable across launches.
+Storing just the string path in `WorkspaceCfg.last` only works for the sandbox, the local default, and the app's own iCloud container.
+The follow-up adds an `objc2` bridge (mirroring `icloud_path.rs`) that presents the picker, serialises a bookmark, persists it next to `actor`, and resolves it on boot before `resolve_storage_root`.
+Until then, `set_workspace` works for any path the frontend can already reach without a scoped bookmark, and `pick_in_icloud` covers the iCloud case.
+
+## Change detection: generic, not iCloud-only
+
+- **iroh (primary).**
+  The transport fires a reload signal whenever it writes peer ops; `iroh_sync.rs` bridges it to the `workspace-ready` Tauri event.
+  This covers a local folder with **no iCloud watcher at all**.
+- **iCloud watcher (conditional).**
+  `OutlOpsWatcher.swift` (`NSMetadataQuery` + `NSFileCoordinator`) is the iCloud-only detector.
+  It is **conditional on the folder being inside iCloud**: its query is scoped to `NSMetadataQueryUbiquitousDocumentsScope`, so for a local folder it matches nothing and stays dormant — it is never *required*.
+  `workspace_open::storage_is_icloud()` / `icloud_path::is_inside_icloud()` answer the "is this path in iCloud" question on the Rust side (logged at boot).
+
+**DEFERRED — iCloud + iroh write coexistence.**
+When the chosen folder lives in iCloud, both the iCloud daemon and iroh write `ops-*.jsonl`.
+iroh already serialises its own writes (append-lock), the parser recovers glued lines, and the watcher already coordinates *reads* via `NSFileCoordinator`.
+Wrapping our own op-log *writes* in `NSFileCoordinator` on the iCloud path (so the iCloud daemon can't interleave) is the remaining coexistence hardening; it touches `JsonlStorage`'s append in `outl-core` (shared) and is left as a follow-up.
+**The local-folder path has no such concern and is fully clean.**
 
 ## Hard rule
 
@@ -145,6 +214,41 @@ The "Run code" action only shows up when `@outl/shared/highlight::detectFence` m
 and the backend re-validates inside `run_block_at_index`,
 so a false-positive surfaces as a runtime toast instead of doing damage.
 
+## Peer / device management (`outl_peer_list` / `outl_peer_remove`)
+
+`commands/peers.rs` exposes two Tauri commands that read and edit the iroh
+peers file (`~/.outl/peers.json`) via `outl_sync_iroh::PeersStore`:
+
+- `outl_peer_list() -> Vec<PeerDto>` — lists paired devices (`node_id`,
+  `alias`, `added_at`).
+- `outl_peer_remove(id: String) -> bool` — removes peers whose `node_id`
+  starts with the given prefix; `true` if any matched.
+
+These are the **only** commands that touch `peers.json` directly instead of
+the workspace lock — peer pairing is sync-transport state, not workspace
+state, so they don't go through `AppState`/`outl-actions`.
+The store path is resolved from `dirs::home_dir()` (not the iCloud
+container), matching where the iroh `SyncEngine` writes it.
+
+`commands/peers.rs` also exposes `outl_sync_now()` (reads `state.iroh`, calls the transport's `sync_now()`) — the force-sync trigger behind the refresh button.
+
+## Sync dot + refresh (iroh-driven)
+
+The header `<SyncDot>` and the refresh button / `PullToRefresh` reflect and drive the **iroh P2P transport** (outl's default sync), not the iCloud-era `navigator.onLine` signal they started on.
+
+- **Dot state.**
+  The PRIMARY input is iroh peer health, polled via `peerStatus()` → the shared `peersOnline()` helper (`@outl/shared/peers`) into a `peersUp` signal.
+  The poll runs on mount, every 5s, and after each `peer-ops-changed` (the native ops bridge) plus after a force-sync.
+  Derivation: a force-sync in flight → **syncing** (spinner); else `online() && peersUp()` → **synced** (green); else **offline** (orange).
+  `navigator.onLine` stays only as a secondary floor (truly no radio → orange regardless).
+  Zero paired peers reads as offline — there's nothing to sync with.
+- **Refresh.**
+  `handleRefresh` (the button **and** `PullToRefresh`) calls `syncNow()` (force a P2P pull — dial every peer now instead of waiting for the 8s catch-up tick) THEN `reloadWorkspace()` (re-render with whatever landed).
+  Both calls are wrapped in `withError` (toast on failure, never wedge the local reload), and the `syncing` spinner brackets the whole pass.
+
+`syncNow()` and `peersOnline()` both live in `@outl/shared` so mobile and desktop derive the dot + drive the refresh identically.
+See [`outl-sync-iroh/CLAUDE.md`](../outl-sync-iroh/CLAUDE.md) → "Force-sync trigger (`sync_now`)".
+
 ## Cross-runtime contracts (now in `@outl/shared`)
 
 The four TS pieces that mirror Rust canonical sources used to live as copies under `lib/`.
@@ -161,11 +265,21 @@ They were extracted to **`crates/outl-frontend-shared/`** so mobile and desktop 
 **Adding a new cross-runtime contract = add it in `@outl/shared` from day one.**
 Never add it under `outl-mobile/src/lib/` first — the next time desktop catches up to the feature, it has to consume from the same file.
 
-## iCloud layout
+## Logging (device console)
 
-The workspace root is `<ubiquity-container>/Documents/`.
+`run()` in `src-tauri/src/lib.rs` installs a `tracing_subscriber` fmt subscriber writing to **stderr** as its very first step (before rustls / Tauri setup).
+The `EnvFilter` defaults to `info,outl_sync_iroh=debug,iroh=info` and honors `RUST_LOG`.
+On iOS, stderr surfaces in `idevicesyslog` / Xcode.
+So the iroh P2P transport's `info!`/`warn!`/`debug!` lines (endpoint bound + node id, each connect attempt's target + outcome, "delta sync received N ops") are visible while debugging device↔device sync.
+Init uses `.try_init()` so a double-init can't panic.
+See [`outl-sync-iroh/CLAUDE.md`](../outl-sync-iroh/CLAUDE.md) for what the transport logs.
+
+## iCloud layout (opt-in destination)
+
+When the user chooses to store the workspace in iCloud, the root is `<ubiquity-container>/Documents/` (resolved by `workspace_open::icloud_workspace_root()`).
+This is **one option**, not the default — see "Storage is a chosen folder" above.
 The container is already the `outl` namespace at the iCloud Drive level; nesting an extra `outl/` folder underneath is redundant and was removed in v0.
-The TUI is expected to point at the same path via `--path "<container>/Documents"`.
+The TUI can point at the same path via `--path "<container>/Documents"`.
 
 ```
 <container>/Documents/

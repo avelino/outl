@@ -110,10 +110,19 @@ impl JsonlStorage {
                         continue;
                     }
                 };
-                match serde_json::from_str::<LogOp>(&raw) {
-                    Ok(op) => {
-                        all.push(op);
-                        ops_parsed += 1;
+                match parse_log_line(&raw) {
+                    Ok(ops) => {
+                        if ops.len() > 1 {
+                            warn!(
+                                "recovered {} glued ops on {}:{} (concatenated JSON with no \
+                                 newline — likely an interleaved concurrent append)",
+                                ops.len(),
+                                path.display(),
+                                lineno + 1
+                            );
+                        }
+                        ops_parsed += ops.len();
+                        all.extend(ops);
                     }
                     Err(e) => warn!("parse {}:{}: {e}", path.display(), lineno + 1),
                 }
@@ -157,6 +166,28 @@ impl JsonlStorage {
     pub fn ops_dir(&self) -> &std::path::Path {
         &self.ops_dir
     }
+}
+
+/// Parse one JSONL line into one-or-more [`LogOp`]s.
+///
+/// The common case is a single op per line. But a non-atomic, unsynchronized
+/// concurrent append (two writers' `write_all`s interleaving on the same file)
+/// can glue two ops together with no separating newline — `…}}}{"ts":…` — and
+/// sometimes leaves a trailing empty line. Rather than drop the whole line
+/// (losing real ops the user authored), we stream every concatenated JSON value
+/// off the line via [`serde_json::StreamDeserializer`] and recover all of them.
+///
+/// `StreamDeserializer` reads consecutive self-delimiting JSON values from one
+/// buffer, so `{…}{…}` yields two ops; a clean single-op line yields one. The
+/// op log dedups by op id on apply, so recovering a value that another file
+/// also carries is harmless.
+fn parse_log_line(raw: &str) -> Result<Vec<LogOp>, serde_json::Error> {
+    let mut ops = Vec::new();
+    let stream = serde_json::Deserializer::from_str(raw).into_iter::<LogOp>();
+    for item in stream {
+        ops.push(item?);
+    }
+    Ok(ops)
 }
 
 fn op_touches_node(op: &Op, id: NodeId) -> bool {
@@ -306,6 +337,50 @@ mod tests {
             },
         };
         assert!(storage.append_op(&op).is_err());
+    }
+
+    #[test]
+    fn recovers_glued_ops_on_one_line() {
+        // Reproduce the on-disk corruption signature: two complete op JSON
+        // objects concatenated on a single line with NO separating newline
+        // (`…}}}{"ts":…`), followed by an empty line — exactly what an
+        // interleaved concurrent append produces. Both ops must be recovered.
+        let tmp = TempDir::new().unwrap();
+        let actor = ActorId::new();
+        let g = HlcGenerator::new(actor);
+
+        let mk = || LogOp {
+            ts: g.next(),
+            actor,
+            op: Op::Create {
+                node: NodeId::new(),
+                parent: NodeId::root(),
+                position: Fractional::first(),
+            },
+        };
+        let a = mk();
+        let b = mk();
+        let line_a = serde_json::to_string(&a).unwrap();
+        let line_b = serde_json::to_string(&b).unwrap();
+
+        // Sanity: the fixture really is the `}}}{` glued pattern.
+        let glued = format!("{line_a}{line_b}");
+        assert!(glued.contains("}{"), "fixture must be glued JSON objects");
+
+        // Write a healthy op, then the glued line, then a trailing empty line.
+        let path = tmp.path().join(format!("ops-{actor}.jsonl"));
+        let healthy = serde_json::to_string(&mk()).unwrap();
+        std::fs::write(&path, format!("{healthy}\n{glued}\n\n")).unwrap();
+
+        let storage = JsonlStorage::open(tmp.path().to_path_buf(), actor).unwrap();
+        // 3 ops total: the healthy one + the two glued ones (empty line ignored).
+        assert_eq!(storage.all_ops().unwrap().len(), 3);
+
+        // parse_log_line in isolation recovers exactly the two glued ops.
+        let recovered = parse_log_line(&glued).unwrap();
+        assert_eq!(recovered.len(), 2);
+        assert_eq!(recovered[0].ts, a.ts);
+        assert_eq!(recovered[1].ts, b.ts);
     }
 
     #[test]

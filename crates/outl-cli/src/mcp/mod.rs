@@ -13,13 +13,17 @@
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 use serde_json::{json, Value};
+use tracing::{debug, warn};
 
 use crate::output::{codes, ApiError, Envelope};
 use crate::ws::{self, WsCtx};
+use outl_actions::SyncTransport;
+use outl_core::WorkspaceId;
 use outl_md::index::WorkspaceIndex;
 
 mod prompts;
@@ -61,6 +65,9 @@ pub fn serve(workspace_path: PathBuf) -> anyhow::Result<()> {
             stdout.flush()?;
         }
     }
+    // Client closed the pipe — tear the P2P transport down cleanly so its
+    // endpoint releases the relay route for any other process on this device.
+    ctx.shutdown_transport();
     Ok(())
 }
 
@@ -77,12 +84,27 @@ pub(crate) struct ServerCtx {
     /// concurrently today, so a `parking_lot::Mutex` is sufficient and
     /// cheap.
     state: Mutex<ServerState>,
+    /// Set by the transport's peer-ready drain thread when a peer pushed
+    /// new ops. The next workspace access drops the cache and reopens so
+    /// the MCP serves the peer's edits, not a stale replay. An `AtomicBool`
+    /// keeps the drain thread off the `state` mutex.
+    peer_dirty: Arc<AtomicBool>,
 }
 
 #[derive(Default)]
 struct ServerState {
     workspace: Option<WsCtx>,
     index: Option<WorkspaceIndex>,
+    /// The iroh P2P transport, brought up lazily on the first workspace
+    /// open (once we know the resolved actor + root). `None` means either
+    /// "not opened yet" or "this device has no paired peers, so there is
+    /// nothing to sync and we stay off the wire". Brought up at most once.
+    transport: Option<Arc<dyn SyncTransport>>,
+    /// Whether we already attempted to bring the transport up (so a device
+    /// with no peers doesn't retry every call).
+    transport_tried: bool,
+    /// Stable workspace id, for the gossip announce payload.
+    workspace_id: Option<String>,
 }
 
 impl ServerCtx {
@@ -90,6 +112,7 @@ impl ServerCtx {
         Self {
             workspace_path,
             state: Mutex::new(ServerState::default()),
+            peer_dirty: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -103,8 +126,20 @@ impl ServerCtx {
         F: FnOnce(&mut WsCtx) -> Result<R, ApiError>,
     {
         let mut state = self.state.lock();
+        // A peer pushed ops since the last access — drop the cache so the
+        // open below replays the freshly-arrived ops-*.jsonl.
+        if self.peer_dirty.swap(false, Ordering::Relaxed) {
+            state.workspace = None;
+            state.index = None;
+        }
         if state.workspace.is_none() {
-            state.workspace = Some(ws::open(&self.workspace_path)?);
+            let wc = ws::open(&self.workspace_path)?;
+            // First open: bring the P2P transport up so this MCP session is a
+            // first-class peer (pushes its ops, accepts inbound) without
+            // depending on a GUI being open. Best-effort — a failure here
+            // never blocks the tool call.
+            self.ensure_transport(&mut state, &wc);
+            state.workspace = Some(wc);
         }
         let wc = state.workspace.as_mut().ok_or_else(|| {
             ApiError::new(
@@ -113,6 +148,87 @@ impl ServerCtx {
             )
         })?;
         f(wc)
+    }
+
+    /// Bring the iroh transport up once, now that we have the resolved actor
+    /// and root. No-op if already tried, or if the device has no paired peers
+    /// (nothing to sync — stay off the wire). All failures degrade silently.
+    fn ensure_transport(self: &Arc<Self>, state: &mut ServerState, wc: &WsCtx) {
+        if state.transport_tried {
+            return;
+        }
+        state.transport_tried = true;
+        let Some(home) = dirs::home_dir() else {
+            return;
+        };
+        let outl_dir = home.join(".outl");
+        let peers = match outl_sync_iroh::PeersStore::load_or_default(&outl_dir.join("peers.json"))
+        {
+            Ok(p) => p,
+            Err(e) => {
+                debug!("mcp: peers.json unreadable, P2P off: {e}");
+                return;
+            }
+        };
+        if peers.list().is_empty() {
+            debug!("mcp: no paired peers — P2P transport stays off");
+            return;
+        }
+        let identity =
+            match outl_sync_iroh::IrohIdentity::load_or_generate(&outl_dir.join("identity.key")) {
+                Ok(i) => i,
+                Err(e) => {
+                    warn!("mcp: identity load failed, P2P off: {e}");
+                    return;
+                }
+            };
+        let workspace_id = match WorkspaceId::read_or_create(&wc.root) {
+            Ok(w) => w.as_str().to_string(),
+            Err(e) => {
+                warn!("mcp: workspace id resolve failed, P2P off: {e}");
+                return;
+            }
+        };
+        let transport: Arc<dyn SyncTransport> =
+            Arc::new(outl_sync_iroh::IrohSyncTransport::new(identity, peers));
+        // The transport signals on this channel each time a peer's ops land;
+        // a tiny drain thread flips `peer_dirty` so the next access reopens.
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let dirty = self.peer_dirty.clone();
+        std::thread::Builder::new()
+            .name("outl-mcp-peer-ready".into())
+            .spawn(move || {
+                while rx.recv().is_ok() {
+                    dirty.store(true, Ordering::Relaxed);
+                }
+            })
+            .ok();
+        transport.start(wc.root.clone(), wc.actor, tx);
+        state.transport = Some(transport);
+        state.workspace_id = Some(workspace_id);
+        debug!("mcp: iroh P2P transport up");
+    }
+
+    /// After a mutating tool commits, wake connected peers so they pull the
+    /// new ops over gossip instead of waiting for the catch-up re-sync.
+    /// No-op when the transport is off (no peers / not yet up).
+    pub(crate) fn announce_after_mutation(self: &Arc<Self>) {
+        let state = self.state.lock();
+        let (Some(transport), Some(workspace_id), Some(wc)) =
+            (&state.transport, &state.workspace_id, &state.workspace)
+        else {
+            return;
+        };
+        // `next()` mints an HLC that sorts after everything the mutation just
+        // committed — the high-water mark peers pull up to.
+        transport.announce_local_ops(workspace_id, wc.hlc.next());
+    }
+
+    /// Tear the transport down (called when the stdio pipe closes).
+    pub(crate) fn shutdown_transport(self: &Arc<Self>) {
+        if let Some(transport) = self.state.lock().transport.take() {
+            transport.shutdown();
+        }
     }
 
     /// Run `f` against the cached `WorkspaceIndex`, building it on

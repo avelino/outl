@@ -59,6 +59,7 @@ impl From<Settings> for Config {
                 vim_mode: s.vim_mode,
                 font_size: s.font_size,
             },
+            sync: Default::default(),
         }
     }
 }
@@ -78,7 +79,12 @@ pub fn load(_app_config_dir: &std::path::Path) -> Settings {
 /// (`~/.config/outl/config.toml`) regardless of where the OS
 /// thinks the app's config directory is.
 pub fn save(_app_config_dir: &std::path::Path, settings: &Settings) -> anyhow::Result<()> {
-    let cfg: Config = settings.clone().into();
+    let mut cfg: Config = settings.clone().into();
+    // The flat desktop `Settings` doesn't model the `[sync]` section, so
+    // `into()` resets it to default. Preserve the on-disk transport choice —
+    // otherwise every Save silently reverts `[sync]` to the default and
+    // disables iroh (exactly the bug that made the desktop stop syncing).
+    cfg.sync = outl_config::load().sync;
     outl_config::save(&cfg)
 }
 

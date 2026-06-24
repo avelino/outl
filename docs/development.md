@@ -262,6 +262,24 @@ Any new branch needs a new test.
 
 The `crdt-invariant-checker` agent runs the same gate from CI on PRs.
 
+### Proptest budget: `PROPTEST_CASES`
+
+The property suites (`outl-core/tests/property_based.rs`, `outl-md/tests/roundtrip.rs`, and any future `outl-sync-iroh` convergence proptests) bake a low default case count via `ProptestConfig::with_cases(200)` so local runs stay fast.
+`PROPTEST_CASES` is proptest's built-in override of that number; set it to explore harder without touching the test files.
+
+```bash
+# Dev default (fast): 200 cases baked into the suites.
+cargo test -p outl-core
+
+# Explore the convergence space harder, locally:
+PROPTEST_CASES=1024 cargo test -p outl-core -p outl-sync-iroh --all-targets
+```
+
+CI's dedicated **`sync`** job (in [`ci.yml`](../.github/workflows/ci.yml)) sets `PROPTEST_CASES=1024` for exactly this pair of crates.
+That way the probabilistic convergence bugs (op reordering, cycle no-ops, concurrent moves) actually get generated cases on every PR.
+That job is a required status check: a red convergence run blocks merge.
+Keep the high budget on the `sync` job only — running 1024 across the whole test matrix burns runner minutes for no extra signal.
+
 ### TDD for bug fixes
 
 Bug → reproduce as a test that fails on `main` → patch turns it green.
@@ -462,7 +480,7 @@ The exact recipe lives in `.github/workflows/bench.yml` `bench-cli-xlarge` if yo
 
 | Workflow | Triggers | What it runs | Blocks merge? |
 |---|---|---|---|
-| [`ci.yml`](../.github/workflows/ci.yml) | Push / PR to `main` (skipped on docs-only) | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo doc -D warnings`. Excludes `outl-mobile` + `outl-desktop`. Test matrix: `ubuntu-latest` + `macos-latest`. | **Yes** |
+| [`ci.yml`](../.github/workflows/ci.yml) | Push / PR to `main` (skipped on docs-only) | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo doc -D warnings`, plus a dedicated **`sync`** job (`outl-core` + `outl-sync-iroh` with `PROPTEST_CASES=1024`). Excludes `outl-mobile` + `outl-desktop`. Test matrix: `ubuntu-latest` + `macos-latest`. | **Yes** |
 | [`mobile.yml`](../.github/workflows/mobile.yml) | Push / PR touching mobile paths | Frontend tests, Swift tests, Rust mobile crate, iOS archive + sign on `push` | Mobile changes only |
 | [`desktop.yml`](../.github/workflows/desktop.yml) | Push / PR touching desktop paths | Tauri build matrix (macOS/Linux/Windows) | Desktop changes only |
 | [`bench.yml`](../.github/workflows/bench.yml) | Push / PR touching `outl-md`, plus weekly cron | Criterion (small/medium/large) on every PR; xlarge + CLI hyperfine on cron / manual dispatch. Artifacts retained 14–30 days. | No (informational) |

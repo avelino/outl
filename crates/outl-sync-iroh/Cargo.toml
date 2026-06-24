@@ -1,0 +1,37 @@
+[package]
+name = "outl-sync-iroh"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "iroh-based P2P sync transport for outl"
+license.workspace = true
+
+[dependencies]
+outl-actions = { workspace = true }
+outl-core = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tokio = { version = "1", features = ["full"] }
+# See workspace Cargo.toml for why iroh keeps default-features ON.
+iroh = { workspace = true }
+iroh-gossip = { workspace = true }
+# `StreamExt` for the gossip receiver stream lives in `n0-future`, re-exported
+# by iroh-gossip's public API surface.
+n0-future = "0.3"
+blake3 = "1"
+# `chrono` + `qrcode` back the pairing helpers (ISO timestamps in PeerEntry,
+# QR ticket rendering) called out in the crate's CLAUDE.md. Kept so the
+# pairing CLI path can land without a manifest change.
+chrono = { version = "0.4", features = ["serde"] }
+qrcode = "0.14"
+# `base64` encodes the pairing ticket (an `EndpointAddr` serialized to JSON);
+# `bytes` is the payload type `GossipSender::broadcast` takes.
+base64 = "0.22"
+bytes = "1"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+outl-core = { workspace = true }

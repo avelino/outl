@@ -45,6 +45,17 @@ vim_mode = true
 # Outline font size in pixels (desktop only — the TUI uses your
 # terminal font).
 font_size = 15
+
+[sync]
+# Which transport moves the per-actor op log between devices.
+#   "iroh" (default) — direct P2P over QUIC (hole punching + relay).
+#   "file"           — iCloud Drive / shared filesystem. Zero infra opt-out.
+# Missing [sync] falls back to "iroh" — P2P is outl's primary sync.
+transport = "iroh"
+
+# Optional relay URL for the "iroh" transport. Empty (or omitted)
+# means use iroh's n0 default relays. Ignored by the "file" transport.
+relay_url = ""
 ```
 
 ### Field reference
@@ -69,6 +80,16 @@ Available presets: `outl`, `default-dark`, `light`, `logseq-light`, `dracula`, `
 |---|---|---|---|---|
 | `vim_mode` | bool | `true` | desktop | When `false`, the desktop drops the modal `Normal / Insert / Visual` model and only listens to OS-standard chrome chords (`⌘P`, `⌘B`, …). The TUI is vim-style by definition and ignores this. |
 | `font_size` | integer (pixels) | `15` | desktop | Outline body font size. The TUI uses the user's terminal font; setting this has no effect there. |
+
+#### `[sync]`
+
+| Field | Type | Default | Read by | Effect |
+|---|---|---|---|---|
+| `transport` | `"file"` \| `"iroh"` | `"file"` | TUI peer-sync wiring | Which transport ships each device's `ops-<actor>.jsonl` to the others. `"file"` relies on iCloud Drive / a shared filesystem; `"iroh"` opens direct P2P QUIC connections to paired peers. Missing `[sync]` keeps the file transport, so existing configs are unaffected. |
+| `relay_url` | string (URL) | _empty_ | TUI peer-sync wiring | iroh relay used for NAT traversal + fallback. Empty means iroh's n0 public relays. Ignored when `transport = "file"`. See [relay.md](relay.md). |
+
+> The iroh transport also reads `~/.outl/identity.key` (this device's ed25519 keypair) and `~/.outl/peers.json` (the paired-device list).
+> Those are managed by `outl peer …`, not by this config file — see [sync.md → iroh transport](sync.md#transport-2-iroh-p2p).
 
 ---
 

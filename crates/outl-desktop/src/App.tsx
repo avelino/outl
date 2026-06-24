@@ -10,20 +10,60 @@ import { onWorkspaceReady } from "./lib/events";
 import { applyPaletteToRoot } from "./lib/palette";
 import { setAppState } from "./lib/store";
 import { AppShell } from "./components/AppShell";
-import { WorkspacePicker } from "./components/WorkspacePicker";
+import { Onboarding } from "./components/Onboarding";
+
+/** `localStorage` key for the first-run flag (pure UI state — never an Op). */
+const ONBOARDED_KEY = "outl.onboarded";
+
+/**
+ * Whether the user has completed (or skipped) first-run onboarding.
+ *
+ * This is a per-install UI flag, not workspace state, so it lives in
+ * `localStorage` and deliberately does NOT go through the op log — it
+ * must not converge across devices (each device onboards once). A
+ * returning user whose workspace already opens at boot is treated as
+ * onboarded so we never re-show the flow.
+ */
+function hasOnboarded(): boolean {
+  try {
+    return localStorage.getItem(ONBOARDED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function markOnboarded() {
+  try {
+    localStorage.setItem(ONBOARDED_KEY, "1");
+  } catch {
+    // Private mode / disabled storage — onboarding just re-shows next
+    // launch. Harmless, never blocks the app.
+  }
+}
 
 /**
  * Root component.
  *
- * Decides between `<WorkspacePicker />` and `<AppShell />` based on
- * whether the backend already has a workspace open. The split is
- * intentional: the user can re-pick a workspace at runtime (from a
- * future "Switch workspace…" menu entry) without remounting the
+ * Three states, decided in order:
+ *
+ *   - workspace already open (returning user) → `<AppShell />`.
+ *   - never onboarded → `<Onboarding />` (pick storage, optional pairing).
+ *   - onboarded but no workspace open (e.g. picked folder removed) →
+ *     fall back into `<Onboarding />` so the user re-picks.
+ *
+ * The split is intentional: the user can re-pick a workspace at runtime
+ * (from a future "Switch workspace…" menu entry) without remounting the
  * whole app.
  */
 function App() {
   const [ready, setReady] = createSignal(false);
   const [checked, setChecked] = createSignal(false);
+  const [onboarded, setOnboarded] = createSignal(hasOnboarded());
+
+  function finishOnboarding() {
+    markOnboarded();
+    setOnboarded(true);
+  }
 
   async function refresh() {
     try {
@@ -32,6 +72,9 @@ function App() {
         const stats = await workspaceStats();
         setAppState("workspace", stats);
         setReady(stats.ready);
+        // A returning user whose workspace already opens has, by
+        // definition, set up before — never re-show onboarding for them.
+        if (stats.ready && !onboarded()) finishOnboarding();
       } else {
         setReady(false);
       }
@@ -101,7 +144,18 @@ function App() {
         when={checked()}
         fallback={<div class="p-8 opacity-50">Loading…</div>}
       >
-        <Show when={ready()} fallback={<WorkspacePicker onPicked={refresh} />}>
+        {/* Ready + onboarded → the app. Otherwise run onboarding: it
+            owns the storage pick (reusing <WorkspacePicker />) and the
+            optional pairing step before handing off to <AppShell />. */}
+        <Show
+          when={ready() && onboarded()}
+          fallback={
+            <Onboarding
+              onWorkspacePicked={refresh}
+              onFinish={finishOnboarding}
+            />
+          }
+        >
           <AppShell />
         </Show>
       </Show>

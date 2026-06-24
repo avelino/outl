@@ -109,6 +109,15 @@ Same surface works through tools (`outl_daily_today`
 There is no `outl-mcp` crate, no parallel logic, no JSON-RPC framework dependency (we speak the protocol directly).
 Every new feature lands once, as a function in `outl-actions`, and is exposed in both surfaces — see [`crates/outl-cli/CLAUDE.md`](../crates/outl-cli/CLAUDE.md) for the exact "add a new tool" walkthrough.
 
+## Sync: edits made through MCP reach your other devices
+
+`outl mcp serve` is **long-lived**, so it participates in P2P sync as a first-class peer — no GUI needs to be open.
+When the device has paired peers (`outl peer pair`), the server brings the iroh transport up on first use and, after every mutating tool, wakes connected peers so they pull the change in real time.
+So an edit you make through Claude lands on your laptop/phone the same way an edit in the desktop app would.
+With no paired peers it stays fully local (nothing to sync) and never touches the network.
+A short-lived `outl <subcommand>` CLI call can't do this (it exits before a connection is even established); for scripts that must flush, run `outl sync` after the mutations.
+See [`crates/outl-sync-iroh/CLAUDE.md`](../crates/outl-sync-iroh/CLAUDE.md) → "Passive writers vs the MCP peer".
+
 ## Troubleshooting
 
 **The server starts but the host shows zero tools.** Check stderr (`outl mcp serve --workspace … 2> /tmp/outl-mcp.log` and tail it).

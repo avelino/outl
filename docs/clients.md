@@ -188,6 +188,14 @@ The policy diverges; the engine does not.
 The TUI runs the scan every 10s on a worker thread; mobile runs it once at boot.
 Both feed the same `outl_md::reconcile::reconcile_md`.
 
+### Peer reachability indicator (P2P / iroh transport)
+
+When the iroh transport is running, the desktop / mobile "online / offline" dot reads `SyncTransport::peer_health()` — a reachability snapshot the transport fills from its **own** dials (boot connect, catch-up loop, gossip-triggered sync).
+The GUI must **never** stand up a second iroh endpoint to probe peers: a second endpoint sharing the device identity hijacks the relay route from the live sync endpoint, and inbound sync gets refused.
+The `outl_peer_status` command merges the snapshot onto the full `peers.json` list, so a peer the transport hasn't dialed yet shows offline.
+The CLI's `outl peer status` is the lone exception (no running transport), so it keeps the transient-endpoint probe.
+See `crates/outl-sync-iroh/CLAUDE.md` → "One endpoint per identity".
+
 See `crates/outl-mobile/CLAUDE.md` for the full bundle ID, signing team, container ID set required to build it, and the `NSFileCoordinator`-based peer-file materialisation step that has to run before any read of a peer `ops-*.jsonl`.
 
 ## Opening a page from a user-typed ref

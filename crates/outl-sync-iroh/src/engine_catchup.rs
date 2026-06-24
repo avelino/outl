@@ -1,0 +1,347 @@
+//! Periodic catch-up loop: pull history from peers paired (or recovered) after
+//! the transport booted.
+//!
+//! Extracted from `engine.rs` so that module stays focused on the boot
+//! orchestration + the delta-sync wire code. The loop reloads `peers.json` each
+//! tick and re-dials new / failed peers; see [`run_catch_up`] for the dedup +
+//! retry contract.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use outl_core::id::ActorId;
+use tracing::{debug, info, warn};
+
+use crate::engine::{
+    delta_sync, try_acquire_in_flight, AppendLock, InFlightPeers, SharedWorkspaceId,
+};
+use crate::health::PeerHealthMap;
+use crate::peers::PeersStore;
+
+/// How often the catch-up loop reloads `peers.json` and re-syncs new/failed
+/// peers. Short enough that a freshly paired device syncs within a few seconds,
+/// long enough that healthy already-synced peers aren't re-dialed needlessly
+/// (those rely on gossip for live updates instead).
+const CATCH_UP_INTERVAL: Duration = Duration::from_secs(8);
+
+/// How long a peer that synced cleanly stays "fresh" before the catch-up loop
+/// re-dials it as a **maintenance re-sync**.
+///
+/// This is the safety net that makes convergence independent of the real-time
+/// gossip path: even if a peer's op-announce never crosses (flaky cross-network
+/// iroh, or a client that never called `announce_local_ops`), the loop re-pulls
+/// from every known peer at least this often. `delta_sync` is a cheap no-op when
+/// the vector clocks already match, and the shared in-flight guard collapses a
+/// slow re-dial into the previous one, so a short interval does not thunder.
+///
+/// Without this, a peer synced once was marked done for the whole session and
+/// never re-dialed — so a later edit on the other device never pulled unless
+/// gossip happened to deliver the announce (the "paired, first sync worked, then
+/// nothing propagates" bug).
+const MAINTENANCE_RESYNC: Duration = Duration::from_secs(10);
+
+/// Periodic catch-up against peers added (or recovered) after boot.
+///
+/// Each tick reloads `peers.json` from disk — this is the whole point: a device
+/// paired *after* `start()` writes its [`crate::PeerEntry`] there, and the
+/// boot-time connect loop never saw it. For every known peer we run
+/// [`delta_sync`], which pulls the peer's entire op-log history on a first
+/// contact (empty vector clock for that actor) and is a cheap no-op once the
+/// clocks match.
+///
+/// To avoid re-dialing every healthy peer forever, we keep a `HashSet` of
+/// node-ids already synced **this session**. A peer is (re)synced only when it
+/// is new this session OR its last attempt failed; a peer that synced cleanly is
+/// left to gossip for live updates. The first `interval` tick fires immediately
+/// (tokio's default), so a peer paired moments after boot syncs within one tick.
+///
+/// Returns when the task is aborted at shutdown.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn catch_up_loop(
+    endpoint: iroh::Endpoint,
+    peers_path: PathBuf,
+    workspace_root: PathBuf,
+    workspace_id: SharedWorkspaceId,
+    actor: ActorId,
+    peer_ready_tx: std::sync::mpsc::Sender<()>,
+    health: PeerHealthMap,
+    append_lock: AppendLock,
+    in_flight: InFlightPeers,
+    wid_changed: tokio::sync::broadcast::Receiver<outl_core::WorkspaceId>,
+) {
+    // Default resolver: reload peers.json each tick and build a full
+    // EndpointAddr (id + relay) for every known peer.
+    let resolver = move || match PeersStore::load_or_default(&peers_path) {
+        Ok(store) => store
+            .list()
+            .iter()
+            .filter_map(|p| p.iroh_endpoint_addr().ok())
+            .collect::<Vec<_>>(),
+        Err(e) => {
+            debug!("catch-up: reload peers.json failed: {e}");
+            Vec::new()
+        }
+    };
+    run_catch_up(
+        endpoint,
+        CATCH_UP_INTERVAL,
+        MAINTENANCE_RESYNC,
+        resolver,
+        workspace_root,
+        workspace_id,
+        actor,
+        peer_ready_tx,
+        Some(health),
+        append_lock,
+        Some(in_flight),
+        Some(wid_changed),
+    )
+    .await
+}
+
+/// Run a single forced delta-sync pass over the current peer set.
+///
+/// This backs `IrohSyncTransport::sync_now` (GUI pull-to-refresh / "sync now").
+/// Unlike [`catch_up_loop`], it does **not** keep a per-session `synced`
+/// dedup — the whole point of a manual sync is to re-dial *every* peer right
+/// now, including healthy ones the catch-up loop leaves to gossip. `delta_sync`
+/// is a cheap no-op when the vector clocks already match, so re-dialing a
+/// healthy peer just confirms convergence.
+///
+/// It still honors the shared safety machinery: the per-peer in-flight guard
+/// (skip a peer already being dialed by boot / catch-up / gossip), the
+/// process-wide append lock (threaded into `delta_sync`), and health recording
+/// for the status dot. Peers are resolved once from `peers.json` at call time.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn force_sync_all(
+    endpoint: iroh::Endpoint,
+    peers_path: PathBuf,
+    workspace_root: PathBuf,
+    workspace_id: SharedWorkspaceId,
+    actor: ActorId,
+    peer_ready_tx: std::sync::mpsc::Sender<()>,
+    health: PeerHealthMap,
+    append_lock: AppendLock,
+    in_flight: InFlightPeers,
+) {
+    let addrs: Vec<iroh::EndpointAddr> = match PeersStore::load_or_default(&peers_path) {
+        Ok(store) => store
+            .list()
+            .iter()
+            .filter_map(|p| p.iroh_endpoint_addr().ok())
+            .collect(),
+        Err(e) => {
+            debug!("sync-now: reload peers.json failed: {e}");
+            return;
+        }
+    };
+
+    for addr in addrs {
+        let nid = addr.id;
+        // Coordinate with boot / catch-up / gossip dials: skip if one is
+        // already running for this peer (its result lands anyway).
+        let Some(_in_flight) = try_acquire_in_flight(&in_flight, nid) else {
+            debug!(
+                "sync-now: sync to {} already in flight, skipping",
+                nid.fmt_short()
+            );
+            continue;
+        };
+        let started = Instant::now();
+        let wid_snapshot = workspace_id
+            .read()
+            .expect("workspace id rwlock poisoned")
+            .clone();
+        match delta_sync(
+            &endpoint,
+            addr,
+            &workspace_root,
+            &wid_snapshot,
+            actor,
+            peer_ready_tx.clone(),
+            &append_lock,
+        )
+        .await
+        {
+            Ok(()) => {
+                info!("sync-now: sync to {} ok", nid.fmt_short());
+                health.record_success(nid, started);
+            }
+            Err(e) => {
+                warn!("sync-now: sync to {} failed: {e}", nid.fmt_short());
+                health.record_failure(nid);
+            }
+        }
+    }
+}
+
+/// Drain the `sync_now` trigger channel, running a forced [`force_sync_all`]
+/// pass on every signal.
+///
+/// Mirrors the `announce_rx` drain task in [`crate::engine::run_iroh`]: the sync
+/// side (`IrohSyncTransport::sync_now`) sends a unit on an unbounded channel,
+/// and this task — spawned once on the transport's runtime — services each
+/// request. Coalescing is fine: a burst of taps still ends in one converged
+/// state because each pass resolves the latest peers + vector clocks.
+///
+/// Returns when the sender drops (transport shutdown).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn drain_sync_now(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<()>,
+    endpoint: iroh::Endpoint,
+    peers_path: PathBuf,
+    workspace_root: PathBuf,
+    workspace_id: SharedWorkspaceId,
+    actor: ActorId,
+    peer_ready_tx: std::sync::mpsc::Sender<()>,
+    health: PeerHealthMap,
+    append_lock: AppendLock,
+    in_flight: InFlightPeers,
+) {
+    while rx.recv().await.is_some() {
+        info!("sync-now: forced sync pass requested");
+        force_sync_all(
+            endpoint.clone(),
+            peers_path.clone(),
+            workspace_root.clone(),
+            workspace_id.clone(),
+            actor,
+            peer_ready_tx.clone(),
+            health.clone(),
+            append_lock.clone(),
+            in_flight.clone(),
+        )
+        .await;
+    }
+}
+
+/// The catch-up engine, parameterized over how peers are resolved each tick.
+///
+/// Production passes a resolver that reloads `peers.json`; tests inject a
+/// resolver that returns loopback [`iroh::EndpointAddr`]s (with direct addrs),
+/// so the dedup + retry behaviour runs over real QUIC without a relay.
+///
+/// `resolve_peers` is called once per tick and returns the set of peers to
+/// consider. A peer already synced cleanly this session is skipped; a new or
+/// previously-failed peer is (re)dialed.
+/// `health` records each dial's outcome for the GUI status path; tests pass
+/// `None` (they assert sync convergence, not the reachability projection).
+/// `append_lock` is the process-wide op-log append guard threaded into
+/// `delta_sync`; `in_flight` is the shared per-peer in-flight set (tests pass
+/// `None` — they exercise convergence over the per-session `synced` dedup).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_catch_up<F>(
+    endpoint: iroh::Endpoint,
+    period: Duration,
+    resync_after: Duration,
+    mut resolve_peers: F,
+    workspace_root: PathBuf,
+    workspace_id: SharedWorkspaceId,
+    actor: ActorId,
+    peer_ready_tx: std::sync::mpsc::Sender<()>,
+    health: Option<PeerHealthMap>,
+    append_lock: AppendLock,
+    in_flight: Option<InFlightPeers>,
+    mut wid_changed: Option<tokio::sync::broadcast::Receiver<outl_core::WorkspaceId>>,
+) where
+    F: FnMut() -> Vec<iroh::EndpointAddr>,
+{
+    let mut interval = tokio::time::interval(period);
+    // When each peer last completed a delta_sync cleanly this session. A peer is
+    // re-dialed once its last success is older than `resync_after` (the
+    // maintenance re-sync) — or immediately if it's new / its last attempt
+    // failed (absent from the map). This replaces the old "synced once, never
+    // again" set that made convergence hostage to the gossip path.
+    let mut last_synced: HashMap<iroh::EndpointId, Instant> = HashMap::new();
+
+    loop {
+        // Wait for the next tick, but if the workspace id is adopted mid-session
+        // (the joiner takes the host's id during pairing), clear `synced` and
+        // continue: every peer must be re-dialed under the new id, otherwise the
+        // single immediate post-pair sync leaves them marked synced forever and
+        // later edits never pull. Reuses the same dial/append/in-flight path —
+        // only the dedup is reset.
+        match wid_changed.as_mut() {
+            Some(rx) => {
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    changed = rx.recv() => {
+                        match changed {
+                            // Adopted (or lagged — same response): re-dial everyone.
+                            Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                info!("catch-up: workspace id changed; clearing synced dedup to re-dial");
+                                last_synced.clear();
+                            }
+                            // Sender dropped (transport shutdown): stop listening,
+                            // keep ticking on the interval alone.
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                wid_changed = None;
+                            }
+                        }
+                        // Loop straight to a fresh tick selection; the cleared
+                        // dedup takes effect on the next resolve_peers pass.
+                        continue;
+                    }
+                }
+            }
+            None => {
+                interval.tick().await;
+            }
+        }
+
+        for addr in resolve_peers() {
+            let nid = addr.id;
+            // Skip a peer only while its last clean sync is still fresh (younger
+            // than `resync_after`). New peers (from pairing), previously-failed
+            // ones (absent), and peers due for a maintenance re-sync fall through
+            // and get (re)dialed — that re-sync is what propagates new ops when
+            // gossip didn't.
+            if let Some(last) = last_synced.get(&nid) {
+                if last.elapsed() < resync_after {
+                    continue;
+                }
+            }
+            // Coordinate with boot/gossip dials: skip if one is already running.
+            let _in_flight = match in_flight.as_ref().map(|s| try_acquire_in_flight(s, nid)) {
+                Some(None) => continue,
+                Some(Some(guard)) => Some(guard),
+                None => None,
+            };
+            let started = Instant::now();
+            let wid_snapshot = workspace_id
+                .read()
+                .expect("workspace id rwlock poisoned")
+                .clone();
+            match delta_sync(
+                &endpoint,
+                addr,
+                &workspace_root,
+                &wid_snapshot,
+                actor,
+                peer_ready_tx.clone(),
+                &append_lock,
+            )
+            .await
+            {
+                Ok(()) => {
+                    info!("catch-up: sync to {} ok", nid.fmt_short());
+                    // Stamp the success so this peer is skipped until it goes
+                    // stale (`resync_after`), then re-dialed as maintenance.
+                    last_synced.insert(nid, Instant::now());
+                    if let Some(h) = &health {
+                        h.record_success(nid, started);
+                    }
+                }
+                Err(e) => {
+                    // Drop any stale timestamp so the next tick retries it now.
+                    last_synced.remove(&nid);
+                    warn!("catch-up: sync to {} failed: {e}", nid.fmt_short());
+                    if let Some(h) = &health {
+                        h.record_failure(nid);
+                    }
+                }
+            }
+        }
+    }
+}

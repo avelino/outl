@@ -11,6 +11,7 @@ use outl_actions::{Backlink, OutlineNode, PageMeta};
 use outl_core::hlc::HlcGenerator;
 use outl_core::workspace::Workspace;
 use outl_exec::RuntimeRegistry;
+use outl_sync_iroh::IrohSyncTransport;
 use parking_lot::Mutex;
 use serde::Serialize;
 
@@ -22,9 +23,13 @@ pub(crate) const ERR_LOADING: &str = "workspace_loading";
 ///
 /// Note: `storage_root` is a plain `PathBuf` (resolved on boot inside
 /// `workspace_open::resolve_storage_root`) — unlike the desktop crate,
-/// the mobile client always has a workspace path (iCloud container or
-/// the local fallback). Don't copy desktop's
-/// `Arc<Mutex<Option<PathBuf>>>` shape — the divergence is deliberate.
+/// the mobile client always has a workspace path: the folder the user
+/// previously chose (`WorkspaceCfg.last`), or the app-local default
+/// `<app-data-dir>/outl/` on a fresh install. Don't copy desktop's
+/// `Arc<Mutex<Option<PathBuf>>>` shape — the single-root divergence is
+/// deliberate. Switching folders at runtime is a `workspace-reopen-required`
+/// event + relaunch today (see `workspace_picker`); a live swap would be
+/// what flips this to the desktop shape.
 pub(crate) struct AppState {
     /// `None` until the background opener completes.
     pub(crate) workspace: Arc<Mutex<Option<Workspace>>>,
@@ -35,6 +40,22 @@ pub(crate) struct AppState {
     /// `spawn_blocking` callers can clone-and-move without holding
     /// the workspace mutex.
     pub(crate) registry: Arc<RuntimeRegistry>,
+    /// The running iroh P2P sync transport, when wired at boot.
+    ///
+    /// This is a **lifetime guard**: the transport's `start()` spawns a
+    /// detached `outl-iroh-sync` thread that owns the tokio runtime via
+    /// internal `Arc`s, but the `shutdown_tx` / `announce_tx` handles
+    /// live on this struct. Keeping the value here means the app holds a
+    /// handle for its whole lifetime; if we dropped it the transport
+    /// would stay running but lose any future `shutdown()` / announce
+    /// path. `None` when iroh is disabled in config or failed to bind
+    /// (the app degrades to the iCloud file transport, which needs no
+    /// live handle).
+    ///
+    /// Read by `commands::peers::outl_peer_status` (via `peer_health()`),
+    /// and parked for the eventual `announce_local_ops` post-commit hook and
+    /// a graceful `shutdown()` on app exit.
+    pub(crate) iroh: Option<IrohSyncTransport>,
 }
 
 #[derive(Debug, Clone, Serialize)]

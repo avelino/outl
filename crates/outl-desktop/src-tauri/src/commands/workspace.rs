@@ -58,6 +58,27 @@ pub(crate) fn set_workspace(
     if let Err(e) = app.emit("workspace-ready", ()) {
         warn!("emit workspace-ready: {e}");
     }
+
+    // Re-bind the iroh transport to the new root (best-effort, gated on
+    // `[sync] transport = "iroh"`). Shut down any transport bound to the
+    // previous workspace first so its background runtime stops. The
+    // `notify` watcher (restarted above) keeps covering detection
+    // regardless of whether iroh comes up.
+    if let Some(prev) = state.iroh_transport.lock().take() {
+        prev.shutdown();
+    }
+    // Drop the stale concrete pairing handle too — it points at the now
+    // shut-down transport. `wire_iroh_transport` republishes a fresh one.
+    *state.iroh_pairing.lock() = None;
+    crate::iroh_sync::wire_iroh_transport(
+        outl_config::load().sync.transport,
+        &state.iroh_transport,
+        &state.iroh_pairing,
+        path.clone(),
+        state.hlc.actor(),
+        app.clone(),
+    );
+
     // Phase 2: scan + reconcile in background so the user can start
     // editing today's journal while legacy `.md` files (vim-authored,
     // peer-pushed without sidecar, fixture imports) materialise into

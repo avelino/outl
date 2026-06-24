@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use outl_actions::{Backlink, HistoryStacks, OutlineNode, PageMeta};
+use outl_actions::{Backlink, HistoryStacks, OutlineNode, PageMeta, SyncTransport};
 use outl_core::hlc::HlcGenerator;
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
@@ -51,6 +51,24 @@ pub(crate) struct AppState {
     /// (replaced) when the user switches workspaces; `None` while
     /// the picker is still up.
     pub fs_watcher: Arc<Mutex<Option<WatcherHandle>>>,
+    /// Active P2P sync transport (`outl_sync_iroh::IrohSyncTransport`),
+    /// when the config opts into `[sync] transport = "iroh"`. `None`
+    /// for the default filesystem transport (the `notify` watcher
+    /// covers change detection in that case).
+    ///
+    /// Held behind a `Mutex` because it's wired in on a background
+    /// thread (the boot opener) after `AppState` is constructed, and
+    /// the pairing / shutdown commands read it back. Stored as the
+    /// `dyn SyncTransport` trait object so `announce_local_ops` /
+    /// `shutdown` are reachable without re-importing the concrete type.
+    pub iroh_transport: Arc<Mutex<Option<Arc<dyn SyncTransport>>>>,
+    /// The same iroh transport as `iroh_transport`, but kept as the **concrete**
+    /// type so the pairing commands can call `pair_host` / `pair_join` (which
+    /// reuse the live sync endpoint — there is no separate pairing endpoint).
+    /// `None` for the filesystem transport. Tracks `iroh_transport` 1:1; held
+    /// concretely because pairing isn't a `SyncTransport` trait concern (the
+    /// trait can't return `outl_sync_iroh::PeerEntry` without a dep cycle).
+    pub iroh_pairing: Arc<Mutex<Option<outl_sync_iroh::IrohSyncTransport>>>,
     /// Per-page undo / redo stacks of rendered `.md` snapshots
     /// (`outl_actions::history::HistoryStacks`). `finish_in_page_with`
     /// records the pre-mutation render; `undo_page` / `redo_page`

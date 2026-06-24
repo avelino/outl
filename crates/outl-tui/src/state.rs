@@ -497,6 +497,15 @@ pub(crate) struct App {
     /// op log to watch).
     pub(crate) jsonl_rx: Option<std::sync::mpsc::Receiver<()>>,
 
+    /// Active sync transport, if one is wired in. `None` means the
+    /// default filesystem/iCloud behaviour: `spawn_jsonl_poller`
+    /// falls back to `outl_actions::FileSyncTransport` (poll `ops/`
+    /// every 2 s). `Some(_)` (e.g. `IrohSyncTransport`) takes over
+    /// both change detection (`start`) and the post-commit announce
+    /// hook (`announce_local_ops`). Behind an `Arc` so the poller
+    /// thread can hold its own handle.
+    pub(crate) sync_transport: Option<std::sync::Arc<dyn outl_actions::SyncTransport>>,
+
     /// Set by [`App::poll_jsonl_updates`] when the poller fires while
     /// the user is in [`Mode::Insert`]. We can't safely reopen the
     /// workspace mid-edit (the in-flight `ParsedPage` would be lost),

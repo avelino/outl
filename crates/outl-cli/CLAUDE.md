@@ -46,6 +46,13 @@ A path stored in `config.toml` that no longer exists on disk is **skipped silent
 - `outl migrate-to-shared [<path>]` — copy local sqlite log into shared `ops/` JSONL for cross-device sync.
 - `outl import logseq|roam <src> <dst>` — graph import.
 - `outl theme list|show <preset>` — TUI theme inspection.
+- `outl peer pair|list|remove|status` — manage paired devices for P2P sync.
+  Reads/writes `~/.outl/identity.key` + `~/.outl/peers.json` via `outl-sync-iroh` (`IrohIdentity`, `PeersStore`).
+  `pair` runs the real iroh handshake.
+  The host prints a ticket + ASCII QR and waits for one inbound connection.
+  `--ticket <str>` connects, exchanges `PeerEntry`s, and writes the peer to `peers.json`.
+  A small `tokio` runtime drives the async `host_pairing` / `join_pairing` helpers from this sync binary.
+  `status` is still a static listing; live reachability lands with the running transport.
 
 ### Machine-shaped (JSON envelope, `--json` everywhere)
 
@@ -70,6 +77,25 @@ The full mapping (CLI ↔ MCP tool) is documented in [`docs/cli.md`](../../docs/
 
 - `outl mcp serve [--workspace=…]` — JSON-RPC 2.0 over stdio implementing the MCP protocol surface Claude Desktop expects (`initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, `prompts/get`).
   Every tool is a thin router that delegates to the same handler the CLI subcommand calls — there is no second business-logic path.
+
+## P2P sync: MCP is a first-class peer, the ephemeral CLI is a passive writer
+
+iroh's relay only lets ONE endpoint per `node_id` hold the inbound route at a time.
+But two endpoints that **both serve the sync ALPN** coexist fine: the relay-hijack is *benign and stable* (the loser keeps working via outbound dial; no flapping).
+See [`outl-sync-iroh/CLAUDE.md`](../outl-sync-iroh/CLAUDE.md) → "One endpoint per identity".
+That fact splits the two surfaces:
+
+- **The MCP server brings the transport UP.**
+  `outl mcp serve` is **long-lived** (it lives for the whole Claude Desktop session).
+  So on the first workspace open it spins up `IrohSyncTransport` (shared `~/.outl/identity.key`, `~/.outl/peers.json`) **when the device has paired peers**, and tears it down when stdin closes.
+  Every mutating tool calls `announce_local_ops` after committing, so an edit made through Claude reaches the other devices in real time **without any GUI open**.
+  Inbound peer pushes flip a dirty flag so the next tool call reopens the workspace and serves the freshly-arrived ops.
+  Wired in `mcp/mod.rs` (`ServerCtx::ensure_transport` / `announce_after_mutation` / `shutdown_transport`).
+- **The ephemeral CLI stays a passive writer.**
+  A `page`/`block`/`daily`/`batch`/`import` command runs in ~200ms — far too short to establish a QUIC connection (which takes seconds), so binding a transport just to drop it would steal the relay route from a running GUI/MCP for nothing.
+  These commands write `ops-<actor>.jsonl` and rely on a co-resident long-lived peer (GUI / MCP) plus every device's catch-up re-sync (`MAINTENANCE_RESYNC`) to converge.
+  `outl sync` is the explicit escape hatch: it brings a transport up, forces a push/pull pass against every peer, waits, and exits — for scripts that must flush before the process dies.
+- **`outl peer pair`/`status`** use a transient endpoint they close before returning (CLI-only, no long-lived client should be mid-pair at the same time).
 
 ## JSON envelope (CLI + MCP)
 

@@ -21,6 +21,7 @@ path = "src/main.rs"
 outl-core = { workspace = true }
 outl-md = { workspace = true }
 outl-actions = { workspace = true }
+outl-sync-iroh = { workspace = true }
 outl-config = { workspace = true }
 outl-exec = { workspace = true }
 outl-theme = { workspace = true }

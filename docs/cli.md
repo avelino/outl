@@ -228,12 +228,18 @@ CLI exit code is `1` in that case; MCP returns the payload via the normal envelo
 | `outl doctor [--json]`                       | `outl_workspace_doctor` |
 | `outl reconcile`                             | —                       |
 | `outl mcp serve [--workspace=…]`             | —                       |
+| `outl peer pair\|list\|remove\|status`        | —                       |
+| `outl sync`                                  | —                       |
 | `outl workspace info [--json]`               | `outl_workspace_info`   |
 | `outl import logseq <src> <dst>`             | —                       |
 | `outl import obsidian <vault> <dst>`         | —                       |
 | `outl import roam <backup.json> <dst>`       | —                       |
 
-`init`, `serve`, `reconcile`, `import`, and `mcp serve` are CLI-only on purpose — they're either interactive, long-running, or bootstrap commands that don't fit a tool-call shape.
+`init`, `serve`, `reconcile`, `import`, `mcp serve`, `peer`, and `sync` are CLI-only on purpose — they're either interactive, long-running, or bootstrap commands that don't fit a tool-call shape.
+
+`outl sync` forces a one-shot P2P sync pass (bring the iroh transport up, exchange ops with every paired device, exit).
+It's for scripts that mutate via the CLI and must flush to peers before the process dies — a normal short-lived CLI mutation can't keep a connection alive long enough.
+The long-lived surfaces (`outl mcp serve`, the desktop/TUI apps) sync continuously and don't need it.
 
 `outl doctor` also reports **parser warnings** — every `.md` whose content stepped outside the outl dialect and got recovered by the permissive parser (typical case: a leading `# heading`, a free paragraph, imported markdown).
 A warning row goes into the doctor report (one per affected file), and one entry per warning is appended to `.outl/orphans.log` tagged `parse-warning <iso> <path>:<line> <kind> <raw>` so the breadcrumb persists across runs.

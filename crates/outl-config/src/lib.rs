@@ -26,6 +26,10 @@
 //! [editor]
 //! vim_mode = true
 //! font_size = 15
+//!
+//! [sync]
+//! transport = "file"   # "file" (iCloud/fs, default) | "iroh" (P2P)
+//! relay_url = ""        # optional; empty = use iroh n0 default relays
 //! ```
 //!
 //! All fields are optional — missing values fall back to
@@ -47,7 +51,7 @@ mod paths;
 mod schema;
 
 pub use paths::{config_dir, config_path};
-pub use schema::{Config, EditorCfg, ThemeCfg, WorkspaceCfg};
+pub use schema::{Config, EditorCfg, SyncConfig, SyncTransportKind, ThemeCfg, WorkspaceCfg};
 
 use std::fs;
 use std::path::Path;

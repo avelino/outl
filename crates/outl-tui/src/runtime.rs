@@ -93,7 +93,13 @@ pub fn run_with_theme_override(path: &Path, theme_override: Option<&str>) -> Res
     // know about yet — re-projecting blindly would clobber those
     // edits before the orphan scanner has a chance to fold them in
     // via `reconcile_md`.
-    let theme = resolve_theme(theme_override, &cfg);
+    // Global config (`~/.config/outl/config.toml`) — shared with the
+    // desktop client. We read both the theme fallback and the `[sync]`
+    // transport selection from it; loading once keeps the two reads
+    // consistent within a single launch.
+    let global_cfg = outl_config::load();
+    let theme = resolve_theme(theme_override, &cfg, &global_cfg);
+    let sync_cfg = global_cfg.sync.clone();
     let shared_workspace = cfg
         .get("workspace")
         .and_then(|w| w.get("storage"))
@@ -143,6 +149,7 @@ pub fn run_with_theme_override(path: &Path, theme_override: Option<&str>) -> Res
         actor,
         theme,
         shared_workspace,
+        sync_cfg,
     );
 
     if enhanced_keys {
@@ -194,7 +201,11 @@ fn install_panic_restore_hook() {
 ///
 /// An unknown name falls through silently to the next level. The
 /// caller can surface the choice via the status line if it cares.
-fn resolve_theme(cli_override: Option<&str>, cfg: &toml::Value) -> Theme {
+fn resolve_theme(
+    cli_override: Option<&str>,
+    cfg: &toml::Value,
+    global: &outl_config::Config,
+) -> Theme {
     if let Some(name) = cli_override {
         if let Some(t) = theme::by_name(name) {
             return t;
@@ -212,8 +223,8 @@ fn resolve_theme(cli_override: Option<&str>, cfg: &toml::Value) -> Theme {
     // Global fallback — same TOML file the desktop reads / writes,
     // so changing the theme in the desktop's Settings modal
     // propagates to the next `outl-tui` launch automatically (and
-    // vice versa).
-    let global = outl_config::load();
+    // vice versa). Passed in pre-loaded so the launch reads the file
+    // once for both theme and `[sync]`.
     if let Some(t) = theme::by_name(&global.theme.preset) {
         return t;
     }
@@ -301,8 +312,16 @@ fn event_loop(
     actor: ActorId,
     theme: Theme,
     shared_workspace: bool,
+    sync_cfg: outl_config::SyncConfig,
 ) -> Result<()> {
-    let mut app = App::new(workspace_root, workspace, actor, theme, shared_workspace)?;
+    let mut app = App::new(
+        workspace_root,
+        workspace,
+        actor,
+        theme,
+        shared_workspace,
+        sync_cfg,
+    )?;
     loop {
         // Pick up the background index build if it finished since the
         // last frame. Non-blocking; costs ~one channel try_recv.

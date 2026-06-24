@@ -83,9 +83,20 @@ impl Tree {
             } => {
                 // Idempotent: if the node already exists, keep its current
                 // parent/position. The Create only seeds initial placement.
-                self.nodes
-                    .entry(*node)
-                    .or_insert_with(|| (*parent, position.clone()));
+                //
+                // Cycle guard, exactly like Move: a reordered Create whose
+                // `parent` is already a descendant of `node` (a prior Move
+                // re-parented something under `node`, putting `parent` below
+                // it) would close a loop. That is a no-op on the materialized
+                // tree — but the LogOp still goes into the log unchanged, so a
+                // later reorder can turn it into a valid Create. Undo is safe:
+                // a node only ever comes into existence through its own Create
+                // (Move never inserts a new entry), so a cycle-skipped Create
+                // leaves `node` absent and `undo_op`'s `remove(node)` is a
+                // no-op.
+                if !self.nodes.contains_key(node) && !self.creates_cycle(*node, *parent) {
+                    self.nodes.insert(*node, (*parent, position.clone()));
+                }
             }
             Op::SetCollapsed {
                 node,

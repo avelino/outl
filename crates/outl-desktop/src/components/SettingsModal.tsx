@@ -9,6 +9,7 @@ import {
 } from "../lib/api";
 import { applyPaletteToRoot } from "../lib/palette";
 import { appState, setAppState } from "../lib/store";
+import { SyncPanel } from "./SyncPanel";
 
 /**
  * Settings modal, opened via `Cmd/Ctrl+,`.
@@ -154,6 +155,8 @@ export function SettingsModal() {
                   Use File → Switch workspace… to change.
                 </div>
               </div>
+
+              <SyncPanel />
             </div>
           </Show>
 

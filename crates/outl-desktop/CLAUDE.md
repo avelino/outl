@@ -54,7 +54,7 @@ crates/outl-desktop/
 ├── index.html
 ├── src/                       # frontend (Solid)
 │   ├── index.tsx              # mount
-│   ├── App.tsx                # WorkspacePicker / AppShell switch
+│   ├── App.tsx                # Onboarding / AppShell switch (first-run gate)
 │   ├── styles.css             # Tailwind v4 entry + theme tokens
 │   ├── setup.test.ts          # smoke (@outl/shared resolves)
 │   ├── components/
@@ -65,6 +65,7 @@ crates/outl-desktop/
 │   │   ├── BacklinksPanel.tsx # right pane
 │   │   ├── Picker.tsx         # Cmd+P quick switcher
 │   │   ├── SettingsModal.tsx  # Cmd+, settings
+│   │   ├── Onboarding.tsx     # first-run flow (storage pick → optional pairing)
 │   │   └── WorkspacePicker.tsx
 │   └── lib/
 │       ├── api.ts             # desktop-only commands (workspace, settings, exec)
@@ -92,8 +93,29 @@ crates/outl-desktop/
             ├── workspace.rs   # set_workspace, current_workspace, reload, settings, stats
             ├── page.rs        # list / search / open / journal nav / resolve_ref
             ├── block.rs       # create / edit / todo / move / collapsed / paste
-            └── exec.rs        # run_code_block — thin Tauri adapter over outl_actions::exec::run_code_block (shared with mobile)
+            ├── exec.rs        # run_code_block — thin Tauri adapter over outl_actions::exec::run_code_block (shared with mobile)
+            └── peers.rs       # outl_peer_list / outl_peer_remove — read/edit ~/.outl/peers.json via outl_sync_iroh::PeersStore
 ```
+
+## First-run onboarding
+
+`components/Onboarding.tsx` is the first-run flow. `App.tsx` decides between it and `<AppShell />`:
+
+- **Returning user** — workspace already opens at boot (`currentWorkspace()` + `workspaceStats().ready`) → straight to `<AppShell />`. `refresh()` also silently sets the onboarded flag for them, so they never see the flow.
+- **First run** (or workspace folder removed) → `<Onboarding />`.
+
+The flow is two honest steps, no filler:
+
+1. **Storage** — reuses the existing `<WorkspacePicker />` (folder pick via `tauri-plugin-dialog` → `set_workspace`).
+   On pick it fires `onWorkspacePicked` (re-runs `App`'s gate) and advances.
+2. **Sync (optional)** — the shared `SYNC_STEP` copy (`@outl/shared/onboarding`) + the existing `<SyncPanel />` so the user can pair right there, or skip.
+   A single device is first-class.
+
+The "has the user onboarded" flag is a **per-install UI flag in `localStorage`** (`outl.onboarded`), **not** workspace state — it deliberately does NOT go through the op log (it must not converge across devices; each device onboards once).
+It is intentionally not in `settings.json` either, since `settings.last_workspace` is the only first-run signal the backend tracks.
+
+The onboarding **copy** lives in `@outl/shared/onboarding` (identical to mobile); only the chrome is desktop-local.
+Pairing is **not** reimplemented — `Onboarding` renders the real `<SyncPanel />`.
 
 ## Blockquote chrome
 
@@ -343,6 +365,14 @@ The `[[ref]]` / `#tag` click handlers are unchanged (they navigate the workspace
 The opener call lives in the shared wrapper — not a custom Tauri command — so mobile can opt in later by registering the same plugin and passing `onLinkClick`.
 Backlink rows stay inert (the whole row is already a navigate-to-source button; nesting a second click target would conflict).
 
+## Logging
+
+`run()` in `src-tauri/src/lib.rs` installs a `tracing_subscriber` fmt subscriber writing to **stderr** as its first step (before rustls / Tauri setup).
+The `EnvFilter` defaults to `info,outl_sync_iroh=debug,iroh=info` and honors `RUST_LOG`.
+Running `cargo tauri dev` from a terminal then shows the iroh P2P transport's `info!`/`warn!`/`debug!` lines (endpoint bound + node id, each connect attempt's target + outcome, "delta sync received N ops") so device↔device sync is debuggable.
+Init uses `.try_init()` so a double-init can't panic.
+See [`outl-sync-iroh/CLAUDE.md`](../outl-sync-iroh/CLAUDE.md) for what the transport logs.
+
 ## Settings
 
 Stored at `<app_config_dir>/settings.json`:
@@ -364,6 +394,28 @@ Schema (`crates/outl-desktop/src-tauri/src/settings.rs::Settings`):
 
 The actor id (one per device) lives next to it as `actor` — a plain ULID.
 Switching workspaces does not rotate it.
+
+## Peers
+
+Paired devices live in `~/.outl/peers.json`, owned by `outl_sync_iroh::PeersStore` (see [`outl-sync-iroh/CLAUDE.md`](../outl-sync-iroh/CLAUDE.md)).
+The desktop exposes two thin Tauri commands in `commands/peers.rs` — no business logic, they just load the store and project / mutate it:
+
+| Command | Returns | Behaviour |
+|---|---|---|
+| `outl_peer_list` | `Vec<PeerDto>` (`node_id`, `alias`, `added_at`) | Loads `peers.json` (or default if absent) and lists every paired peer |
+| `outl_peer_remove(id)` | `bool` | Removes peers whose `node_id` starts with `id` (prefix match); `true` if any were removed |
+
+The path is fixed at `~/.outl/peers.json` (via `dirs::home_dir()`), the same location the CLI and the iroh transport read — not the desktop's `<app_config_dir>`.
+
+`commands/peers.rs` also exposes `outl_sync_now()` (reads `state.iroh_transport`, the `Arc<dyn SyncTransport>`, and calls the trait's `sync_now()`) — the force-sync trigger behind the Sync panel's Refresh.
+
+### Sync panel dot + refresh (iroh-driven)
+
+`components/SyncPanel.tsx` (the "Sync" section of `SettingsModal`) is the only place the desktop surfaces sync state; there is **no** always-on chrome dot (`StatusBar` / `ChromeToggleBar` carry none).
+The panel header shows a small status dot derived from the shared `peersOnline(statuses())` helper (`@outl/shared/peers`) — green when at least one iroh peer is reachable, orange when none are (no peers paired, or all unreachable).
+The **Refresh** button calls `forceSync()`: `syncNow()` (force a P2P pull) → `reloadWorkspace()` (re-render) → `refresh()` (re-read the device list + health for the dots).
+`syncNow` / `reloadWorkspace` failures land on `appState.lastError` but never block the status read.
+`syncNow()` + `peersOnline()` live in `@outl/shared` so desktop and mobile derive the dot + drive the refresh identically — see [`outl-sync-iroh/CLAUDE.md`](../outl-sync-iroh/CLAUDE.md) → "Force-sync trigger (`sync_now`)".
 
 ## When you're done
 

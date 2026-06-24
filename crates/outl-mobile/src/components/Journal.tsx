@@ -25,6 +25,7 @@ import {
   openTodayJournal,
   outdentBlock,
   pasteMarkdown,
+  peerStatus,
   previousDay,
   reloadWorkspace,
   runCodeBlock,
@@ -32,10 +33,12 @@ import {
   searchPages,
   searchPersons,
   setBlockCollapsed,
+  syncNow,
   todaySlug,
   toggleTodo,
   workspaceStats,
 } from "@outl/shared/api/commands";
+import { peersOnline } from "@outl/shared/peers";
 import { detectFence } from "@outl/shared/highlight";
 import {
   countDescendants,
@@ -65,6 +68,7 @@ import {
   setNativeSuggesterState,
 } from "../lib/native-suggester";
 import { Calendar } from "./Calendar";
+import { DevicesSheet } from "./DevicesSheet";
 import { PageSwitcher } from "./PageSwitcher";
 import { PullToRefresh } from "./PullToRefresh";
 import { SyncDot } from "./SyncDot";
@@ -96,6 +100,7 @@ export function Journal() {
   const [stats] = createResource(workspaceStats);
   const [switcherOpen, setSwitcherOpen] = createSignal(false);
   const [calendarOpen, setCalendarOpen] = createSignal(false);
+  const [devicesOpen, setDevicesOpen] = createSignal(false);
   // When set, the delete-confirmation dialog is open. Holds the
   // block id we're about to delete + a descendant count for the
   // copy. Cleared on confirm or cancel.
@@ -108,13 +113,31 @@ export function Journal() {
     string | null
   >(null);
   const [syncing, setSyncing] = createSignal(false);
-  // Network state — drives the `<SyncDot>` "offline" pill so the
-  // user knows iCloud peer pushes are stalled. `navigator.onLine`
-  // is not perfectly accurate (it lies when a captive portal eats
-  // requests) but it's the best signal a WebView has.
+  // PRIMARY sync signal: is at least one iroh peer reachable right now?
+  // Polled from the transport's own dial outcomes (`peerStatus()` →
+  // `peer_health()`), NOT from `navigator.onLine`. The phone having WiFi
+  // says nothing about whether a P2P peer answered — iroh is outl's
+  // default transport, so the dot must reflect the mesh, not the radio.
+  // `false` means nothing to sync with (no peers paired, or all down).
+  const [peersUp, setPeersUp] = createSignal(false);
+  // SECONDARY signal — drives the `<SyncDot>` "offline" pill when the
+  // device itself is offline (truly no radio → no peer can be up
+  // anyway). `navigator.onLine` is not perfectly accurate (it lies when
+  // a captive portal eats requests) but it's a cheap floor.
   const [online, setOnline] = createSignal(
     typeof navigator !== "undefined" ? navigator.onLine : true,
   );
+
+  // Poll the iroh transport's per-peer health so the dot tracks the live
+  // mesh. Best-effort: a failed probe leaves the last value rather than
+  // flapping the dot to offline on a transient error.
+  async function refreshPeerStatus() {
+    try {
+      setPeersUp(peersOnline(await peerStatus()));
+    } catch {
+      // keep the previous value; the next tick retries
+    }
+  }
   // Single in-flight `editBlock` lock. Two concurrent edits to the
   // same block can land in arbitrary order at the backend (e.g.
   // toggle-todo's optimistic commit racing with a delayed onBlur
@@ -171,9 +194,15 @@ export function Journal() {
     const upOffline = () => setOnline(false);
     window.addEventListener("online", upOnline);
     window.addEventListener("offline", upOffline);
+    // Probe iroh peer health on mount, then every 5s, so the dot tracks
+    // the mesh without a user action. `peer-ops-changed` (ops bridge)
+    // and a force-sync also poke `refreshPeerStatus` for a fresher read.
+    void refreshPeerStatus();
+    const peerPoll = window.setInterval(() => void refreshPeerStatus(), 5000);
     onCleanup(() => {
       window.removeEventListener("online", upOnline);
       window.removeEventListener("offline", upOffline);
+      window.clearInterval(peerPoll);
     });
   }
 
@@ -366,6 +395,9 @@ export function Journal() {
       } finally {
         pending = false;
         setSyncing(false);
+        // A peer just delivered ops → the mesh is demonstrably up; refresh
+        // the dot's health read right away instead of waiting for the tick.
+        void refreshPeerStatus();
       }
     };
   }
@@ -740,6 +772,12 @@ export function Journal() {
     setRefreshing(true);
     setSyncing(true);
     haptic("light");
+    // Force a P2P pull FIRST (dial every iroh peer now instead of waiting
+    // for the catch-up tick), THEN reload the local op log so the re-render
+    // reflects whatever the peers just delivered. `syncNow` is best-effort:
+    // a no-op when iroh isn't wired, and tolerated (toast, don't wedge) on
+    // error so a flaky peer never blocks the local reload.
+    await withError(syncNow);
     await withError(reloadWorkspace);
     // Reopen current page after refresh.
     const cur = view();
@@ -750,6 +788,8 @@ export function Journal() {
           : await withError(() => openPageBySlug(cur.page.slug));
       if (next) applyView(next);
     }
+    // Re-read the dot off the fresh dial outcomes the force-sync produced.
+    void refreshPeerStatus();
     setRefreshing(false);
     setSyncing(false);
   }
@@ -998,10 +1038,45 @@ export function Journal() {
                 <path d="M21 21l-4.3-4.3M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z" />
               </svg>
             </button>
+            <button
+              type="button"
+              aria-label="Devices"
+              onClick={() => {
+                haptic("light");
+                setDevicesOpen(true);
+              }}
+              class="flex h-9 w-10 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
+            >
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="var(--color-ios-accent)"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="2" y="4" width="14" height="10" rx="2" />
+                <path d="M16 9h3l3 3v3a1 1 0 0 1-1 1h-2" />
+                <circle cx="6.5" cy="18.5" r="1.5" />
+                <circle cx="17.5" cy="18.5" r="1.5" />
+              </svg>
+            </button>
             <span class="px-1.5">
               <SyncDot
                 status={
-                  !online() ? "offline" : syncing() ? "syncing" : "synced"
+                  // PRIMARY signal is iroh peer health, not navigator.onLine.
+                  // A force-sync in flight wins (spinner); else a reachable
+                  // peer → synced (green); else offline/orange — either the
+                  // device has no radio, or peers exist but none answered
+                  // (or none are paired, so there's nothing to sync with).
+                  syncing()
+                    ? "syncing"
+                    : online() && peersUp()
+                      ? "synced"
+                      : "offline"
                 }
               />
             </span>
@@ -1219,6 +1294,11 @@ export function Journal() {
         todaySlug={todaySlugValue()}
         onClose={() => setCalendarOpen(false)}
         onPick={handlePickDate}
+      />
+
+      <DevicesSheet
+        open={devicesOpen()}
+        onClose={() => setDevicesOpen(false)}
       />
 
       <ConfirmDialog

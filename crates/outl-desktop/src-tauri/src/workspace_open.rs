@@ -13,7 +13,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 
-use outl_actions::{migrate_legacy_into_today, open_today};
+use outl_actions::{migrate_legacy_into_today, open_today, SyncTransport};
+use outl_config::SyncTransportKind;
 use outl_core::hlc::HlcGenerator;
 use outl_core::id::ActorId;
 use outl_core::storage::JsonlStorage;
@@ -141,10 +142,14 @@ pub(crate) fn load_or_create_actor(local_dir: &Path) -> std::io::Result<ActorId>
 /// already set. Runs on a worker thread so the WebView starts
 /// painting immediately; the frontend polls `workspace_stats` /
 /// listens for the `workspace-ready` event.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_workspace_opener(
     workspace_slot: Arc<Mutex<Option<Workspace>>>,
     storage_root_slot: Arc<Mutex<Option<PathBuf>>>,
     fs_watcher_slot: Arc<Mutex<Option<WatcherHandle>>>,
+    iroh_transport_slot: Arc<Mutex<Option<Arc<dyn SyncTransport>>>>,
+    iroh_pairing_slot: Arc<Mutex<Option<outl_sync_iroh::IrohSyncTransport>>>,
+    sync_transport_kind: SyncTransportKind,
     last_workspace: PathBuf,
     hlc: HlcGenerator,
     app: tauri::AppHandle,
@@ -186,6 +191,21 @@ pub(crate) fn spawn_workspace_opener(
             warn!("emit workspace-ready: {e}");
         }
         info!("background workspace opener complete");
+
+        // Wire the iroh P2P transport (best-effort, gated on
+        // `[sync] transport = "iroh"`). It runs ALONGSIDE the `notify`
+        // watcher started above: both deliver peer ops to `<root>/ops/`
+        // and both surface as `peer-ops-changed`, so the frontend
+        // reload path is identical whichever wins the race. A `File`
+        // config or any build failure is a silent no-op here.
+        crate::iroh_sync::wire_iroh_transport(
+            sync_transport_kind,
+            &iroh_transport_slot,
+            &iroh_pairing_slot,
+            last_workspace.clone(),
+            actor,
+            app.clone(),
+        );
 
         // Phase 2: scan and reconcile orphan `.md` files in yet
         // another thread, releasing the workspace lock between each

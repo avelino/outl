@@ -175,7 +175,15 @@ do_op(op):
 
         Create { node, parent, position }:
             // Idempotent: if node already in tree, no-op.
-            if !tree.contains(node):
+            // Cycle guard, exactly like Move: under reordering a Create can
+            // arrive after a Move already parented something under `node`, so
+            // `parent` may already be a descendant of `node`. Creating the edge
+            // would close a loop, so it's a NO-OP on the tree (LogOp still gets
+            // appended). Undo is safe: a node only ever comes into existence
+            // through its own Create (Move never inserts a new entry), so a
+            // cycle-skipped Create leaves `node` absent and `undo_op`'s remove
+            // is a no-op.
+            if !tree.contains(node) and not creates_cycle(node, parent):
                 tree.create(node, parent, position)
 ```
 

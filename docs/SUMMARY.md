@@ -9,6 +9,7 @@
 ## Sync — done right
 
 * [The problem with how the others do it](sync.md)
+* [Relay & NAT traversal](relay.md)
 * [Tree CRDT walkthrough](crdt.md)
 
 ## Editor

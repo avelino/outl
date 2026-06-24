@@ -14,21 +14,67 @@
 //! drains the queued reload.
 
 use crate::state::App;
+use outl_actions::SyncTransport;
+use outl_config::{SyncConfig, SyncTransportKind};
 
 impl App {
-    /// Spawn the background poller that watches `<root>/ops/` for new
-    /// `.jsonl` entries written by peers (mobile, another TUI).
+    /// Wire an optional [`outl_actions::SyncTransport`] into the app
+    /// based on the `[sync]` section of the global config.
     ///
-    /// The poller delegates change detection to
-    /// [`outl_actions::SyncEngine::snapshot`] every 2 s and sends a
-    /// `()` over the channel stored in `App.jsonl_rx` whenever the
-    /// snapshot differs from the previous one. The event loop drains
-    /// the channel via [`Self::poll_jsonl_updates`] and asks
-    /// `SyncEngine` to reopen the workspace + reproject the focused
-    /// page.
+    /// When `sync_cfg.transport` is [`SyncTransportKind::Iroh`] (and the
+    /// workspace is shared), build an
+    /// [`outl_sync_iroh::IrohSyncTransport`] from the on-disk device
+    /// identity (`~/.outl/identity.key`) and peer store
+    /// (`~/.outl/peers.json`). On any failure we log and leave
+    /// `sync_transport` as `None`, so `spawn_jsonl_poller` falls back
+    /// to the filesystem/iCloud poller — sync degrades, the editor
+    /// still works.
+    ///
+    /// When `transport` is [`SyncTransportKind::File`] (the default)
+    /// this is a no-op and the TUI keeps the `FileSyncTransport`
+    /// behaviour.
+    pub(crate) fn wire_sync_transport(&mut self, sync_cfg: &SyncConfig) {
+        if !self.shared_workspace {
+            return;
+        }
+        if sync_cfg.transport != SyncTransportKind::Iroh {
+            return;
+        }
+        match build_iroh_transport() {
+            Ok(transport) => {
+                self.sync_transport = Some(transport);
+                self.status = "iroh sync enabled".to_string();
+            }
+            Err(e) => {
+                // Best-effort: degrade to the filesystem poller.
+                self.toast(
+                    crate::state::ToastKind::Warning,
+                    format!("iroh sync unavailable, using filesystem sync: {e}"),
+                );
+            }
+        }
+    }
+
+    /// Spawn the background watcher that picks up ops written by peers
+    /// (mobile, another TUI) into `<root>/ops/`.
+    ///
+    /// Change detection is delegated to a [`outl_actions::SyncTransport`]:
+    ///
+    /// - When `self.sync_transport` is set (e.g. `IrohSyncTransport`),
+    ///   that transport owns detection — it receives ops over QUIC,
+    ///   writes them to local `ops/`, and signals over `tx`.
+    /// - Otherwise we fall back to [`outl_actions::FileSyncTransport`],
+    ///   which polls `ops/` every 2 s and signals when a peer file grew
+    ///   (its own `ops-<actor>.jsonl` filtered out so a local save
+    ///   never closes a reload-race loop).
+    ///
+    /// Either way the transport sends a `()` over the channel stored in
+    /// `App.jsonl_rx`; the event loop drains it via
+    /// [`Self::poll_jsonl_updates`] and asks `SyncEngine` to reopen the
+    /// workspace + reproject the focused page.
     ///
     /// Workspaces using the SQLite backend don't have `ops/`; the
-    /// snapshot stays empty forever and the poller never fires.
+    /// watcher never fires.
     pub(crate) fn spawn_jsonl_poller(&mut self) {
         // Gate on the configured backend, not on whether `ops/` exists
         // on disk. A workspace running SQLite that happens to have an
@@ -44,28 +90,17 @@ impl App {
             return;
         }
         let (tx, rx) = std::sync::mpsc::channel();
-        let engine = outl_actions::SyncEngine::new(self.workspace_root.clone(), self.hlc.actor());
-        std::thread::Builder::new()
-            .name("outl-jsonl-poll".into())
-            .spawn(move || {
-                use std::time::Duration;
-                // Watch only peer jsonl files. Reacting to our own
-                // file (which we just touched on save) would close a
-                // destructive loop: every commit would fire a reload
-                // that re-projects `.md` and races the next commit.
-                let mut last = engine.snapshot_peers();
-                loop {
-                    std::thread::sleep(Duration::from_secs(2));
-                    let current = engine.snapshot_peers();
-                    if current != last {
-                        last = current;
-                        if tx.send(()).is_err() {
-                            return;
-                        }
-                    }
-                }
-            })
-            .expect("spawning the jsonl poll worker thread should not fail");
+        if let Some(transport) = &self.sync_transport {
+            // iroh (or any custom) transport owns change detection.
+            transport.start(self.workspace_root.clone(), self.hlc.actor(), tx);
+        } else {
+            // FileSyncTransport fallback: poll `ops/` every 2 s.
+            outl_actions::FileSyncTransport.start(
+                self.workspace_root.clone(),
+                self.hlc.actor(),
+                tx,
+            );
+        }
         self.jsonl_rx = Some(rx);
     }
 
@@ -243,4 +278,22 @@ impl App {
         let slug = self.current_slug();
         outl_actions::find_by_slug(&self.workspace, &slug)
     }
+}
+
+/// Build an [`outl_sync_iroh::IrohSyncTransport`] from the device's
+/// on-disk identity and peer store under `~/.outl/`.
+///
+/// Returns the transport behind an `Arc` so the poller thread can hold
+/// its own handle. Errors (no `$HOME`, unreadable identity / peers
+/// files) bubble up to `wire_sync_transport`, which degrades to the
+/// filesystem poller instead of aborting startup.
+fn build_iroh_transport() -> anyhow::Result<std::sync::Arc<dyn SyncTransport>> {
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("$HOME is not set; cannot locate ~/.outl"))?;
+    let outl_dir = home.join(".outl");
+    let identity = outl_sync_iroh::IrohIdentity::load_or_generate(&outl_dir.join("identity.key"))?;
+    let peers = outl_sync_iroh::PeersStore::load_or_default(&outl_dir.join("peers.json"))?;
+    let transport = outl_sync_iroh::IrohSyncTransport::new(identity, peers);
+    Ok(std::sync::Arc::new(transport))
 }

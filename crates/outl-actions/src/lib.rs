@@ -96,7 +96,7 @@ pub use paste::{
     looks_like_outline, normalize_external_syntax, paste_markdown, PasteAnchor, PasteOutcome,
 };
 pub use person::{search_persons, PERSON_TYPE, TYPE_KEY};
-pub use sync::{OpsFileSnapshot, SyncEngine};
+pub use sync::{FileSyncTransport, OpsFileSnapshot, PeerHealthSnapshot, SyncEngine, SyncTransport};
 pub use todo::{cycle_todo, split_todo, TodoState, DONE_PREFIX, TODO_PREFIX};
 pub use tree::{
     children_of, enclosing_page_id, position_after, position_for_new_last_child, walk_subtree,

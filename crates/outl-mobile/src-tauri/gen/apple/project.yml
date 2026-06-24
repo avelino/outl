@@ -16,6 +16,7 @@ settingGroups:
       CURRENT_PROJECT_VERSION: 1
       INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
       INFOPLIST_KEY_CFBundleDisplayName: outl
+      ENABLE_USER_SCRIPT_SANDBOXING: NO
 targetTemplates:
   app:
     type: application
@@ -44,6 +45,10 @@ targets:
       path: outl-mobile_iOS/Info.plist
       properties:
         LSRequiresIPhoneOS: true
+        # Camera access string for the QR pairing scanner
+        # (tauri-plugin-barcode-scanner). Required or iOS hard-crashes
+        # the first time `scan()` requests the camera.
+        NSCameraUsageDescription: Scan a pairing QR code to connect your devices.
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]
         # Universal app (iPhone + iPad — TARGETED_DEVICE_FAMILY = "1,2"
@@ -87,6 +92,14 @@ targets:
       - sdk: UIKit.framework
       - sdk: WebKit.framework
       - sdk: BackgroundTasks.framework
+      # Required by iroh's transitive deps (system-configuration, netdev) for
+      # network-interface + DNS discovery on iOS. Cargo's rustc-link-lib /
+      # #[link] directives are dropped because Xcode does the final .dylib link,
+      # so the frameworks must be declared here. Also mirrored in
+      # tauri.conf.json → bundle.iOS.frameworks so `tauri ios init` keeps them.
+      - sdk: SystemConfiguration.framework
+      - sdk: Network.framework
+      - sdk: CoreFoundation.framework
     preBuildScripts:
       - script: cargo tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
         name: Build Rust Code

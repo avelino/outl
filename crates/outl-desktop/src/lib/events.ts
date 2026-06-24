@@ -52,3 +52,65 @@ export function onRefProjectionFailed(
     handler(e.payload),
   );
 }
+
+// ---------------------------------------------------------------------------
+// Peer pairing (iroh sync transport)
+// ---------------------------------------------------------------------------
+//
+// The host's `outl_peer_pair_host` command (`commands/peers.rs`) emits the
+// pairing ticket **early** — the moment the transient iroh endpoint binds,
+// before it blocks on the inbound connection — via `peer-pairing-ticket`.
+// Once a peer completes the handshake and is persisted to
+// `~/.outl/peers.json`, the backend emits `peer-paired` (a `PeerDto`).
+//
+// The Sync panel listens to both: `peer-pairing-ticket` to render the QR
+// + copyable ticket while we wait, and `peer-paired` to flip to the
+// "paired" state and refresh the device list.
+
+import type { PeerDto } from "@outl/shared/api/types";
+
+/** Payload for the early `peer-pairing-ticket` event (`{ ticket }`). */
+export interface PeerPairingTicketPayload {
+  ticket: string;
+}
+
+/**
+ * Register a handler for `peer-pairing-ticket`. Fires once per
+ * `outl_peer_pair_host` call, before the handshake completes, carrying
+ * the ticket the joining device scans / types. Returns an unlisten fn.
+ */
+export function onPeerPairingTicket(
+  handler: (payload: PeerPairingTicketPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<PeerPairingTicketPayload>("peer-pairing-ticket", (e) =>
+    handler(e.payload),
+  );
+}
+
+/**
+ * Register a handler for `peer-paired`. Fires after a pairing handshake
+ * completes and the peer is persisted (payload: the new `PeerDto`).
+ * Returns an unlisten fn.
+ */
+export function onPeerPaired(
+  handler: (peer: PeerDto) => void,
+): Promise<UnlistenFn> {
+  return listen<PeerDto>("peer-paired", (e) => handler(e.payload));
+}
+
+/**
+ * Register a handler for `peer-pair-failed`. Fires if the host
+ * handshake times out or errors (payload: an error string). Returns an
+ * unlisten fn.
+ *
+ * The current backend resolves/rejects the `outl_peer_pair_host`
+ * promise on failure rather than emitting this event, so the panel
+ * relies on the rejected promise too; the listener is here for the
+ * aligned-backend path where the long-running host blocks and surfaces
+ * failures out-of-band.
+ */
+export function onPeerPairFailed(
+  handler: (error: string) => void,
+): Promise<UnlistenFn> {
+  return listen<string>("peer-pair-failed", (e) => handler(e.payload));
+}
