@@ -41,13 +41,16 @@ Devices live at different paths (desktop `~/outl-p2p`, mobile `…/app.outl.mobi
   Genuinely-different workspaces never cross-merge op logs; legit same-workspace peers (now sharing an id) pass.
 - **Pairing makes the joiner adopt the host's id.**
   The handshake `PairingPayload` carries each side's id.
-  The **host advertises and keeps** its id; the **joiner adopts** the host's (writes it to its own `.outl/workspace-id` + updates the live handle) *before* the immediate post-pair `delta_sync` fires.
+  The **host advertises and keeps** its id; the **joiner adopts** the host's *before* the immediate post-pair `delta_sync` fires.
+  Adoption is **persist-first**: `adopt_workspace_id` writes the host's id to `.outl/workspace-id` and only then flips the in-memory handle.
+  If the disk write fails it does NOT adopt — the pair just doesn't take and a retry is safe.
+  A half-adopted state (memory on the host's id, disk on the old one) would silently split the workspace if the process died before the next write, since the next start reads the stale id from disk.
   Both sides then compute the same topic and validate as one workspace, and their op logs CRDT-merge (content from both converges — expected).
   CLI `outl peer pair` neither advertises nor adopts (it edits the device-global `peers.json`, not one open workspace); adoption is a GUI concern, wired in `engine_pairing`.
 - **Live handle.**
   The id lives behind a shared `RwLock` (`SharedWorkspaceId`) read at call time by `delta_sync` + serve, so an adopted id takes effect immediately for direct sync (boot connect, 8s catch-up, immediate post-pair dial — all carry the live id).
 - **Gossip re-subscribes on id change (no restart).**
-  Adoption fires a `tokio::sync::broadcast::Sender<WorkspaceId>` held in the `PairingHub` (`adopt_workspace_id` sends after updating the `RwLock` + writing the file).
+  Adoption fires a `tokio::sync::broadcast::Sender<WorkspaceId>` held in the `PairingHub` (`adopt_workspace_id` sends after persisting the file + updating the `RwLock`).
   The gossip supervisor (`engine_gossip::run_gossip`) holds one receiver and, on the signal, **drops its old-topic subscription and re-subscribes to `blake3(new id)`** — same `Gossip`/`Endpoint`, no second endpoint, no `start()` restart.
   Before this, the boot-time subscription stayed on the *pre-adoption* topic, so the two devices sat on different gossip topics and no real-time announce ever crossed (the "post-pair, nothing syncs again" bug).
 - **Catch-up re-dials on id change.**

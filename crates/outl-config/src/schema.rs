@@ -90,8 +90,8 @@ impl Default for EditorCfg {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SyncTransportKind {
-    /// File-based transport (iCloud Drive / shared filesystem). Opt in
-    /// with `transport = "file"`; still fully supported.
+    /// File-based transport (iCloud Drive / shared filesystem). The opt-out
+    /// from iroh: set `transport = "file"`. Still fully supported.
     File,
     /// iroh P2P transport (QUIC + hole punching). The default — P2P is
     /// outl's primary sync. Override with `transport = "file"`.

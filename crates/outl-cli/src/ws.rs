@@ -14,7 +14,7 @@ use outl_core::workspace::Workspace;
 use outl_core::{resolve_write_actor, ActorWriteLock, WorkspaceLock};
 
 use crate::output::{codes, ApiError};
-use crate::workspace_layout::{ensure_ops_dir, read_config, Paths};
+use crate::workspace_layout::{ensure_ops_dir, read_or_init_config, Paths};
 
 /// Per-command runtime context. The shared workspace lock plus an
 /// exclusive per-actor write lock are held for the whole command —
@@ -72,7 +72,7 @@ pub fn open(path: &Path) -> Result<WsCtx, ApiError> {
         ));
     }
 
-    let cfg = read_config(&paths).map_err(|e| {
+    let cfg = read_or_init_config(&paths).map_err(|e| {
         ApiError::new(
             codes::NO_WORKSPACE,
             format!("workspace config missing or unreadable: {e}"),

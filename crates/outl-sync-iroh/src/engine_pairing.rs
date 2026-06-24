@@ -157,19 +157,33 @@ impl PairingHub {
     /// handshake. Best-effort on the file write — the in-memory handle is updated
     /// regardless so the immediate post-pair sync uses the adopted id.
     fn adopt_workspace_id(&self, remote: WorkspaceId) {
+        // Cheap skip if already adopted (avoids a redundant disk write).
+        if *self
+            .workspace_id
+            .read()
+            .expect("workspace id rwlock poisoned")
+            == remote
+        {
+            return;
+        }
+        // Persist FIRST, then flip the in-memory handle. A half-adopted state
+        // (memory on the host's id, disk still on the old one) would silently
+        // split the workspace if the process died before the next write: the
+        // next start reads the stale id from disk and never converges with the
+        // host. So if the write fails we do NOT adopt — the pair just doesn't
+        // take this time and the user retries, which is safe. Either both the
+        // disk and memory move to the host's id, or neither does.
+        if let Err(e) = remote.write(&self.workspace_root) {
+            warn!("pairing: persist adopted workspace id failed, not adopting: {e}");
+            return;
+        }
         {
             let mut guard = self
                 .workspace_id
                 .write()
                 .expect("workspace id rwlock poisoned");
-            if *guard == remote {
-                return;
-            }
-            info!(adopted = %remote, "pairing: joiner adopting host's workspace id");
+            info!(adopted = %remote, "pairing: joiner adopted host's workspace id");
             *guard = remote.clone();
-        }
-        if let Err(e) = remote.write(&self.workspace_root) {
-            warn!("pairing: persist adopted workspace id failed: {e}");
         }
         // Signal `run_iroh` so the gossip task re-subscribes to the new topic and
         // the catch-up loop clears its `synced` dedup and re-dials under the

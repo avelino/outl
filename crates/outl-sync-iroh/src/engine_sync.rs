@@ -94,7 +94,14 @@ async fn ingest_received_ops(
         // HLC sanity: skip ops more than 24h in the future.
         let op_ms = op.ts.physical_ms;
         if op_ms > now_ms + 86_400_000 {
-            warn!("skipping op with future HLC ({}ms ahead)", op_ms - now_ms);
+            // Log the op's HLC + actor (its identity) so a dropped op is
+            // traceable, not just "something 25h ahead vanished".
+            warn!(
+                ts = ?op.ts,
+                actor = ?op.actor,
+                "skipping op with future HLC ({}ms ahead)",
+                op_ms - now_ms
+            );
             continue;
         }
         let line = match crate::protocol::encode_op(op) {

@@ -182,6 +182,27 @@ pub fn read_config(paths: &Paths) -> Result<Config> {
     Ok(cfg)
 }
 
+/// Read the workspace config, lazily seeding it when absent.
+///
+/// A workspace created by a GUI client (desktop / mobile) or by P2P sync only
+/// seeds `.outl/workspace-id`, never the per-workspace `config.toml` the CLI /
+/// TUI / MCP read the device actor from. When the `.outl/` dir exists but the
+/// config doesn't, write a fresh one (new actor) and return it, so opening such
+/// a workspace doesn't demand `outl init`. A parse error on an existing file
+/// still propagates, and a genuinely-missing `.outl/` is rejected by the opener
+/// (`ws::open` checks `dot_outl.exists()` first).
+pub fn read_or_init_config(paths: &Paths) -> Result<Config> {
+    match read_config(paths) {
+        Ok(cfg) => Ok(cfg),
+        Err(_) if !paths.config.exists() && paths.dot_outl.is_dir() => {
+            let cfg = Config::fresh();
+            write_config(paths, &cfg)?;
+            Ok(cfg)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Write the workspace config.
 pub fn write_config(paths: &Paths, cfg: &Config) -> Result<()> {
     let s = toml::to_string_pretty(cfg).with_context(|| "serializing config.toml")?;
