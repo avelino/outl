@@ -25,6 +25,13 @@ Precedence — first hit wins:
 
 A path stored in `config.toml` that no longer exists on disk is **skipped silently** (`tracing::warn!` only) so a deleted/unmounted workspace doesn't crash the launch — the chain falls through to cwd.
 
+**Opening a workspace created by a GUI client or P2P sync.**
+The desktop, mobile, and the iroh transport seed a workspace with `.outl/workspace-id` + `ops/` + the page/journal dirs, but **never** the per-workspace `.outl/config.toml`.
+They keep the device actor in `<app-config-dir>/actor`, not in the workspace.
+The CLI/TUI/MCP read the device actor from `config.toml`, so pointing them at a GUI-made workspace used to fail with "no outl workspace — run `outl init`".
+`workspace_layout::read_or_init_config` fixes that: when the `.outl/` dir exists but `config.toml` doesn't, it seeds a fresh one (new actor) and proceeds, so `outl --workspace <gui-folder>` just works.
+`ws::open` (CLI + MCP) and `outl_tui`'s `open_workspace` both go through this lazy-seed path; a genuinely-missing `.outl/` still errors.
+
 > Full schema + per-OS path of `config.toml` is documented in [`docs/config.md`](../../docs/config.md).
 > The `outl-config` crate is the only reader; never re-parse the TOML by hand here.
 

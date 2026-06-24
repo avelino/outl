@@ -58,6 +58,20 @@ pub(crate) struct AppState {
     pub(crate) iroh: Option<IrohSyncTransport>,
 }
 
+impl Drop for AppState {
+    fn drop(&mut self) {
+        // Make the "graceful shutdown() on app exit" the field doc promises real.
+        // The detached transport thread would die with the process regardless,
+        // but shutdown() releases the relay route right away instead of waiting
+        // for the OS to reap the socket — so another process on this device
+        // reclaims the route immediately.
+        if let Some(transport) = &self.iroh {
+            use outl_actions::SyncTransport;
+            transport.shutdown();
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct WorkspaceSummary {
     pub(crate) blocks: usize,

@@ -59,7 +59,21 @@ pub fn serve(workspace_path: PathBuf) -> anyhow::Result<()> {
         if trimmed.is_empty() {
             continue;
         }
-        let response = handle_line(trimmed, &ctx);
+        // A panic in one tool handler shouldn't kill the whole MCP session
+        // (it'd drop the iroh transport and every cached workspace mid-chain).
+        // Catch it, reply with a JSON-RPC internal error, and keep serving.
+        let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            handle_line(trimmed, &ctx)
+        })) {
+            Ok(resp) => resp,
+            Err(_) => {
+                warn!("mcp: tool handler panicked; replied internal error, session stays up");
+                Some(
+                    r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"internal error"}}"#
+                        .to_string(),
+                )
+            }
+        };
         if let Some(resp) = response {
             writeln!(stdout, "{resp}")?;
             stdout.flush()?;
@@ -128,7 +142,7 @@ impl ServerCtx {
         let mut state = self.state.lock();
         // A peer pushed ops since the last access — drop the cache so the
         // open below replays the freshly-arrived ops-*.jsonl.
-        if self.peer_dirty.swap(false, Ordering::Relaxed) {
+        if self.peer_dirty.swap(false, Ordering::Acquire) {
             state.workspace = None;
             state.index = None;
         }
@@ -199,7 +213,7 @@ impl ServerCtx {
             .name("outl-mcp-peer-ready".into())
             .spawn(move || {
                 while rx.recv().is_ok() {
-                    dirty.store(true, Ordering::Relaxed);
+                    dirty.store(true, Ordering::Release);
                 }
             })
             .ok();

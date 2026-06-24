@@ -261,13 +261,32 @@ fn open_workspace(
     let lock = outl_core::WorkspaceLock::acquire(root)
         .with_context(|| format!("could not acquire workspace lock at {}", root.display()))?;
 
-    let cfg_path = root.join(".outl").join("config.toml");
-    let cfg = fs::read_to_string(&cfg_path).with_context(|| {
-        format!(
-            "no outl workspace at {} — run `outl init` first",
-            root.display()
-        )
-    })?;
+    let dot_outl = root.join(".outl");
+    let cfg_path = dot_outl.join("config.toml");
+    let cfg = match fs::read_to_string(&cfg_path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && dot_outl.is_dir() => {
+            // The `.outl/` dir exists (real workspace) but there's no
+            // per-workspace `config.toml`. That's a workspace created by a GUI
+            // client (desktop / mobile) or by P2P sync, which only seed
+            // `.outl/workspace-id` and keep the device actor elsewhere. Seed a
+            // config with a fresh actor for this device so the TUI can open it
+            // instead of demanding `outl init`. Persisted, so it's a one-time
+            // cost and a re-open reuses the same actor.
+            let seed = format!("[workspace]\nactor_id = \"{}\"\n", ActorId::new().0);
+            fs::write(&cfg_path, &seed)
+                .with_context(|| format!("seeding config.toml at {}", cfg_path.display()))?;
+            seed
+        }
+        Err(e) => {
+            return Err(e).with_context(|| {
+                format!(
+                    "no outl workspace at {} — run `outl init` first",
+                    root.display()
+                )
+            });
+        }
+    };
     let cfg: toml::Value = toml::from_str(&cfg).context("parsing config.toml")?;
     let actor_str = cfg
         .get("workspace")
