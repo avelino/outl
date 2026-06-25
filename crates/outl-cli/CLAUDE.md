@@ -54,10 +54,13 @@ The CLI/TUI/MCP read the device actor from `config.toml`, so pointing them at a 
 - `outl import logseq|roam <src> <dst>` — graph import.
 - `outl theme list|show <preset>` — TUI theme inspection.
 - `outl peer pair|list|remove|status` — manage paired devices for P2P sync.
-  Reads/writes `~/.outl/identity.key` + `~/.outl/peers.json` via `outl-sync-iroh` (`IrohIdentity`, `PeersStore`).
+  Reads the per-**device** `~/.outl/identity.key` + the per-**workspace** `<workspace>/.outl/peers.json` via `outl-sync-iroh` (`IrohIdentity`, `PeersStore`).
+  All four resolve the workspace (`--workspace` / `resolve_path`) so the pair belongs to the graph, not the OS; a one-time migration copies any legacy global `~/.outl/peers.json` into the workspace on first touch.
   `pair` runs the real iroh handshake.
   The host prints a ticket + ASCII QR and waits for one inbound connection.
   `--ticket <str>` connects, exchanges `PeerEntry`s, and writes the peer to `peers.json`.
+  `--name <str>` is the alias THIS device advertises (it lands under our node id in the peer's `peers.json`).
+  It defaults to the machine hostname via `default_device_name` (best-effort `hostname` shell-out, `.local` trimmed) so the peer list reads a real name instead of a node-id stub.
   A small `tokio` runtime drives the async `host_pairing` / `join_pairing` helpers from this sync binary.
   `status` is still a static listing; live reachability lands with the running transport.
 
@@ -94,7 +97,7 @@ That fact splits the two surfaces:
 
 - **The MCP server brings the transport UP.**
   `outl mcp serve` is **long-lived** (it lives for the whole Claude Desktop session).
-  So on the first workspace open it spins up `IrohSyncTransport` (shared `~/.outl/identity.key`, `~/.outl/peers.json`) **when the device has paired peers**, and tears it down when stdin closes.
+  So on the first workspace open it spins up `IrohSyncTransport` (shared `~/.outl/identity.key`, the workspace's `.outl/peers.json`) **when the workspace has paired peers**, and tears it down when stdin closes.
   Every mutating tool calls `announce_local_ops` after committing, so an edit made through Claude reaches the other devices in real time **without any GUI open**.
   Inbound peer pushes flip a dirty flag so the next tool call reopens the workspace and serves the freshly-arrived ops.
   Wired in `mcp/mod.rs` (`ServerCtx::ensure_transport` / `announce_after_mutation` / `shutdown_transport`).

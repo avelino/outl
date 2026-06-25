@@ -23,7 +23,7 @@ outl-mobile (this crate)
    │       ├── workspace.rs        (workspace_stats, reload_workspace)
    │       ├── page.rs             (list_all_pages / search_pages / search_persons / outl_emoji_search / open_* / *_day / resolve_ref / legacy compat shims)
    │       ├── block.rs            (create_block / edit_block / toggle_todo / toggle_quote / delete_block / indent_block / outdent_block / move_block_* / set_block_collapsed / paste_markdown_at)
-   │       ├── peers.rs            (outl_peer_list / outl_peer_remove — read/edit the iroh peers.json, no workspace lock)
+   │       ├── peers.rs            (outl_peer_list / outl_peer_remove — read/edit <workspace>/.outl/peers.json, no workspace lock)
    │       └── exec.rs             (run_code_block — thin shim over outl_actions::exec::run_code_block)
    ├── gen/apple/.../main.mm       (NSMetadataQuery + NSFileCoordinator iCloud watcher)
    └── (frontend in ../src)        (Solid components, Tailwind, Tauri bridge)
@@ -217,18 +217,24 @@ so a false-positive surfaces as a runtime toast instead of doing damage.
 ## Peer / device management (`outl_peer_list` / `outl_peer_remove`)
 
 `commands/peers.rs` exposes two Tauri commands that read and edit the iroh
-peers file (`~/.outl/peers.json`) via `outl_sync_iroh::PeersStore`:
+peers file (`<workspace>/.outl/peers.json`) via `outl_sync_iroh::PeersStore`:
 
 - `outl_peer_list() -> Vec<PeerDto>` — lists paired devices (`node_id`,
   `alias`, `added_at`).
 - `outl_peer_remove(id: String) -> bool` — removes peers whose `node_id`
   starts with the given prefix; `true` if any matched.
 
+The peer list is per-**graph**: it lives at `<workspace_root>/.outl/peers.json`
+(resolved from `AppState::storage_root` via `outl_sync_iroh::workspace_peers_path`),
+NOT next to the device identity.
+The device `identity.key` stays per-**install** in the Tauri app local data dir
+([`iroh_sync::iroh_dir`]) — one node id per install.
+Each command runs `migrate_global_peers_if_absent` first, so a legacy global
+`~/.outl/peers.json` is copied into the workspace once on first open.
 These are the **only** commands that touch `peers.json` directly instead of
-the workspace lock — peer pairing is sync-transport state, not workspace
-state, so they don't go through `AppState`/`outl-actions`.
-The store path is resolved from `dirs::home_dir()` (not the iCloud
-container), matching where the iroh `SyncEngine` writes it.
+the workspace lock — peer pairing is sync-transport state, but the list is
+graph-scoped, so they read `storage_root` without going through
+`outl-actions`.
 
 `commands/peers.rs` also exposes `outl_sync_now()` (reads `state.iroh`, calls the transport's `sync_now()`) — the force-sync trigger behind the refresh button.
 
@@ -245,6 +251,10 @@ The header `<SyncDot>` and the refresh button / `PullToRefresh` reflect and driv
 - **Refresh.**
   `handleRefresh` (the button **and** `PullToRefresh`) calls `syncNow()` (force a P2P pull — dial every peer now instead of waiting for the 8s catch-up tick) THEN `reloadWorkspace()` (re-render with whatever landed).
   Both calls are wrapped in `withError` (toast on failure, never wedge the local reload), and the `syncing` spinner brackets the whole pass.
+- **Auto-sync (no button).**
+  `Journal.tsx` shares the refresh core as `pullAndReload()` and fires it automatically: on `onMount` (opening the app), on `visibilitychange` → visible (iOS froze JS in the background), and on the 5s poll tick (alongside the peer-status probe).
+  The mobile side initiating the dial is NAT-friendly — waiting for the desktop to reach an iPhone behind carrier NAT is not — so this is what makes a desktop edit show up without the user touching refresh.
+  The `workspace-ready` reload skips while a block is being edited (guarded by `editingId()`) so it never resets the textarea mid-edit.
 
 `syncNow()` and `peersOnline()` both live in `@outl/shared` so mobile and desktop derive the dot + drive the refresh identically.
 See [`outl-sync-iroh/CLAUDE.md`](../outl-sync-iroh/CLAUDE.md) → "Force-sync trigger (`sync_now`)".

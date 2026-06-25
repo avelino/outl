@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "core:window:allow-close",
+    "os:allow-hostname",
     "dialog:default",
     "dialog:allow-open",
     {

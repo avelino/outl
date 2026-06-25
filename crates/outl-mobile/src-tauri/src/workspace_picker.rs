@@ -1,30 +1,25 @@
-//! Folder selection for the mobile workspace (Fase 2).
+//! Folder selection for the mobile workspace.
 //!
 //! ## Why this module exists
 //!
-//! Storage is now a folder the user picks — not a forced iCloud
-//! container (see `workspace_open` module doc). This module owns the
-//! *picking*: present a native iOS folder picker, persist the chosen
-//! path, and hand it back so the app reopens against it.
+//! Storage is a folder on this device, synced by iroh (no iCloud — see
+//! `workspace_open` module doc). This module owns the *picking*: persist a
+//! chosen path and hand it back so the app reopens against it.
 //!
 //! ## What is implemented now
 //!
-//! - [`set_workspace`] — the Tauri command the frontend calls once it
-//!   has a folder path. It validates the path, persists it as
-//!   `WorkspaceCfg.last` (so the next launch reopens it), and asks the
-//!   app to reopen. The actual reopen is **boot-read** today: the boot
-//!   path in `lib.rs` reads `WorkspaceCfg.last` and opens it
-//!   ([`workspace_open::resolve_storage_root`]). `set_workspace`
-//!   therefore persists + emits `workspace-reopen-required` so the
-//!   frontend can prompt a relaunch (or a future runtime swap can hook
-//!   the same event). This keeps the mobile `AppState.storage_root`
-//!   single-root invariant intact — swapping it live would mean turning
-//!   it into an `Arc<Mutex<Option<PathBuf>>>` and rebinding the iroh
-//!   transport mid-flight, a separate change.
-//!
-//! - [`pick_in_icloud`] — convenience for "store my workspace in
-//!   iCloud": resolves the app's iCloud container and returns
-//!   `<container>/Documents`. The user opts in; it is never forced.
+//! - [`set_workspace`] — the Tauri command the frontend calls once it has
+//!   a folder path. It validates the path, persists it as
+//!   `WorkspaceCfg.last` (so the next launch reopens it), and asks the app
+//!   to reopen. The actual reopen is **boot-read** today: the boot path in
+//!   `lib.rs` reads `WorkspaceCfg.last` and opens it
+//!   ([`workspace_open::resolve_storage_root`]). `set_workspace` therefore
+//!   persists + emits `workspace-reopen-required` so the frontend can
+//!   prompt a relaunch (or a future runtime swap can hook the same event).
+//!   This keeps the mobile `AppState.storage_root` single-root invariant
+//!   intact — swapping it live would mean turning it into an
+//!   `Arc<Mutex<Option<PathBuf>>>` and rebinding the iroh transport
+//!   mid-flight, a separate change.
 //!
 //! ## What is DEFERRED (native picker UI + security-scoped bookmark)
 //!
@@ -44,13 +39,12 @@
 //!    `NSURL` bookmark (`bookmarkData(options: .minimalBookmark)`) and
 //!    resolve it with `startAccessingSecurityScopedResource()`. Storing
 //!    only the string path (what `WorkspaceCfg.last` holds) is enough for
-//!    a folder *inside* the sandbox or inside the app's own iCloud
-//!    container, but **not** for an arbitrary Files-app folder.
+//!    a folder *inside* the sandbox, but **not** for an arbitrary
+//!    Files-app folder.
 //!
 //! ### The deferred native piece, concretely
 //!
-//! A follow-up adds an ObjC/`objc2` bridge (mirroring `icloud_path.rs`)
-//! that:
+//! A follow-up adds an ObjC/`objc2` bridge that:
 //!   - presents `UIDocumentPickerViewController(forOpeningContentTypes: [.folder])`
 //!     from the root view controller on the main thread,
 //!   - in its delegate, calls `startAccessingSecurityScopedResource()`,
@@ -59,11 +53,9 @@
 //!   - on boot, resolves the bookmark back to a live security-scoped URL
 //!     before `resolve_storage_root` runs.
 //!
-//! Until that lands, [`set_workspace`] works for any path the frontend
-//! can already reach without a scoped bookmark (the app sandbox, the
-//! local default, and the app's iCloud container), and
-//! [`pick_in_icloud`] covers the "put it in iCloud" case with zero
-//! native code.
+//! Until that lands, [`set_workspace`] works for any path the frontend can
+//! already reach without a scoped bookmark (the app sandbox, the local
+//! default).
 
 use std::path::{Path, PathBuf};
 
@@ -71,7 +63,7 @@ use tauri::{Emitter, State};
 use tracing::{info, warn};
 
 use crate::state::AppState;
-use crate::workspace_open::{icloud_workspace_root, persist_workspace_path, storage_is_icloud};
+use crate::workspace_open::persist_workspace_path;
 
 /// Event emitted after a successful [`set_workspace`] so the frontend
 /// knows the chosen folder is persisted and the workspace must be
@@ -84,27 +76,21 @@ const REOPEN_EVENT: &str = "workspace-reopen-required";
 
 /// Persist a user-chosen folder as the workspace and request a reopen.
 ///
-/// Called by the frontend once it has a folder path (from the native
-/// picker, a manual entry, or [`pick_in_icloud`]). The path is taken
-/// verbatim — local, Files-app, or iCloud — because *where* the folder
-/// lives is the user's choice, not ours.
+/// Called by the frontend once it has a folder path (from a future native
+/// picker or a manual entry). The path is taken verbatim — *where* the
+/// folder lives is the user's choice, not ours.
 ///
 /// Best-effort persistence: a config write failure is logged, not fatal.
-/// Returns whether the chosen folder is inside iCloud, so the frontend
-/// can show the right "syncs via iCloud + iroh" vs "syncs via iroh"
-/// affordance.
 ///
-/// NOTE: this command must be added to the `invoke_handler!` list in
-/// `lib.rs` to be callable. That list is owned by a concurrent change;
-/// the one-line registration is intentionally left to whoever merges
-/// last to avoid a macro-list collision.
+/// NOTE: this command must be in the `invoke_handler!` list in `lib.rs` to
+/// be callable.
 #[tauri::command]
-#[allow(dead_code)] // Wired once registered in lib.rs's invoke_handler!.
+#[allow(dead_code)] // Caller arrives with the deferred native folder picker.
 pub(crate) fn set_workspace(
     path: String,
     app: tauri::AppHandle,
     _state: State<'_, AppState>,
-) -> Result<bool, String> {
+) -> Result<(), String> {
     let path = PathBuf::from(&path);
     validate_pickable(&path)?;
 
@@ -113,28 +99,12 @@ pub(crate) fn set_workspace(
     std::fs::create_dir_all(&path).map_err(|e| format!("create {}: {e}", path.display()))?;
 
     persist_workspace_path(&path);
-    let is_icloud = storage_is_icloud(&path);
-    info!(
-        "workspace folder chosen: {} (icloud={is_icloud})",
-        path.display()
-    );
+    info!("workspace folder chosen: {}", path.display());
 
     if let Err(e) = app.emit(REOPEN_EVENT, path.to_string_lossy().into_owned()) {
         warn!("emit {REOPEN_EVENT}: {e}");
     }
-    Ok(is_icloud)
-}
-
-/// Resolve the app's iCloud container workspace root for the
-/// "store my workspace in iCloud" choice.
-///
-/// Returns `None` when the user isn't signed into iCloud / the
-/// entitlement is missing — the frontend then keeps the local default or
-/// offers the native picker. Opt-in only; nothing here is forced.
-#[tauri::command]
-#[allow(dead_code)] // Wired once registered in lib.rs's invoke_handler!.
-pub(crate) fn pick_in_icloud() -> Option<String> {
-    icloud_workspace_root().map(|p| p.to_string_lossy().into_owned())
+    Ok(())
 }
 
 /// Guard a path before we accept it as a workspace.

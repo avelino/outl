@@ -68,7 +68,7 @@ pub async fn probe_peers(identity: &IrohIdentity, peers: &PeersStore) -> Result<
     // dual-stack builder when iroh > 1.0.0 ships the multipath fallback fix.
     // See `crate::bind`. (CLI-only: see the module doc — the GUI reads
     // reachability from the running transport, not this probe.)
-    let endpoint = crate::bind::n0_builder_ipv4_only()
+    let endpoint = crate::bind::n0_builder_ipv4_only(None)
         .secret_key(identity.secret_key().clone())
         .alpns(vec![SYNC_ALPN.to_vec()])
         .bind()

@@ -13,6 +13,8 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
+# Resolve `~/.outl/peers.json` for the one-time per-workspace peers migration.
+dirs = { workspace = true }
 tokio = { version = "1", features = ["full"] }
 # See workspace Cargo.toml for why iroh keeps default-features ON.
 iroh = { workspace = true }

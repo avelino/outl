@@ -99,10 +99,29 @@ async fn concurrent_writers_never_corrupt_op_log() {
         r_ready_tx,
     );
 
-    // Build N initiator workspaces, each holding a DISJOINT batch authored by the
-    // shared victim actor (counters offset so HLCs stay globally unique).
+    // Author ONE canonical batch for the victim actor, then hand each writer a
+    // DENSE PREFIX of it. Real peers hold dense prefixes of the same actor
+    // (partial propagation of C's log), never disjoint sparse counters — the
+    // latter breaks the 1-actor-per-device invariant the vector clock
+    // (last-ts-per-actor) relies on, so an out-of-order writer holding only
+    // "middle" counters looked already-synced and its ops were silently dropped.
+    // Prefixes converge: the longest prefix carries the full union, each op once.
+    let total_ops = n_writers * ops_per_writer;
+    let canonical = tempfile::tempdir().expect("canonical tempdir");
+    let all_nodes = common::seed_ops(canonical.path(), victim_actor, total_ops);
+    let all_expected: BTreeSet<String> = all_nodes.iter().map(|n| n.to_string()).collect();
+    let canonical_lines: Vec<String> = std::fs::read_to_string(
+        canonical
+            .path()
+            .join("ops")
+            .join(format!("ops-{victim_actor}.jsonl")),
+    )
+    .expect("read canonical ops log")
+    .lines()
+    .map(str::to_string)
+    .collect();
+
     let mut handles = Vec::new();
-    let mut all_expected: BTreeSet<String> = BTreeSet::new();
     let mut rng = Rng::new(seed);
 
     // Shuffle the launch order deterministically so dials don't go out in a tidy
@@ -114,11 +133,15 @@ async fn concurrent_writers_never_corrupt_op_log() {
         let dir_w = tempfile::tempdir().expect("writer tempdir");
         let id_w = fresh_identity(dir_w.path(), &format!("w{w}"));
         let actor_w = ActorId::new(); // distinct device identity per writer
-        let start = w * ops_per_writer;
-        let nodes = seed_ops_from(dir_w.path(), victim_actor, ops_per_writer, start);
-        for node in &nodes {
-            all_expected.insert(node.to_string());
-        }
+                                      // This writer holds the first (w+1)*ops_per_writer ops of the canonical
+                                      // victim log — a dense prefix. The longest prefix carries the full set.
+        let prefix_len = ((w + 1) * ops_per_writer) as usize;
+        let ops_w_dir = dir_w.path().join("ops");
+        std::fs::create_dir_all(&ops_w_dir).expect("writer ops dir");
+        let mut content = canonical_lines[..prefix_len].join("\n");
+        content.push('\n');
+        std::fs::write(ops_w_dir.join(format!("ops-{victim_actor}.jsonl")), content)
+            .expect("write writer prefix");
 
         let ep_w = test_support::bind_sync_endpoint(&id_w)
             .await

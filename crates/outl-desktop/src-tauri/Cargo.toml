@@ -37,6 +37,7 @@ rustls = { version = "0.23", features = ["ring"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-os = "2"
 notify = "8"
 notify-debouncer-full = "0.7"
 serde = { workspace = true }

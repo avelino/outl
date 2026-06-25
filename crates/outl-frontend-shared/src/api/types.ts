@@ -246,12 +246,15 @@ export interface PeerDto {
 /**
  * A paired peer's live reachability, as returned by `outl_peer_status`.
  * Mirrors the Rust `PeerStatusDto` in both clients' `commands/peers.rs`.
- * Built by probing each peer through one transient iroh endpoint with a
- * short connect timeout, so the call is async on the backend.
+ * On GUI clients this reads the running transport's `peer_health()` snapshot
+ * (populated by the transport's own boot / catch-up / gossip dials), NOT a
+ * transient probe endpoint — a second endpoint with the device identity would
+ * hijack the relay route (see outl-sync-iroh "One endpoint per identity").
+ * Only the CLI `outl peer status`, which has no running transport, probes.
  *
- * - `online` is `true` when the probe connected within the timeout.
- * - `rtt_ms` is the round-trip time in milliseconds when reachable,
- *   `null` when the peer was offline (no successful probe to measure).
+ * - `online` is `true` when the peer is currently reachable.
+ * - `rtt_ms` is the last round-trip time in milliseconds when reachable,
+ *   `null` when the peer is offline.
  */
 export interface PeerStatusDto {
   node_id: string;

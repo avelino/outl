@@ -237,6 +237,9 @@ CLI exit code is `1` in that case; MCP returns the payload via the normal envelo
 
 `init`, `serve`, `reconcile`, `import`, `mcp serve`, `peer`, and `sync` are CLI-only on purpose — they're either interactive, long-running, or bootstrap commands that don't fit a tool-call shape.
 
+`outl peer pair` takes an optional `--name <NAME>` — the label this device advertises to the other (shown in the peer's `outl peer list`).
+It defaults to the machine hostname; the GUI clients default it to "desktop" / "mobile" and let the user edit it before pairing.
+
 `outl sync` forces a one-shot P2P sync pass (bring the iroh transport up, exchange ops with every paired device, exit).
 It's for scripts that mutate via the CLI and must flush to peers before the process dies — a normal short-lived CLI mutation can't keep a connection alive long enough.
 The long-lived surfaces (`outl mcp serve`, the desktop/TUI apps) sync continuously and don't need it.

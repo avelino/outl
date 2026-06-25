@@ -133,8 +133,8 @@ The trigger to actually stand it up is one of:
 
 ## It's already a config flip
 
-None of this needs a code change when the day comes.
-The iroh transport reads the relay URL from config:
+None of this needs a code change when the day comes — the wiring is already in place.
+The iroh transport reads the relay URL from config and binds the long-lived sync endpoint against it:
 
 ```toml
 [sync]
@@ -145,7 +145,14 @@ relay_url = "https://relay.outl.app"   # empty / omitted = n0 default relays
 Leave `relay_url` empty and you get n0's public relays (today's default).
 Point it at `relay.outl.app` once it's up, and that endpoint uses our relay for home registration, hole-punch coordination, and fallback.
 
-iroh also supports **mixing**: you can run your own relay *and* keep n0's as a fallback, so standing up `relay.outl.app` doesn't become a single point of failure on day one.
+How it threads through: each client reads `[sync] relay_url` from the global config and passes it to `IrohSyncTransport::new`, which hands it to the endpoint builder (`bind::n0_builder_ipv4_only`).
+`None` (or empty) keeps iroh's `presets::N0` relay; `Some(url)` swaps in `RelayMode::Custom`.
+A malformed URL logs a warning and falls back to the n0 default rather than failing the bind, so a typo degrades gracefully instead of taking sync down.
+Only the long-lived **sync** endpoint honors the custom relay today; the short-lived pairing / status / test endpoints stay on the n0 default (a custom-relay deployment cares about convergence, which the sync endpoint owns).
+
+iroh also supports **mixing**: you can run your own relay *and* keep n0's as a fallback.
+outl's current wiring sets a single custom relay (`RelayMode::Custom` with one URL).
+Broadening that to a custom-plus-n0 list is a one-line change in `bind::n0_builder_ipv4_only` if we want it, so standing up `relay.outl.app` doesn't have to be a single point of failure on day one.
 
 ---
 

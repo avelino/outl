@@ -182,7 +182,6 @@ export function Journal() {
   // published once and then never updated as the user typed inside
   // `[[…]]`.
   registerNativeToolbarBridge();
-  registerOpsChangeBridge();
   registerNativeSuggesterBridge();
 
   // Track connectivity so the SyncDot can show "offline" when iCloud
@@ -198,7 +197,21 @@ export function Journal() {
     // the mesh without a user action. `peer-ops-changed` (ops bridge)
     // and a force-sync also poke `refreshPeerStatus` for a fresher read.
     void refreshPeerStatus();
-    const peerPoll = window.setInterval(() => void refreshPeerStatus(), 5000);
+    const peerPoll = window.setInterval(() => {
+      void refreshPeerStatus();
+      // Pull from peers AND reload the view every tick so an edit on the
+      // desktop OR the TUI shows up without the refresh button. The mobile side
+      // initiating the dial is NAT-friendly (waiting for the desktop to reach an
+      // iPhone behind carrier NAT is not), which is why desktop/TUI→mobile needs
+      // us to pull. We call the full `pullAndReload` (not just `syncNow`):
+      // relying on the `workspace-ready` event alone left the ops on disk
+      // without re-rendering — the symptom was "only shows after I hit sync".
+      // Skipped mid-edit so it never resets the textarea; cheap no-op when the
+      // vector clocks already match. `background: true` keeps this silent — no
+      // sync spinner every tick, and it only swaps the view when the content
+      // actually changed, so a quiet poll never re-renders under the user.
+      if (!editingId()) void pullAndReload({ background: true });
+    }, 3000);
     onCleanup(() => {
       window.removeEventListener("online", upOnline);
       window.removeEventListener("offline", upOffline);
@@ -241,6 +254,17 @@ export function Journal() {
   onMount(async () => {
     listenForWorkspaceReady();
     await loadTodayWithRetry();
+    // Opening the app: pull whatever peers produced while it was closed, so the
+    // user sees fresh state without hitting refresh. Runs after the local load
+    // so the UI is already up; best-effort.
+    void pullAndReload();
+    // iOS freezes JS in the background; on return to the foreground, pull again
+    // so edits made on another device while we were away land right away.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void pullAndReload();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    onCleanup(() => document.removeEventListener("visibilitychange", onVisible));
   });
 
   /**
@@ -365,43 +389,6 @@ export function Journal() {
     });
   }
 
-  /**
-   * Bridge for the iCloud watcher in `main.mm`. iOS calls this when
-   * `ops-*.jsonl` files inside the ubiquitous container change —
-   * meaning a sibling device pushed new ops. We reload the workspace
-   * + refresh the current view so the user sees peer changes without
-   * having to pull-to-refresh.
-   */
-  function registerOpsChangeBridge() {
-    let pending = false;
-    (window as unknown as {
-      __outlOpsChanged?: () => void;
-    }).__outlOpsChanged = async () => {
-      if (pending) return;
-      pending = true;
-      setSyncing(true);
-      try {
-        await reloadWorkspace();
-        const cur = view();
-        if (cur) {
-          const next =
-            cur.page.kind === "journal"
-              ? await openJournalFor(cur.page.slug)
-              : await openPageBySlug(cur.page.slug);
-          applyView(next);
-        }
-      } catch {
-        // best effort; next interaction will refresh
-      } finally {
-        pending = false;
-        setSyncing(false);
-        // A peer just delivered ops → the mesh is demonstrably up; refresh
-        // the dot's health read right away instead of waiting for the tick.
-        void refreshPeerStatus();
-      }
-    };
-  }
-
   async function loadTodayWithRetry() {
     // Show a generic "Loading…" first, then upgrade the message to
     // The skeleton placeholder takes the place of the old progress
@@ -440,6 +427,10 @@ export function Journal() {
     // "loading" window converges on the freshly opened workspace.
     import("@tauri-apps/api/event").then(({ listen }) => {
       listen("workspace-ready", async () => {
+        // Don't reopen the page out from under an in-flight edit — it would
+        // reset the textarea. The ops are already on disk; the next idle
+        // workspace-ready (or the user committing) picks them up.
+        if (editingId()) return;
         const v = view();
         if (!v) {
           await loadTodayWithRetry();
@@ -766,32 +757,49 @@ export function Journal() {
     }
   }
 
-  async function handleRefresh() {
-    const pid = pageId();
-    if (!pid) return;
-    setRefreshing(true);
-    setSyncing(true);
-    haptic("light");
-    // Force a P2P pull FIRST (dial every iroh peer now instead of waiting
-    // for the catch-up tick), THEN reload the local op log so the re-render
-    // reflects whatever the peers just delivered. `syncNow` is best-effort:
-    // a no-op when iroh isn't wired, and tolerated (toast, don't wedge) on
-    // error so a flaky peer never blocks the local reload.
+  /**
+   * Core P2P pull, shared by the manual pull-to-refresh and the automatic
+   * open/foreground sync. Force a sync pass against every iroh peer NOW (dial
+   * instead of waiting for the catch-up tick), reload the local op log, and
+   * reopen the current page so the re-render reflects what peers delivered.
+   * Best-effort: `syncNow` is a no-op when iroh isn't wired, and tolerated
+   * (toast, don't wedge) on a flaky peer so it never blocks the local reload.
+   */
+  async function pullAndReload(opts?: { background?: boolean }) {
+    // `background` = the silent 4s poll. It still pulls + replays the op log,
+    // but it only swaps the rendered view when the content ACTUALLY changed and
+    // the user isn't editing — so an unchanged poll never re-renders (no scroll
+    // jump, no cursor churn) and a desktop/TUI edit arriving mid-typing never
+    // yanks the textarea out from under the user. The foreground paths (button,
+    // app open, resume) always apply and show the spinner.
+    const bg = opts?.background ?? false;
+    if (!bg) setSyncing(true);
     await withError(syncNow);
     await withError(reloadWorkspace);
-    // Reopen current page after refresh.
     const cur = view();
     if (cur) {
       const next =
         cur.page.kind === "journal"
           ? await withError(() => openJournalFor(cur.page.slug))
           : await withError(() => openPageBySlug(cur.page.slug));
-      if (next) applyView(next);
+      if (next) {
+        const changed =
+          JSON.stringify(next.outline) !== JSON.stringify(cur.outline);
+        if ((!bg || changed) && !editingId()) applyView(next);
+      }
     }
     // Re-read the dot off the fresh dial outcomes the force-sync produced.
     void refreshPeerStatus();
+    if (!bg) setSyncing(false);
+  }
+
+  async function handleRefresh() {
+    const pid = pageId();
+    if (!pid) return;
+    setRefreshing(true);
+    haptic("light");
+    await pullAndReload();
     setRefreshing(false);
-    setSyncing(false);
   }
 
   async function handlePrevDay() {
@@ -1038,33 +1046,18 @@ export function Journal() {
                 <path d="M21 21l-4.3-4.3M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z" />
               </svg>
             </button>
+            {/* The sync dot IS the devices/pairing affordance: it shows the
+                mesh status AND opens the pairing sheet on tap — no separate
+                (ugly) devices glyph. Mirrors the desktop's clickable dot. */}
             <button
               type="button"
-              aria-label="Devices"
+              aria-label="Devices and sync — tap to pair"
               onClick={() => {
                 haptic("light");
                 setDevicesOpen(true);
               }}
               class="flex h-9 w-10 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
             >
-              <svg
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="var(--color-ios-accent)"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-              >
-                <rect x="2" y="4" width="14" height="10" rx="2" />
-                <path d="M16 9h3l3 3v3a1 1 0 0 1-1 1h-2" />
-                <circle cx="6.5" cy="18.5" r="1.5" />
-                <circle cx="17.5" cy="18.5" r="1.5" />
-              </svg>
-            </button>
-            <span class="px-1.5">
               <SyncDot
                 status={
                   // PRIMARY signal is iroh peer health, not navigator.onLine.
@@ -1079,10 +1072,10 @@ export function Journal() {
                       : "offline"
                 }
               />
-            </span>
+            </button>
             <button
               type="button"
-              aria-label="Sync from iCloud"
+              aria-label="Sync now"
               onClick={handleRefresh}
               class="flex h-9 w-10 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
             >

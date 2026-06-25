@@ -24,8 +24,9 @@ impl App {
     /// When `sync_cfg.transport` is [`SyncTransportKind::Iroh`] (and the
     /// workspace is shared), build an
     /// [`outl_sync_iroh::IrohSyncTransport`] from the on-disk device
-    /// identity (`~/.outl/identity.key`) and peer store
-    /// (`~/.outl/peers.json`). On any failure we log and leave
+    /// identity (`~/.outl/identity.key`, per-device) and the
+    /// per-workspace peer store (`<workspace>/.outl/peers.json`). On any
+    /// failure we log and leave
     /// `sync_transport` as `None`, so `spawn_jsonl_poller` falls back
     /// to the filesystem/iCloud poller — sync degrades, the editor
     /// still works.
@@ -40,7 +41,10 @@ impl App {
         if sync_cfg.transport != SyncTransportKind::Iroh {
             return;
         }
-        match build_iroh_transport() {
+        match build_iroh_transport(
+            &self.workspace_root,
+            sync_cfg.relay_url().map(str::to_string),
+        ) {
             Ok(transport) => {
                 self.sync_transport = Some(transport);
                 self.status = "iroh sync enabled".to_string();
@@ -90,16 +94,34 @@ impl App {
             return;
         }
         let (tx, rx) = std::sync::mpsc::channel();
+        // Always run the filesystem poller, even when an iroh transport is
+        // wired. The two cover DIFFERENT delivery paths and neither
+        // subsumes the other:
+        //
+        // - **iroh** signals a reload only on ITS OWN QUIC receipts — ops it
+        //   pulled/was-pushed over the wire.
+        // - **the file poller** signals on ANY growth of a peer's
+        //   `ops-<actor>.jsonl` on disk, including ops a CO-RESIDENT process
+        //   wrote (a desktop / MCP / CLI on the same machine sharing this
+        //   workspace's `ops/`).
+        //
+        // The co-resident case is real and was the "TUI ↔ mobile doesn't
+        // sync" bug: the desktop and the TUI share `~/.outl/identity.key`
+        // (one node id per device), so the relay routes the mobile's inbound
+        // to whichever endpoint holds the route — usually the desktop. The
+        // desktop receives the peer's ops over iroh and writes them to the
+        // shared `ops/`, but the TUI's iroh transport never saw those bytes
+        // on the wire, so without the poller the TUI stays blind to them.
+        // The poller filters out our own `ops-<actor>.jsonl`, so a local
+        // save never self-triggers; reopen is idempotent, so the occasional
+        // overlap with an iroh signal just confirms convergence.
+        outl_actions::FileSyncTransport.start(
+            self.workspace_root.clone(),
+            self.hlc.actor(),
+            tx.clone(),
+        );
         if let Some(transport) = &self.sync_transport {
-            // iroh (or any custom) transport owns change detection.
             transport.start(self.workspace_root.clone(), self.hlc.actor(), tx);
-        } else {
-            // FileSyncTransport fallback: poll `ops/` every 2 s.
-            outl_actions::FileSyncTransport.start(
-                self.workspace_root.clone(),
-                self.hlc.actor(),
-                tx,
-            );
         }
         self.jsonl_rx = Some(rx);
     }
@@ -283,17 +305,32 @@ impl App {
 /// Build an [`outl_sync_iroh::IrohSyncTransport`] from the device's
 /// on-disk identity and peer store under `~/.outl/`.
 ///
+/// `relay_url` is the configured `[sync] relay_url` (normalized to `None`
+/// for the empty string by `SyncConfig::relay_url`); `None` keeps iroh's
+/// n0 default relay, `Some(url)` points the sync endpoint at a custom one.
+///
 /// Returns the transport behind an `Arc` so the poller thread can hold
 /// its own handle. Errors (no `$HOME`, unreadable identity / peers
 /// files) bubble up to `wire_sync_transport`, which degrades to the
 /// filesystem poller instead of aborting startup.
-fn build_iroh_transport() -> anyhow::Result<std::sync::Arc<dyn SyncTransport>> {
+///
+/// The device **identity** is per-machine (`~/.outl/identity.key`); the
+/// **peer list** is per-graph (`<workspace_root>/.outl/peers.json`). A
+/// one-time migration copies any legacy global peer list into the workspace
+/// on first open.
+fn build_iroh_transport(
+    workspace_root: &std::path::Path,
+    relay_url: Option<String>,
+) -> anyhow::Result<std::sync::Arc<dyn SyncTransport>> {
     let home = std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
         .ok_or_else(|| anyhow::anyhow!("$HOME is not set; cannot locate ~/.outl"))?;
     let outl_dir = home.join(".outl");
     let identity = outl_sync_iroh::IrohIdentity::load_or_generate(&outl_dir.join("identity.key"))?;
-    let peers = outl_sync_iroh::PeersStore::load_or_default(&outl_dir.join("peers.json"))?;
-    let transport = outl_sync_iroh::IrohSyncTransport::new(identity, peers);
+    outl_sync_iroh::migrate_global_peers_if_absent(workspace_root);
+    let peers = outl_sync_iroh::PeersStore::load_or_default(
+        &outl_sync_iroh::workspace_peers_path(workspace_root),
+    )?;
+    let transport = outl_sync_iroh::IrohSyncTransport::new(identity, peers, relay_url);
     Ok(std::sync::Arc::new(transport))
 }

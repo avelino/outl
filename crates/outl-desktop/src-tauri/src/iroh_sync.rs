@@ -4,9 +4,10 @@
 //! `~/.config/outl/config.toml` (read via `outl_config::load()`). When
 //! the user opts in, [`wire_iroh_transport`] builds an
 //! [`outl_sync_iroh::IrohSyncTransport`] from the on-disk device
-//! identity (`~/.outl/identity.key`) and peer store
-//! (`~/.outl/peers.json`) — the same `~/.outl/` location the CLI, the
-//! TUI, and the pairing commands use — and starts it.
+//! identity (`~/.outl/identity.key`, per-device) and the per-workspace
+//! peer store (`<workspace>/.outl/peers.json`). Identity stays global
+//! (one node id per machine, same `~/.outl/` the CLI / TUI use); the peer
+//! list belongs to the graph, so it lives under the workspace root.
 //!
 //! ## Relationship to the `notify` file watcher
 //!
@@ -45,19 +46,30 @@ pub(crate) fn outl_dir() -> Option<PathBuf> {
 }
 
 /// Build an [`outl_sync_iroh::IrohSyncTransport`] from the device's
-/// on-disk identity and peer store under `~/.outl/`.
+/// on-disk identity (global `~/.outl/identity.key`) and the per-workspace
+/// peer store (`<workspace_root>/.outl/peers.json`).
 ///
 /// Returns the **concrete** transport (cheaply `Clone`, internally
 /// `Arc`-backed). The caller stores one clone as the concrete
 /// `iroh_pairing` slot (so the pairing commands can call `pair_host` /
 /// `pair_join`, which reuse the live sync endpoint) and one as the
 /// `dyn SyncTransport` slot (`announce` / `shutdown` / `peer_health`).
-fn build_iroh_transport() -> anyhow::Result<outl_sync_iroh::IrohSyncTransport> {
+fn build_iroh_transport(
+    workspace_root: &std::path::Path,
+) -> anyhow::Result<outl_sync_iroh::IrohSyncTransport> {
     let dir = outl_dir().ok_or_else(|| anyhow::anyhow!("$HOME unset; cannot locate ~/.outl"))?;
     std::fs::create_dir_all(&dir)?;
     let identity = outl_sync_iroh::IrohIdentity::load_or_generate(&dir.join("identity.key"))?;
-    let peers = outl_sync_iroh::PeersStore::load_or_default(&dir.join("peers.json"))?;
-    Ok(outl_sync_iroh::IrohSyncTransport::new(identity, peers))
+    outl_sync_iroh::migrate_global_peers_if_absent(workspace_root);
+    let peers = outl_sync_iroh::PeersStore::load_or_default(
+        &outl_sync_iroh::workspace_peers_path(workspace_root),
+    )?;
+    // `[sync] relay_url` from the global config: `None` (or empty) keeps iroh's
+    // n0 default relay, `Some(url)` points the sync endpoint at a custom relay.
+    let relay_url = outl_config::load().sync.relay_url().map(str::to_string);
+    Ok(outl_sync_iroh::IrohSyncTransport::new(
+        identity, peers, relay_url,
+    ))
 }
 
 /// Wire the iroh transport into the running app when the config asks
@@ -83,7 +95,7 @@ pub(crate) fn wire_iroh_transport(
     if transport_kind != SyncTransportKind::Iroh {
         return;
     }
-    let transport = match build_iroh_transport() {
+    let transport = match build_iroh_transport(&workspace_root) {
         Ok(t) => t,
         Err(e) => {
             warn!("iroh sync unavailable, using filesystem watcher: {e}");

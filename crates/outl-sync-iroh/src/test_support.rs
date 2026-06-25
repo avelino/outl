@@ -37,7 +37,7 @@ pub async fn bind_sync_endpoint(identity: &crate::IrohIdentity) -> Result<iroh::
     // carries only the 127.0.0.1 direct addr, so the test connect never races a
     // `[::1]` path. Revert when iroh > 1.0.0 ships the multipath fallback fix.
     // See `crate::bind`.
-    crate::bind::n0_builder_ipv4_only()
+    crate::bind::n0_builder_ipv4_only(None)
         .secret_key(identity.secret_key().clone())
         .alpns(vec![SYNC_ALPN.to_vec()])
         .bind()

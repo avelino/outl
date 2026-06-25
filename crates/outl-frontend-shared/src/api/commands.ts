@@ -365,7 +365,10 @@ export function syncNow(): Promise<void> {
  * to refresh the device list. `peer-pair-failed` (payload: error
  * string) fires if the handshake times out or errors.
  *
- * `alias` is an optional human label advertised to the joining device.
+ * `alias` is this device's own human label, advertised to and stored by
+ * the joining device (it persists under *our* node id in the peer's
+ * `peers.json`). Defaults to the platform name ("desktop" / "mobile") when
+ * omitted.
  *
  * Backend note: the desktop's `outl_peer_pair_host` currently resolves
  * with the paired peer object instead of the ticket and emits the
@@ -384,8 +387,9 @@ export function peerPairHost(alias?: string | null): Promise<string> {
  * host to `peers.json`, and resolves with the newly paired
  * {@link PeerDto}. Mirrors `outl_peer_pair_join`.
  *
- * `alias` is an optional human label for the host device as seen from
- * this side.
+ * `alias` is this device's own human label, advertised to and stored by
+ * the host (it persists under *our* node id in the host's `peers.json`).
+ * The returned {@link PeerDto} carries the *host's* alias, not this one.
  */
 export function peerPairJoin(ticket: string, alias?: string | null): Promise<PeerDto> {
   return invoke<PeerDto>("outl_peer_pair_join", { ticket, alias: alias ?? null });

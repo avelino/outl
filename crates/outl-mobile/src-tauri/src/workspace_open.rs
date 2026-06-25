@@ -1,34 +1,28 @@
 //! Workspace resolution + background opener.
 //!
-//! ## Storage is a chosen folder, not forced iCloud (Fase 2)
+//! ## Storage is a local folder, synced by iroh (no iCloud)
 //!
-//! The workspace root is a folder the user picks; it may live anywhere
-//! — the app's local data dir (the default), the Files app, or inside an
-//! iCloud container. iroh P2P is the primary sync, so the storage
-//! *location* is a choice, not a hard iCloud dependency. A fresh install
-//! works with **no iCloud at all**: the default root is
-//! `<app-data-dir>/outl/` and iroh syncs it.
+//! The workspace root is a folder on this device; iroh P2P is the only
+//! sync. A fresh install works with **no iCloud at all**: the default
+//! root is `<app-data-dir>/outl/` and iroh ships the op log to paired
+//! devices.
 //!
 //! Resolution order in [`resolve_storage_root`]:
 //!
 //! 1. The persisted `WorkspaceCfg.last` path, when present and usable
 //!    (survives restarts — written by [`persist_workspace_path`]).
-//! 2. The app-local default `<app-data-dir>/outl/` (zero iCloud).
+//! 2. The app-local default `<app-data-dir>/outl/`.
 //!
-//! iCloud stays available as a *destination* the user can point the
-//! folder at (via [`icloud_path::resolve_container`] +
-//! [`icloud_container_workspace_root`]), but it is never the forced
-//! default.
+//! Picking an arbitrary folder is the deferred native-picker concern (see
+//! `workspace_picker`); until that lands the default local root is the
+//! only path a fresh install ever opens.
 //!
-//! ## Change detection is generic, not iCloud-only
+//! ## Change detection is the iroh signal
 //!
 //! The iroh transport signals reloads when it writes peer ops (see
-//! `iroh_sync::wire_iroh_transport`). The iCloud-only `NSMetadataQuery`
-//! watcher (`OutlOpsWatcher.swift`) is now **conditional** on the chosen
-//! folder being inside iCloud ([`icloud_path::is_inside_icloud`]): a local
-//! folder relies on the iroh signal and does not require the iCloud
-//! daemon. The Rust boot path surfaces that decision via
-//! [`storage_is_icloud`] so the native side and the JS bridge agree.
+//! `iroh_sync::wire_iroh_transport`). There is no filesystem watcher: a
+//! single device needs none, and peer ops arrive through iroh, which pokes
+//! the reload itself.
 //!
 //! ## Other mobile divergences from desktop
 //!
@@ -51,57 +45,21 @@ use parking_lot::Mutex;
 use tauri::Emitter;
 use tracing::{info, warn};
 
-use crate::icloud_path;
-
 /// Folder name for the **local** default workspace, created under the
 /// app's data dir when the user hasn't picked anything yet.
 ///
-/// A fresh install lands here with no iCloud involved — iroh is the sync.
+/// A fresh install lands here — iroh is the sync.
 const LOCAL_WORKSPACE_DIR: &str = "outl";
 
-/// Sub-path under the iCloud Ubiquity Container where the workspace
-/// lives **when the user chooses to store it in iCloud**.
-///
-/// The container itself is already namespaced as
-/// `iCloud.app.outl.mobile-app`, so re-tagging an inner `outl/`
-/// folder underneath it is noise. We use the standard iOS
-/// `Documents/` directory directly: iCloud Documents only syncs that
-/// path between devices, and the resulting layout matches what the
-/// user sees in the Files app.
-///
-/// Kept non-dotted because iCloud Documents skips paths starting
-/// with `.` when syncing between devices.
-const WORKSPACE_SUBDIR: [&str; 1] = ["Documents"];
-
-/// iCloud Ubiquity Container identifier registered in the
-/// `com.apple.developer.icloud-container-identifiers` entitlement.
-///
-/// Only consulted when the user opts in to iCloud storage; the default
-/// path never touches it.
-const ICLOUD_CONTAINER_ID: &str = "iCloud.app.outl.mobile-app";
-
-/// The workspace root inside an iCloud container (`<container>/Documents`).
-///
-/// Kept as the opt-in iCloud destination. Renamed from the old
-/// `workspace_root_in` (which `lib.rs` used to call unconditionally) to
-/// make the iCloud-specific intent obvious at the call site.
-pub(crate) fn icloud_container_workspace_root(container: &Path) -> PathBuf {
-    let mut p = container.to_path_buf();
-    for seg in WORKSPACE_SUBDIR {
-        p.push(seg);
-    }
-    p
+fn ops_dir(workspace_root: &Path) -> PathBuf {
+    workspace_root.join("ops")
 }
 
 /// The app-local default workspace root: `<app-data-dir>/outl/`.
 ///
-/// This is what a fresh install uses with no iCloud — iroh syncs it P2P.
+/// This is what a fresh install uses — iroh syncs it P2P.
 pub(crate) fn local_default_root(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join(LOCAL_WORKSPACE_DIR)
-}
-
-fn ops_dir(workspace_root: &Path) -> PathBuf {
-    workspace_root.join("ops")
 }
 
 pub(crate) fn load_or_create_actor(local_dir: &Path) -> std::io::Result<ActorId> {
@@ -123,25 +81,22 @@ pub(crate) fn load_or_create_actor(local_dir: &Path) -> std::io::Result<ActorId>
 
 /// Resolve the workspace root to open on boot.
 ///
-/// **No longer forces iCloud.** Order:
+/// Order:
 ///
 /// 1. A previously chosen folder, if `persisted` points at something
-///    usable (the user picked it; it survived this restart). The path is
-///    taken verbatim — it may be local, in the Files app, or inside an
-///    iCloud container; we don't second-guess where the user put it.
-/// 2. The app-local default `<app-data-dir>/outl/` — a fresh install with
-///    **no iCloud at all**, synced by iroh.
+///    usable (the user picked it; it survived this restart).
+/// 2. The app-local default `<app-data-dir>/outl/` — a fresh install,
+///    synced by iroh.
 ///
 /// `persisted` is `WorkspaceCfg.last` from `outl-config`. A `None` (first
 /// launch) or a path that no longer resolves falls through to the local
-/// default rather than reaching for iCloud.
+/// default.
 pub(crate) fn resolve_storage_root(app_data_dir: &Path, persisted: Option<&Path>) -> PathBuf {
     if let Some(chosen) = persisted {
         // Accept the chosen path as long as its parent exists (the
         // workspace dir itself is created by the caller). A path whose
-        // parent vanished — e.g. an iCloud container the user signed out
-        // of, or a removed external volume — falls through to the local
-        // default instead of failing the boot.
+        // parent vanished — e.g. a removed external volume — falls through
+        // to the local default instead of failing the boot.
         let usable = chosen.exists() || chosen.parent().map(|p| p.exists()).unwrap_or(false);
         if usable {
             info!("opening chosen workspace at {}", chosen.display());
@@ -159,30 +114,6 @@ pub(crate) fn resolve_storage_root(app_data_dir: &Path, persisted: Option<&Path>
         default_root.display()
     );
     default_root
-}
-
-/// Resolve the app's iCloud container workspace root, if the user wants to
-/// store the workspace in iCloud and the container is available.
-///
-/// Opt-in only — the folder picker (or a future "store in iCloud" toggle)
-/// calls this; the boot path does **not**. Returns `None` when the user
-/// isn't signed into iCloud or the entitlement is missing, so the caller
-/// can fall back to a local folder cleanly.
-#[allow(dead_code)] // Wired by the folder picker; see workspace_picker.rs.
-pub(crate) fn icloud_workspace_root() -> Option<PathBuf> {
-    let container = icloud_path::resolve_container(ICLOUD_CONTAINER_ID)?;
-    info!("iCloud container available at {}", container.display());
-    Some(icloud_container_workspace_root(&container))
-}
-
-/// Whether the chosen workspace folder lives inside iCloud.
-///
-/// Gates the iCloud-only change detector: `true` means the
-/// `NSMetadataQuery` watcher (`OutlOpsWatcher.swift`) + `NSFileCoordinator`
-/// materialisation are relevant; `false` means a local folder that relies
-/// on the iroh reload signal and must not require the iCloud daemon.
-pub(crate) fn storage_is_icloud(storage_root: &Path) -> bool {
-    icloud_path::is_inside_icloud(storage_root)
 }
 
 /// Persist the chosen workspace path so the next launch reopens it

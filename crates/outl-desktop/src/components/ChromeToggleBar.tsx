@@ -1,4 +1,5 @@
 import { appState, setAppState } from "../lib/store";
+import { SyncIndicator } from "./SyncIndicator";
 
 /**
  * Small chrome toggle button (sidebar / shortcuts help).
@@ -68,6 +69,10 @@ export function ChromeToggleBar() {
         title="Keyboard shortcuts (?)"
         onToggle={() => setAppState("helpOpen", !appState.helpOpen)}
       />
+      {/* Thin divider, then the always-visible sync status dot. Clicking
+          it opens Settings → Sync (peer list + pairing). */}
+      <span class="mx-0.5 h-4 w-px bg-(--color-outl-border)" aria-hidden="true" />
+      <SyncIndicator />
     </div>
   );
 }

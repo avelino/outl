@@ -46,6 +46,7 @@ outl-exec = { path = "../../outl-exec", default-features = false, features = [
 
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-os = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 parking_lot = { workspace = true }

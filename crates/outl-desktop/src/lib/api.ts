@@ -83,6 +83,12 @@ export interface Settings {
    */
   theme: string;
   font_size: number;
+  /**
+   * Sync transport: `"iroh"` (direct P2P over QUIC, the default) or
+   * `"file"` (iCloud Drive / shared filesystem). Mirrors the Rust
+   * `Settings.sync_transport` and the `[sync] transport` config key.
+   */
+  sync_transport: string;
 }
 
 /**
