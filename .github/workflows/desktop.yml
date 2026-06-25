@@ -67,6 +67,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # `cargo test -p outl-desktop` links the desktop's test binaries with
+      # tauri + webkit + wasmtime + iroh all in one image; since wasmtime 46
+      # that link peaks past the runner's ~7 GB RAM and the OOM killer reaps
+      # the job (clippy compiles fine — only `cargo test` links the fat
+      # binaries, so it dies with no test output). An 8 GB swapfile absorbs
+      # the spike. Drop this if a future wasmtime slims the link or we move
+      # to a larger runner.
+      - name: Add swap space (OOM headroom for the test link)
+        run: |
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
