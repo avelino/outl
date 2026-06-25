@@ -17,6 +17,8 @@ outl-mobile (this crate)
    │   ├── helpers.rs              (parse_node_id / parse_date / with_ws* / build_page_view / finish_in_page*)
    │   ├── workspace_open.rs       (resolve_storage_root, spawn_workspace_opener, reconcile_orphan_md)
    │   ├── workspace_picker.rs     (set_workspace — folder choice + persistence; native picker deferred)
+   │   ├── iroh_sync.rs            (wire_iroh_transport — boot the P2P transport, register the bg-sync handle)
+   │   ├── bg_sync.rs             (outl_ios_background_sync FFI — drives a forced sync from the iOS BGProcessingTask)
    │   └── commands/               (Tauri command surface — split mirrors outl-desktop)
    │       ├── mod.rs
    │       ├── workspace.rs        (workspace_stats, reload_workspace)
@@ -98,6 +100,22 @@ There is no filesystem watcher in the Rust path.
 The iOS-native `OutlOpsWatcher.swift` (`NSMetadataQuery` + `NSFileCoordinator`), the iCloud container entitlements, and the `Info.plist`/`pbxproj` references are still present from before the Rust teardown.
 Because the chosen folder is now always local, the watcher's `NSMetadataQueryUbiquitousDocumentsScope` query matches nothing and stays **dormant** — it does nothing and breaks nothing.
 Removing it (watcher → no-op, strip the entitlements + plist keys) is a follow-up that touches code-signing, so it must be validated with a device build, not done blind.
+
+## Background sync (iOS)
+
+iOS suspends the app's sockets the moment it backgrounds, so there is **no continuous background P2P**.
+The only sanctioned path is an opportunistic `BGProcessingTask`, wired across three pieces:
+
+1. **Info.plist** declares `UIBackgroundModes` (`fetch` + `processing`) and `BGTaskSchedulerPermittedIdentifiers` (`app.outl.mobile-app.refresh`, `app.outl.mobile-app.sync`).
+   Without these the toggle never shows in Settings and `BGTaskScheduler.register`/`submit` fail silently.
+2. **`OutlBackgroundRefresh.swift`** registers both tasks (`+load` → `install`).
+   The `sync` (`BGProcessingTask`, `requiresNetworkConnectivity = true`) handler calls the Rust FFI on a background queue and reports completion exactly once (the work and the OS expiration handler race).
+3. **`bg_sync.rs`** owns the FFI `outl_ios_background_sync()` (C ABI, `@_silgen_name` on the Swift side).
+   `wire_iroh_transport` registers a `Clone` of the live `IrohSyncTransport` into a re-settable global.
+   The FFI fires `sync_now()` (a forced delta-sync against every peer, mobile side initiating, which is NAT-friendly) and blocks ~20s so the QUIC pull/push lands before Swift completes the task.
+
+The FFI + Swift handler can only be validated with a **device build**.
+The simulator has no `BGTaskScheduler` daemon, so `submit` always fails there and is swallowed; the Rust side is `cargo check`-clean on its own.
 
 ## Hard rule
 

@@ -19,14 +19,12 @@
 //!
 //! - **Whether to wire iroh at all.** Driven by the `[sync]` section of
 //!   the global `outl-config`. iroh is the default transport on mobile
-//!   (P2P is the whole point of the companion app); we only fall back to
-//!   the iCloud file transport when the config explicitly says
-//!   `transport = "file"`.
+//!   (P2P is the whole point of the companion app); the only opt-out is
+//!   the `transport = "file"` shared-filesystem mode.
 //!
 //! - **Resilience.** Any failure binding the identity / peer store logs
-//!   and returns `None`. The app keeps running on the iCloud file
-//!   transport (the native `NSMetadataQuery` watcher in `main.mm`), so a
-//!   broken iroh setup never crashes startup.
+//!   and returns `None`. The app keeps running without sync rather than
+//!   crashing startup; a later relaunch retries.
 
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -132,11 +130,15 @@ pub(crate) fn wire_iroh_transport(
     let transport = IrohSyncTransport::new(identity, peers, relay_url);
 
     // The transport fires `()` on this channel whenever peer ops land on
-    // disk. Bridge each signal to the `workspace-ready` Tauri event so
-    // the frontend reloads — mirroring the iCloud `__outlOpsChanged`
-    // path's effect without a native watcher.
+    // disk. Bridge each signal to the `workspace-ready` Tauri event so the
+    // frontend reloads (iroh has no native watcher, so it reuses the same
+    // Tauri event the background opener fires).
     let (tx, rx) = mpsc::channel::<()>();
     transport.start(workspace_root, actor, tx);
+
+    // Expose the live transport to the iOS BGProcessingTask FFI so a
+    // background window can drive a forced sync pass (see `bg_sync`).
+    crate::bg_sync::register(&transport);
 
     let app_for_drain = app.clone();
     std::thread::Builder::new()
