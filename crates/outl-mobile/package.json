@@ -1,6 +1,6 @@
 {
   "name": "outl-mobile",
-  "version": "0.4.0",
+  "version": "0.7.0",
   "description": "Mobile companion app for outl (Tauri 2 + Solid).",
   "type": "module",
   "scripts": {
@@ -15,21 +15,21 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@tauri-apps/api": "^2",
+    "@tauri-apps/api": "catalog:",
     "@tauri-apps/plugin-barcode-scanner": "^2",
-    "@tauri-apps/plugin-opener": "^2",
-    "@tauri-apps/plugin-os": "^2",
-    "solid-js": "^1.9.3"
+    "@tauri-apps/plugin-opener": "catalog:",
+    "@tauri-apps/plugin-os": "catalog:",
+    "solid-js": "catalog:"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.3.0",
-    "@tauri-apps/cli": "^2",
-    "@vitest/ui": "^4.1.7",
-    "happy-dom": "^20.9.0",
-    "tailwindcss": "^4.3.0",
-    "typescript": "~5.6.2",
-    "vite": "^6.0.3",
-    "vite-plugin-solid": "^2.11.0",
-    "vitest": "^4.1.7"
+    "@tailwindcss/vite": "catalog:",
+    "@tauri-apps/cli": "catalog:",
+    "@vitest/ui": "catalog:",
+    "happy-dom": "catalog:",
+    "tailwindcss": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plugin-solid": "catalog:",
+    "vitest": "catalog:"
   }
 }

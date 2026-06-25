@@ -19,7 +19,6 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
 
-    "baseUrl": ".",
     "paths": {
       "@outl/shared": ["../outl-frontend-shared/src/index.ts"],
       "@outl/shared/*": ["../outl-frontend-shared/src/*"]

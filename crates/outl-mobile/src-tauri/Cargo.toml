@@ -25,11 +25,11 @@ outl-md = { workspace = true }
 outl-actions = { workspace = true }
 outl-sync-iroh = { workspace = true }
 outl-config = { workspace = true }
-dirs = "5"
+dirs = { workspace = true }
 # Pin the rustls crypto provider. iroh pulls rustls with default features off,
 # dropping the workspace-wide default provider, which makes reqwest (Tauri's
 # webview asset protocol) panic at boot. `run()` installs `ring` explicitly.
-rustls = { version = "0.23", features = ["ring"] }
+rustls = { workspace = true }
 # Code-block runtime. `lang-rust` deliberately disabled: it pulls in
 # wasmtime + Cranelift JIT, which inflates the IPA and runs into iOS
 # code-signing restrictions on dynamic code generation. Lisp / JS /
@@ -44,9 +44,9 @@ outl-exec = { path = "../../outl-exec", default-features = false, features = [
     "lang-lua",
 ] }
 
-tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
-tauri-plugin-os = "2"
+tauri = { workspace = true }
+tauri-plugin-opener = { workspace = true }
+tauri-plugin-os = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 parking_lot = { workspace = true }

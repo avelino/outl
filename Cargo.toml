@@ -17,7 +17,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT"
@@ -28,15 +28,15 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Internal crates
-outl-core = { path = "crates/outl-core", version = "0.6.0" }
-outl-md = { path = "crates/outl-md", version = "0.6.0" }
-outl-actions = { path = "crates/outl-actions", version = "0.6.0" }
-outl-sync-iroh = { path = "crates/outl-sync-iroh", version = "0.6.0" }
-outl-config = { path = "crates/outl-config", version = "0.6.0" }
-outl-exec = { path = "crates/outl-exec", version = "0.6.0" }
-outl-shortcuts = { path = "crates/outl-shortcuts", version = "0.6.0" }
-outl-theme = { path = "crates/outl-theme", version = "0.6.0" }
-outl-tui = { path = "crates/outl-tui", version = "0.6.0" }
+outl-core = { path = "crates/outl-core", version = "0.7.0" }
+outl-md = { path = "crates/outl-md", version = "0.7.0" }
+outl-actions = { path = "crates/outl-actions", version = "0.7.0" }
+outl-sync-iroh = { path = "crates/outl-sync-iroh", version = "0.7.0" }
+outl-config = { path = "crates/outl-config", version = "0.7.0" }
+outl-exec = { path = "crates/outl-exec", version = "0.7.0" }
+outl-shortcuts = { path = "crates/outl-shortcuts", version = "0.7.0" }
+outl-theme = { path = "crates/outl-theme", version = "0.7.0" }
+outl-tui = { path = "crates/outl-tui", version = "0.7.0" }
 
 # IDs and time
 ulid = { version = "1", features = ["serde"] }
@@ -56,7 +56,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # CRDT
-yrs = "0.26"
+yrs = "0.27"
 
 # P2P sync (iroh)
 # `default-features` stays ON: iroh 1.0.0 ships its TLS backend (tls-ring) and
@@ -68,7 +68,7 @@ iroh-gossip = "0.101.0"
 
 # Markdown
 comrak = { version = "0.52", default-features = false }
-emojis = "0.8"
+emojis = "0.9"
 
 # TUI
 ratatui = "0.30"
@@ -90,7 +90,13 @@ parking_lot = "0.12"
 sha2 = "0.11"
 hex = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
-dirs = "5"
+dirs = "6"
+
+# Tauri clients (desktop + mobile src-tauri)
+rustls = { version = "0.23", features = ["ring"] }
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-os = "2"
 
 # Dev
 proptest = "1"

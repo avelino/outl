@@ -28,16 +28,16 @@ outl-exec = { workspace = true }
 outl-shortcuts = { workspace = true }
 outl-theme = { workspace = true }
 outl-sync-iroh = { workspace = true }
-dirs = "5"
+dirs = { workspace = true }
 # Pin the rustls crypto provider. iroh pulls rustls with default features off,
 # dropping the workspace-wide default provider, which makes reqwest (Tauri's
 # webview asset protocol) panic at boot. `run()` installs `ring` explicitly.
-rustls = { version = "0.23", features = ["ring"] }
+rustls = { workspace = true }
 
-tauri = { version = "2", features = [] }
+tauri = { workspace = true }
 tauri-plugin-dialog = "2"
-tauri-plugin-opener = "2"
-tauri-plugin-os = "2"
+tauri-plugin-opener = { workspace = true }
+tauri-plugin-os = { workspace = true }
 notify = "8"
 notify-debouncer-full = "0.7"
 serde = { workspace = true }
