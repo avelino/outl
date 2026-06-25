@@ -15,9 +15,8 @@ outl-mobile (this crate)
    │   ├── lib.rs                  (mod decls + run())
    │   ├── state.rs                (AppState, PageView, WorkspaceSummary, CreateBlockReply, ERR_LOADING)
    │   ├── helpers.rs              (parse_node_id / parse_date / with_ws* / build_page_view / finish_in_page*)
-   │   ├── workspace_open.rs       (resolve_storage_root, spawn_workspace_opener, reconcile_orphan_md, storage_is_icloud)
-   │   ├── workspace_picker.rs     (set_workspace / pick_in_icloud — folder choice + persistence; native picker deferred)
-   │   ├── icloud_path.rs          (NSFileManager bridge + is_inside_icloud — iOS-only, opt-in)
+   │   ├── workspace_open.rs       (resolve_storage_root, spawn_workspace_opener, reconcile_orphan_md)
+   │   ├── workspace_picker.rs     (set_workspace — folder choice + persistence; native picker deferred)
    │   └── commands/               (Tauri command surface — split mirrors outl-desktop)
    │       ├── mod.rs
    │       ├── workspace.rs        (workspace_stats, reload_workspace)
@@ -59,9 +58,8 @@ iCloud is reachable on demand via `workspace_open::icloud_workspace_root()` (use
 
 - `set_workspace(path)` validates, creates the dir, persists `WorkspaceCfg.last`, and emits `workspace-reopen-required`.
   The reopen is **boot-read** today (next launch picks up `last`); a runtime swap would need `AppState.storage_root` to become an `Arc<Mutex<Option<PathBuf>>>` plus an iroh rebind, deliberately deferred.
-  Frontend wrapper: `setWorkspace(path) → Promise<boolean>` in `src/lib/api.ts` (returns `is_icloud`).
-- `pick_in_icloud()` resolves `<container>/Documents` for the "store in iCloud" opt-in, zero native code; returns `null` when the device isn't signed into iCloud.
-  Frontend wrapper: `pickInICloud() → Promise<string | null>` in `src/lib/api.ts`.
+  Frontend wrapper: `setWorkspace(path) → Promise<void>` in `src/lib/api.ts`.
+  No caller wires it yet — the arbitrary-folder native picker (`UIDocumentPickerViewController` + security-scoped bookmark) is deferred, so the local default is the only root a fresh install opens.
 
 > **Registration note:** both commands are registered in `lib.rs`'s `invoke_handler!` list (`workspace_picker::set_workspace`, `workspace_picker::pick_in_icloud`).
 
@@ -86,25 +84,20 @@ Pairing is **not** reimplemented — `Onboarding` opens the real `<DevicesSheet 
 **DEFERRED — native folder picker + security-scoped bookmark.**
 The native `UIDocumentPickerViewController` (folder mode) bridge is **not** implemented (and is not faked).
 Two real blockers: Tauri 2's iOS folder picker is incomplete (tauri-apps/plugins-workspace#3030), and a folder *outside* the app sandbox needs an `NSURL` security-scoped **bookmark** to be reopenable across launches.
-Storing just the string path in `WorkspaceCfg.last` only works for the sandbox, the local default, and the app's own iCloud container.
-The follow-up adds an `objc2` bridge (mirroring `icloud_path.rs`) that presents the picker, serialises a bookmark, persists it next to `actor`, and resolves it on boot before `resolve_storage_root`.
-Until then, `set_workspace` works for any path the frontend can already reach without a scoped bookmark, and `pick_in_icloud` covers the iCloud case.
+Storing just the string path in `WorkspaceCfg.last` only works for the sandbox and the local default.
+The follow-up adds an `objc2` bridge that presents the picker, serialises a bookmark, persists it next to `actor`, and resolves it on boot before `resolve_storage_root`.
+Until then, `set_workspace` works for any path the frontend can already reach without a scoped bookmark, and the local default is the only root a fresh install opens.
 
-## Change detection: generic, not iCloud-only
+## Change detection: the iroh signal
 
-- **iroh (primary).**
-  The transport fires a reload signal whenever it writes peer ops; `iroh_sync.rs` bridges it to the `workspace-ready` Tauri event.
-  This covers a local folder with **no iCloud watcher at all**.
-- **iCloud watcher (conditional).**
-  `OutlOpsWatcher.swift` (`NSMetadataQuery` + `NSFileCoordinator`) is the iCloud-only detector.
-  It is **conditional on the folder being inside iCloud**: its query is scoped to `NSMetadataQueryUbiquitousDocumentsScope`, so for a local folder it matches nothing and stays dormant — it is never *required*.
-  `workspace_open::storage_is_icloud()` / `icloud_path::is_inside_icloud()` answer the "is this path in iCloud" question on the Rust side (logged at boot).
+Storage is a **local folder synced by iroh** (no iCloud — the Rust side was ripped out: `icloud_path.rs` deleted, `storage_is_icloud`/`pick_in_icloud`/`icloud_workspace_root` removed).
+The transport fires a reload signal whenever it writes peer ops; `iroh_sync.rs` bridges it to the `workspace-ready` Tauri event.
+There is no filesystem watcher in the Rust path.
 
-**DEFERRED — iCloud + iroh write coexistence.**
-When the chosen folder lives in iCloud, both the iCloud daemon and iroh write `ops-*.jsonl`.
-iroh already serialises its own writes (append-lock), the parser recovers glued lines, and the watcher already coordinates *reads* via `NSFileCoordinator`.
-Wrapping our own op-log *writes* in `NSFileCoordinator` on the iCloud path (so the iCloud daemon can't interleave) is the remaining coexistence hardening; it touches `JsonlStorage`'s append in `outl-core` (shared) and is left as a follow-up.
-**The local-folder path has no such concern and is fully clean.**
+**DEFERRED — native iCloud cleanup.**
+The iOS-native `OutlOpsWatcher.swift` (`NSMetadataQuery` + `NSFileCoordinator`), the iCloud container entitlements, and the `Info.plist`/`pbxproj` references are still present from before the Rust teardown.
+Because the chosen folder is now always local, the watcher's `NSMetadataQueryUbiquitousDocumentsScope` query matches nothing and stays **dormant** — it does nothing and breaks nothing.
+Removing it (watcher → no-op, strip the entitlements + plist keys) is a follow-up that touches code-signing, so it must be validated with a device build, not done blind.
 
 ## Hard rule
 

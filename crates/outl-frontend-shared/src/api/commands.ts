@@ -365,10 +365,9 @@ export function syncNow(): Promise<void> {
  * to refresh the device list. `peer-pair-failed` (payload: error
  * string) fires if the handshake times out or errors.
  *
- * `alias` is this device's own human label, advertised to and stored by
- * the joining device (it persists under *our* node id in the peer's
- * `peers.json`). Defaults to the platform name ("desktop" / "mobile") when
- * omitted.
+ * `alias` is this device's own human label. We advertise it to the joining
+ * device, which stores it under *our* node id in its `peers.json`. Defaults
+ * to the platform name ("desktop" / "mobile") when omitted.
  *
  * Backend note: the desktop's `outl_peer_pair_host` currently resolves
  * with the paired peer object instead of the ticket and emits the
