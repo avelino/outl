@@ -33,7 +33,6 @@
 
 mod commands;
 mod helpers;
-mod icloud_path;
 mod iroh_sync;
 mod state;
 mod workspace_open;
@@ -58,9 +57,7 @@ use crate::commands::{
     workspace_stats,
 };
 use crate::state::AppState;
-use crate::workspace_open::{
-    load_or_create_actor, resolve_storage_root, spawn_workspace_opener, storage_is_icloud,
-};
+use crate::workspace_open::{load_or_create_actor, resolve_storage_root, spawn_workspace_opener};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -87,7 +84,9 @@ pub fn run() {
     // shares it. Ignore the error: a second call just means it's already set.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_os::init());
 
     // Camera/QR scanning is the device-pairing entry point and only
     // compiles on the mobile targets (Android + iOS). Gate it behind
@@ -104,25 +103,15 @@ pub fn run() {
             std::fs::create_dir_all(&local_dir)?;
 
             let actor = load_or_create_actor(&local_dir)?;
-            // Fase 2: storage is a folder the user picks, NOT forced iCloud.
+            // Storage is a local folder synced by iroh (no iCloud).
             // `resolve_storage_root` reopens the previously chosen path
             // (`WorkspaceCfg.last`) when present, otherwise defaults to the
-            // app-local `<app-data-dir>/outl/` — a fresh install works with
-            // no iCloud at all, synced by iroh. iCloud is just one place the
-            // chosen folder *might* live (see `workspace_open` module doc).
+            // app-local `<app-data-dir>/outl/`. Change detection is the iroh
+            // reload signal — there is no filesystem watcher.
             let persisted = outl_config::load().workspace.last;
             let storage_root = resolve_storage_root(&local_dir, persisted.as_deref());
             std::fs::create_dir_all(&storage_root)?;
-            // The iCloud-only change detector (`NSMetadataQuery` watcher) is
-            // relevant only when the chosen folder is inside iCloud; a local
-            // folder relies on the iroh reload signal instead and must not
-            // require the iCloud daemon. Log the decision so the boot path is
-            // debuggable from the device console.
-            let is_icloud = storage_is_icloud(&storage_root);
-            info!(
-                "workspace root {} (icloud={is_icloud})",
-                storage_root.display()
-            );
+            info!("workspace root {}", storage_root.display());
             let hlc = HlcGenerator::new(actor);
 
             let workspace: Arc<Mutex<Option<Workspace>>> = Arc::new(Mutex::new(None));
@@ -197,9 +186,8 @@ pub fn run() {
             outl_sync_now,
             outl_peer_pair_host,
             outl_peer_pair_join,
-            // Workspace folder selection (Fase 2 — choose where the workspace lives)
+            // Workspace folder selection (choose where the workspace lives)
             workspace_picker::set_workspace,
-            workspace_picker::pick_in_icloud,
             // Code execution
             exec::run_code_block,
             // Legacy

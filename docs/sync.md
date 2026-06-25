@@ -360,15 +360,19 @@ What it gives you:
 - **An HLC sanity gate.**
   Ops timestamped more than 24 h in the future are logged and skipped rather than applied, so one device with a wrong clock can't poison the merge.
 
-Identity and the paired-peer list live outside the workspace, in `~/.outl/`:
+The device identity is per-machine and lives in `~/.outl/`; the paired-peer list is per-graph and lives inside the workspace, in `<workspace>/.outl/`:
 
 ```
 ~/.outl/
-├── identity.key      ← this device's ed25519 keypair (iroh node identity)
-└── peers.json        ← known paired peers (node id, alias, added_at)
+└── identity.key            ← this device's ed25519 keypair (iroh node identity)
+
+<workspace>/.outl/
+└── peers.json              ← peers paired into THIS graph (node id, alias, added_at)
 ```
 
-Both are managed by `outl peer …` (below), not hand-edited.
+The pair belongs to the graph, not the OS: pairing a device into one workspace must not expose it to a different workspace on the same machine.
+A one-time migration copies any legacy global `~/.outl/peers.json` into a workspace the first time that workspace is opened (the global is left in place).
+Both files are managed by `outl peer …` (below), not hand-edited.
 
 #### Pairing: `outl peer pair`
 

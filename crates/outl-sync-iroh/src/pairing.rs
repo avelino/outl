@@ -221,7 +221,7 @@ async fn bind_pairing_endpoint(identity: &IrohIdentity) -> Result<Endpoint> {
     // IPv6 direct addr, so the peer never stores (and later dials) a dead path.
     // Revert to the plain dual-stack builder when iroh > 1.0.0 ships the
     // multipath fallback fix. See `crate::bind`.
-    crate::bind::n0_builder_ipv4_only()
+    crate::bind::n0_builder_ipv4_only(None)
         .secret_key(identity.secret_key().clone())
         .alpns(vec![PAIRING_ALPN.to_vec()])
         .bind()

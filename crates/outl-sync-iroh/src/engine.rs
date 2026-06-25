@@ -42,6 +42,12 @@ use crate::protocol::{PAIRING_ALPN, SYNC_ALPN};
 pub struct IrohSyncTransport {
     identity: Arc<IrohIdentity>,
     peers: Arc<Mutex<PeersStore>>,
+    /// Relay URL for the sync endpoint, from `[sync] relay_url` in the user
+    /// config. `None` (or empty, normalized to `None` by `SyncConfig::relay_url`)
+    /// keeps iroh's n0 default relay; `Some(url)` swaps in a custom relay via
+    /// [`crate::bind::n0_builder_ipv4_only`]. Only the long-lived sync endpoint
+    /// honors it; pairing / status / test endpoints stay on the n0 default.
+    relay_url: Option<String>,
     /// Sender used to trigger graceful shutdown.
     shutdown_tx: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
     /// Sender that pushes local-op announcements into the gossip task.
@@ -151,10 +157,15 @@ impl std::fmt::Debug for IrohSyncTransport {
 
 impl IrohSyncTransport {
     /// Create a new transport. Call `SyncTransport::start` to activate it.
-    pub fn new(identity: IrohIdentity, peers: PeersStore) -> Self {
+    ///
+    /// `relay_url` comes from `[sync] relay_url` in the user config
+    /// (`outl_config::SyncConfig::relay_url`). `None` keeps iroh's n0 default
+    /// relay; `Some(url)` points the long-lived sync endpoint at a custom relay.
+    pub fn new(identity: IrohIdentity, peers: PeersStore, relay_url: Option<String>) -> Self {
         Self {
             identity: Arc::new(identity),
             peers: Arc::new(Mutex::new(peers)),
+            relay_url,
             shutdown_tx: Arc::new(Mutex::new(None)),
             announce_tx: Arc::new(Mutex::new(None)),
             sync_now_tx: Arc::new(Mutex::new(None)),
@@ -232,6 +243,7 @@ impl SyncTransport for IrohSyncTransport {
         let peers = self.peers.clone();
         let health = self.health.clone();
         let pairing_hub = self.pairing_hub.clone();
+        let relay_url = self.relay_url.clone();
 
         // Resolve the STABLE, SHARED workspace identity once, before binding.
         // Generated + persisted at `<root>/.outl/workspace-id` on first open
@@ -275,6 +287,7 @@ impl SyncTransport for IrohSyncTransport {
                         peers,
                         health,
                         pairing_hub,
+                        relay_url,
                         runtime_handle,
                         workspace_root,
                         workspace_id,
@@ -294,9 +307,20 @@ impl SyncTransport for IrohSyncTransport {
     }
 
     fn announce_local_ops(&self, workspace_id: &str, hlc: outl_core::hlc::Hlc) {
-        // Hand the announcement to the gossip task running inside the tokio
-        // runtime. Send errors mean the runtime is down (transport stopped or
-        // never started) — nothing to announce, so they're ignored.
+        // Two wake-up paths, fired together, because either one alone is too
+        // weak for reliable real-time propagation:
+        //
+        // 1. Gossip announce — light, but only reaches peers already joined to
+        //    the gossip swarm. Across different networks the swarm often hasn't
+        //    formed (the flaky iroh 1.0 multipath connect), so the announce
+        //    never crosses and the edit only lands on the peer's next catch-up
+        //    tick — what felt like "sync is slow, I had to hit refresh".
+        // 2. A forced sync pass — dials every known peer directly and runs the
+        //    bidirectional delta-sync, PUSHING the new ops without depending on
+        //    the gossip swarm. This is exactly what the manual refresh button
+        //    does, now fired automatically on every commit so desktop→mobile
+        //    propagates on its own. The in-flight guard + cheap no-op delta-sync
+        //    (matching vector clocks) keep a burst of edits from piling up dials.
         if let Some(tx) = self
             .announce_tx
             .lock()
@@ -304,6 +328,14 @@ impl SyncTransport for IrohSyncTransport {
             .as_ref()
         {
             let _ = tx.send((workspace_id.to_string(), hlc));
+        }
+        if let Some(tx) = self
+            .sync_now_tx
+            .lock()
+            .expect("sync_now mutex poisoned")
+            .as_ref()
+        {
+            let _ = tx.send(());
         }
     }
 
@@ -349,6 +381,7 @@ async fn run_iroh(
     peers: Arc<Mutex<PeersStore>>,
     health: PeerHealthMap,
     pairing_hub_slot: Arc<Mutex<Option<Arc<PairingHub>>>>,
+    relay_url: Option<String>,
     runtime: tokio::runtime::Handle,
     workspace_root: PathBuf,
     workspace_id: WorkspaceId,
@@ -373,7 +406,12 @@ async fn run_iroh(
     // dead global IPv6 addr to peers. Relay + LAN-IPv4 direct stay. Revert to
     // the plain dual-stack builder when iroh > 1.0.0 ships the multipath
     // fallback fix. See `crate::bind`.
-    let endpoint = crate::bind::n0_builder_ipv4_only()
+    //
+    // `relay_url` (from `[sync] relay_url`) selects the relay this long-lived
+    // endpoint registers with: `None` keeps the n0 default, `Some(url)` swaps
+    // in a custom relay. This is the only endpoint that honors it — pairing /
+    // status / test endpoints stay on n0.
+    let endpoint = crate::bind::n0_builder_ipv4_only(relay_url.as_deref())
         .secret_key(identity.secret_key().clone())
         .alpns(vec![SYNC_ALPN.to_vec(), PAIRING_ALPN.to_vec()])
         .bind()

@@ -60,8 +60,8 @@ export function onRefProjectionFailed(
 // The host's `outl_peer_pair_host` command (`commands/peers.rs`) emits the
 // pairing ticket **early** — the moment the transient iroh endpoint binds,
 // before it blocks on the inbound connection — via `peer-pairing-ticket`.
-// Once a peer completes the handshake and is persisted to
-// `~/.outl/peers.json`, the backend emits `peer-paired` (a `PeerDto`).
+// Once a peer completes the handshake and is persisted to the workspace's
+// `.outl/peers.json`, the backend emits `peer-paired` (a `PeerDto`).
 //
 // The Sync panel listens to both: `peer-pairing-ticket` to render the QR
 // + copyable ticket while we wait, and `peer-paired` to flip to the

@@ -100,11 +100,21 @@ pub fn run_with_theme_override(path: &Path, theme_override: Option<&str>) -> Res
     let global_cfg = outl_config::load();
     let theme = resolve_theme(theme_override, &cfg, &global_cfg);
     let sync_cfg = global_cfg.sync.clone();
+    // `shared_workspace` gates the peer-sync threads (iroh transport + the
+    // filesystem poller). JsonlStorage is the ONLY persistent backend
+    // (sqlite was removed in 0.5.0), so a workspace is shareable unless its
+    // config *explicitly* pins a non-jsonl storage. A GUI/sync-created
+    // workspace — and the CLI/TUI lazy-seeded config — omit the `storage`
+    // key entirely; treat that absence as the jsonl default, NOT as "not
+    // shared". The old `== Some("jsonl")` check made the TUI silently run
+    // with NO peer sync on exactly those workspaces (the "TUI ↔ mobile
+    // doesn't sync" bug: `~/outl-p2p/.outl/config.toml` has no `storage`
+    // line, so the TUI never started a transport or a poller).
     let shared_workspace = cfg
         .get("workspace")
         .and_then(|w| w.get("storage"))
         .and_then(|s| s.as_str())
-        == Some("jsonl");
+        .is_none_or(|s| s == "jsonl");
 
     // Install the panic hook BEFORE switching to raw mode. If
     // anything panics from here on — bug in the render path, OOM —

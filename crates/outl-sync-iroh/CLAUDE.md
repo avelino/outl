@@ -5,8 +5,10 @@ Implements `outl_actions::SyncTransport` using iroh QUIC + iroh-gossip.
 
 ## What this crate owns
 
-- `IrohIdentity` — ed25519 keypair, stored at `~/.outl/identity.key`
-- `PeersStore` — known paired peers, stored at `~/.outl/peers.json`
+- `IrohIdentity` — ed25519 keypair, stored at `~/.outl/identity.key` (per **device**, one node id per machine)
+- `PeersStore` — known paired peers, stored at `<workspace>/.outl/peers.json` (per **graph**, the pair belongs to the workspace, not the OS).
+  `workspace_peers_path(root)` builds the path; `migrate_global_peers_if_absent(root)` does a one-time best-effort copy of any legacy global `~/.outl/peers.json` into the workspace on first open (never deletes the global).
+  Every client calls `migrate_*` then `PeersStore::load_or_default(workspace_peers_path(root))`.
 - `IrohSyncTransport` — implements `SyncTransport` trait, including the
   gossip-backed `announce_local_ops` hook (sync side → tokio task via an
   `mpsc` channel set up in `start()`) and the `peer_health()` reachability
@@ -46,7 +48,7 @@ Devices live at different paths (desktop `~/outl-p2p`, mobile `…/app.outl.mobi
   If the disk write fails it does NOT adopt — the pair just doesn't take and a retry is safe.
   A half-adopted state (memory on the host's id, disk on the old one) would silently split the workspace if the process died before the next write, since the next start reads the stale id from disk.
   Both sides then compute the same topic and validate as one workspace, and their op logs CRDT-merge (content from both converges — expected).
-  CLI `outl peer pair` neither advertises nor adopts (it edits the device-global `peers.json`, not one open workspace); adoption is a GUI concern, wired in `engine_pairing`.
+  CLI `outl peer pair` neither advertises nor adopts (it edits the resolved workspace's `peers.json`, not the live in-memory workspace); adoption is a GUI concern, wired in `engine_pairing`.
 - **Live handle.**
   The id lives behind a shared `RwLock` (`SharedWorkspaceId`) read at call time by `delta_sync` + serve, so an adopted id takes effect immediately for direct sync (boot connect, 8s catch-up, immediate post-pair dial — all carry the live id).
 - **Gossip re-subscribes on id change (no restart).**
@@ -71,15 +73,12 @@ The nuance (verified against the iroh 1.0.0 source — `endpoint.rs::same_endpoi
   When the holder leaves, the route returns to the other.
   This is what lets the **GUI and the MCP server both bind the device identity at once** (see "Passive writers"): whichever holds the route serves inbound from the same `ops-*.jsonl` on disk, and the other still pushes/pulls on its own dials.
 - **An endpoint that does NOT serve `SYNC_ALPN` is the dangerous case.**
-  If the newcomer can't accept `SYNC_ALPN`, a dialer routed to it gets `CONNECTION_REFUSED` ("the server refused to accept a new connection") — sync breaks for real.
-  That was the original device↔device bug: a transient status-probe endpoint (and, before consolidation, a separate pairing endpoint) stole the route from the sync endpoint and answered nothing.
+  If the newcomer can't accept `SYNC_ALPN`, a dialer routed to it gets `CONNECTION_REFUSED` — sync breaks for real (the original device↔device bug, detailed below).
 
-**Why the route is single at all:** iroh's relay (and discovery) keep a single `node_id → endpoint` route.
-When a second endpoint registers with the same secret key, the relay's `DashMap<EndpointId, ClientState>` *replaces* the active client.
-All inbound relay datagrams then route to the newcomer and the original endpoint silently stops receiving traffic (iroh ships a test asserting exactly this: `endpoint.rs::same_endpoint_id_relay`).
-If that newcomer doesn't accept `SYNC_ALPN`, the dialer's QUIC handshake is refused — **"the server refused to accept a new connection"** (`quinn` `CONNECTION_REFUSED`).
-That was the device↔device "connection refused, nothing syncs" bug: a transient status-probe endpoint (and, before this consolidation, the GUI's separate pairing endpoint) stole the relay route from the sync endpoint.
-The pairing case was real and observed in device relay logs: while the pairing screen was open the sync endpoint stopped receiving ("Another endpoint connected with the same endpoint id"), and sync recovered the instant the pairing endpoint closed.
+**Why the route is single at all:** when a second endpoint registers with the same secret key, the relay's `DashMap<EndpointId, ClientState>` *replaces* the active client (a single `node_id → endpoint` route).
+All inbound relay datagrams then route to the newcomer and the original endpoint silently stops receiving traffic (iroh ships `endpoint.rs::same_endpoint_id_relay` asserting this).
+If that newcomer doesn't accept `SYNC_ALPN`, the dialer's QUIC handshake is refused (`quinn` `CONNECTION_REFUSED`) — the "connection refused, nothing syncs" bug.
+A transient status-probe endpoint (or, pre-consolidation, the GUI's separate pairing endpoint) stole the route, observed in relay logs as "Another endpoint connected with the same endpoint id" until it closed.
 
 **Three call sites, three rules:**
 
@@ -308,7 +307,7 @@ Since two sync-serving endpoints can share the device identity without breaking 
 
 - **The MCP server brings a real transport up.**
   `outl mcp serve` is long-lived (the whole Claude Desktop session), so it CAN hold an endpoint and push in real time.
-  On the first workspace open it spins up `IrohSyncTransport` with the shared `~/.outl/identity.key` + `~/.outl/peers.json` **when the device has paired peers**.
+  On the first workspace open it spins up `IrohSyncTransport` with the shared `~/.outl/identity.key` + the workspace's `.outl/peers.json` **when the workspace has paired peers**.
   It announces after every mutating tool, drains peer pushes (reopening the workspace so it serves fresh ops), and shuts down on stdin close.
   If a GUI is also running, the two share the identity — stable hijack, both serve.
   Wired in `outl-cli` `mcp/mod.rs` (`ServerCtx::ensure_transport` / `announce_after_mutation` / `shutdown_transport`).
@@ -342,8 +341,11 @@ On timeout we proceed anyway — the local net report has usually already filled
 **Exchange:** the host mints the ticket from its ready addr, so the joiner stores a reachable host; the joiner sends its own ready `EndpointAddr` in the pairing payload, so the host stores a reachable joiner.
 Each side persists the other's full addr.
 
-**Resolution order** (`PeerEntry::iroh_endpoint_addr`): stored `endpoint_addr` (full) → id + `relay_url` → bare id.
+**Resolution order** (`PeerEntry::iroh_endpoint_addr`): stored `endpoint_addr` → keep the relay + the **IPv4** direct addrs, **drop IPv6**; else id + `relay_url`; else bare id.
 A corrupt `endpoint_addr` logs a warning and falls through, never failing the dial.
+
+**Why not relay-only:** it dropped all direct addrs, so a flaky relay broke even same-WiFi sync.
+Keeping IPv4 direct fixes it; IPv6 is dropped (a dead one stalls multipath for minutes).
 
 **Back-compat:** `endpoint_addr` is `#[serde(default)]`, so old `peers.json` entries (just `node_id` + `relay_url`) still deserialize and dial via the fallback.
 `relay_url` is kept for display + back-compat.
@@ -372,6 +374,13 @@ By default the builder pre-binds both `0.0.0.0` and `[::]`; `clear` + `bind_addr
 
 Every endpoint goes through `bind::n0_builder_ipv4_only` so the dial and accept sides stay consistent — `run_iroh` (engine), `bind_pairing_endpoint` (pairing), `probe_peers` (status), and `bind_sync_endpoint` (test_support).
 Dropping IPv6 on only one side would let the other still advertise a dead path.
+
+### Configurable relay (default n0)
+
+`n0_builder_ipv4_only(relay_url: Option<&str>)` selects the relay on top of the IPv4-only STOPGAP (orthogonal — `clear_ip_transports` drops only IP *direct* transports, never the relay).
+`None` keeps the `presets::N0` relay (n0 default, common path); `Some(url)` swaps in `RelayMode::custom([url.parse::<RelayUrl>()?])`, falling back to n0 with a warning on a parse error.
+Only the long-lived **sync** endpoint threads it — `run_iroh` passes its `relay_url` (from `IrohSyncTransport::new`) to the bind; pairing/status/test pass `None`.
+Each client reads `outl_config::load().sync.relay_url()` and passes it to `new`; see `docs/relay.md` / `docs/config.md`.
 
 **Revert condition:** delete the `bind` module once iroh > 1.0.0 ships the multipath fallback fix (a stalled path no longer blocks convergence on a healthy path).
 Then let every call site go back to the plain dual-stack `Endpoint::builder(presets::N0)` builder.

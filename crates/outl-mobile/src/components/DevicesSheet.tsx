@@ -24,6 +24,19 @@
 
 import { Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import { Portal } from "solid-js/web";
+// Static import (NOT `await import(...)`): on iOS the WKWebView custom scheme
+// can't fetch the separate chunk Vite emits for a dynamic plugin import, so the
+// lazy form failed with "Importing a module script failed" the moment the user
+// tapped Scan. This file is mobile-only, so pulling the plugin into the main
+// bundle costs the desktop nothing.
+import {
+  scan,
+  Format,
+  cancel,
+  checkPermissions,
+  requestPermissions,
+} from "@tauri-apps/plugin-barcode-scanner";
+import { hostname } from "@tauri-apps/plugin-os";
 
 import {
   peerList,
@@ -44,14 +57,43 @@ interface DevicesSheetProps {
   onClose: () => void;
 }
 
+/** localStorage key for this device's advertised pairing name. Per-install
+ *  (a presentation label, not workspace state that must converge), so it
+ *  lives in localStorage, not the op log — same key the desktop uses. */
+const DEVICE_NAME_KEY = "outl.deviceName";
+
+/** Whether the user explicitly named this device. Only `updateDeviceName`
+ *  ever writes the key, so its presence means "user-chosen". */
+function userNamedDevice(): boolean {
+  return localStorage.getItem(DEVICE_NAME_KEY) !== null;
+}
+
+/** The user's saved device name, or "" when unset — the field then shows
+ *  the OS device name, resolved on mount. */
+function loadDeviceName(): string {
+  return localStorage.getItem(DEVICE_NAME_KEY) ?? "";
+}
+
+/** Best-effort OS device name (hostname) with a platform fallback.
+ *  Desktop returns the machine name; iOS returns a generic model name
+ *  (Apple hides the real device name since iOS 16), which still beats a
+ *  flat "mobile". Falls back when not in a Tauri webview. */
+async function resolveDeviceName(fallback: string): Promise<string> {
+  try {
+    const h = await hostname();
+    const clean = (h ?? "").replace(/\.(local|lan|home)$/i, "").trim();
+    if (clean) return clean;
+  } catch {
+    // Plugin unavailable / not a Tauri host — use the fallback.
+  }
+  return fallback;
+}
+
 /** Scan a QR with the device camera, returning the decoded string.
  *  Resolves `null` when the user cancels the scanner. Loaded lazily so
  *  the (mobile-only) plugin bindings never enter the desktop bundle and
  *  the import cost is paid only when the user actually taps "Scan". */
 async function scanQrTicket(): Promise<string | null> {
-  const { scan, Format, cancel, checkPermissions, requestPermissions } =
-    await import("@tauri-apps/plugin-barcode-scanner");
-
   // iOS only opens the camera once permission is granted. Ask explicitly so a
   // first-run (or previously-denied) device gets the prompt instead of a
   // silently dead scanner.
@@ -89,7 +131,6 @@ async function scanQrTicket(): Promise<string | null> {
  *  button). `cancel()` makes the pending `scan()` resolve, unwinding the
  *  `handleScan` flow and clearing the transparent-background class. */
 async function cancelActiveScan(): Promise<void> {
-  const { cancel } = await import("@tauri-apps/plugin-barcode-scanner");
   await cancel().catch(() => {});
 }
 
@@ -102,6 +143,12 @@ export function DevicesSheet(props: DevicesSheetProps) {
   const [scanning, setScanning] = createSignal(false);
   const [hostTicket, setHostTicket] = createSignal<string | null>(null);
   const [toast, setToast] = createSignal<string | null>(null);
+  const [deviceName, setDeviceName] = createSignal(loadDeviceName());
+
+  function updateDeviceName(value: string) {
+    setDeviceName(value);
+    localStorage.setItem(DEVICE_NAME_KEY, value);
+  }
 
   const drag = createSheetDrag(() => props.onClose());
 
@@ -132,6 +179,13 @@ export function DevicesSheet(props: DevicesSheetProps) {
   let unlistenFailed: (() => void) | undefined;
 
   onMount(async () => {
+    // Pre-fill the name field with the OS device name when the user
+    // hasn't chosen one. Re-check after the async resolve so a fast edit
+    // mid-resolve isn't clobbered.
+    if (!userNamedDevice()) {
+      const suggested = await resolveDeviceName("mobile");
+      if (!userNamedDevice()) setDeviceName(suggested);
+    }
     const { listen } = await import("@tauri-apps/api/event");
     unlistenPaired = await listen("peer-paired", () => {
       setHostTicket(null);
@@ -182,7 +236,7 @@ export function DevicesSheet(props: DevicesSheetProps) {
 
     setBusy(true);
     try {
-      const peer = await peerPairJoin(ticket);
+      const peer = await peerPairJoin(ticket, deviceName().trim() || "mobile");
       haptic("success");
       setToast(`Paired with ${peer.alias ?? "device"}`);
       // The status probe dials peers over iroh with per-peer timeouts and can
@@ -202,7 +256,7 @@ export function DevicesSheet(props: DevicesSheetProps) {
     haptic("light");
     setBusy(true);
     try {
-      const ticket = await peerPairHost();
+      const ticket = await peerPairHost(deviceName().trim() || "mobile");
       setHostTicket(ticket);
     } catch (e) {
       setToast(`Could not start hosting: ${String(e)}`);
@@ -282,6 +336,23 @@ export function DevicesSheet(props: DevicesSheetProps) {
             Pair this device with another to sync your workspace
             peer-to-peer.
           </p>
+
+          {/* This device's advertised name — what the other device shows in
+              its paired list. Defaults to "mobile", editable, remembered. */}
+          <label class="mb-3 block">
+            <span class="mb-1 block text-[13px] text-(--color-ios-text-secondary) dark:text-(--color-iosd-text-secondary)">
+              This device's name
+            </span>
+            <input
+              type="text"
+              value={deviceName()}
+              onInput={(e) => updateDeviceName(e.currentTarget.value)}
+              placeholder="mobile"
+              autocapitalize="none"
+              autocorrect="off"
+              class="w-full rounded-xl border border-(--color-ios-divider) bg-(--color-ios-card)/60 px-3 py-2.5 text-[16px] text-(--color-ios-text) outline-none focus:border-(--color-ios-accent) dark:border-(--color-iosd-divider) dark:bg-(--color-iosd-card)/60 dark:text-(--color-iosd-text)"
+            />
+          </label>
 
           {/* Primary action: scan the host's QR. */}
           <button

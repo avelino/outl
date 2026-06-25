@@ -36,6 +36,8 @@
 
 use iroh::endpoint::presets;
 use iroh::endpoint::Builder;
+use iroh::{RelayMode, RelayUrl};
+use tracing::warn;
 
 /// IPv4 unspecified bind address (random free port) used by the IPv4-only
 /// STOPGAP. `0.0.0.0:0` binds all IPv4 interfaces on an OS-assigned port —
@@ -43,7 +45,19 @@ use iroh::endpoint::Builder;
 const IPV4_UNSPECIFIED: &str = "0.0.0.0:0";
 
 /// Build an `Endpoint::builder(presets::N0)` constrained to **IPv4-only** direct
-/// transports (n0 relay preserved).
+/// transports.
+///
+/// `relay_url` selects the relay server the endpoint registers with:
+///
+/// - `None` (or empty after the config layer normalizes it) keeps the
+///   `presets::N0` relay — the n0 public relay outl ships with today.
+/// - `Some(url)` swaps in a single custom relay via
+///   [`RelayMode::Custom`], for users who run their own relay. The
+///   IPv4-only STOPGAP is preserved either way (`clear_ip_transports`
+///   only drops the IP direct transports, never the relay transport).
+/// - A `Some(url)` that fails to parse as a [`RelayUrl`] logs a warning
+///   and falls back to the n0 default, so a typo in `relay_url` degrades
+///   to "use the default relay" instead of failing the bind.
 ///
 /// STOPGAP for the iroh 1.0.0 multipath stall on unreachable IPv6 paths — see
 /// the module docs for the full rationale and the revert condition.
@@ -51,14 +65,31 @@ const IPV4_UNSPECIFIED: &str = "0.0.0.0:0";
 /// Every endpoint in this crate (sync engine, pairing, status probe, and the
 /// test-support harness) MUST go through this builder so the dial side and the
 /// accept side stay consistent: if only one side dropped IPv6, the other could
-/// still advertise a dead IPv6 path and re-trigger the stall.
-pub(crate) fn n0_builder_ipv4_only() -> Builder {
+/// still advertise a dead IPv6 path and re-trigger the stall. The **sync
+/// endpoint** is the one that threads the configured `relay_url`; pairing /
+/// status / test-support pass `None` (they ride whatever relay the n0 preset
+/// resolves, and a custom-relay deployment configures the long-lived sync
+/// endpoint, which is what matters for convergence).
+pub(crate) fn n0_builder_ipv4_only(relay_url: Option<&str>) -> Builder {
     // `clear_ip_transports()` drops the pre-configured 0.0.0.0 + [::] sockets;
     // `bind_addr("0.0.0.0:0")` re-adds IPv4 only. `bind_addr` only errors on an
     // unparseable socket address, and this constant is a valid literal, so the
     // `expect` cannot fire.
-    iroh::Endpoint::builder(presets::N0)
+    let builder = iroh::Endpoint::builder(presets::N0)
         .clear_ip_transports()
         .bind_addr(IPV4_UNSPECIFIED)
-        .expect("0.0.0.0:0 is a valid IPv4 socket address")
+        .expect("0.0.0.0:0 is a valid IPv4 socket address");
+
+    // `presets::N0` already configures the n0 relay, so no override is the
+    // common path: leave the builder untouched and the n0 relay stays.
+    match relay_url {
+        None => builder,
+        Some(url) => match url.parse::<RelayUrl>() {
+            Ok(relay) => builder.relay_mode(RelayMode::custom([relay])),
+            Err(e) => {
+                warn!("invalid relay_url {url:?} ({e}); using n0 default relay");
+                builder
+            }
+        },
+    }
 }

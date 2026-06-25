@@ -63,6 +63,10 @@ enum PeerCommand {
         /// Accept a ticket from the other device instead of generating one.
         #[arg(long)]
         ticket: Option<String>,
+        /// Human-readable name this device advertises to the other (shown in
+        /// its `peer list`). Defaults to the machine hostname.
+        #[arg(long)]
+        name: Option<String>,
     },
     /// List all paired devices.
     List,
@@ -316,17 +320,28 @@ fn main() -> Result<()> {
             }
         },
         Some(Command::Peer { cmd }) => {
+            // Identity is per-DEVICE → global `~/.outl/identity.key`.
             let outl_dir = dirs::home_dir().expect("home dir").join(".outl");
             std::fs::create_dir_all(&outl_dir)?;
             let identity =
                 outl_sync_iroh::IrohIdentity::load_or_generate(&outl_dir.join("identity.key"))?;
-            let mut peers =
-                outl_sync_iroh::PeersStore::load_or_default(&outl_dir.join("peers.json"))?;
+            // The peer list is per-GRAPH → `<workspace>/.outl/peers.json`. Pairing
+            // writes the new peer into the workspace the user is operating on, so
+            // it needs the resolved workspace root (not the OS home).
+            let ws_root = resolve_path(cli.workspace.as_ref(), None)?;
+            outl_sync_iroh::migrate_global_peers_if_absent(&ws_root);
+            let peers_path = outl_sync_iroh::workspace_peers_path(&ws_root);
+            let mut peers = outl_sync_iroh::PeersStore::load_or_default(&peers_path)?;
 
             match cmd {
-                PeerCommand::Pair { ticket } => {
-                    let peers_path = outl_dir.join("peers.json");
+                PeerCommand::Pair { ticket, name } => {
+                    let peers_path = peers_path.clone();
                     let identity = std::sync::Arc::new(identity);
+                    // The alias is the label THIS device advertises to the peer
+                    // (it persists under our node id in the peer's `peers.json`).
+                    // `--name` wins; otherwise fall back to the machine hostname
+                    // so the peer list reads "macbook" instead of a node-id stub.
+                    let alias = name.or_else(default_device_name);
                     let rt = tokio::runtime::Runtime::new()
                         .context("build tokio runtime for pairing")?;
 
@@ -336,7 +351,7 @@ fn main() -> Result<()> {
                             identity,
                             &ticket_str,
                             &peers_path,
-                            None,
+                            alias,
                         ))?;
                         let prefix = &entry.node_id[..entry.node_id.len().min(12)];
                         println!("Paired with {prefix}");
@@ -345,7 +360,7 @@ fn main() -> Result<()> {
                         let entry = rt.block_on(outl_sync_iroh::host_pairing(
                             identity,
                             &peers_path,
-                            None,
+                            alias,
                             |ticket, qr| {
                                 println!();
                                 println!("Scan this QR on the other device, or copy the ticket:");
@@ -427,13 +442,19 @@ fn run_sync(path: &std::path::Path) -> anyhow::Result<()> {
 
     let wc = ws::open(path).map_err(|e| anyhow::anyhow!("{}: {}", e.code, e.message))?;
     let outl_dir = dirs::home_dir().expect("home dir").join(".outl");
-    let peers = outl_sync_iroh::PeersStore::load_or_default(&outl_dir.join("peers.json"))?;
+    // Peer list is per-GRAPH (`<workspace>/.outl/peers.json`); identity is global.
+    outl_sync_iroh::migrate_global_peers_if_absent(path);
+    let peers =
+        outl_sync_iroh::PeersStore::load_or_default(&outl_sync_iroh::workspace_peers_path(path))?;
     if peers.list().is_empty() {
         println!("No paired devices. Use `outl peer pair` to add one.");
         return Ok(());
     }
     let identity = outl_sync_iroh::IrohIdentity::load_or_generate(&outl_dir.join("identity.key"))?;
-    let transport = outl_sync_iroh::IrohSyncTransport::new(identity, peers);
+    // `[sync] relay_url` from the global config: `None` (or empty) keeps iroh's
+    // n0 default relay, `Some(url)` points the sync endpoint at a custom relay.
+    let relay_url = outl_config::load().sync.relay_url().map(str::to_string);
+    let transport = outl_sync_iroh::IrohSyncTransport::new(identity, peers, relay_url);
 
     let (tx, rx) = std::sync::mpsc::channel::<()>();
     transport.start(wc.root.clone(), wc.actor, tx);
@@ -488,6 +509,21 @@ fn run_sync(path: &std::path::Path) -> anyhow::Result<()> {
 /// skipped silently rather than failing the launch — the user
 /// likely deleted / unmounted the folder and would be surprised by
 /// a crash. The cwd fallback picks up.
+/// Best-effort device label for `outl peer pair` when `--name` is omitted.
+///
+/// Shells out to the `hostname` command (present on macOS + Linux) so the
+/// peer's device list reads "macbook" instead of a node-id stub, trimming the
+/// macOS `.local` suffix. Returns `None` if the command is unavailable or
+/// empty — pairing then advertises no alias, exactly as before this flag.
+/// Kept dependency-free on purpose; `--name` is the explicit override.
+fn default_device_name() -> Option<String> {
+    let out = std::process::Command::new("hostname").output().ok()?;
+    let raw = String::from_utf8(out.stdout).ok()?;
+    let name = raw.trim();
+    let name = name.strip_suffix(".local").unwrap_or(name);
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 fn resolve_path(global: Option<&PathBuf>, local: Option<&PathBuf>) -> Result<PathBuf> {
     if let Some(p) = local {
         return Ok(p.clone());

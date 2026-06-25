@@ -28,7 +28,7 @@
 //! font_size = 15
 //!
 //! [sync]
-//! transport = "file"   # "file" (iCloud/fs, default) | "iroh" (P2P)
+//! transport = "iroh"   # "iroh" (P2P, default) | "file" (iCloud/fs opt-out)
 //! relay_url = ""        # optional; empty = use iroh n0 default relays
 //! ```
 //!

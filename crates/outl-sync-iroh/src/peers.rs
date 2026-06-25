@@ -1,9 +1,71 @@
-//! Trusted peer store — read/written at `~/.outl/peers.json`.
+//! Trusted peer store — read/written at `<workspace>/.outl/peers.json`.
+//!
+//! The paired-peer list belongs to the **graph** (workspace), not the OS:
+//! pairing device B into workspace X must not silently expose B to workspace Y
+//! on the same machine. The device *identity* (`identity.key`) stays global —
+//! one node id per device — but the trust list is per-workspace.
 
 use anyhow::{Context, Result};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+use tracing::{debug, warn};
+
+/// Build the per-workspace peers path: `<workspace_root>/.outl/peers.json`.
+///
+/// The `.outl/` directory already holds the workspace's `workspace-id` and
+/// `config.toml`, so the peer list sits next to the other graph-scoped state.
+pub fn workspace_peers_path(workspace_root: &Path) -> PathBuf {
+    workspace_root.join(".outl").join("peers.json")
+}
+
+/// One-time migration: when a workspace has no `peers.json` yet but the legacy
+/// **global** `~/.outl/peers.json` exists, copy the global list into the
+/// workspace so an already-paired user keeps their peers after the move from
+/// device-global to per-workspace storage.
+///
+/// Best-effort: any failure is logged and swallowed (the workspace just starts
+/// with an empty peer list, recoverable by re-pairing). The global file is
+/// **never** deleted — other not-yet-migrated workspaces may still read it, and
+/// a fresh per-workspace copy is the safe outcome on a partial migration.
+///
+/// Idempotent: once the workspace file exists this is a no-op, so the copy
+/// happens exactly once per workspace and later edits stay workspace-local.
+pub fn migrate_global_peers_if_absent(workspace_root: &Path) {
+    let dest = workspace_peers_path(workspace_root);
+    if dest.exists() {
+        return;
+    }
+    let Some(home) = dirs::home_dir() else {
+        return;
+    };
+    let global = home.join(".outl").join("peers.json");
+    if !global.exists() {
+        return;
+    }
+    if let Some(parent) = dest.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            warn!(
+                "peers migration: create {} failed, starting empty: {e}",
+                parent.display()
+            );
+            return;
+        }
+    }
+    match std::fs::copy(&global, &dest) {
+        Ok(_) => debug!(
+            "peers migration: copied {} -> {}",
+            global.display(),
+            dest.display()
+        ),
+        Err(e) => warn!(
+            "peers migration: copy {} -> {} failed, starting empty: {e}",
+            global.display(),
+            dest.display()
+        ),
+    }
+}
 
 /// A single trusted peer entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,28 +144,46 @@ impl PeerEntry {
     /// 3. Bare node id — last resort, relies on n0 discovery resolving a route.
     pub fn iroh_endpoint_addr(&self) -> Result<iroh::EndpointAddr> {
         let id = self.iroh_node_id()?;
-        // Dial keys, not IPs. When we have a relay, dial node_id + relay ONLY.
-        // Pairing-time direct addrs go stale on every network change (peer on
-        // 192.168.x while we're on 10.x is unreachable), and iroh's multipath
-        // stalls for MINUTES retrying those dead paths (`MultipathNotNegotiated`
-        // + timeout) before it gives up. The relay is the stable contact point;
-        // iroh hole-punches the peer's CURRENT direct addrs once the relay link
-        // is up. Stored direct addrs are used only when there's no relay (the
-        // loopback integration tests, which dial 127.0.0.1 with no relay).
-        if let Some(relay) = &self.relay_url {
-            match relay.parse::<iroh::RelayUrl>() {
-                Ok(url) => return Ok(iroh::EndpointAddr::new(id).with_relay_url(url)),
-                Err(e) => tracing::debug!("ignoring unparseable relay url {relay:?}: {e}"),
+        // Dial the relay AND the IPv4 direct addrs. On the same LAN the direct
+        // IPv4 path connects without touching the relay — which is what saves
+        // the sync when the public relay is flaky (its ping times out). The
+        // relay stays as the cross-network fallback.
+        //
+        // We DROP IPv6 direct addrs: a dead global-IPv6 path stalls iroh's
+        // multipath for minutes (`MultipathNotNegotiated` + timeout), while a
+        // stale IPv4 fails fast (No route to host) and yields to the relay. The
+        // IPv4-only endpoint bind means we rarely even store an IPv6 path; this
+        // filter is belt-and-suspenders for older `peers.json` entries captured
+        // before that bind. (The old code dialed relay-only to dodge the IPv6
+        // stall, but that also threw away the LAN-direct path and made every
+        // connect hostage to the relay.)
+        let relay = self
+            .relay_url
+            .as_ref()
+            .and_then(|r| r.parse::<iroh::RelayUrl>().ok());
+
+        if let Some(encoded) = &self.endpoint_addr {
+            match decode_endpoint_addr(encoded) {
+                Ok(stored) => {
+                    let mut addr = iroh::EndpointAddr::new(id);
+                    if let Some(url) = relay.clone() {
+                        addr = addr.with_relay_url(url);
+                    }
+                    for sock in stored.ip_addrs() {
+                        if sock.is_ipv4() {
+                            addr = addr.with_ip_addr(*sock);
+                        }
+                    }
+                    return Ok(addr);
+                }
+                Err(e) => tracing::warn!("stored endpoint_addr won't decode, falling back: {e}"),
             }
         }
-        match &self.endpoint_addr {
-            Some(encoded) => match decode_endpoint_addr(encoded) {
-                Ok(a) => Ok(a),
-                Err(e) => {
-                    tracing::warn!("stored endpoint_addr won't decode, falling back: {e}");
-                    Ok(iroh::EndpointAddr::new(id))
-                }
-            },
+        // No full addr: dial node_id + relay only (iroh hole-punches current
+        // direct addrs once the relay link is up). Bare id when there's no relay
+        // either (loopback tests dial 127.0.0.1 via the stored addr above).
+        match relay {
+            Some(url) => Ok(iroh::EndpointAddr::new(id).with_relay_url(url)),
             None => Ok(iroh::EndpointAddr::new(id)),
         }
     }
@@ -115,7 +195,7 @@ struct PeersFile {
     peers: Vec<PeerEntry>,
 }
 
-/// In-memory peer store backed by `~/.outl/peers.json`.
+/// In-memory peer store backed by `<workspace>/.outl/peers.json`.
 pub struct PeersStore {
     path: PathBuf,
     inner: PeersFile,
@@ -142,7 +222,8 @@ impl PeersStore {
         &self.inner.peers
     }
 
-    /// Path this store reads from / writes to (`~/.outl/peers.json` in prod).
+    /// Path this store reads from / writes to
+    /// (`<workspace>/.outl/peers.json` in prod).
     ///
     /// The transport keeps the path so its catch-up loop can reload peers added
     /// by pairing *after* the transport booted (pairing writes this same file).
@@ -222,41 +303,34 @@ mod tests {
             .with_ip_addr("192.168.7.7:4242".parse().expect("direct addr"))
     }
 
-    /// Bug #6 (reachability resolution, relay branch): when a relay URL is
-    /// present, `iroh_endpoint_addr` must dial node_id + relay ONLY and DROP the
-    /// stored direct addrs (they go stale on every network change and iroh's
-    /// multipath stalls for minutes on a dead direct path). The relay is the
-    /// stable contact point; iroh hole-punches the peer's *current* direct addrs
-    /// once the relay link is up.
+    /// Bug #6 (reachability resolution, relay branch): with a relay present, the
+    /// dial addr keeps the relay AND the IPv4 direct addrs — so a same-LAN peer
+    /// connects directly without the (possibly flaky) relay — but DROPS global
+    /// IPv6 direct addrs, because a dead one stalls iroh's multipath for minutes.
+    /// (Earlier this was relay-only, which threw away the LAN-direct path and
+    /// made every connect hostage to the relay.)
     #[test]
-    fn iroh_endpoint_addr_prefers_relay_only_and_drops_stale_direct_addrs() {
-        let full = addr_with_relay_and_direct();
+    fn iroh_endpoint_addr_keeps_relay_and_ipv4_but_drops_ipv6() {
+        let id = iroh::SecretKey::generate().public();
+        let relay: iroh::RelayUrl = "https://relay.example/".parse().expect("relay url");
+        let full = iroh::EndpointAddr::new(id)
+            .with_relay_url(relay)
+            .with_ip_addr("192.168.7.7:4242".parse().expect("ipv4")) // kept
+            .with_ip_addr("[2001:db8::1]:4242".parse().expect("ipv6")); // dropped
         let entry = PeerEntry::from_endpoint_addr(&full, None).expect("build entry");
 
-        // Sanity: the stored full addr really does carry a direct addr...
-        let stored = decode_endpoint_addr(entry.endpoint_addr.as_ref().expect("has endpoint_addr"))
-            .expect("decode stored addr");
-        assert!(
-            stored.ip_addrs().next().is_some(),
-            "fixture must carry a stored direct addr to prove it's dropped"
-        );
-
-        // ...but the resolved dial addr is relay-only: same node id, the relay,
-        // and NO direct ip addresses.
         let resolved = entry.iroh_endpoint_addr().expect("resolve");
-        assert_eq!(
-            resolved.id, full.id,
-            "resolved must target the same node id"
-        );
+        assert_eq!(resolved.id, id, "resolved must target the same node id");
         assert_eq!(
             resolved.relay_urls().count(),
             1,
-            "resolved must carry the relay url"
+            "resolved must keep the relay url"
         );
-        assert_eq!(
-            resolved.ip_addrs().count(),
-            0,
-            "resolved must DROP the stale stored direct addrs when a relay is present"
+        let ips: Vec<_> = resolved.ip_addrs().copied().collect();
+        assert_eq!(ips.len(), 1, "resolved keeps exactly the IPv4 direct addr");
+        assert!(
+            ips[0].is_ipv4(),
+            "the surviving direct addr is the IPv4 one"
         );
     }
 
@@ -358,6 +432,38 @@ mod tests {
         assert!(
             kept.endpoint_addr.is_some(),
             "merge_unknown must NOT clobber the locally-captured endpoint_addr"
+        );
+    }
+
+    /// The per-workspace path is `<root>/.outl/peers.json` — next to the
+    /// workspace-id + config.toml the `.outl/` dir already holds.
+    #[test]
+    fn workspace_peers_path_is_under_dot_outl() {
+        let root = std::path::Path::new("/tmp/ws");
+        assert_eq!(
+            workspace_peers_path(root),
+            std::path::Path::new("/tmp/ws/.outl/peers.json")
+        );
+    }
+
+    /// Migration is a no-op (idempotent) once the workspace already has a
+    /// `peers.json`: it must NEVER clobber the workspace-local list with the
+    /// global one. We seed a workspace file, then prove migrate leaves it byte
+    /// for byte intact regardless of whatever the global file holds.
+    #[test]
+    fn migrate_is_noop_when_workspace_peers_exist() {
+        let ws = tempfile::tempdir().expect("tempdir");
+        let dest = workspace_peers_path(ws.path());
+        std::fs::create_dir_all(dest.parent().unwrap()).expect("mkdir .outl");
+        let sentinel = r#"{"peers":[{"node_id":"local-only","alias":null,"relay_url":null,"added_at":"2026-01-01T00:00:00Z"}]}"#;
+        std::fs::write(&dest, sentinel).expect("seed ws peers");
+
+        migrate_global_peers_if_absent(ws.path());
+
+        let after = std::fs::read_to_string(&dest).expect("read ws peers");
+        assert_eq!(
+            after, sentinel,
+            "migration must not overwrite an existing workspace peers.json"
         );
     }
 }

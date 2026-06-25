@@ -10,13 +10,18 @@
 //! use outl_actions::SyncEngine;
 //! use std::sync::mpsc;
 //!
+//! // Identity is per-DEVICE (one node id per machine) → global `~/.outl/`.
 //! let identity = IrohIdentity::load_or_generate(
 //!     &dirs::home_dir().unwrap().join(".outl/identity.key")
 //! ).unwrap();
+//! // The peer list is per-GRAPH → `<workspace>/.outl/peers.json`.
+//! outl_sync_iroh::migrate_global_peers_if_absent(&workspace_root);
 //! let peers = PeersStore::load_or_default(
-//!     &dirs::home_dir().unwrap().join(".outl/peers.json")
+//!     &outl_sync_iroh::workspace_peers_path(&workspace_root)
 //! ).unwrap();
-//! let transport = IrohSyncTransport::new(identity, peers);
+//! // `relay_url`: `None` uses iroh's n0 default relay; `Some(url)` (from
+//! // `[sync] relay_url` in the user config) points the endpoint at a custom one.
+//! let transport = IrohSyncTransport::new(identity, peers, None);
 //! let engine = SyncEngine::with_transport(workspace_root, actor, Box::new(transport));
 //! let (tx, rx) = mpsc::channel();
 //! engine.start_transport(tx);
@@ -46,6 +51,6 @@ pub mod test_support;
 pub use engine::IrohSyncTransport;
 pub use identity::IrohIdentity;
 pub use pairing::{host_pairing, join_pairing};
-pub use peers::{PeerEntry, PeersStore};
+pub use peers::{migrate_global_peers_if_absent, workspace_peers_path, PeerEntry, PeersStore};
 pub use protocol::{PAIRING_ALPN, SYNC_ALPN};
 pub use status::{probe_peers, probe_peers_blocking, PeerStatus};

@@ -39,6 +39,7 @@ import {
 import { PairingQR, PeerList, peersOnline } from "@outl/shared/peers";
 import type { PeerDto, PeerStatusDto } from "@outl/shared/api/types";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { hostname } from "@tauri-apps/plugin-os";
 
 import {
   onPeerPaired,
@@ -59,6 +60,36 @@ function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** localStorage key for this device's advertised pairing name. Per-install
+ *  (a name is a presentation label, not workspace state that must converge),
+ *  so it lives in localStorage, not the op log. */
+const DEVICE_NAME_KEY = "outl.deviceName";
+
+/** Whether the user explicitly named this device. Only `updateDeviceName`
+ *  ever writes the key, so its presence means "user-chosen". */
+function userNamedDevice(): boolean {
+  return localStorage.getItem(DEVICE_NAME_KEY) !== null;
+}
+
+/** The user's saved device name, or "" when unset — the field then shows
+ *  the OS machine name (hostname), resolved on mount. */
+function loadDeviceName(): string {
+  return localStorage.getItem(DEVICE_NAME_KEY) ?? "";
+}
+
+/** Best-effort machine name (hostname) with a fallback. On desktop this is
+ *  the real machine name; falls back when not in a Tauri host. */
+async function resolveDeviceName(fallback: string): Promise<string> {
+  try {
+    const h = await hostname();
+    const clean = (h ?? "").replace(/\.(local|lan|home)$/i, "").trim();
+    if (clean) return clean;
+  } catch {
+    // Plugin unavailable / not a Tauri host — use the fallback.
+  }
+  return fallback;
+}
+
 /** Short, human-glanceable prefix of a long hex node id. */
 function shortNodeId(nodeId: string): string {
   return nodeId.length <= 12 ? nodeId : `${nodeId.slice(0, 12)}…`;
@@ -72,6 +103,12 @@ export function SyncPanel() {
   const [loading, setLoading] = createSignal(false);
   const [pair, setPair] = createSignal<PairState>({ phase: "idle" });
   const [copied, setCopied] = createSignal(false);
+  const [deviceName, setDeviceName] = createSignal(loadDeviceName());
+
+  function updateDeviceName(value: string) {
+    setDeviceName(value);
+    localStorage.setItem(DEVICE_NAME_KEY, value);
+  }
 
   let unlistenTicket: UnlistenFn | undefined;
   let unlistenPaired: UnlistenFn | undefined;
@@ -143,7 +180,7 @@ export function SyncPanel() {
     setCopied(false);
     setPair({ phase: "starting" });
     try {
-      await peerPairHost(null);
+      await peerPairHost(deviceName().trim() || "desktop");
       // Success is handled by the `peer-paired` listener; if we got here
       // without that firing (aligned backend that resolves with the
       // ticket and never emits `peer-paired`), keep the panel as-is.
@@ -178,6 +215,13 @@ export function SyncPanel() {
 
   onMount(async () => {
     void refresh();
+    // Pre-fill the name field with the machine name when the user hasn't
+    // chosen one. Re-check after the async resolve so a fast edit isn't
+    // clobbered.
+    if (!userNamedDevice()) {
+      const suggested = await resolveDeviceName("desktop");
+      if (!userNamedDevice()) setDeviceName(suggested);
+    }
     unlistenTicket = await onPeerPairingTicket(({ ticket }) => {
       setPair({ phase: "waiting", ticket });
     });
@@ -260,13 +304,25 @@ export function SyncPanel() {
       <Show
         when={pair().phase !== "idle"}
         fallback={
-          <button
-            type="button"
-            onClick={() => void startPairing()}
-            class="rounded bg-(--color-outl-fg)/15 px-3 py-1.5 text-sm font-medium hover:bg-(--color-outl-fg)/25"
-          >
-            Pair a new device…
-          </button>
+          <div class="flex flex-col gap-2">
+            <label class="flex flex-col gap-1 text-xs opacity-70">
+              <span>This device's name (shown on your other devices)</span>
+              <input
+                type="text"
+                value={deviceName()}
+                onInput={(e) => updateDeviceName(e.currentTarget.value)}
+                placeholder="desktop"
+                class="rounded border border-(--color-outl-fg)/15 bg-(--color-outl-fg)/[0.03] px-2 py-1 text-sm text-(--color-outl-fg) outline-none focus:border-(--color-outl-fg)/30"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => void startPairing()}
+              class="self-start rounded bg-(--color-outl-fg)/15 px-3 py-1.5 text-sm font-medium hover:bg-(--color-outl-fg)/25"
+            >
+              Pair a new device…
+            </button>
+          </div>
         }
       >
         <div class="rounded border border-(--color-outl-fg)/15 bg-(--color-outl-fg)/[0.03] p-4">

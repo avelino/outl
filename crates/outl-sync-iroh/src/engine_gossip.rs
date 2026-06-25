@@ -238,12 +238,25 @@ pub(crate) async fn run_gossip(
         tokio::select! {
             // ── Op-announce drain (local edits → broadcast so peers pull) ──
             announce_msg = announce_rx.recv() => {
-                let Some((workspace_id, hlc)) = announce_msg else {
+                let Some((_hint, hlc)) = announce_msg else {
                     // Sender dropped: transport shutting down.
                     return;
                 };
                 if let Some((sender, _)) = topic.as_ref() {
-                    announce(sender, ctx.actor, workspace_id, hlc).await;
+                    // Announce under the CANONICAL workspace id, not whatever the
+                    // client passed in (clients pass the page slug, which is the
+                    // wrong key — the announce payload should carry the gossip
+                    // topic key). The broadcast already targets the subscribed
+                    // topic, so peers are woken regardless; using the real id here
+                    // keeps the payload honest if the receive side ever validates
+                    // it.
+                    let wid = ctx
+                        .workspace_id
+                        .read()
+                        .expect("workspace id rwlock poisoned")
+                        .as_str()
+                        .to_string();
+                    announce(sender, ctx.actor, wid, hlc).await;
                 }
             }
 

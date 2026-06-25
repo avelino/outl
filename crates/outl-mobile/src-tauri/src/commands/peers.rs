@@ -6,14 +6,15 @@
 //!
 //! ## Where the iroh files live (mobile-specific)
 //!
-//! Unlike the TUI/desktop (which use `~/.outl/`), iOS has no meaningful
-//! home directory — the sandbox `$HOME` is opaque and per-install. We
-//! resolve the iroh files from the Tauri **app local data dir** via
-//! [`crate::iroh_sync::iroh_dir`], the same path the live transport in
-//! `iroh_sync::wire_iroh_transport` uses. That keeps the running
-//! transport and the pairing handshake pointed at one `peers.json`, so a
-//! freshly paired device shows up in `outl_peer_list` and starts syncing
-//! after the next launch without a second source of truth.
+//! The device **identity** (`identity.key`) is per-install and lives in
+//! the Tauri **app local data dir** ([`crate::iroh_sync::iroh_dir`]) — iOS
+//! has no meaningful home directory, so that is the per-device analogue of
+//! `~/.outl/`. The **peer list** is per-GRAPH, so it lives at
+//! `<workspace_root>/.outl/peers.json` ([`peers_path`]); these commands
+//! resolve it from `AppState::storage_root`, the same root the live
+//! transport in `iroh_sync::wire_iroh_transport` reads, so a freshly
+//! paired device shows up in `outl_peer_list` and starts syncing after the
+//! next launch without a second source of truth.
 
 use std::collections::HashMap;
 
@@ -21,8 +22,17 @@ use outl_actions::SyncTransport;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::iroh_sync::{iroh_dir, peers_path};
+use crate::iroh_sync::peers_path;
 use crate::state::AppState;
+
+/// Resolve the active workspace's `peers.json` path
+/// (`<workspace_root>/.outl/peers.json`) and run the one-time global →
+/// workspace migration. The peer list is per-GRAPH; the device identity
+/// stays in the per-install `iroh_dir`.
+fn workspace_peers(state: &AppState) -> std::path::PathBuf {
+    outl_sync_iroh::migrate_global_peers_if_absent(&state.storage_root);
+    peers_path(&state.storage_root)
+}
 
 /// DTO for a paired peer.
 ///
@@ -48,18 +58,16 @@ impl From<outl_sync_iroh::PeerEntry> for PeerDto {
 
 /// List all paired devices.
 #[tauri::command]
-pub fn outl_peer_list(app: AppHandle) -> Result<Vec<PeerDto>, String> {
-    let dir = iroh_dir(&app)?;
-    let peers = outl_sync_iroh::PeersStore::load_or_default(&peers_path(&dir))
+pub fn outl_peer_list(state: State<'_, AppState>) -> Result<Vec<PeerDto>, String> {
+    let peers = outl_sync_iroh::PeersStore::load_or_default(&workspace_peers(&state))
         .map_err(|e| e.to_string())?;
     Ok(peers.list().iter().cloned().map(PeerDto::from).collect())
 }
 
 /// Remove a peer by node_id prefix.
 #[tauri::command]
-pub fn outl_peer_remove(app: AppHandle, id: String) -> Result<bool, String> {
-    let dir = iroh_dir(&app)?;
-    let mut peers = outl_sync_iroh::PeersStore::load_or_default(&peers_path(&dir))
+pub fn outl_peer_remove(state: State<'_, AppState>, id: String) -> Result<bool, String> {
+    let mut peers = outl_sync_iroh::PeersStore::load_or_default(&workspace_peers(&state))
         .map_err(|e| e.to_string())?;
     peers.remove(&id).map_err(|e| e.to_string())
 }
@@ -85,12 +93,8 @@ pub struct PeerStatusDto {
 /// hasn't dialed yet — or the case where iroh isn't wired (file transport) —
 /// shows `online = false`.
 #[tauri::command]
-pub fn outl_peer_status(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Vec<PeerStatusDto>, String> {
-    let dir = iroh_dir(&app)?;
-    let peers = outl_sync_iroh::PeersStore::load_or_default(&peers_path(&dir))
+pub fn outl_peer_status(state: State<'_, AppState>) -> Result<Vec<PeerStatusDto>, String> {
+    let peers = outl_sync_iroh::PeersStore::load_or_default(&workspace_peers(&state))
         .map_err(|e| e.to_string())?;
 
     // Snapshot the transport's per-peer health (empty when iroh isn't wired).

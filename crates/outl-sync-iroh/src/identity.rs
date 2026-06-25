@@ -30,6 +30,15 @@ impl IrohIdentity {
             }
             std::fs::write(path, secret_key.to_bytes())
                 .with_context(|| format!("write identity key to {}", path.display()))?;
+            // This is a long-lived device secret. Restrict it to the owner so a
+            // permissive umask on a multi-user box can't leave it group/world
+            // readable. Best-effort: a failure to tighten perms doesn't block
+            // identity creation (the key is already written).
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+            }
             tracing::info!(
                 node_id = %secret_key.public().fmt_short(),
                 "generated new iroh identity"

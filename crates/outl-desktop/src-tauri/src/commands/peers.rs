@@ -7,8 +7,21 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::state::AppState;
 
-fn outl_dir() -> std::path::PathBuf {
-    dirs::home_dir().expect("home dir").join(".outl")
+/// Resolve the active workspace's `peers.json` path
+/// (`<workspace>/.outl/peers.json`) and run the one-time global → workspace
+/// migration. The peer list is per-GRAPH; only the device identity stays in
+/// the global `~/.outl/`.
+///
+/// Errors with `ERR_LOADING` while the background opener hasn't published a
+/// workspace yet, so the frontend retries instead of touching a stale path.
+fn workspace_peers_path(state: &AppState) -> Result<std::path::PathBuf, String> {
+    let root = state
+        .storage_root
+        .lock()
+        .clone()
+        .ok_or_else(|| crate::state::ERR_LOADING.to_string())?;
+    outl_sync_iroh::migrate_global_peers_if_absent(&root);
+    Ok(outl_sync_iroh::workspace_peers_path(&root))
 }
 
 /// DTO for a paired peer.
@@ -21,8 +34,8 @@ pub struct PeerDto {
 
 /// List all paired devices.
 #[tauri::command]
-pub fn outl_peer_list() -> Result<Vec<PeerDto>, String> {
-    let peers = outl_sync_iroh::PeersStore::load_or_default(&outl_dir().join("peers.json"))
+pub fn outl_peer_list(state: State<'_, AppState>) -> Result<Vec<PeerDto>, String> {
+    let peers = outl_sync_iroh::PeersStore::load_or_default(&workspace_peers_path(&state)?)
         .map_err(|e| e.to_string())?;
     Ok(peers
         .list()
@@ -37,8 +50,8 @@ pub fn outl_peer_list() -> Result<Vec<PeerDto>, String> {
 
 /// Remove a peer by node_id prefix.
 #[tauri::command]
-pub fn outl_peer_remove(id: String) -> Result<bool, String> {
-    let mut peers = outl_sync_iroh::PeersStore::load_or_default(&outl_dir().join("peers.json"))
+pub fn outl_peer_remove(state: State<'_, AppState>, id: String) -> Result<bool, String> {
+    let mut peers = outl_sync_iroh::PeersStore::load_or_default(&workspace_peers_path(&state)?)
         .map_err(|e| e.to_string())?;
     peers.remove(&id).map_err(|e| e.to_string())
 }
@@ -64,7 +77,7 @@ pub struct PeerStatusDto {
 /// — shows `online = false`.
 #[tauri::command]
 pub fn outl_peer_status(state: State<'_, AppState>) -> Result<Vec<PeerStatusDto>, String> {
-    let peers = outl_sync_iroh::PeersStore::load_or_default(&outl_dir().join("peers.json"))
+    let peers = outl_sync_iroh::PeersStore::load_or_default(&workspace_peers_path(&state)?)
         .map_err(|e| e.to_string())?;
 
     // Snapshot the transport's per-peer health (empty when iroh isn't wired).
@@ -138,7 +151,7 @@ impl From<outl_sync_iroh::PeerEntry> for PairedPeerDto {
 /// Mirrors the mobile/CLI design: the ticket is surfaced before the
 /// command resolves via the `peer-pairing-ticket` event (`{ ticket }`),
 /// and `peer-paired` (`PairedPeerDto`) fires once a peer is persisted to
-/// `~/.outl/peers.json`. The command resolves with the same
+/// the workspace's `.outl/peers.json`. The command resolves with the same
 /// [`PairedPeerDto`] so a caller that prefers awaiting over listening
 /// also gets the result.
 ///
@@ -186,8 +199,8 @@ pub async fn outl_peer_pair_host(
 
 /// Join a pairing session from a ticket string produced by a host's
 /// [`outl_peer_pair_host`]. Dials over the **live sync endpoint**, completes
-/// the handshake, persists the host to `~/.outl/peers.json`, and emits
-/// `peer-paired`.
+/// the handshake, persists the host to the workspace's `.outl/peers.json`,
+/// and emits `peer-paired`.
 #[tauri::command]
 pub async fn outl_peer_pair_join(
     app: AppHandle,

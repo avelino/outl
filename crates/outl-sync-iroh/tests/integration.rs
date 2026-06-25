@@ -139,10 +139,12 @@ async fn gui_pairing_over_live_sync_endpoint() {
     let host = outl_sync_iroh::IrohSyncTransport::new(
         host_identity,
         PeersStore::load_or_default(&host_peers).expect("host peers"),
+        None,
     );
     let join = outl_sync_iroh::IrohSyncTransport::new(
         join_identity,
         PeersStore::load_or_default(&join_peers).expect("join peers"),
+        None,
     );
 
     // Start both transports (binds the one long-lived endpoint each, mounts the

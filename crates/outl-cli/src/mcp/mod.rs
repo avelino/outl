@@ -176,8 +176,12 @@ impl ServerCtx {
             return;
         };
         let outl_dir = home.join(".outl");
-        let peers = match outl_sync_iroh::PeersStore::load_or_default(&outl_dir.join("peers.json"))
-        {
+        // Peer list is per-GRAPH → `<workspace>/.outl/peers.json`; identity stays
+        // global (`~/.outl/identity.key`).
+        outl_sync_iroh::migrate_global_peers_if_absent(&wc.root);
+        let peers = match outl_sync_iroh::PeersStore::load_or_default(
+            &outl_sync_iroh::workspace_peers_path(&wc.root),
+        ) {
             Ok(p) => p,
             Err(e) => {
                 debug!("mcp: peers.json unreadable, P2P off: {e}");
@@ -203,8 +207,13 @@ impl ServerCtx {
                 return;
             }
         };
-        let transport: Arc<dyn SyncTransport> =
-            Arc::new(outl_sync_iroh::IrohSyncTransport::new(identity, peers));
+        // `[sync] relay_url` from the global config: `None` (or empty) keeps
+        // iroh's n0 default relay, `Some(url)` points the sync endpoint at a
+        // custom relay.
+        let relay_url = outl_config::load().sync.relay_url().map(str::to_string);
+        let transport: Arc<dyn SyncTransport> = Arc::new(outl_sync_iroh::IrohSyncTransport::new(
+            identity, peers, relay_url,
+        ));
         // The transport signals on this channel each time a peer's ops land;
         // a tiny drain thread flips `peer_dirty` so the next access reopens.
         let (tx, rx) = std::sync::mpsc::channel::<()>();

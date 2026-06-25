@@ -65,6 +65,8 @@ crates/outl-desktop/
 │   │   ├── BacklinksPanel.tsx # right pane
 │   │   ├── Picker.tsx         # Cmd+P quick switcher
 │   │   ├── SettingsModal.tsx  # Cmd+, settings
+│   │   ├── ChromeToggleBar.tsx# bottom-left cluster: sidebar / help toggles + SyncIndicator
+│   │   ├── SyncIndicator.tsx  # always-visible sync dot → opens Settings → Sync
 │   │   ├── Onboarding.tsx     # first-run flow (storage pick → optional pairing)
 │   │   └── WorkspacePicker.tsx
 │   └── lib/
@@ -94,7 +96,7 @@ crates/outl-desktop/
             ├── page.rs        # list / search / open / journal nav / resolve_ref
             ├── block.rs       # create / edit / todo / move / collapsed / paste
             ├── exec.rs        # run_code_block — thin Tauri adapter over outl_actions::exec::run_code_block (shared with mobile)
-            └── peers.rs       # outl_peer_list / outl_peer_remove — read/edit ~/.outl/peers.json via outl_sync_iroh::PeersStore
+            └── peers.rs       # outl_peer_list / outl_peer_remove — read/edit <workspace>/.outl/peers.json via outl_sync_iroh::PeersStore
 ```
 
 ## First-run onboarding
@@ -116,6 +118,14 @@ It is intentionally not in `settings.json` either, since `settings.last_workspac
 
 The onboarding **copy** lives in `@outl/shared/onboarding` (identical to mobile); only the chrome is desktop-local.
 Pairing is **not** reimplemented — `Onboarding` renders the real `<SyncPanel />`.
+
+### Sync status dot (always-visible)
+
+`<SyncIndicator />` sits in the bottom-left `<ChromeToggleBar />` cluster so the mesh state is glanceable without opening Settings (GUI users expect that, the way mobile shows a dot in its toolbar).
+Green = at least one iroh peer reachable, orange = none, dim = first probe still running; clicking opens Settings → Sync (the full `<SyncPanel />`).
+It derives reachability from `peerStatus()` → `peersOnline()` (`@outl/shared/peers`) — the **same source** the Sync panel and the mobile dot use, so the three never disagree.
+It re-probes on a slow interval and immediately on `peer-ops-changed` (a delivery proves the mesh is up).
+Do not add a second reachability path; `peersOnline` is the one owner.
 
 ## Blockquote chrome
 
@@ -388,16 +398,20 @@ Schema (`crates/outl-desktop/src-tauri/src/settings.rs::Settings`):
   "last_workspace": "/Users/me/iCloud/outl",
   "vim_mode": false,
   "theme": "auto",       // "light" | "dark" | "auto"
-  "font_size": 15
+  "font_size": 15,
+  "sync_transport": "iroh"  // "iroh" (P2P, default) | "file" (iCloud/fs)
 }
 ```
+
+The Sync transport select in `SettingsModal` writes `sync_transport`.
+`settings.rs` maps it to/from `[sync] transport` and preserves `relay_url` on save; takes effect on next launch.
 
 The actor id (one per device) lives next to it as `actor` — a plain ULID.
 Switching workspaces does not rotate it.
 
 ## Peers
 
-Paired devices live in `~/.outl/peers.json`, owned by `outl_sync_iroh::PeersStore` (see [`outl-sync-iroh/CLAUDE.md`](../outl-sync-iroh/CLAUDE.md)).
+Paired devices live in `<workspace>/.outl/peers.json` (per-graph), owned by `outl_sync_iroh::PeersStore` (see [`outl-sync-iroh/CLAUDE.md`](../outl-sync-iroh/CLAUDE.md)).
 The desktop exposes two thin Tauri commands in `commands/peers.rs` — no business logic, they just load the store and project / mutate it:
 
 | Command | Returns | Behaviour |
@@ -405,7 +419,9 @@ The desktop exposes two thin Tauri commands in `commands/peers.rs` — no busine
 | `outl_peer_list` | `Vec<PeerDto>` (`node_id`, `alias`, `added_at`) | Loads `peers.json` (or default if absent) and lists every paired peer |
 | `outl_peer_remove(id)` | `bool` | Removes peers whose `node_id` starts with `id` (prefix match); `true` if any were removed |
 
-The path is fixed at `~/.outl/peers.json` (via `dirs::home_dir()`), the same location the CLI and the iroh transport read — not the desktop's `<app_config_dir>`.
+The path is `<workspace>/.outl/peers.json` (resolved from `AppState::storage_root` via `outl_sync_iroh::workspace_peers_path`) — the same per-graph location the CLI and the iroh transport read, not `~/.outl/` or `<app_config_dir>`.
+Each command runs `migrate_global_peers_if_absent` first, so a user with a legacy global list keeps their peers on first open.
+Only `identity.key` stays global (`~/.outl/`).
 
 `commands/peers.rs` also exposes `outl_sync_now()` (reads `state.iroh_transport`, the `Arc<dyn SyncTransport>`, and calls the trait's `sync_now()`) — the force-sync trigger behind the Sync panel's Refresh.
 

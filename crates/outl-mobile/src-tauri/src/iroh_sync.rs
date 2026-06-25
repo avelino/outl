@@ -2,14 +2,20 @@
 //!
 //! Owns three mobile-specific concerns the desktop/TUI keep elsewhere:
 //!
-//! - **Where the device identity + peer store live.** Unlike the TUI
-//!   (which uses `~/.outl/`), iOS has no meaningful home directory — the
-//!   sandbox `$HOME` is per-install and opaque. We resolve the iroh
-//!   files from the Tauri **app local data dir** so they sit next to the
-//!   persisted `actor` ULID and survive across launches. [`iroh_dir`] is
-//!   the single source of that path; the pairing commands in
-//!   `commands::peers` resolve through it too, so the running transport
-//!   and the pairing handshake always touch the same `peers.json`.
+//! - **Where the device identity lives.** Unlike the TUI (which uses
+//!   `~/.outl/`), iOS has no meaningful home directory — the sandbox
+//!   `$HOME` is per-install and opaque. We resolve `identity.key` from
+//!   the Tauri **app local data dir** so it sits next to the persisted
+//!   `actor` ULID and survives across launches. [`iroh_dir`] is the
+//!   single source of that per-device path. The identity is per-DEVICE
+//!   (one node id per install), never per-graph.
+//!
+//! - **Where the peer list lives.** The paired-peer list is per-GRAPH,
+//!   so it lives at `<workspace_root>/.outl/peers.json` (via
+//!   [`outl_sync_iroh::workspace_peers_path`]) — NOT next to the
+//!   identity. The running transport and the pairing commands both
+//!   resolve it from the workspace root, so a freshly paired device shows
+//!   up in `outl_peer_list` and syncs after the next launch.
 //!
 //! - **Whether to wire iroh at all.** Driven by the `[sync]` section of
 //!   the global `outl-config`. iroh is the default transport on mobile
@@ -28,7 +34,10 @@ use std::sync::mpsc;
 use outl_actions::SyncTransport;
 use outl_config::SyncTransportKind;
 use outl_core::id::ActorId;
-use outl_sync_iroh::{IrohIdentity, IrohSyncTransport, PeersStore};
+use outl_sync_iroh::{
+    migrate_global_peers_if_absent, workspace_peers_path, IrohIdentity, IrohSyncTransport,
+    PeersStore,
+};
 use tauri::{Emitter, Manager};
 use tracing::{info, warn};
 
@@ -50,8 +59,13 @@ pub(crate) fn identity_path(dir: &std::path::Path) -> PathBuf {
     dir.join("identity.key")
 }
 
-pub(crate) fn peers_path(dir: &std::path::Path) -> PathBuf {
-    dir.join("peers.json")
+/// Per-GRAPH peers file: `<workspace_root>/.outl/peers.json`.
+///
+/// Takes the **workspace root** (not the per-device `iroh_dir`): the peer
+/// list belongs to the graph, so it moves with the workspace, while the
+/// device identity stays in `iroh_dir`.
+pub(crate) fn peers_path(workspace_root: &std::path::Path) -> PathBuf {
+    workspace_peers_path(workspace_root)
 }
 
 /// Build + start the iroh transport when the config asks for it.
@@ -100,7 +114,11 @@ pub(crate) fn wire_iroh_transport(
             return None;
         }
     };
-    let peers = match PeersStore::load_or_default(&peers_path(&dir)) {
+    // Peer list is per-GRAPH: read it from `<workspace_root>/.outl/peers.json`,
+    // migrating any legacy global list on first open. Identity above stays in
+    // the per-device `iroh_dir`.
+    migrate_global_peers_if_absent(&workspace_root);
+    let peers = match PeersStore::load_or_default(&peers_path(&workspace_root)) {
         Ok(p) => p,
         Err(e) => {
             warn!("iroh disabled: peers load: {e}");
@@ -108,7 +126,10 @@ pub(crate) fn wire_iroh_transport(
         }
     };
 
-    let transport = IrohSyncTransport::new(identity, peers);
+    // `[sync] relay_url` from the global config: `None` (or empty) keeps iroh's
+    // n0 default relay, `Some(url)` points the sync endpoint at a custom relay.
+    let relay_url = outl_config::load().sync.relay_url().map(str::to_string);
+    let transport = IrohSyncTransport::new(identity, peers, relay_url);
 
     // The transport fires `()` on this channel whenever peer ops land on
     // disk. Bridge each signal to the `workspace-ready` Tauri event so
