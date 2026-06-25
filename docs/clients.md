@@ -44,7 +44,7 @@ To keep them honest, we route every workspace operation through one shared crate
 | Code-block execution (runtimes + orchestration) | `outl-exec`            |
 | Cross-client "run a fence" glue (`run_code_block`) | `outl-actions::exec` |
 | TUI: keymaps, modes, overlays, in-flight AST manipulation | `outl-tui`         |
-| Mobile: iCloud storage, Tauri commands, Solid frontend | `outl-mobile`         |
+| Mobile: local storage + iroh P2P (incl. iOS background sync), Tauri commands, Solid frontend | `outl-mobile` |
 | CLI subcommands                      | `outl-cli`                      |
 
 ## When to put logic in `outl-actions`

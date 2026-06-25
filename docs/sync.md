@@ -476,6 +476,22 @@ Same engine, simpler policy.
 The TUI runs the scan every 10 seconds on a worker thread; mobile runs it once at boot.
 Both call into `outl_md::reconcile::reconcile_md`, which uses 3-level matching to emit the minimum ops that translate the on-disk state into the op log.
 
+### Background sync on iOS
+
+While the app is in the foreground, the iroh transport syncs continuously (catch-up loop + real-time gossip).
+The moment the app backgrounds, iOS suspends its network sockets, so **there is no continuous background P2P** — that's an OS limit, not an outl choice.
+
+What outl does instead is use iOS's sanctioned background mechanism: a `BGProcessingTask`.
+When the system grants a window (it decides when — typically a handful of times a day, on Wi-Fi, often while charging), outl wakes, runs **one forced sync pass** against every paired device, and suspends again.
+The phone initiates the connection, which is what makes it work even when a peer (a Mac behind NAT) can't reach the phone directly.
+So edits made on another device while your phone was closed are usually already there when you reopen it, without you hitting refresh.
+
+This needs **Background App Refresh** enabled for outl (Settings → outl → Background App Refresh, and the global Settings → General → Background App Refresh).
+The toggle only appears because the app declares `UIBackgroundModes` + `BGTaskSchedulerPermittedIdentifiers`; with it off, sync only happens while the app is open.
+There's no battery cost to speak of — the OS schedules the windows, and each pass is a short op-log diff, not a live connection.
+
+> Wiring (Info.plist → `OutlBackgroundRefresh.swift` → the `bg_sync.rs` FFI that drives `sync_now`) is documented in [`crates/outl-mobile/CLAUDE.md`](../crates/outl-mobile/CLAUDE.md#background-sync-ios).
+
 ---
 
 ## Honest trade-offs (today)

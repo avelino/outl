@@ -31,6 +31,7 @@
 //! workspace lands, Tauri emits a `workspace-ready` event the frontend
 //! can listen for to refresh proactively.
 
+mod bg_sync;
 mod commands;
 mod helpers;
 mod iroh_sync;

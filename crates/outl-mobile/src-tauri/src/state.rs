@@ -49,8 +49,8 @@ pub(crate) struct AppState {
     /// handle for its whole lifetime; if we dropped it the transport
     /// would stay running but lose any future `shutdown()` / announce
     /// path. `None` when iroh is disabled in config or failed to bind
-    /// (the app degrades to the iCloud file transport, which needs no
-    /// live handle).
+    /// (the app then simply runs without P2P sync until a later relaunch
+    /// retries).
     ///
     /// Read by `commands::peers::outl_peer_status` (via `peer_health()`),
     /// and parked for the eventual `announce_local_ops` post-commit hook and
