@@ -21,6 +21,7 @@ mod overlays;
 mod sidebar;
 mod toasts;
 mod warnings_banner;
+mod wrap;
 
 use crate::state::{App, Focus, Overlay, View};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -138,9 +139,9 @@ fn render_main(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
     // Build the single scrollable region: outline lines, then the
     // inline backlinks section. The `─` separator and headers live
     // inside `backlinks::render_backlinks_inline`.
-    let (mut all_lines, sel_outline) = outline::render_outline(&app.page, app);
-    let outline_len = all_lines.len();
     let inner_width = body_area.width.saturating_sub(2);
+    let (mut all_lines, sel_outline) = outline::render_outline(&app.page, app, inner_width);
+    let outline_len = all_lines.len();
     let (bl_lines, sel_bl) = backlinks::render_backlinks_inline(app, inner_width);
     let bl_offset = all_lines.len();
     all_lines.extend(bl_lines);
@@ -192,11 +193,12 @@ fn render_main(f: &mut ratatui::Frame<'_>, area: Rect, app: &mut App) {
                 .title(title.to_string()),
         )
         .scroll((app.scroll_y, 0));
-    // NB: no `.wrap(...)`. Wrap turns one logical line into N visual
-    // lines whose count depends on width, which would invalidate our
-    // `selected_line` index. We trade off-screen long lines (rare,
-    // and you can horizontal-scroll later) for a correct vertical
-    // scroll today.
+    // NB: no ratatui `.wrap(...)`. It expands one logical line into N
+    // visual lines *after* layout, whose count depends on width — that
+    // would invalidate the `selected_line` index the scroll math above
+    // relies on. Instead the outline pre-wraps to `inner_width` itself
+    // (`view::wrap::push_wrapped`), so `all_lines` already holds the
+    // final visual rows and the index stays honest. See issue #99.
     f.render_widget(body, body_area);
 
     // Vertical scrollbar on the right border. Only meaningful when the

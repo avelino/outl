@@ -73,6 +73,7 @@ emojis = "0.9"
 # TUI
 ratatui = "0.30"
 crossterm = "0.29"
+unicode-width = "0.2"
 
 # CLI
 clap = { version = "4", features = ["derive"] }

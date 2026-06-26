@@ -105,6 +105,11 @@ TUI-specific contracts worth remembering:
   The bar composes with the TODO checkbox (`│ ☐ foo`) and `view::inline::split_block_prefixes` accepts the prefixes in **either order**, so `"> TODO foo"` and `"TODO > foo"` render the same.
 - IDs are **never** shown.
 - Mode tag (`NORMAL`/`INSERT`) appears in the header.
+- **Block text word-wraps to the pane width** (issue #99).
+  Terminals don't reflow, and `Paragraph::wrap` can't be used because it expands lines *after* layout and would desync the `selected_line` scroll index.
+  So `view::wrap::push_wrapped` emits the wrapped `Line`s up front: the first visual row keeps the bullet/fold `head`, continuations re-indent under the text column, and the `│ ` indent rails repeat on every row.
+  Wrapping runs on the already-styled `Span`s (post-tokenization), so a break never splits a `**bold**` token back into literal asterisks.
+  **Cursor rows (Insert / Normal-selected) never wrap** — the cursor column is a byte offset into the unwrapped row, so the caller passes width `0` (the "don't wrap" sentinel) for them.
 
 ## Reuse across UI surfaces (Tauri, mobile)
 
@@ -170,6 +175,7 @@ src/
 ├── view/
 │   ├── inline.rs        # span-level markdown (highlight + pretty)
 │   ├── outline.rs       # outline rendering (render_outline, render_block, …)
+│   ├── wrap.rs          # width-aware word wrap of styled spans (push_wrapped)
 │   ├── overlays.rs      # every modal popup
 │   ├── warnings_banner.rs # yellow banner above the outline when the current page has ParseWarnings
 │   └── backlinks.rs     # inline backlinks section (below outline, ─ rule)

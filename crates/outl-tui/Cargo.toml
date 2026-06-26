@@ -28,6 +28,9 @@ outl-theme = { workspace = true }
 anyhow = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
+# Width-aware word wrapping of block text in the outline (terminals
+# don't reflow on their own, and CJK / emoji glyphs are 2 cells wide).
+unicode-width = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 # Bridge for crates that emit via the `log` crate (Steel does this).
