@@ -147,6 +147,13 @@ jobs:
 
   build:
     name: ${{ matrix.label }}
+    # Gate the expensive runners (macOS is 10x, Windows 2x Linux billing)
+    # behind the Linux `check` job. `check` already compiles the whole
+    # desktop tree + runs clippy/tests/tsc/vitest, so any compile error or
+    # desktop test failure stops the matrix before a single macOS/Windows
+    # minute is spent. A `needs` dep runs the dependent only on success, so
+    # this is the gate — no extra `if:` required.
+    needs: check
     runs-on: ${{ matrix.os }}
     # `tauri build --debug` uses the dev profile; `debuginfo=0` keeps the
     # link cheap and the target dir small on every OS. The optimised
