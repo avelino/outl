@@ -6,6 +6,7 @@ use crate::outline_ops::path_for_index;
 use crate::state::{App, Focus, Mode};
 use crate::theme::Theme;
 use crate::view::inline::{highlight_inline, render_markdown_inline, render_pretty_block_text};
+use crate::view::wrap::push_wrapped;
 use outl_md::inline::{byte_index_for_char, tokenize, InlineTok};
 use outl_md::parse::{OutlineNode, ParsedPage};
 use outl_md::view::{block_to_rows, BlockRowKind};
@@ -30,7 +31,11 @@ const EMBED_MAX_DEPTH: u32 = 4;
 /// report the visual line index where the *selected* block's bullet
 /// row landed. The caller uses that index to keep the selection
 /// inside the scrolled viewport.
-pub(crate) fn render_outline(p: &ParsedPage, app: &App) -> (Vec<Line<'static>>, Option<usize>) {
+pub(crate) fn render_outline(
+    p: &ParsedPage,
+    app: &App,
+    text_width: u16,
+) -> (Vec<Line<'static>>, Option<usize>) {
     let mut out = Vec::new();
     for (k, v) in &p.properties {
         out.push(Line::from(vec![
@@ -44,11 +49,20 @@ pub(crate) fn render_outline(p: &ParsedPage, app: &App) -> (Vec<Line<'static>>, 
     let mut cursor = 0usize;
     let mut selected_line: Option<usize> = None;
     for block in &p.blocks {
-        render_block(block, 0, &mut cursor, app, &mut out, &mut selected_line);
+        render_block(
+            block,
+            0,
+            &mut cursor,
+            app,
+            &mut out,
+            &mut selected_line,
+            text_width,
+        );
     }
     (out, selected_line)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_block(
     b: &OutlineNode,
     indent: u32,
@@ -56,6 +70,7 @@ pub(crate) fn render_block(
     app: &App,
     out: &mut Vec<Line<'static>>,
     selected_line: &mut Option<usize>,
+    text_width: u16,
 ) {
     // Outline only owns selection/cursor decoration when focus lives
     // here. With `Focus::Backlink`, the bullet/caret belong to the
@@ -133,6 +148,7 @@ pub(crate) fn render_block(
         fold_marker,
         app,
         out,
+        text_width,
     );
 
     for (k, v) in &b.properties {
@@ -162,7 +178,7 @@ pub(crate) fn render_block(
             // `outer_indent` matches the carrying block's own indent so
             // the `│ ` guides line up with the outline's normal indent
             // pattern. Embed-internal nesting comes from `depth`.
-            emit_embedded_children(&entry.children, indent, 1, app, out);
+            emit_embedded_children(&entry.children, indent, 1, app, out, text_width);
         }
     }
 
@@ -176,7 +192,15 @@ pub(crate) fn render_block(
         *cursor += outl_md::outline_ops::flat_count(&b.children);
     } else {
         for child in &b.children {
-            render_block(child, indent + 1, cursor, app, out, selected_line);
+            render_block(
+                child,
+                indent + 1,
+                cursor,
+                app,
+                out,
+                selected_line,
+                text_width,
+            );
         }
     }
 }
@@ -221,16 +245,20 @@ fn emit_embedded_children(
     depth: u32,
     app: &App,
     out: &mut Vec<Line<'static>>,
+    text_width: u16,
 ) {
     if depth > EMBED_MAX_DEPTH {
         return;
     }
     for child in children {
-        let mut spans: Vec<Span<'static>> = Vec::new();
+        // `guides` repeat on every wrapped row; the `↳ ` marker lives in
+        // `head` so it only appears once and continuations re-indent
+        // under the embedded text (same split `emit_block_lines` uses).
+        let mut guides: Vec<Span<'static>> = Vec::new();
         // 1. Outline indent guides (mirrors what `emit_block_lines`
         //    draws for a regular block at the same depth in the doc).
         for _ in 0..outer_indent {
-            spans.push(Span::styled("│ ", app.theme.dim));
+            guides.push(Span::styled("│ ", app.theme.dim));
         }
         // 2. Embed-internal indent so children land **below the source
         //    root's text**, not alongside its `↳ `. The carrying
@@ -241,16 +269,19 @@ fn emit_embedded_children(
         //    another two per nested level. `(depth + 1) * 2` spaces
         //    keeps the geometry: depth 1 → 4 spaces, depth 2 → 6, etc.
         for _ in 0..(depth + 1) {
-            spans.push(Span::raw("  "));
+            guides.push(Span::raw("  "));
         }
-        spans.push(Span::styled("↳ ", app.theme.dim));
-        spans.extend(render_pretty_block_text(
-            &child.text,
-            &app.theme,
-            &app.index,
-        ));
-        out.push(Line::from(spans));
-        emit_embedded_children(&child.children, outer_indent, depth + 1, app, out);
+        let head = vec![Span::styled("↳ ", app.theme.dim)];
+        let content = render_pretty_block_text(&child.text, &app.theme, &app.index);
+        push_wrapped(guides, head, content, text_width, out);
+        emit_embedded_children(
+            &child.children,
+            outer_indent,
+            depth + 1,
+            app,
+            out,
+            text_width,
+        );
     }
 }
 
@@ -292,6 +323,7 @@ pub(crate) enum RenderMode {
 /// clients use the same classification. This function is the
 /// TUI-specific mapping: each [`outl_md::view::BlockRow`] becomes a
 /// `Line` of `Span`s using the active theme.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_block_lines(
     indent: u32,
     bullet_style: Style,
@@ -300,6 +332,7 @@ pub(crate) fn emit_block_lines(
     fold: FoldMarker,
     app: &App,
     out: &mut Vec<Line<'static>>,
+    text_width: u16,
 ) {
     let (text, cursor_char, cursor_style) = match mode {
         RenderMode::Editing { text, cursor_char } => {
@@ -318,10 +351,16 @@ pub(crate) fn emit_block_lines(
     let single_line_pretty = pretty && rows.len() == 1;
 
     for row in &rows {
-        let mut spans: Vec<Span<'_>> = Vec::new();
+        // The line is built in three parts so word-wrap can keep the
+        // prefix on the first visual row and re-indent continuations:
+        //   - `guides`  : the `│ ` indent rails (repeated on every wrap row)
+        //   - `head`    : fold marker + bullet (first wrap row only)
+        //   - `content` : the styled block text that may wrap
+        let mut guides: Vec<Span<'static>> = Vec::new();
         for _ in 0..row.indent {
-            spans.push(Span::styled("│ ", app.theme.dim));
+            guides.push(Span::styled("│ ", app.theme.dim));
         }
+        let mut head: Vec<Span<'static>> = Vec::new();
         match row.kind {
             BlockRowKind::Bullet => {
                 // Fold indicator goes first — two-cell slot whether
@@ -329,17 +368,17 @@ pub(crate) fn emit_block_lines(
                 // column stable across siblings (leaf next to a
                 // parent must line up).
                 match fold {
-                    FoldMarker::None => spans.push(Span::raw("  ")),
-                    FoldMarker::Expanded => spans.push(Span::styled("▼ ", app.theme.dim)),
-                    FoldMarker::Collapsed => spans.push(Span::styled("▶ ", app.theme.hint)),
+                    FoldMarker::None => head.push(Span::raw("  ")),
+                    FoldMarker::Expanded => head.push(Span::styled("▼ ", app.theme.dim)),
+                    FoldMarker::Collapsed => head.push(Span::styled("▶ ", app.theme.hint)),
                 }
                 // Blocks with `auto-run::` get a ⚡ before the bullet
                 // so the user can see at a glance which cells re-run
                 // themselves on page open.
                 if has_auto_run {
-                    spans.push(Span::styled("⚡", app.theme.hint));
+                    head.push(Span::styled("⚡", app.theme.hint));
                 }
-                spans.push(Span::styled("- ", bullet_style));
+                head.push(Span::styled("- ", bullet_style));
             }
             BlockRowKind::Continuation
             | BlockRowKind::CodeFenceMarker
@@ -348,19 +387,20 @@ pub(crate) fn emit_block_lines(
                 // continuation rows stay aligned with the bullet
                 // column above them (two cells for the fold slot,
                 // one extra cell when `⚡` is present).
-                spans.push(Span::raw("  "));
+                head.push(Span::raw("  "));
                 if has_auto_run {
-                    spans.push(Span::raw(" "));
+                    head.push(Span::raw(" "));
                 }
-                spans.push(Span::raw("  "));
+                head.push(Span::raw("  "));
             }
         }
 
+        let mut content: Vec<Span<'static>> = Vec::new();
         // If the cursor is on this row we always go raw — we want
         // bytes to line up with what the user typed, regardless of
         // fence state.
         if let (Some(col), Some(style)) = (row.cursor_col, cursor_style) {
-            emit_row_with_cursor(row.text, col, style, &app.theme, &mut spans);
+            emit_row_with_cursor(row.text, col, style, &app.theme, &mut content);
         } else {
             // A bullet row whose text opens a code fence (`` ```lisp ``)
             // is *both* a bullet and a fence marker — style the text
@@ -370,13 +410,13 @@ pub(crate) fn emit_block_lines(
                 && row.text.trim_start().starts_with("```");
             match row.kind {
                 _ if pretty && bullet_is_fence_opener => {
-                    spans.push(Span::styled(row.text.to_string(), app.theme.dim));
+                    content.push(Span::styled(row.text.to_string(), app.theme.dim));
                 }
                 BlockRowKind::CodeFenceMarker if pretty => {
-                    spans.push(Span::styled(row.text.to_string(), app.theme.dim));
+                    content.push(Span::styled(row.text.to_string(), app.theme.dim));
                 }
                 BlockRowKind::CodeFenceBody if pretty => {
-                    spans.push(Span::styled(row.text.to_string(), app.theme.code));
+                    content.push(Span::styled(row.text.to_string(), app.theme.code));
                 }
                 BlockRowKind::Bullet if single_line_pretty => {
                     // Single owner for the bullet's pretty render: it
@@ -386,12 +426,22 @@ pub(crate) fn emit_block_lines(
                     // function the embed expansion uses, so the
                     // chrome stays in lockstep between bullet and
                     // embed root.
-                    spans.extend(render_pretty_block_text(row.text, &app.theme, &app.index));
+                    content.extend(render_pretty_block_text(row.text, &app.theme, &app.index));
                 }
-                _ => spans.extend(render_markdown_inline(row.text, &app.theme, &app.index)),
+                _ => content.extend(render_markdown_inline(row.text, &app.theme, &app.index)),
             }
         }
-        out.push(Line::from(spans));
+
+        // Cursor rows must stay on a single visual line: the cursor's
+        // column is a byte offset into the unwrapped row text, so
+        // splitting it across wrap rows would desync the caret from
+        // what the user typed. Only wrap when no cursor sits here.
+        let wrap_width = if row.cursor_col.is_some() {
+            0
+        } else {
+            text_width
+        };
+        push_wrapped(guides, head, content, wrap_width, out);
     }
 }
 

@@ -33,6 +33,11 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Fixed
 
+- **TUI now word-wraps block text to the pane width** ([#99](https://github.com/avelino/outl/issues/99)).
+  Typing past the right edge of the terminal used to run a block off-screen instead of flowing onto the next visual row — terminals don't reflow on their own, and the outline deliberately avoided ratatui's `Paragraph::wrap` because that expands lines *after* layout and would desync the `selected_line` scroll index.
+  The outline now pre-wraps itself (`outl-tui` `view::wrap::push_wrapped`): wrapped rows are emitted up front so the scroll index stays honest, the first visual row keeps the bullet/fold marker, continuations re-indent under the text column, and the `│ ` indent rails repeat top to bottom.
+  Wrapping runs on the already-styled spans (post-tokenization), so a break never splits a `**bold**` / `[[ref]]` token back into its literal markers, and wide glyphs (CJK, emoji) count as two cells.
+  The block being edited (Insert) or selected in Normal mode stays on one line so the cursor column keeps matching the source bytes.
 - **Page-level properties now reach the workspace tree.**
   The reconcile pipeline previously emitted `Op::SetProp` only for block-nested properties.
   Anything written at the top of a `.md` (above the first `-` bullet) — `title::`, `icon::`, `pinned::`, `type::`, custom keys — lived only on disk.
