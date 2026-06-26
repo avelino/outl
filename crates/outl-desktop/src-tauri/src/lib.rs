@@ -48,7 +48,8 @@ use outl_core::hlc::HlcGenerator;
 use outl_core::workspace::Workspace;
 use outl_exec::RuntimeRegistry;
 use parking_lot::Mutex;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+use tauri_plugin_deep_link::DeepLinkExt;
 
 use crate::commands::{
     create_block, current_workspace, date_title, delete_block, edit_block, get_settings, get_theme,
@@ -62,6 +63,64 @@ use crate::commands::{
 };
 use crate::state::AppState;
 use crate::workspace_open::{load_or_create_actor, spawn_workspace_opener};
+
+/// A deep link that arrived during cold start, before the frontend
+/// mounted its `deep-link://navigate` listener. The frontend drains it
+/// once on boot via [`take_pending_deep_link`] (issue #98).
+///
+/// Only the **cold-start** path (the launch URL) populates this. The
+/// warm path (`on_open_url` while the app runs) emits the event directly
+/// — the listener is already up — and never touches the buffer, so a
+/// stale target can't replay on the next plain launch.
+struct PendingDeepLink(parking_lot::Mutex<Option<serde_json::Value>>);
+
+/// Frontend command: take (and clear) the deep link buffered during cold
+/// start. Returns `null` when the app launched normally.
+#[tauri::command]
+fn take_pending_deep_link(pending: tauri::State<'_, PendingDeepLink>) -> Option<serde_json::Value> {
+    pending.0.lock().take()
+}
+
+/// Parse an `outl://` URL via the shared `outl_actions` parser into the
+/// `{kind, …}` payload the frontend maps onto its `open*` commands.
+///
+/// A malformed URL (wrong scheme, unknown kind, bad date, traversal
+/// slug) is logged at `warn` and returns `None` — never a crash, never a
+/// stray page (issue #98). The parser is shared with `outl-mobile` so
+/// the two clients can't drift on the scheme contract.
+fn deep_link_payload(raw: &str) -> Option<serde_json::Value> {
+    use outl_actions::DeepLinkTarget;
+
+    match outl_actions::parse_deep_link(raw) {
+        Ok(DeepLinkTarget::Today) => Some(serde_json::json!({ "kind": "today" })),
+        Ok(DeepLinkTarget::Daily(date)) => Some(serde_json::json!({
+            "kind": "daily",
+            "date": date.format("%Y-%m-%d").to_string(),
+        })),
+        Ok(DeepLinkTarget::Page(slug)) => Some(serde_json::json!({
+            "kind": "page",
+            "slug": slug,
+        })),
+        Err(err) => {
+            tracing::warn!("deep link ignored ({raw}): {err}");
+            None
+        }
+    }
+}
+
+/// Warm path: an `outl://` URL opened while the app is running. Emit the
+/// navigate event (the frontend listener is up) and focus the window.
+fn dispatch_deep_link(app: &tauri::AppHandle, raw: &str) {
+    let Some(payload) = deep_link_payload(raw) else {
+        return;
+    };
+    if let Err(err) = app.emit("deep-link://navigate", payload) {
+        tracing::warn!("deep link: failed to emit navigate event: {err}");
+    }
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.set_focus();
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -86,9 +145,20 @@ pub fn run() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     tauri::Builder::default()
+        // Single-instance MUST be the first plugin. Its `deep-link`
+        // feature forwards an `outl://` URL opened while the app is
+        // already running to `on_open_url` (Linux/Windows); the callback
+        // only needs to surface the existing window. macOS routes the
+        // URL to the running instance natively via Apple Event.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_deep_link::init())
         .setup(|app| -> Result<(), Box<dyn std::error::Error>> {
             // Local-only state (the per-device `actor` ULID and the
             // `config.toml`) lives at `~/.config/outl/` — the XDG
@@ -149,6 +219,36 @@ pub fn run() {
                 iroh_pairing,
                 history: Mutex::new(std::collections::HashMap::new()),
             });
+            app.manage(PendingDeepLink(parking_lot::Mutex::new(None)));
+
+            // `outl://` deep links (issue #98). On Linux (and Windows in
+            // dev) the scheme is registered at runtime; bundled macOS /
+            // Windows builds get it from the `CFBundleURLTypes` /
+            // registry entry the plugin writes from tauri.conf.json.
+            #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
+            {
+                if let Err(err) = app.deep_link().register_all() {
+                    tracing::warn!("deep link: register_all failed: {err}");
+                }
+            }
+            // Warm path: a URL opened while the app already runs. The
+            // frontend listener is up, so emit straight to it.
+            let dl_handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                for url in event.urls() {
+                    dispatch_deep_link(&dl_handle, url.as_str());
+                }
+            });
+            // Cold start: an `outl://` URL that *launched* the app. The
+            // frontend hasn't mounted its listener yet, so an emit here
+            // would be lost (the app would just open today's journal).
+            // Buffer the target instead; `take_pending_deep_link` drains
+            // it once the AppShell mounts. Only the first URL is kept.
+            if let Ok(Some(urls)) = app.deep_link().get_current() {
+                if let Some(payload) = urls.first().and_then(|u| deep_link_payload(u.as_str())) {
+                    *app.state::<PendingDeepLink>().0.lock() = Some(payload);
+                }
+            }
 
             Ok(())
         })
@@ -175,6 +275,7 @@ pub fn run() {
             open_journal_for,
             open_page_by_slug,
             open_ref,
+            take_pending_deep_link,
             previous_day,
             next_day,
             today_slug_cmd,

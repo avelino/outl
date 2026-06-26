@@ -442,6 +442,35 @@ This is the only injection point that survives the build because Tauri only expo
 - `xcrun altool --type ios` returns exit 0 even on 409 errors.
   The `Upload IPA to TestFlight` step in `testflight.yml` greps for `ERROR:` and exits non-zero explicitly — don't simplify that step.
 
+## Deep links (`outl://`)
+
+The mobile app registers the `outl://` scheme so links shared into it (or the Raycast extension on the same Mac, once Handoff is in play) open a specific page or daily note (issue #98).
+The scheme contract and the shared parser live in `outl-actions` — see [`docs/clients.md` → Deep links](../../docs/clients.md#deep-links-outl) — so the mobile and desktop handlers can't drift.
+
+Wiring:
+
+- **Plugin.**
+  `tauri-plugin-deep-link` is registered in `lib.rs`'s builder.
+  No single-instance plugin — iOS is single-instance by construction, so the OS routes the URL to the running app.
+- **Scheme registration is the iOS `Info.plist`, not config.**
+  Tauri's `plugins.deep-link.desktop.schemes` key is desktop-only.
+  For an iOS **custom scheme** the `CFBundleURLTypes` entry is added directly to `gen/apple/outl-mobile_iOS/Info.plist`, alongside the existing `UIBackgroundModes` / iCloud keys this project already hand-maintains there.
+  Universal Links (`https://outl.app/…`) would instead need the `mobile` config + an Associated Domains entitlement + a hosted `apple-app-site-association`; that's a separate follow-up.
+- **Warm path** (`dispatch_deep_link`, fired by `on_open_url`) mirrors the desktop: parse with `outl_actions::parse_deep_link`, emit `deep-link://navigate` (`{kind:"today"}` / `{kind:"daily",date}` / `{kind:"page",slug}`), focus the window.
+  A malformed URL is logged at `warn` and ignored.
+- **Cold path** (a URL that *launched* the app) buffers the parsed payload in a managed `PendingDeepLink(Mutex<Option<Value>>)` during `setup()`, because the frontend listener isn't up yet.
+  The `take_pending_deep_link` command drains it once `Journal` mounts.
+  Same shape as the desktop buffer; only the launch URL populates it.
+- **Frontend.**
+  `Journal.tsx` registers `listenForDeepLink()` in `onMount` (warm) and, right after `loadTodayWithRetry`, drains `take_pending_deep_link` (cold).
+  Both call the shared `navigateDeepLink` helper, which maps onto the same `openTodayJournal` / `openJournalFor` / `openPageBySlug` commands the ref-tap path uses, then `applyView`.
+  The warm listener skips while a block is being edited (`editingId()` guard) so it never resets the textarea mid-edit.
+  The cold drain runs after the workspace is open, so it overrides today's journal with the launch target.
+
+**Validation needs a device build.**
+The Rust side is `cargo check`-clean, but the iOS scheme registration + the OS routing only exercise on a real device / simulator build (`cargo tauri ios dev`), the same constraint the `BGTaskScheduler` and `NSMetadataQuery` paths carry.
+Don't mark the mobile half "verified" from a host `cargo check` alone.
+
 ## Testing
 
 Two layers cover the mobile crate:

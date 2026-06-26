@@ -38,6 +38,11 @@ tauri = { workspace = true }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = { workspace = true }
 tauri-plugin-os = { workspace = true }
+# `outl://` deep links (Raycast "open in app", shared launchers). The
+# single-instance plugin's `deep-link` feature forwards the URL to the
+# already-running instance on Linux/Windows (macOS routes it natively).
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 notify = "8"
 notify-debouncer-full = "0.7"
 serde = { workspace = true }

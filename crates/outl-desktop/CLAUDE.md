@@ -433,6 +433,36 @@ The **Refresh** button calls `forceSync()`: `syncNow()` (force a P2P pull) → `
 `syncNow` / `reloadWorkspace` failures land on `appState.lastError` but never block the status read.
 `syncNow()` + `peersOnline()` live in `@outl/shared` so desktop and mobile derive the dot + drive the refresh identically — see [`outl-sync-iroh/CLAUDE.md`](../outl-sync-iroh/CLAUDE.md) → "Force-sync trigger (`sync_now`)".
 
+## Deep links (`outl://`)
+
+The desktop registers the `outl://` scheme so external launchers (the Raycast extension, shared links) jump straight to a page or daily note (issue #98).
+The scheme contract and the shared parser live in `outl-actions` — see [`docs/clients.md` → Deep links](../../docs/clients.md#deep-links-outl) — so the desktop and mobile handlers can't drift.
+
+Wiring (all in `src-tauri/src/lib.rs`):
+
+- **Plugins.**
+  `tauri-plugin-single-instance` is registered **first**.
+  Its `deep-link` feature forwards an `outl://` URL opened while the app runs to the existing instance on Linux/Windows; the callback just focuses the `main` window.
+  `tauri-plugin-deep-link` follows.
+  The scheme is declared in `tauri.conf.json` under `plugins.deep-link.desktop.schemes` and granted via `deep-link:default` in `capabilities/default.json`.
+- **Warm path** (`dispatch_deep_link`, fired by `on_open_url`) parses the URL with `outl_actions::parse_deep_link` — the one owner, this crate adds no parsing.
+  It then **emits** `deep-link://navigate` with one of `{kind:"today"}` / `{kind:"daily",date}` / `{kind:"page",slug}` and focuses the window.
+  A malformed URL is logged at `warn` and ignored — never a crash, never a stray page.
+- **Cold path** (a URL that *launched* the app) can't emit — the frontend listener isn't mounted yet.
+  So `setup()` buffers the parsed payload in a managed `PendingDeepLink(Mutex<Option<Value>>)` instead, and the `take_pending_deep_link` command drains it once on mount.
+  Only the launch URL populates the buffer; the warm path never does, so a stale target can't replay on the next plain launch.
+- **Frontend.**
+  `AppShell` listens via `onDeepLinkNavigate` (`lib/events.ts`) for the warm path.
+  On mount it calls `takePendingDeepLink()` (`lib/api.ts`) for the cold path — if a target is buffered it navigates there instead of loading today's journal (which would otherwise race and overwrite it).
+  Both map onto the same `openTodayJournal` / `openJournalFor` / `openPageBySlug` commands the picker already calls, then `applyView`.
+  The backend, not the frontend, owns parsing + window focus.
+
+**Testing on macOS needs a bundled, installed app.**
+macOS does not register URL schemes at runtime — only via LaunchServices from the app bundle's `CFBundleURLTypes` (which `tauri-plugin-deep-link` writes from `schemes` at `cargo tauri build` time).
+So `cargo tauri dev` does **not** register `outl://`; `open outl://…` then shows the Finder "no application set to open the URL" dialog.
+To test: `cargo tauri build`, copy the `.app` into `/Applications` (the scheme registration requires it to live there), open it once so LaunchServices indexes it, then `open "outl://page/<slug>"`.
+Linux/Windows register at runtime (`register_all()` in `setup`), so dev mode works there.
+
 ## When you're done
 
 1. `cargo fmt`

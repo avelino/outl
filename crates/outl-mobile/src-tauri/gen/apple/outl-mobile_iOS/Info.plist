@@ -46,5 +46,18 @@
 		<string>app.outl.mobile-app.refresh</string>
 		<string>app.outl.mobile-app.sync</string>
 	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>app.outl.mobile-app</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>outl</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

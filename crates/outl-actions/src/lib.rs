@@ -52,6 +52,7 @@
 pub mod backlinks;
 pub mod block;
 pub mod collapsed;
+pub mod deeplink;
 pub mod error;
 pub mod exec;
 pub mod history;
@@ -72,6 +73,7 @@ pub use block::{
     BlockTreeSpec,
 };
 pub use collapsed::{set_block_collapsed, toggle_block_collapsed};
+pub use deeplink::{parse_deep_link, DeepLinkError, DeepLinkTarget, DEEP_LINK_SCHEME};
 pub use error::ActionError;
 pub use exec::{run_code_block, ExecOutputDto, RunCodeBlockOutcome};
 pub use history::{restore_page_md, HistoryStacks, DEFAULT_HISTORY_CAP};

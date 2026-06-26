@@ -9,8 +9,9 @@ import {
 import type { PageView } from "@outl/shared/api/types";
 
 import { appState, setAppState } from "../lib/store";
-import { workspaceStats } from "../lib/api";
-import { onPeerOpsChanged } from "../lib/events";
+import { takePendingDeepLink, workspaceStats } from "../lib/api";
+import { onDeepLinkNavigate, onPeerOpsChanged } from "../lib/events";
+import type { DeepLinkNavigate } from "../lib/events";
 import { installShortcuts } from "../lib/shortcuts";
 import { buildHandlers } from "../lib/action-handlers";
 import { Sidebar } from "./Sidebar";
@@ -99,8 +100,37 @@ export function AppShell() {
     }
   }
 
+  /**
+   * Navigate in response to an `outl://` deep link (issue #98). The
+   * backend already parsed + validated the URL through the shared
+   * `outl_actions::parse_deep_link` and focused the window; here we just
+   * map the resulting shape onto the same `open*` command the picker /
+   * sidebar use, then render it. A failed open lands on the status line.
+   */
+  async function handleDeepLink(payload: DeepLinkNavigate) {
+    try {
+      const view =
+        payload.kind === "today"
+          ? await openTodayJournal()
+          : payload.kind === "daily"
+            ? await openJournalFor(payload.date)
+            : await openPageBySlug(payload.slug);
+      applyView(view);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   onMount(async () => {
-    void loadToday();
+    // A cold-start deep link wins over today's journal: if an `outl://`
+    // URL launched the app, navigate there instead of loading the
+    // journal (which would otherwise race and overwrite the target).
+    const pending = await takePendingDeepLink();
+    if (pending) {
+      void handleDeepLink(pending);
+    } else {
+      void loadToday();
+    }
 
     const handlers = buildHandlers({ applyView, setError });
     const unbindShortcuts = await installShortcuts(handlers);
@@ -110,6 +140,12 @@ export function AppShell() {
       void onPeerChange();
     });
     onCleanup(() => unlisten());
+
+    // `outl://` deep links opened while the app is running (issue #98).
+    const unlistenDeepLink = await onDeepLinkNavigate((payload) => {
+      void handleDeepLink(payload);
+    });
+    onCleanup(() => unlistenDeepLink());
   });
 
   function gridTemplate(): string {

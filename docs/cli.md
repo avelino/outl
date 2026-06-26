@@ -96,7 +96,7 @@ The MCP tool column is the name Claude Desktop (or any MCP host) sees.
 | CLI                                                            | MCP tool             |
 |----------------------------------------------------------------|----------------------|
 | `outl page get <slug> [--json]`                                | `outl_page_get`      |
-| `outl page create <slug> --title=… [--icon=…] [--content=<JSON\|->]` | `outl_page_create`   |
+| `outl page create <slug> --title=… [--icon=…] [--content=<JSON\|->] [--slugify]` | `outl_page_create`   |
 | `outl page update <slug> [--title=…] [--icon=…]`               | `outl_page_update`   |
 | `outl page delete <slug> [--confirm]`                          | `outl_page_delete`   |
 | `outl page list [--filter=tag:foo] [--json]`                   | `outl_page_list`     |
@@ -111,6 +111,10 @@ Affected blocks come back in `affected_refs` so the caller can decide whether to
 `page create --content` accepts a forest of `[{text, children?}, ...]` (or a single `{text, children?}` for ergonomics) so a brand-new page lands with its full outline in one op-log session instead of a chain of `block append` calls.
 Pass `--content -` to read the JSON from stdin.
 The returned `content` array mirrors the input and carries the freshly minted block ids, so the caller can keep referencing them in follow-ups.
+
+`page create --slugify` treats the positional argument as a human name and derives the slug from it through the shared `outl_md::slugify` rule (lowercase, fold Latin accents, non-alphanumeric → `-`, collapse + trim).
+It is opt-in and idempotent on an already-clean slug, so the default path — and the `outl_page_create` MCP tool — stay literal, keeping hierarchical slugs like `ai-agent/learning` verbatim.
+The flag exists so external clients (the Raycast extension's "New Page") can ask the user for a name only and let the one owner of the rule generate the slug, instead of re-implementing slugify.
 
 ### Block
 

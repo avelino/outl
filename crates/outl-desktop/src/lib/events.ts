@@ -53,6 +53,35 @@ export function onRefProjectionFailed(
   );
 }
 
+/**
+ * Payload emitted with `deep-link://navigate` when the backend receives
+ * an `outl://` URL (issue #98). The Rust side parses the URL through the
+ * shared `outl_actions::parse_deep_link` (so the scheme contract has one
+ * owner) and emits one of three shapes the frontend maps onto its
+ * existing `open*` commands:
+ *
+ * - `{ kind: "today" }` — open today's journal.
+ * - `{ kind: "daily", date }` — open the journal for that ISO date.
+ * - `{ kind: "page", slug }` — open the page by slug.
+ */
+export type DeepLinkNavigate =
+  | { kind: "today" }
+  | { kind: "daily"; date: string }
+  | { kind: "page"; slug: string };
+
+/**
+ * Register a handler for `deep-link://navigate`. Fires when the user
+ * opens an `outl://` URL while the app is running (warm start). Returns
+ * an unlisten function — call it on cleanup to avoid leaks.
+ */
+export function onDeepLinkNavigate(
+  handler: (payload: DeepLinkNavigate) => void,
+): Promise<UnlistenFn> {
+  return listen<DeepLinkNavigate>("deep-link://navigate", (e) =>
+    handler(e.payload),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Peer pairing (iroh sync transport)
 // ---------------------------------------------------------------------------

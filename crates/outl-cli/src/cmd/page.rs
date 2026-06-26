@@ -40,7 +40,8 @@ pub enum PageCommand {
     /// page's outline in a single call. Skipping `--content` keeps
     /// the historical "empty page" behavior.
     Create {
-        /// Page slug (filename-safe, e.g. `ideas`).
+        /// Page slug (filename-safe, e.g. `ideas`). With `--slugify`,
+        /// pass a human name instead (`"My Ideas"`) and it is converted.
         slug: String,
         /// Page title (defaults to slug when omitted).
         #[arg(long)]
@@ -51,6 +52,13 @@ pub enum PageCommand {
         /// Initial page content as JSON forest. Pass `-` to read from stdin.
         #[arg(long)]
         content: Option<String>,
+        /// Treat the positional argument as a human name and derive the
+        /// slug from it via the shared `outl_md::slugify` rule (lowercase,
+        /// fold accents, non-alnum → `-`). Idempotent on an already-clean
+        /// slug. Opt-in so the default path stays literal — the MCP layer
+        /// and hierarchical slugs (`ai-agent/learning`) keep `/` verbatim.
+        #[arg(long)]
+        slugify: bool,
         /// Force JSON output.
         #[arg(long)]
         json: bool,
@@ -127,13 +135,23 @@ pub fn run(cmd: &PageCommand, path: &Path) -> i32 {
             title,
             icon,
             content,
+            slugify,
             json,
         } => {
+            // `--slugify` turns a human name into a filename-safe slug via
+            // the shared rule (one owner: `outl_md::slugify`). Default
+            // leaves the positional verbatim so the MCP path and
+            // hierarchical slugs are untouched.
+            let slug = if *slugify {
+                outl_md::slug::slugify(slug)
+            } else {
+                slug.clone()
+            };
             let result = read_content_arg(content.as_deref()).and_then(|specs| {
                 ws::open(path).and_then(|mut ctx| {
                     create(
                         &mut ctx,
-                        slug,
+                        &slug,
                         title.as_deref(),
                         icon.as_deref(),
                         specs.as_deref(),

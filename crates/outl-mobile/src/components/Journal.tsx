@@ -56,6 +56,15 @@ import { ParseWarningsBanner } from "@outl/shared/warnings";
 import { parkCaret, spliceText } from "../lib/textarea";
 import { withTimeout } from "../lib/async";
 
+/**
+ * Payload shapes emitted by the backend's `deep-link://navigate` event
+ * (and buffered for cold start via `take_pending_deep_link`) — issue #98.
+ */
+type DeepLinkNavigate =
+  | { kind: "today" }
+  | { kind: "daily"; date: string }
+  | { kind: "page"; slug: string };
+
 /** Maximum time we wait for a single Tauri command to settle before
  *  surfacing a timeout error. Keeps the UI from getting stuck in
  *  "syncing…" forever when iCloud coordination stalls. */
@@ -253,7 +262,21 @@ export function Journal() {
 
   onMount(async () => {
     listenForWorkspaceReady();
+    listenForDeepLink();
     await loadTodayWithRetry();
+    // Cold-start deep link: a URL that *launched* the app was buffered
+    // by the backend before the listener above existed. Drain it now
+    // that the workspace is open and override today's journal with the
+    // target. A normal launch returns null and keeps the journal.
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const pending = await invoke<DeepLinkNavigate | null>(
+        "take_pending_deep_link",
+      );
+      if (pending) await navigateDeepLink(pending);
+    } catch {
+      // best-effort — a failed drain just leaves the journal showing
+    }
     // Opening the app: pull whatever peers produced while it was closed, so the
     // user sees fresh state without hitting refresh. Runs after the local load
     // so the UI is already up; best-effort.
@@ -385,6 +408,39 @@ export function Journal() {
           return;
         }
         setNativeSuggesterState(buildShowMessage(finalItems, { mention }));
+      });
+    });
+  }
+
+  /**
+   * Navigate in response to an `outl://` deep link (issue #98). The Rust
+   * backend parsed + validated the URL through the shared
+   * `outl_actions::parse_deep_link`; map each shape onto the same
+   * `open*` command the ref-tap path uses. Shared by the warm listener
+   * and the cold-start drain so the two can't diverge.
+   */
+  async function navigateDeepLink(p: DeepLinkNavigate) {
+    try {
+      const next =
+        p.kind === "today"
+          ? await openTodayJournal()
+          : p.kind === "daily"
+            ? await openJournalFor(p.date)
+            : await openPageBySlug(p.slug);
+      applyView(next);
+      setError(null);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  function listenForDeepLink() {
+    import("@tauri-apps/api/event").then(({ listen }) => {
+      listen<DeepLinkNavigate>("deep-link://navigate", async (e) => {
+        // Skip while editing so a warm-path navigation never yanks the
+        // textarea out from under the user mid-keystroke.
+        if (editingId()) return;
+        await navigateDeepLink(e.payload);
       });
     });
   }

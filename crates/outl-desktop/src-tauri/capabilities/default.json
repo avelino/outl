@@ -6,7 +6,9 @@
   "permissions": [
     "core:default",
     "core:window:allow-close",
+    "core:window:allow-set-focus",
     "os:allow-hostname",
+    "deep-link:default",
     "dialog:default",
     "dialog:allow-open",
     {

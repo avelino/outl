@@ -10,6 +10,18 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type { PageView, WorkspaceSummary } from "@outl/shared/api/types";
+import type { DeepLinkNavigate } from "./events";
+
+/**
+ * Take (and clear) an `outl://` deep link that arrived during cold
+ * start — i.e. a URL that *launched* the app, before the `AppShell`
+ * mounted its `deep-link://navigate` listener (issue #98). Returns
+ * `null` on a normal launch. Call once on `AppShell` mount; the warm
+ * path (app already running) is handled by the live event listener.
+ */
+export function takePendingDeepLink(): Promise<DeepLinkNavigate | null> {
+  return invoke<DeepLinkNavigate | null>("take_pending_deep_link");
+}
 
 // ---------------------------------------------------------------------------
 // Workspace lifecycle (desktop-only)
