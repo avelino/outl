@@ -254,4 +254,15 @@ mod tests {
             Err(DeepLinkError::InvalidSlug(_))
         ));
     }
+
+    #[test]
+    fn rejects_leading_slash_segment() {
+        // `outl://page//foo` → payload `/foo` → empty first segment.
+        // `is_valid_slug("")` is false, so the whole slug is rejected
+        // instead of resolving to a stray `foo` page.
+        assert!(matches!(
+            parse_deep_link("outl://page//foo"),
+            Err(DeepLinkError::InvalidSlug(_))
+        ));
+    }
 }

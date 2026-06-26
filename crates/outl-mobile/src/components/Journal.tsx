@@ -435,14 +435,31 @@ export function Journal() {
   }
 
   function listenForDeepLink() {
-    import("@tauri-apps/api/event").then(({ listen }) => {
-      listen<DeepLinkNavigate>("deep-link://navigate", async (e) => {
-        // Skip while editing so a warm-path navigation never yanks the
-        // textarea out from under the user mid-keystroke.
-        if (editingId()) return;
-        await navigateDeepLink(e.payload);
-      });
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    // Register cleanup synchronously (inside the component owner, before
+    // the dynamic import resolves) so the listener is torn down if
+    // Journal ever unmounts — matching the desktop's `onCleanup`. Journal
+    // is the mobile root today (singleton), so this is defensive, but it
+    // keeps the two clients consistent. If we unmount before `listen()`
+    // resolves, dispose the late-arriving handle right away.
+    onCleanup(() => {
+      disposed = true;
+      unlisten?.();
     });
+    import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<DeepLinkNavigate>("deep-link://navigate", async (e) => {
+          // Skip while editing so a warm-path navigation never yanks the
+          // textarea out from under the user mid-keystroke.
+          if (editingId()) return;
+          await navigateDeepLink(e.payload);
+        }),
+      )
+      .then((un) => {
+        if (disposed) un();
+        else unlisten = un;
+      });
   }
 
   async function loadTodayWithRetry() {
