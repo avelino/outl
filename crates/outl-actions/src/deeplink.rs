@@ -111,7 +111,7 @@ fn parse_page(payload: &str) -> Result<DeepLinkTarget, DeepLinkError> {
     // Validate each segment with the page model's own rule. `is_valid_slug`
     // rejects `/`, control chars, and `..`, so applying it per segment
     // both allows nesting and blocks path traversal.
-    if slug.split('/').all(|seg| is_valid_slug(seg)) {
+    if slug.split('/').all(is_valid_slug) {
         Ok(DeepLinkTarget::Page(slug.to_string()))
     } else {
         Err(DeepLinkError::InvalidSlug(slug.to_string()))
