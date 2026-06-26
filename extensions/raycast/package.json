@@ -1,13 +1,13 @@
 {
   "$schema": "https://www.raycast.com/schemas/extension.json",
   "name": "outl",
-  "title": "outl",
+  "title": "Outl",
   "description": "Quick capture, search, and navigate your outl outliner from Raycast. Thin client over the outl CLI.",
   "icon": "command-icon.png",
   "author": "avelino",
   "categories": [
     "Productivity",
-    "Notes"
+    "Documentation"
   ],
   "license": "MIT",
   "commands": [

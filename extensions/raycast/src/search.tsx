@@ -132,7 +132,7 @@ function HitActions(props: { link: string; title: string }): React.JSX.Element {
   return (
     <ActionPanel>
       <Action
-        title="Open in outl"
+        title="Open in Outl"
         icon={Icon.AppWindow}
         onAction={async () => {
           try {
