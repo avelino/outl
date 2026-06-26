@@ -11,17 +11,20 @@ name: Desktop
 # Two jobs split by what's actually platform-specific:
 #
 #   `check`  → runs on Linux (cheapest runner). Owns clippy, rust
-#              tests, Vitest, tsc, and the full build + tauri bundle
+#              tests, Vitest, tsc, and a debug-profile `tauri build`
 #              for Linux. Everything platform-agnostic happens here
 #              once instead of four times.
 #   `build`  → matrix of macOS arm64 / macOS x86_64 / Windows x86_64.
-#              Compiles + bundles the Tauri app. We don't repeat
-#              clippy/tests/vitest/tsc here because they don't care
-#              which OS they're on.
+#              Compiles the Tauri app on the dev profile. We don't
+#              repeat clippy/tests/vitest/tsc here because they don't
+#              care which OS they're on.
 #
-# Neither job uploads artefacts. `release.yml` owns artefact
-# distribution (signed dmg/msi for GA, beta builds on every main
-# push), and the PR-stage runs are just compile guards.
+# Both jobs build with `tauri build --debug` (dev profile) on purpose:
+# this is a "does it still compile + assemble?" guard, and the dev
+# profile is several times faster than the optimised release profile
+# (no LTO, codegen-units > 1). Neither job uploads artefacts. The
+# optimised, signed dmg/msi come from `release.yml`, gated on tag
+# pushes — that's the only place the release profile is paid for.
 
 on:
   push:
@@ -67,17 +70,16 @@ jobs:
     # `cargo test -p outl-desktop` links the desktop's test binaries with
     # tauri + webkit + wasmtime + iroh all in one image; since wasmtime 46
     # that link peaks past the runner's ~7 GB RAM and the OOM killer reaps
-    # the job (clippy compiles fine — only `cargo test`/`build` link the fat
+    # the job (clippy compiles fine — only `cargo test` links the fat
     # binaries, so it dies with no test output). `debuginfo=0` shrinks every
-    # linked object, and dropping LTO + the single codegen-unit on the PR
-    # release build cuts the linker's other peak; an unoptimised binary is
-    # fine for a compile-only check (release.yml still ships the optimised,
-    # stripped one). Revert when a future wasmtime slims the link or we move
-    # to a larger runner.
+    # linked object to cut the linker's peak. The whole job now builds on the
+    # dev profile (tests, clippy, and `tauri build --debug` share one
+    # unoptimised artefact set instead of compiling the workspace twice as
+    # dev + release), so there's no `CARGO_PROFILE_RELEASE_*` override to make
+    # here. The optimised, stripped release build lives in release.yml, gated
+    # on tag pushes.
     env:
       RUSTFLAGS: "-C debuginfo=0"
-      CARGO_PROFILE_RELEASE_LTO: "false"
-      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
     steps:
       - uses: actions/checkout@v4
 
@@ -131,28 +133,26 @@ jobs:
         working-directory: crates/outl-desktop
         run: bunx tsc --noEmit
 
-      # ── Platform-specific: build + bundle the Linux binary. Mirrors
-      # what the `build` matrix below does for macOS + Windows.
-
-      - name: Build (cargo)
-        run: cargo build -p outl-desktop --release
-        env:
-          # Keep doc warnings green so PRs don't regress rustdoc on
-          # a platform the maintainers don't run locally.
-          RUSTDOCFLAGS: "-D warnings"
-
-      - name: Tauri bundle
+      # ── Platform-specific: compile + assemble the Linux app. Mirrors
+      # what the `build` matrix below does for macOS + Windows. `tauri
+      # build` compiles the Rust binary itself, so there's no separate
+      # `cargo build` step — that only duplicated the link. `--debug`
+      # uses the dev profile (fast, unoptimised); `--no-bundle` (a
+      # tauri-cli flag, before any `--`) skips the dmg/AppImage/msi
+      # packagers we don't sign on PRs. The signed, optimised artefacts
+      # come from release.yml on tag pushes.
+      - name: Tauri build (debug, no bundle)
         working-directory: crates/outl-desktop
-        # `--no-bundle` is a tauri-cli flag, not a cargo flag, so it
-        # rides BEFORE any `--` separator. `--no-bundle` keeps CI
-        # fast (skip dmg/msi/AppImage packagers we don't sign on PRs
-        # anyway). `release.yml` is the workflow that produces the
-        # actual dmg / msi artefacts for distribution.
-        run: bun run tauri build --no-bundle
+        run: bun run tauri build --debug --no-bundle
 
   build:
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
+    # `tauri build --debug` uses the dev profile; `debuginfo=0` keeps the
+    # link cheap and the target dir small on every OS. The optimised
+    # release profile is paid for only on tag pushes, in release.yml.
+    env:
+      RUSTFLAGS: "-C debuginfo=0"
     strategy:
       fail-fast: false
       matrix:
@@ -200,16 +200,10 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
 
-      - name: Build (cargo)
-        run: cargo build -p outl-desktop --release
-        env:
-          RUSTDOCFLAGS: "-D warnings"
-
-      - name: Tauri bundle
+      # `tauri build` compiles the Rust binary itself — no separate
+      # `cargo build` step, which only duplicated the link. `--debug`
+      # = dev profile (fast); `--no-bundle` skips the packagers.
+      # release.yml drops both flags and ships the signed dmg/msi.
+      - name: Tauri build (debug, no bundle)
         working-directory: crates/outl-desktop
-        # See note on the `check` job. `--no-bundle` is a tauri flag,
-        # not a cargo flag. The release.yml workflow drops the flag
-        # and produces the actual dmg / msi artefacts for
-        # distribution; this workflow is the PR-stage compile guard
-        # only, so no artefact upload here.
-        run: bun run tauri build --no-bundle
+        run: bun run tauri build --debug --no-bundle
