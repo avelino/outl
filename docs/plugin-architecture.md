@@ -13,8 +13,13 @@ The answer is a describe → apply loop on top of the op log.
 A plugin never touches `outl-core`, never holds a mutable workspace, and never edits a `.md` file.
 Every mutation it asks for travels the same path:
 
-```
-plugin JS  →  host API (ctx.*)  →  HostIntent  →  outl-actions  →  Workspace::apply  →  op log
+```mermaid
+flowchart LR
+    A[plugin JS] --> B["host API (ctx.*)"]
+    B --> C[HostIntent]
+    C --> D[outl-actions]
+    D --> E["Workspace::apply"]
+    E --> F[op log]
 ```
 
 The op log stays the source of truth (root invariant 1), the markdown stays 100% clean (root invariant 2), and every op a plugin produces is stamped `actor = "plugin:<id>@<device>"` so the log doubles as a per-plugin audit trail.
@@ -27,22 +32,19 @@ A plugin is, structurally, a thing that **reads a snapshot and proposes ops** �
 Each layer below only depends on the ones above it.
 Plugins sit at the bottom and reach the tree only through the layers in between — never directly.
 
+```mermaid
+flowchart TB
+    clients["clients<br/>TUI · desktop · mobile · CLI<br/><i>each owns a PluginHost and drives it</i>"]
+    plugins["outl-plugins<br/>PluginEngine (Boa) · PluginHost · loader<br/>ReadModel / HostIntent · permission gating<br/><i>describe→apply runtime</i>"]
+    actions["outl-actions<br/>shared mutations: block::* · page::* · todo::*<br/><i>every client + the host call this</i>"]
+    core["outl-core<br/>tree CRDT · op log · Workspace<br/><i>source of truth</i>"]
+    clients -->|depends on| plugins
+    plugins -->|depends on| actions
+    actions -->|depends on| core
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  outl-core        tree CRDT · op log · Workspace                  │  ← source of truth
-├──────────────────────────────────────────────────────────────────┤
-│  outl-actions     shared mutations (block::*, page::*, todo::*)   │  ← every client + the host call this
-├──────────────────────────────────────────────────────────────────┤
-│  outl-plugins     PluginEngine (Boa) · PluginHost · loader        │  ← describe→apply runtime
-│                   ReadModel / HostIntent · permission gating      │
-├──────────────────────────────────────────────────────────────────┤
-│  clients          TUI · desktop · mobile · CLI                    │  ← each declares its capabilities,
-│                   (each owns a PluginHost and drives it)          │     drives the host, renders results
-└──────────────────────────────────────────────────────────────────┘
 
-        a plugin's reach:  JS  →  ctx.*  →  HostIntent  →  outl-actions  →  Workspace::apply
-        a plugin's reach does NOT include:  outl-core directly · the .md files · the sidecar
-```
+A plugin's reach is `JS → ctx.* → HostIntent → outl-actions → Workspace::apply`.
+It does **not** include `outl-core` directly, the `.md` files, or the sidecar.
 
 `outl-plugins` is the single owner of the runtime; every client wraps it the same way.
 The host-API methods are thin wrappers over `outl-actions` — the crate re-implements no block or page logic of its own.
@@ -66,29 +68,12 @@ A "turn" is one unit of plugin work — running a command, or dispatching one ap
 3. **Apply.**
    When the handler returns, the host **drains the buffer** and applies each intent through `outl-actions` → `Workspace::apply` → the op log — one at a time, each gated on the plugin's approved permissions.
 
-```
-            turn begins
-                │
-   ┌────────────▼─────────────┐
-   │ host: build ReadModel    │   read-only snapshot of blocks + pages + config
-   │ (blocks, pages, config)  │
-   └────────────┬─────────────┘
-                │  hand snapshot to engine
-   ┌────────────▼─────────────┐
-   │ JS-land (Boa)            │
-   │  ctx.blocks.query(...) ──┼──► reads from the snapshot
-   │  ctx.blocks.move(...) ───┼──► pushes a HostIntent onto a buffer
-   │  ctx.ui.notify(...) ─────┼──► pushes a notification
-   │  (handler returns)       │
-   └────────────┬─────────────┘
-                │  host drains the buffer
-   ┌────────────▼─────────────┐
-   │ for each HostIntent:     │
-   │   permission.check()? ───┼──► denied → recorded as an error, skipped (no crash)
-   │   outl-actions::…  ──────┼──► Workspace::apply → op log entry (plugin actor stamp)
-   └────────────┬─────────────┘
-                │
-            turn ends → TurnOutput { applied, logs, notifications, errors }
+```mermaid
+flowchart TB
+    start([turn begins]) --> build["host: build ReadModel<br/>read-only snapshot of blocks + pages + config"]
+    build -->|hand snapshot to engine| js["JS-land (Boa)<br/>ctx.blocks.query(...) → reads from the snapshot<br/>ctx.blocks.move(...) → pushes a HostIntent onto a buffer<br/>ctx.ui.notify(...) → pushes a notification<br/>handler returns"]
+    js -->|host drains the buffer| drain["for each HostIntent:<br/>permission.check()? → denied: recorded error, skipped (no crash)<br/>outl-actions::… → Workspace::apply → op log entry (plugin actor stamp)"]
+    drain --> done([turn ends → TurnOutput: applied, logs, notifications, errors])
 ```
 
 Plugin handlers live in JS-land on `globalThis.__OUTL` (the `commands` map and the `opHooks` list).
