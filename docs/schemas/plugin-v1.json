@@ -1,0 +1,248 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://outl.app/schemas/plugin-v1.json",
+  "title": "outl plugin manifest",
+  "description": "Schema for plugin.json — the contract between an outl plugin and the host. Validated at install time and on every load.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "version", "api", "main"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional pointer back to this schema, for editor autocomplete."
+    },
+    "id": {
+      "type": "string",
+      "description": "Stable reverse-DNS identity. Never changes across versions. Used as the install directory name and the op-log actor stamp (plugin:<id>@<device>).",
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$",
+      "examples": ["com.avelino.todo-archiver", "app.outl.mermaid"]
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable display name.",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "version": {
+      "type": "string",
+      "description": "Plugin version (semver). Resolved from the install tag and frozen in installed.json.",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+      "examples": ["1.2.0", "0.3.1-beta.1"]
+    },
+    "api": {
+      "type": "string",
+      "description": "Plugin API range this plugin targets (semver range against the outl plugin API, NOT the binary version). A host whose plugin API major does not satisfy this range refuses to load the plugin.",
+      "examples": ["^1.0", "~1.2", "1.x"]
+    },
+    "main": {
+      "type": "string",
+      "description": "Path to the bundled entry file, relative to the plugin root. A single self-contained JS file — no node_modules, no runtime resolution.",
+      "pattern": "^[^/].*\\.js$",
+      "examples": ["index.js"]
+    },
+    "engines": {
+      "type": "object",
+      "description": "Minimum host binary requirements.",
+      "additionalProperties": false,
+      "properties": {
+        "outl": {
+          "type": "string",
+          "description": "Minimum outl binary version (semver range). Independent of `api`: this tracks the binary, `api` tracks the plugin API surface.",
+          "examples": [">=0.8.0", "^0.8"]
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "description": "What the plugin plugs into. The loader intersects this with what the current client implements; a capability this client cannot honor loads partially with a warning, never a crash.",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "op-hook",
+          "slash-command",
+          "keybinding",
+          "config-schema",
+          "ui-render",
+          "content-transformer:text",
+          "content-transformer:rich",
+          "query-provider",
+          "sync-transport",
+          "toolbar-button"
+        ]
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "description": "Capabilities the plugin requests against the host. Approved on install, frozen in the lockfile; an update asking for more triggers re-approval. A bare `network:*` is rejected — network must be scoped to a domain.",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "anyOf": [
+          {
+            "enum": [
+              "read-page",
+              "write-page",
+              "read-op-log",
+              "submit-op",
+              "storage:local"
+            ]
+          },
+          {
+            "description": "Network access scoped to one domain. `network:api.openai.com` (exact) or `network:*.openai.com` (leading-label wildcard). A bare `network:*` or a mid-string wildcard is rejected.",
+            "type": "string",
+            "pattern": "^network:(\\*\\.)?([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$"
+          }
+        ]
+      }
+    },
+    "contributes": {
+      "type": "object",
+      "description": "Static contributions the host wires up without running the plugin.",
+      "additionalProperties": false,
+      "properties": {
+        "commands": {
+          "type": "array",
+          "description": "Commands the plugin handles, surfaced in the slash menu / command palette and bindable to a chord.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "title"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Command id, unique within the plugin. The handler is registered at runtime via ctx.commands.register(id, ...).",
+                "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+              },
+              "title": {
+                "type": "string",
+                "description": "Label shown in the slash menu / palette.",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string",
+                "description": "Optional longer description."
+              }
+            }
+          }
+        },
+        "keybindings": {
+          "type": "array",
+          "description": "Default chord bindings for the plugin's commands. They resolve through Action::PluginCommand in outl-shortcuts; the user can override them.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["command", "key"],
+            "properties": {
+              "command": {
+                "type": "string",
+                "description": "id of a command declared in contributes.commands."
+              },
+              "key": {
+                "type": "string",
+                "description": "Chord, e.g. `Ctrl+Shift+A`. (Declarable today; chord dispatch is not yet wired in any client.)",
+                "minLength": 1
+              },
+              "when": {
+                "type": "string",
+                "description": "Optional client scope: `tui`, `desktop`, or `mobile`."
+              }
+            }
+          }
+        },
+        "configSchema": {
+          "type": "string",
+          "description": "Path, relative to the plugin root, to a JSON Schema file (draft 2020-12) describing this plugin's user-editable config, e.g. `config.schema.json`. The host renders a form from it and validates the value before handing it to ctx.config.get(). Day-zero accepts a path only, never an inline schema.",
+          "pattern": "^[^/].*\\.json$"
+        },
+        "toolbar": {
+          "type": "array",
+          "description": "Toolbar buttons the plugin contributes to GUI clients' chrome (capability `toolbar-button`). Tapping a button runs the referenced command.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["command", "icon"],
+            "properties": {
+              "command": {
+                "type": "string",
+                "description": "id of a command declared in contributes.commands."
+              },
+              "icon": {
+                "type": "string",
+                "description": "Short glyph/emoji shown on the button.",
+                "minLength": 1
+              },
+              "title": {
+                "type": "string",
+                "description": "Optional tooltip / accessible label."
+              },
+              "when": {
+                "type": "string",
+                "description": "Optional client scope: `desktop` or `mobile`."
+              }
+            }
+          }
+        },
+        "transformers": {
+          "type": "array",
+          "description": "Content transformers: code-fence languages the plugin renders into a descriptor each client draws (capabilities `content-transformer:text` / `:rich`).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["lang"],
+            "properties": {
+              "lang": {
+                "type": "string",
+                "description": "Code-fence language this transformer handles (e.g. `mermaid`).",
+                "minLength": 1
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["text", "rich"],
+                "default": "text",
+                "description": "`text` (rendered on every client) or `rich` (HTML in a sandboxed iframe, GUI only)."
+              }
+            }
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Non-load-bearing descriptive fields. Surfaced in discovery UI and the registry.",
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "Short one-line description."
+        },
+        "author": {
+          "type": "string"
+        },
+        "license": {
+          "type": "string",
+          "description": "SPDX license identifier, e.g. `MIT`."
+        },
+        "repo": {
+          "type": "string",
+          "description": "Source repository URL.",
+          "format": "uri"
+        },
+        "funding": {
+          "type": "string",
+          "description": "Funding / sponsor URL.",
+          "format": "uri"
+        },
+        "locales": {
+          "type": "array",
+          "description": "BCP-47 locale tags the plugin ships strings for.",
+          "items": { "type": "string" }
+        },
+        "category": {
+          "type": "string",
+          "description": "Free-form category used by discovery, e.g. `productivity`, `export`."
+        }
+      }
+    }
+  }
+}

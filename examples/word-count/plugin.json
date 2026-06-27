@@ -1,0 +1,21 @@
+{
+  "$schema": "https://outl.app/schemas/plugin-v1.json",
+  "id": "app.outl.examples.word-count",
+  "name": "Word Count",
+  "version": "1.0.0",
+  "api": "^1.0",
+  "engines": {
+    "outl": ">=0.7.0"
+  },
+  "main": "index.js",
+  "description": "Counts the words in a block as you type and toasts when it crosses a milestone (50/100/250/500). A minimal op-hook demo.",
+  "author": "Avelino <avelinorun@gmail.com>",
+  "license": "MIT",
+  "category": "writing",
+  "capabilities": [
+    "op-hook"
+  ],
+  "permissions": [
+    "read-op-log"
+  ]
+}

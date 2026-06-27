@@ -16,7 +16,8 @@ import {
 import type { PageView } from "@outl/shared/api/types";
 
 import { ParseWarningsBanner } from "@outl/shared/warnings";
-import { runCodeBlock } from "../lib/api";
+import { pluginRun, pluginSyncHooks, runCodeBlock } from "../lib/api";
+import { playPluginViews } from "../lib/plugin-views";
 import { visualRangeSet } from "../lib/outline-walk";
 import { appState, setAppState } from "../lib/store";
 import { BlockRow, type BlockCallbacks } from "./BlockRow";
@@ -162,12 +163,39 @@ export function OutlineView() {
       setAppState("selectedBlockId", id);
       setEditingId(id);
     },
+    onRunPluginCommand: async (pluginId, commandId) => {
+      // Same dispatch the `⧉` PluginPalette runs: surface the command's
+      // notifications / errors on the status line, re-render from the
+      // returned view, and play any `ui-render` overlays.
+      const reply = await handleError(
+        pluginRun(pluginId, commandId, appState.page?.id ?? null),
+      );
+      if (!reply) return;
+      for (const note of reply.notifications) setAppState("lastError", note);
+      for (const err of reply.errors) {
+        setAppState("lastError", `plugin: ${err}`);
+      }
+      if (reply.view) applyView(reply.view);
+      playPluginViews(reply.views);
+    },
     onCommit: async (id, text) => {
       const pageId = appState.page?.id;
       if (!pageId) return;
       const view = await handleError(editBlock(pageId, id, text));
       if (view) applyView(view);
       setEditingId(null);
+      // Single post-mutation point for plugin `onOp` hooks. `sync_hooks`
+      // dispatches EVERY op since the host's last sweep (not just this
+      // edit), so one call after a commit catches up structural ops
+      // (indent / move / delete) committed since the previous commit too
+      // — mirrors the TUI's once-per-tick sweep. Best-effort; the lock is
+      // already released here so the plugin thread can take it.
+      const hooked = await handleError(pluginSyncHooks(pageId));
+      if (hooked?.view) applyView(hooked.view);
+      // Confetti path: a `ui-render` plugin (op-hook + ui-render) emits
+      // HTML from its `onOp` hook on e.g. a DONE toggle. Play it as a
+      // sandboxed iframe overlay even when nothing was re-rendered.
+      if (hooked) playPluginViews(hooked.views);
     },
     onEnter: async (id, text) => {
       const pageId = appState.page?.id;

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://outl.app/schemas/plugin-v1.json",
+  "id": "app.outl.examples.confetti",
+  "name": "Confetti on Done",
+  "version": "1.0.0",
+  "api": "^1.0",
+  "engines": {
+    "outl": ">=0.7.0"
+  },
+  "main": "index.js",
+  "description": "Throws confetti every time you mark a block DONE. A tiny visual demo of the op-hook + ui.effect surface.",
+  "author": "Avelino",
+  "license": "MIT",
+  "category": "fun",
+  "capabilities": [
+    "op-hook",
+    "ui-render"
+  ],
+  "permissions": [
+    "read-op-log"
+  ]
+}

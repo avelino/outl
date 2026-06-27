@@ -18,7 +18,7 @@ use outl_core::workspace::Workspace;
 use outl_exec::RuntimeRegistry;
 use outl_md::index::WorkspaceIndex;
 use outl_md::parse::{OutlineNode, ParsedPage};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
@@ -193,16 +193,40 @@ pub(crate) enum Overlay {
 }
 
 /// One entry in the slash menu.
+///
+/// Built-in commands carry names from the
+/// [`crate::commands::CommandRegistry`]; plugin-contributed commands
+/// carry owned strings plus a [`SlashOrigin::Plugin`] tag so
+/// `accept_slash` routes them to the `PluginHost` instead of the
+/// registry. Both kinds share this one filterable list.
 #[derive(Debug, Clone)]
 pub(crate) struct SlashCommand {
-    /// Name as typed: `prop`, `search`, `run`, ...
-    pub(crate) name: &'static str,
+    /// Name as typed / displayed: `prop`, `search`, `run`, or a
+    /// plugin command's title.
+    pub(crate) name: String,
     /// One-liner shown next to the name.
-    pub(crate) description: &'static str,
+    pub(crate) description: String,
     /// When true, accepting opens the vim command palette pre-filled
     /// with `<name> ` so the user can supply arguments
     /// (`prop priority high`). When false the command runs immediately.
+    /// Always false for plugin commands (no arg surface in d0).
     pub(crate) needs_args: bool,
+    /// Where this command runs when accepted.
+    pub(crate) origin: SlashOrigin,
+}
+
+/// Dispatch target for an accepted slash command.
+#[derive(Debug, Clone)]
+pub(crate) enum SlashOrigin {
+    /// A shipped command in the [`crate::commands::CommandRegistry`],
+    /// dispatched by `name`.
+    Builtin,
+    /// A plugin-contributed command, dispatched to the `PluginHost` by
+    /// `(plugin_id, command_id)`.
+    Plugin {
+        plugin_id: String,
+        command_id: String,
+    },
 }
 
 /// State of the slash overlay.
@@ -400,6 +424,14 @@ pub(crate) struct App {
     /// — both are armed by a single keystroke and the next key
     /// resolves exactly one of them.
     pub(crate) pending_input_op: Option<PendingInputOp>,
+    /// First chord of a two-chord **plugin** keybinding, buffered while
+    /// we wait on the second keypress. Separate from `pending_chord`
+    /// (which is the native vim chord accumulator) so plugin sequences
+    /// like `Ctrl+T A` never interfere with — and are never shadowed
+    /// by — the built-in `d`/`g`/`y`/`z` chords. Only ever set when the
+    /// first chord is a strict prefix of some registered plugin binding
+    /// and matches no native action; see `input/normal.rs`.
+    pub(crate) pending_plugin_chord: Option<outl_shortcuts::Chord>,
     pub(crate) status: String,
 
     /// Last Visual range, captured every time the user leaves Visual
@@ -638,7 +670,43 @@ pub(crate) struct App {
 
     /// Registered slash / palette commands (`prop`, `search`, …).
     /// Built once at startup with the shipped commands; plugins
-    /// (future) will append to it. Driving registry for both `/`
+    /// contribute their commands through the separate `plugin_host`
+    /// (see `slash_candidates`). Driving registry for both `/`
     /// and `:` overlays.
     pub(crate) command_registry: crate::commands::CommandRegistry,
+
+    /// JS plugin runtime, loaded from `<root>/.outl/plugins/` at boot.
+    ///
+    /// `None` only on the rare path where the host couldn't be built at
+    /// all; a host that simply found no plugins is still `Some` and
+    /// empty. Plugins are **best-effort**: a load failure never blocks
+    /// the TUI. The host contributes slash commands (concatenated into
+    /// the slash menu) and runs `onOp` hooks after every mutation via
+    /// [`App::run_plugin_op_hooks`].
+    ///
+    /// Not `Send` (the Boa context is single-thread), which is fine —
+    /// the TUI is single-threaded on the main loop, so the host lives
+    /// directly in `App` with no `Arc`/`Mutex`.
+    pub(crate) plugin_host: Option<outl_plugins::PluginHost>,
+
+    /// Pre-computed content-transformer output for the current view,
+    /// keyed by block `NodeId`. A block whose text is a single code
+    /// fence (`` ```<lang> `` … `` ``` ``) whose `lang` a loaded plugin
+    /// claims as a `text` transformer gets its body run through
+    /// [`outl_plugins::PluginHost::transform_block`] **at load time**
+    /// (in `recompute_transforms`), and the resulting text/markdown is
+    /// stashed here.
+    ///
+    /// Why pre-compute: `transform_block` is `&mut self` (it runs the
+    /// Boa engine) and the outline render walk only has `&App`, so the
+    /// transform cannot happen during render. It would also be wrong to
+    /// run JS once per frame. This map turns the render path into a pure
+    /// `HashMap` lookup keyed by `id_by_flat[cursor]`.
+    ///
+    /// Only `kind == "text"` results land here — `rich` (HTML for a GUI
+    /// iframe) has no meaning in a terminal and is ignored. Rebuilt
+    /// whenever the AST is (every `load_current_no_autorun`); a block
+    /// being edited (cursor on it) renders raw regardless of an entry
+    /// here, so the user always sees and edits the real fence source.
+    pub(crate) transform_cache: HashMap<NodeId, String>,
 }

@@ -233,13 +233,23 @@ CLI exit code is `1` in that case; MCP returns the payload via the normal envelo
 | `outl reconcile`                             | —                       |
 | `outl mcp serve [--workspace=…]`             | —                       |
 | `outl peer pair\|list\|remove\|status`        | —                       |
+| `outl plugin list\|install\|run\|enable\|disable` | —                   |
 | `outl sync`                                  | —                       |
 | `outl workspace info [--json]`               | `outl_workspace_info`   |
 | `outl import logseq <src> <dst>`             | —                       |
 | `outl import obsidian <vault> <dst>`         | —                       |
 | `outl import roam <backup.json> <dst>`       | —                       |
 
-`init`, `serve`, `reconcile`, `import`, `mcp serve`, `peer`, and `sync` are CLI-only on purpose — they're either interactive, long-running, or bootstrap commands that don't fit a tool-call shape.
+`init`, `serve`, `reconcile`, `import`, `mcp serve`, `peer`, `plugin`, and `sync` are CLI-only on purpose — they're either interactive, long-running, or bootstrap commands that don't fit a tool-call shape.
+
+`outl plugin` manages the workspace's JS plugins (under `<workspace>/.outl/plugins/`), wrapping `outl-plugins`.
+`list` loads every installed plugin and prints each one's version, enabled state, and the slash commands it contributes.
+`install <DIR>` takes a local directory holding a `plugin.json` plus its bundle (the installed shape).
+It prints the permissions the manifest requests and asks for approval before copying the plugin in and freezing those permissions in the lockfile.
+Pass `--yes` to approve non-interactively (required when stdin is not a TTY).
+`github:user/repo` sources are not wired yet; clone the repo and point at the local checkout.
+`run <PLUGIN_ID> <COMMAND_ID>` runs a contributed command and re-renders every page's `.md` afterwards, because the op log is the source of truth and the files are a projection.
+`enable <ID>` / `disable <ID>` flip the plugin's `enabled` flag in the lockfile without uninstalling it.
 
 `outl peer pair` takes an optional `--name <NAME>` — the label this device advertises to the other (shown in the peer's `outl peer list`).
 It defaults to the machine hostname; the GUI clients default it to "desktop" / "mobile" and let the user edit it before pairing.

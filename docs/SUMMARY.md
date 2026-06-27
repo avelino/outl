@@ -24,6 +24,11 @@
 * [CLI](cli.md)
 * [MCP](mcp.md)
 * [MCP recipes (skills & commands)](mcp-recipes.md)
+* [Plugins](plugins.md)
+* [Build your first plugin](plugin-tutorial.md)
+* [Plugin API](plugin-api.md)
+* [Plugin architecture](plugin-architecture.md)
+* [Plugin examples](plugin-examples.md)
 
 ## Format
 

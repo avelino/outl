@@ -7,7 +7,7 @@
 
 use crate::state::{
     hit_count, App, CommandState, ErrorState, LastSearch, Overlay, QuickSwitchState, SearchHit,
-    SearchState, SlashCommand, SlashState, SwitchCandidate, SwitchKind, View,
+    SearchState, SlashCommand, SlashOrigin, SlashState, SwitchCandidate, SwitchKind, View,
 };
 use anyhow::Result;
 use outl_md::parse::OutlineNode;
@@ -339,20 +339,71 @@ impl App {
     /// the menu (one extra keystroke, full discoverability and
     /// future plugin commands appear here automatically).
     pub(crate) fn open_slash(&mut self) {
-        let candidates = self
-            .command_registry
-            .all()
-            .map(|c| SlashCommand {
-                name: c.name(),
-                description: c.description(),
-                needs_args: c.needs_args(),
-            })
-            .collect();
+        let candidates = self.slash_candidates();
         self.overlay = Some(Overlay::Slash(SlashState {
             query: String::new(),
             candidates,
             selected: 0,
         }));
+    }
+
+    /// The full slash-menu universe: every shipped command from the
+    /// registry plus every command a loaded plugin contributes (whose
+    /// `slash-command` capability this client grants). Both live in one
+    /// filterable list so a plugin command is discoverable next to
+    /// `/search` with no second surface to keep in sync.
+    fn slash_candidates(&self) -> Vec<SlashCommand> {
+        let mut out: Vec<SlashCommand> = self
+            .command_registry
+            .all()
+            .map(|c| SlashCommand {
+                name: c.name().to_string(),
+                description: c.description().to_string(),
+                needs_args: c.needs_args(),
+                origin: SlashOrigin::Builtin,
+            })
+            .collect();
+        if let Some(host) = &self.plugin_host {
+            let mut seen = std::collections::HashSet::new();
+            for cmd in host.commands() {
+                seen.insert((cmd.plugin_id.clone(), cmd.command_id.clone()));
+                // `name` is what the user types against and what shows in
+                // the list, so it must be the command **id** (`stats`), not
+                // the human title — that mirrors the CLI (`/stats`) and the
+                // built-ins (`iso-date-today`), and a `/stats` query then
+                // fuzzy-matches the id directly instead of ranking far below
+                // the date built-ins (a title like "Workspace statistics"
+                // scores ~42 on "sta" and falls off-screen; the id scores
+                // ~150 and lands on top). The title moves to the description.
+                out.push(SlashCommand {
+                    name: cmd.command_id.clone(),
+                    description: format!("{} · plugin", cmd.title),
+                    needs_args: false,
+                    origin: SlashOrigin::Plugin {
+                        plugin_id: cmd.plugin_id,
+                        command_id: cmd.command_id,
+                    },
+                });
+            }
+            // A toolbar button is a runnable command; the terminal has no chrome
+            // bar, so it lands in the slash menu too. Skip ones already surfaced
+            // as a slash command (a plugin can declare both for the same id).
+            for tb in host.toolbar_buttons("tui") {
+                if seen.insert((tb.plugin_id.clone(), tb.command_id.clone())) {
+                    let label = tb.title.unwrap_or_else(|| tb.command_id.clone());
+                    out.push(SlashCommand {
+                        name: format!("{} {label}", tb.icon),
+                        description: format!("plugin · {}", tb.plugin_id),
+                        needs_args: false,
+                        origin: SlashOrigin::Plugin {
+                            plugin_id: tb.plugin_id,
+                            command_id: tb.command_id,
+                        },
+                    });
+                }
+            }
+        }
+        out
     }
 
     /// Recompute the slash overlay's candidate list against the
@@ -363,22 +414,17 @@ impl App {
         };
         let query = state.query.clone();
         let mut filtered: Vec<(i32, SlashCommand)> = self
-            .command_registry
-            .all()
-            .filter_map(|c| {
-                let entry = SlashCommand {
-                    name: c.name(),
-                    description: c.description(),
-                    needs_args: c.needs_args(),
-                };
+            .slash_candidates()
+            .into_iter()
+            .filter_map(|entry| {
                 if query.is_empty() {
                     Some((0, entry))
                 } else {
-                    crate::fuzzy::fuzzy_score(&query, c.name()).map(|score| (score, entry))
+                    crate::fuzzy::fuzzy_score(&query, &entry.name).map(|score| (score, entry))
                 }
             })
             .collect();
-        filtered.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.name.cmp(b.1.name)));
+        filtered.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.name.cmp(&b.1.name)));
         if let Some(Overlay::Slash(ref mut s)) = self.overlay {
             s.candidates = filtered.into_iter().map(|(_, c)| c).collect();
             s.selected = s.selected.min(s.candidates.len().saturating_sub(1));
@@ -397,14 +443,25 @@ impl App {
         let Some(cmd) = pick else {
             return Ok(false);
         };
-        if cmd.needs_args {
-            self.overlay = Some(Overlay::Command(CommandState {
-                buffer: format!("{} ", cmd.name),
-            }));
-            return Ok(false);
+        match cmd.origin {
+            SlashOrigin::Plugin {
+                plugin_id,
+                command_id,
+            } => {
+                self.run_plugin_command(&plugin_id, &command_id);
+                Ok(false)
+            }
+            SlashOrigin::Builtin => {
+                if cmd.needs_args {
+                    self.overlay = Some(Overlay::Command(CommandState {
+                        buffer: format!("{} ", cmd.name),
+                    }));
+                    return Ok(false);
+                }
+                let registry = self.command_registry.clone();
+                registry.dispatch(self, &cmd.name)
+            }
         }
-        let registry = self.command_registry.clone();
-        registry.dispatch(self, cmd.name)
     }
 
     pub(crate) fn open_command(&mut self) {

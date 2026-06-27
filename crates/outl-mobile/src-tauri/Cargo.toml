@@ -23,6 +23,11 @@ tempfile = { workspace = true }
 outl-core = { workspace = true }
 outl-md = { workspace = true }
 outl-actions = { workspace = true }
+# JS plugin host (Boa). Default feature `js` (the only runtime that ships on
+# iOS — no JIT, interpreted) compiles fine here. The host is `!Send` (embeds a
+# Boa `Context`), so it runs on a dedicated thread behind `PluginService` —
+# never in the `Send + Sync` `AppState`. See `plugin_service.rs`.
+outl-plugins = { workspace = true, features = ["registry"] }
 outl-sync-iroh = { workspace = true }
 outl-config = { workspace = true }
 dirs = { workspace = true }

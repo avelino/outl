@@ -18,6 +18,7 @@ path = "src/main.rs"
 outl-core = { workspace = true }
 outl-md = { workspace = true }
 outl-actions = { workspace = true }
+outl-plugins = { workspace = true, features = ["registry"] }
 outl-sync-iroh = { workspace = true }
 outl-config = { workspace = true }
 outl-tui = { workspace = true }
@@ -36,9 +37,12 @@ chrono = { workspace = true }
 ulid = { workspace = true }
 parking_lot = { workspace = true }
 dirs = { workspace = true }
+# `outl plugin install github:…` clones into a temp dir and resolves the
+# newest semver tag.
+tempfile = { workspace = true }
+semver = { workspace = true }
 # Only `outl peer pair` needs a runtime — to drive the async iroh pairing
 # handshake from this otherwise-sync binary. Minimal multi-thread feature set.
 tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [dev-dependencies]
-tempfile = { workspace = true }

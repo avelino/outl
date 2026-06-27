@@ -8,7 +8,9 @@
       "crates/outl-frontend-shared",
       "crates/outl-mobile",
       "crates/outl-desktop",
-      "extensions/raycast"
+      "extensions/raycast",
+      "plugin-sdk",
+      "examples/*"
     ],
     "catalog": {
       "@tailwindcss/vite": "^4.3.1",

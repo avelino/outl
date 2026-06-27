@@ -133,6 +133,11 @@ enum Command {
         #[command(subcommand)]
         sub: cmd::page::PageCommand,
     },
+    /// Manage workspace plugins (list / install / run / enable / disable).
+    Plugin {
+        #[command(subcommand)]
+        sub: cmd::plugin::PluginCommand,
+    },
     /// Block-level operations.
     Block {
         #[command(subcommand)]
@@ -273,6 +278,10 @@ fn main() -> Result<()> {
         Some(Command::Block { sub }) => {
             let p = resolve_path(cli.workspace.as_ref(), None)?;
             std::process::exit(cmd::block::run(&sub, &p));
+        }
+        Some(Command::Plugin { sub }) => {
+            let p = resolve_path(cli.workspace.as_ref(), None)?;
+            cmd::plugin::run(&sub, &p)
         }
         Some(Command::Daily { sub }) => {
             let p = resolve_path(cli.workspace.as_ref(), None)?;

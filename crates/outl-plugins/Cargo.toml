@@ -1,0 +1,57 @@
+[package]
+name = "outl-plugins"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Plugin system for outl: manifest, capability/permission model, JS runtime, and host API shared by every client."
+
+[dependencies]
+outl-core.workspace = true
+outl-actions.workspace = true
+outl-shortcuts.workspace = true
+ulid.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+semver.workspace = true
+sha2.workspace = true
+hex.workspace = true
+chrono.workspace = true
+
+# JS engine. Boa is pure-Rust (runs on iOS, no JIT) and is already the
+# code-block engine in outl-exec; the plugin runtime reuses it behind the
+# `PluginEngine` trait. Optional so a "no-JS" build (or a future QuickJS
+# swap) can drop it.
+boa_engine = { version = "0.21", optional = true }
+
+# Blocking HTTP for `ctx.net.fetch`. rustls (never OpenSSL) per the workspace
+# TLS policy. The fetch runs on the plugin's own thread (GUI) or inline
+# (TUI/CLI), so blocking is fine; a hard timeout caps the worst case.
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "rustls-tls",
+], optional = true }
+
+# Used by `registry::install_official` to stage a downloaded bundle before
+# handing it to `install_from_dir`.
+tempfile = { workspace = true, optional = true }
+
+[features]
+default = ["js"]
+# The Boa-backed plugin engine. Without it the crate still parses manifests,
+# gates permissions, and manages the lockfile — it just can't run plugin code.
+js = ["dep:boa_engine", "dep:reqwest"]
+# HTTP fetch of the static plugin registry (plugins.outl.app/registry.json).
+# Separate from `js`: a client can browse/search the registry without the
+# engine. Registry parsing + search are always available; only the network
+# fetch needs this.
+registry = ["dep:reqwest", "dep:tempfile"]
+
+[dev-dependencies]
+tempfile.workspace = true

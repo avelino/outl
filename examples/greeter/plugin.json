@@ -1,0 +1,29 @@
+{
+  "$schema": "https://outl.app/schemas/plugin-v1.json",
+  "id": "app.outl.examples.greeter",
+  "name": "Greeter",
+  "version": "1.0.0",
+  "api": "^1.0",
+  "engines": {
+    "outl": ">=0.7.0"
+  },
+  "main": "index.js",
+  "description": "A `greet` slash command that toasts a friendly hello using a user-configurable name. A minimal config-schema demo.",
+  "author": "Avelino <avelinorun@gmail.com>",
+  "license": "MIT",
+  "category": "fun",
+  "capabilities": [
+    "config-schema",
+    "slash-command"
+  ],
+  "permissions": [],
+  "contributes": {
+    "commands": [
+      {
+        "id": "greet",
+        "title": "Greet me"
+      }
+    ],
+    "configSchema": "config.schema.json"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "outl-page-pulse",
+  "version": "1.0.0",
+  "description": "Example outl plugin: count blocks, TODOs, and DONEs via a toolbar button.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --format=iife --platform=neutral --target=es2022 --outfile=index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@outl/plugin-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "typescript": "^6.0.3"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://outl.app/schemas/plugin-v1.json",
+  "id": "app.outl.examples.workspace-stats",
+  "name": "Workspace Stats",
+  "version": "1.0.0",
+  "api": "^1.0",
+  "engines": {
+    "outl": ">=0.7.0"
+  },
+  "main": "index.js",
+  "description": "A `stats` slash command that counts blocks, TODOs, DONEs and pages across the workspace and toasts the summary. A read-only slash-command demo.",
+  "author": "Avelino <avelinorun@gmail.com>",
+  "license": "MIT",
+  "category": "productivity",
+  "capabilities": [
+    "slash-command"
+  ],
+  "permissions": [
+    "read-page"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "stats",
+        "title": "Workspace statistics"
+      }
+    ]
+  }
+}

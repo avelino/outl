@@ -145,6 +145,10 @@ impl App {
             }
         }
         self.recompute_hidden_by_collapse();
+        // Re-run content transformers for the freshly-parsed AST. Needs
+        // `id_by_flat` (built just above) since the cache is keyed by
+        // NodeId. No-op when no plugin host / no text transformers.
+        self.recompute_transforms();
         // Snapshot the file's mtime so the polling loop can tell when
         // an *external* edit lands (vs. our own save).
         self.last_mtime = file_mtime(&path);

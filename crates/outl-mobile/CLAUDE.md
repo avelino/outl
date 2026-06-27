@@ -19,12 +19,14 @@ outl-mobile (this crate)
    │   ├── workspace_picker.rs     (set_workspace — folder choice + persistence; native picker deferred)
    │   ├── iroh_sync.rs            (wire_iroh_transport — boot the P2P transport, register the bg-sync handle)
    │   ├── bg_sync.rs             (outl_ios_background_sync FFI — drives a forced sync from the iOS BGProcessingTask)
+   │   ├── plugin_service.rs       (PluginService + dedicated plugin thread — Boa Context is !Send, so it can't live in AppState)
    │   └── commands/               (Tauri command surface — split mirrors outl-desktop)
    │       ├── mod.rs
    │       ├── workspace.rs        (workspace_stats, reload_workspace)
    │       ├── page.rs             (list_all_pages / search_pages / search_persons / outl_emoji_search / open_* / *_day / resolve_ref / legacy compat shims)
    │       ├── block.rs            (create_block / edit_block / toggle_todo / toggle_quote / delete_block / indent_block / outdent_block / move_block_* / set_block_collapsed / paste_markdown_at)
    │       ├── peers.rs            (outl_peer_list / outl_peer_remove — read/edit <workspace>/.outl/peers.json, no workspace lock)
+   │       ├── plugin.rs           (plugin_list / plugin_run / plugin_sync_hooks — thin shims over PluginService)
    │       └── exec.rs             (run_code_block — thin shim over outl_actions::exec::run_code_block)
    ├── gen/apple/.../main.mm       (NSMetadataQuery + NSFileCoordinator iCloud watcher)
    └── (frontend in ../src)        (Solid components, Tailwind, Tauri bridge)
@@ -225,6 +227,65 @@ The "Run code" action only shows up when `@outl/shared/highlight::detectFence` m
 and the backend re-validates inside `run_block_at_index`,
 so a false-positive surfaces as a runtime toast instead of doing damage.
 
+## Plugins
+
+JS plugins (`outl_plugins::PluginHost`) run on mobile; the design is the desktop's.
+Read [`outl-desktop/CLAUDE.md` → Plugins](../outl-desktop/CLAUDE.md#plugins) for the shared rationale (`!Send` Boa host on a dedicated thread, `PluginService` in `AppState`, re-projection via `apply_all_pages_md`).
+Boa is pure-Rust (no JIT), so it ships under iOS's dynamic-code ban (same as `lang-js`).
+
+**The one divergence from desktop:** mobile's `storage_root` is an owned `PathBuf` (folder swap is a relaunch), so `PluginService::spawn` takes `PathBuf`, not `Arc<Mutex<Option<PathBuf>>>`.
+That drops the desktop's "re-load on root swap" branch: the host loads plugins once, lazily, from `<root>/.outl/plugins/` on the first request after the workspace opens (`ensure_loaded` + `mark_synced`).
+
+Capabilities honored: `slash-command` + `op-hook` + `ui-render` + `toolbar-button` + `content-transformer:text` + `content-transformer:rich` (no `keybinding` — no chord surface on mobile).
+Each must be declared in `client_capabilities()` (`plugin_service.rs`); the host gates contributions on the client∩plugin intersection.
+Dropping `ToolbarButton` silently empties `toolbar_buttons("mobile")`; dropping either transformer cap silently filters `transformers()` (a custom-language fence then renders as plain code).
+Tauri commands in `commands/plugin.rs` have the **identical shape to desktop**:
+
+| Command | Returns |
+|---|---|
+| `plugin_list` | `Vec<PluginCommandDto>` |
+| `plugin_toolbar` | `Vec<ToolbarButtonDto>` (`plugin_id` / `command_id` / `icon` / `title?`) |
+| `plugin_transformers` | `Vec<TransformerDto>` (`plugin_id` / `lang` / `kind`) |
+| `plugin_transform(plugin_id, lang, input)` | `Option<TransformResultDto>` (`kind` / `content`; `None` = transformer declined → plain fence) |
+| `plugin_run(plugin_id, command_id, page_id?)` | `PluginRunReply` (`applied` / `notifications` / `errors` / `views` / `view?`) |
+| `plugin_sync_hooks(page_id?)` | `PluginSyncReply` (`views` + `view?` — view only when a hook mutated) |
+
+Op-hooks fire at a single post-mutation point: `Journal.tsx`'s `commitEdit` calls `pluginSyncHooks(pid)` after an edit lands.
+One call dispatches every op since the last sweep, so it also catches structural ops (indent / move / delete).
+The hook-driven `applyView` guards on `!editingId()` so it never resets the textarea.
+
+Frontend: `src/lib/api.ts` adds the mobile-only `pluginList` / `pluginToolbar` / `pluginRun` / `pluginSyncHooks` wrappers (client-wired, not `@outl/shared`).
+The stacked-squares header glyph opens `components/PluginSheet.tsx` — a bottom sheet that lists + runs commands and pipes `notify` / errors to the toast.
+Toolbar buttons are inline header glyphs.
+`Journal.tsx` loads `pluginToolbar()` in `onMount` into a `toolbarButtons()` signal and renders one `<button>` per entry next to the sheet glyph.
+`runToolbarButton` → `pluginRun(...)` reuses the sheet's toast / `showPluginViews` / `applyView` path.
+
+### `ui-render` views (the confetti path)
+
+A `ui-render` plugin emits HTML/JS via `ctx.ui.render(html)`; the core gates it onto `PluginRun::views`, propagated as `views` on both `PluginRunReply` (command path) and `PluginSyncReply` (`onOp` hook path).
+
+`components/PluginViewOverlay.tsx` paints each in a **sandboxed, ephemeral `<iframe>`**.
+The frame is `sandbox="allow-scripts"` **WITHOUT `allow-same-origin`** — load-bearing.
+Plugin JS is untrusted; the missing flag forces an opaque origin so the frame can't reach the app DOM / Tauri bridge — the two flags together defeat the sandbox, so **never** add it.
+Content is `srcdoc={html}` (no network), fullscreen, `pointer-events: none`, auto-removed after ~6s.
+
+The overlay exposes an imperative `push(html)` via its `bind` prop.
+`Journal.tsx` holds it as `pushPluginView` and feeds it from `showPluginViews(views)` at every source: `PluginSheet`'s `onViews`, `commitEdit`'s `pluginSyncHooks` reply, and `runToolbarButton`.
+**End-to-end:** block → DONE → `commitEdit` → `plugin_sync_hooks` → confetti plugin's `onOp` emits HTML → `showPluginViews` → iframe overlay → confetti.
+
+The sandbox attrs + auto-removal are pinned by `PluginViewOverlay.test.ts` (Vitest + happy-dom).
+`plugin_service.rs` unit tests cover list / toolbar / transformer / run / unknown-command / empty-host; a real plugin load + the sheet UI + iframe overlay only exercise under `cargo tauri ios dev`.
+
+### Content transformers (custom-language fences)
+
+A plugin transformer claims a code-fence language and turns the body into a render descriptor (`{kind, content}`).
+`Journal.tsx`'s `onMount` calls `loadTransformers()` (`src/lib/transformers.ts`) once when the workspace opens, filling a module signal keyed by `lang` (best-effort — failure leaves fences as plain code).
+`BlockRow`'s fence branch looks the language up via `transformerForLang(lang)`; a match renders `<PluginFence />`, falling back to plain `<HighlightedCode />` while loading or on decline.
+`<PluginFence />` runs `pluginTransform(...)` through `runTransform`, **cached by `(block id, body)`** so it runs at most once per distinct body (editing invalidates; a `null` decline is cached too).
+Render by `kind`: `text` → inline preformatted text (no frontend markdown-string tokenizer — backend-only in `outl_md`).
+`rich` → HTML in a persistent **inline** sandboxed `<iframe>` (`allow-scripts`, never `allow-same-origin` — same posture as `<PluginViewOverlay />`).
+The registry + cache glue is mobile-only client lifecycle (`src/lib/transformers.ts`), not `@outl/shared`; only the DTO shapes + `invoke()` wrappers (`src/lib/api.ts`) would graduate if desktop needed identical behaviour.
+
 ## Peer / device management (`outl_peer_list` / `outl_peer_remove`)
 
 `commands/peers.rs` exposes two Tauri commands that read and edit the iroh
@@ -297,30 +358,10 @@ See [`outl-sync-iroh/CLAUDE.md`](../outl-sync-iroh/CLAUDE.md) for what the trans
 
 ## iCloud layout (opt-in destination)
 
-When the user chooses to store the workspace in iCloud, the root is `<ubiquity-container>/Documents/` (resolved by `workspace_open::icloud_workspace_root()`).
-This is **one option**, not the default — see "Storage is a chosen folder" above.
-The container is already the `outl` namespace at the iCloud Drive level; nesting an extra `outl/` folder underneath is redundant and was removed in v0.
-The TUI can point at the same path via `--path "<container>/Documents"`.
-
-```
-<container>/Documents/
-├── journals/
-│   └── YYYY-MM-DD.md            ← daily journal projections
-├── pages/
-│   ├── <slug>.md                ← regular page projections
-│   └── <slug>.outl              ← sidecar (block IDs + hashes)
-└── ops/
-    ├── ops-<this_device>.jsonl  ← only THIS device writes here
-    ├── ops-<other_device>.jsonl
-    └── ...
-```
-
-- One `ops-*.jsonl` per actor. iCloud syncs files individually, so two devices never conflict at the filesystem layer.
-- The folder is **`ops/`**, not `.ops/`. iCloud Documents skips paths starting with `.` when syncing across devices — using a dotted name silently breaks multi-device sync (the per-device jsonl never leaves its origin).
-- `.md` files are projections regenerated after every mutation.
-  Never parse them back to reconstruct workspace state — the op log is the source of truth.
-- Sidecar files live next to the `.md` as `pages/<slug>.outl` (no leading dot).
-  The dotted form was abandoned for the same iCloud reason as `.ops/` — dotted paths do not propagate across devices.
+When the user opts into iCloud, the root is `<ubiquity-container>/Documents/` (`workspace_open::icloud_workspace_root()`) — **one option**, not the default.
+The container is already the `outl` namespace, so no extra `outl/` nesting; the TUI uses `--path "<container>/Documents"`.
+Layout is the standard `journals/` + `pages/` (`.md` + `.outl` sidecar) + `ops/` (one `ops-<actor>.jsonl` per device).
+**iCloud trap:** every path must be undotted — iCloud Documents skips `.`-prefixed paths across devices, so `ops/` (not `.ops/`) and `pages/<slug>.outl`, else the file never leaves its origin.
 
 ## Peer-file materialisation (the iCloud catch)
 
@@ -382,8 +423,7 @@ After the first run, the iCloud capability must be confirmed in Xcode (Signing &
 ## Versioning + TestFlight release
 
 **Single source of truth: `Cargo.toml` workspace `version`.**
-To bump the app version, edit `[workspace.package].version` at the repo root and that's it.
-Everywhere else inherits:
+To bump the app version, edit `[workspace.package].version` at the repo root — everywhere else inherits:
 
 | Field | Where it lives | How it's resolved |
 |-------|----------------|-------------------|
@@ -402,45 +442,24 @@ If it's present, Tauri uses the static value instead of the `--config` override,
 
 ### CI release flow
 
-A push to `main` triggers two workflows in parallel:
+A push to `main` triggers in parallel:
 
-1. **`Release`** (`release.yml`) — auto-bumps `Cargo.toml` locally to `<base>-beta.<run_number>` (e.g.
-   `0.5.1-beta.27`), cuts a tag `v0.5.1-beta.27`, builds desktop binaries, ships the Homebrew formula.
-   Never commits the bump back.
-2. **`Mobile`** (`mobile.yml`) — builds the signed iOS IPA from the *unbumped* `Cargo.toml`, then uploads it as the `outl-ios-release` artifact.
-   Triggers `TestFlight` on success.
-3. **`TestFlight`** (`testflight.yml`) — downloads the IPA artifact and uploads to App Store Connect via `xcrun altool`.
+1. **`Release`** (`release.yml`) — auto-bumps `Cargo.toml` locally to `<base>-beta.<run_number>`, cuts a `v<...>-beta.<N>` tag, builds desktop binaries, ships the Homebrew formula (never commits the bump back).
+2. **`Mobile`** (`mobile.yml`) — builds the signed IPA from the *unbumped* `Cargo.toml`, uploads it as `outl-ios-release`, triggers `TestFlight`.
+3. **`TestFlight`** (`testflight.yml`) — downloads the artifact, uploads to App Store Connect (`xcrun altool`).
 
 ### CFBundleVersion (build number) scheme
 
-Apple needs `CFBundleVersion` strictly monotonic across **every** IPA ever uploaded.
-We can't reuse `tauri.conf.json.version` directly because the marketing version (`0.5.1`) repeats across many beta builds.
-The scheme:
-
-```
-CFBundleShortVersionString = <SHORT_VERSION>            e.g. 0.5.1
-CFBundleVersion            = <SHORT_VERSION><BETA_PAD>  e.g. 0.5.1027
-                                              ^^^
-                              beta number zero-padded to 3 digits
-```
-
-Where `BETA` comes from the latest `v<SHORT_VERSION>-beta.<N>` git tag (set by the `Release` workflow).
-Fallback to Mobile's `github.run_number` when no beta tag exists for the current `SHORT_VERSION`.
-Re-runs append `.<run_attempt>` as a 4th component to dodge Apple's duplicate guard.
-
-The build number is set by patching the `.xcarchive`'s embedded `Info.plist` after `cargo tauri ios build` produces the archive, but **before** `xcodebuild -exportArchive` re-signs and exports the IPA.
-This is the only injection point that survives the build because Tauri only exposes a single `version` field.
+Apple needs `CFBundleVersion` strictly monotonic across every IPA, but the marketing version (`0.5.1`) repeats across beta builds.
+Scheme: `CFBundleShortVersionString = <SHORT_VERSION>` (e.g. `0.5.1`); `CFBundleVersion = <SHORT_VERSION><BETA_PAD>` (e.g. `0.5.1027`, beta number zero-padded to 3 digits).
+`BETA` comes from the latest `v<SHORT_VERSION>-beta.<N>` git tag (set by `Release`), falling back to Mobile's `github.run_number`; re-runs append `.<run_attempt>` as a 4th component to dodge Apple's duplicate guard.
+The build number is patched into the `.xcarchive`'s embedded `Info.plist` after `cargo tauri ios build` but **before** `xcodebuild -exportArchive` — the only injection point that survives, since Tauri exposes a single `version` field.
 
 ### What goes wrong if you forget this
 
-- `tauri.conf.json` left with stale `"version"`: IPA ships with that static value regardless of `Cargo.toml` or `--config`.
-  Apple sees a value that hasn't been bumped → 409 duplicate.
-- Dropping `--config '{"version": "..."}'` from `cargo tauri ios build` in `mobile.yml`: Tauri's iOS path falls back to `1.0.0` (not to `Cargo.toml` as the docs imply).
-  The sanity check in the `Patch archive CFBundleVersion` step catches this — don't disable it.
-- Patching `gen/apple/.../Info.plist` directly before the build: Tauri regenerates the file from the merged config on every build.
-  No-op.
-- `xcrun altool --type ios` returns exit 0 even on 409 errors.
-  The `Upload IPA to TestFlight` step in `testflight.yml` greps for `ERROR:` and exits non-zero explicitly — don't simplify that step.
+- Stale `"version"` in `tauri.conf.json` → IPA ships that static value (ignores `Cargo.toml` / `--config`) → Apple 409 duplicate.
+- Dropping `--config '{"version": "..."}'` from `mobile.yml` → Tauri's iOS path falls back to `1.0.0` (not `Cargo.toml`); the `Patch archive CFBundleVersion` sanity check catches it — don't disable it.
+- Patching `gen/apple/.../Info.plist` pre-build is a no-op (Tauri regenerates it). `xcrun altool --type ios` exits 0 even on 409, so `testflight.yml` greps for `ERROR:` — don't simplify that step.
 
 ## Deep links (`outl://`)
 

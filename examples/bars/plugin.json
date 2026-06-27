@@ -1,0 +1,27 @@
+{
+  "$schema": "https://outl.app/schemas/plugin-v1.json",
+  "id": "app.outl.examples.bars",
+  "name": "Bar Chart",
+  "version": "1.0.0",
+  "api": "^1.0",
+  "engines": {
+    "outl": ">=0.7.0"
+  },
+  "main": "index.js",
+  "description": "Turns a ```bars fence of `label: number` lines into a mini bar chart. A demo of a rich content-transformer that renders self-contained HTML in a sandboxed iframe (GUI only).",
+  "author": "Avelino",
+  "license": "MIT",
+  "category": "fun",
+  "capabilities": [
+    "content-transformer:rich"
+  ],
+  "permissions": [],
+  "contributes": {
+    "transformers": [
+      {
+        "lang": "bars",
+        "kind": "rich"
+      }
+    ]
+  }
+}

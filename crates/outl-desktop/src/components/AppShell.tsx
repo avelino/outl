@@ -10,13 +10,20 @@ import type { PageView } from "@outl/shared/api/types";
 
 import { appState, setAppState } from "../lib/store";
 import { takePendingDeepLink, workspaceStats } from "../lib/api";
-import { onDeepLinkNavigate, onPeerOpsChanged } from "../lib/events";
+import {
+  onDeepLinkNavigate,
+  onPeerOpsChanged,
+  onWorkspaceReady,
+} from "../lib/events";
 import type { DeepLinkNavigate } from "../lib/events";
 import { installShortcuts } from "../lib/shortcuts";
+import { loadTransformers } from "../lib/transformers";
 import { buildHandlers } from "../lib/action-handlers";
 import { Sidebar } from "./Sidebar";
 import { OutlineView } from "./OutlineView";
 import { Picker } from "./Picker";
+import { PluginMarketplace } from "./PluginMarketplace";
+import { PluginEffectLayer } from "./PluginEffectLayer";
 import { SettingsModal } from "./SettingsModal";
 import { HelpOverlay } from "./HelpOverlay";
 import { ChromeToggleBar } from "./ChromeToggleBar";
@@ -136,6 +143,16 @@ export function AppShell() {
     const unbindShortcuts = await installShortcuts(handlers);
     onCleanup(unbindShortcuts);
 
+    // Content transformers (code-fence renderers). Plugins load lazily on
+    // the first host request after the workspace opens, so this boot call
+    // can come back empty; `workspace-ready` re-loads once they're in (and
+    // catches a workspace swap clearing/adding transformers). Best-effort.
+    void loadTransformers();
+    const unlistenReady = await onWorkspaceReady(() => {
+      void loadTransformers();
+    });
+    onCleanup(() => unlistenReady());
+
     const unlisten = await onPeerOpsChanged(() => {
       void onPeerChange();
     });
@@ -184,8 +201,10 @@ export function AppShell() {
 
       <ChromeToggleBar />
       <Picker onPicked={applyView} />
+      <PluginMarketplace />
       <SettingsModal />
       <HelpOverlay />
+      <PluginEffectLayer />
     </>
   );
 }

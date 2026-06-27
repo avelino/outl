@@ -469,6 +469,15 @@ fn event_loop(
             Mode::Insert { .. } => handle_insert_key(&mut app, key)?,
             Mode::Visual { .. } => handle_visual_key(&mut app, key)?,
         }
+
+        // Single post-mutation point: a keystroke may have appended ops
+        // to the log (edit, indent, TODO toggle, …). Dispatch them to
+        // plugins' `onOp` hooks. Cheap + idempotent when nothing
+        // changed — the host short-circuits on an unchanged log length,
+        // so this is safe to call after every key. A hook that mutates
+        // the workspace re-projects `.md` and reparses inside
+        // `run_plugin_op_hooks`.
+        app.run_plugin_op_hooks();
     }
 }
 

@@ -37,6 +37,8 @@ mod commands;
 mod fs_watcher;
 mod helpers;
 mod iroh_sync;
+mod plugin_dto;
+mod plugin_service;
 mod settings;
 mod state;
 mod workspace_open;
@@ -56,11 +58,14 @@ use crate::commands::{
     indent_block, list_all_pages, list_shortcut_bindings, list_themes, move_block_down,
     move_block_up, next_day, open_journal_for, open_page_by_slug, open_ref, open_today_journal,
     outdent_block, outl_emoji_search, outl_peer_list, outl_peer_pair_host, outl_peer_pair_join,
-    outl_peer_remove, outl_peer_status, outl_sync_now, paste_markdown_at, previous_day, redo_page,
-    reload_workspace, resolve_ref, run_code_block, search_pages, search_persons,
-    set_block_collapsed, set_workspace, today_slug_cmd, toggle_quote, toggle_todo, undo_page,
-    update_settings, workspace_stats,
+    outl_peer_remove, outl_peer_status, outl_sync_now, paste_markdown_at, plugin_install_official,
+    plugin_keybindings, plugin_list, plugin_registry_list, plugin_run, plugin_set_enabled,
+    plugin_sync_hooks, plugin_toolbar, plugin_transform, plugin_transformers, plugin_uninstall,
+    previous_day, redo_page, reload_workspace, resolve_ref, run_code_block, search_pages,
+    search_persons, set_block_collapsed, set_workspace, today_slug_cmd, toggle_quote, toggle_todo,
+    undo_page, update_settings, workspace_stats,
 };
+use crate::plugin_service::PluginService;
 use crate::state::AppState;
 use crate::workspace_open::{load_or_create_actor, spawn_workspace_opener};
 
@@ -207,6 +212,15 @@ pub fn run() {
                 );
             }
 
+            // Plugin host runs on its own thread (Boa `Context` is
+            // `!Send`, so it can't live in `AppState`). It shares the same
+            // `workspace` / `storage_root` Arcs every command locks, plus
+            // the per-device HLC, and loads plugins from
+            // `<root>/.outl/plugins/` on its first request once the
+            // workspace is open. See `plugin_service.rs`.
+            let plugins =
+                PluginService::spawn(workspace.clone(), storage_root.clone(), hlc.clone());
+
             app.manage(AppState {
                 workspace,
                 storage_root,
@@ -219,6 +233,7 @@ pub fn run() {
                 iroh_pairing,
                 history: Mutex::new(std::collections::HashMap::new()),
             });
+            app.manage(plugins);
             app.manage(PendingDeepLink(parking_lot::Mutex::new(None)));
 
             // `outl://` deep links (issue #98). On Linux (and Windows in
@@ -305,6 +320,19 @@ pub fn run() {
             outl_sync_now,
             outl_peer_pair_host,
             outl_peer_pair_join,
+            // Plugins
+            plugin_list,
+            plugin_run,
+            plugin_sync_hooks,
+            plugin_keybindings,
+            plugin_toolbar,
+            plugin_transformers,
+            plugin_transform,
+            // Marketplace
+            plugin_registry_list,
+            plugin_install_official,
+            plugin_set_enabled,
+            plugin_uninstall,
         ])
         .run(tauri::generate_context!())
         .expect("error while running outl-desktop application");

@@ -38,9 +38,11 @@
 
 use crate::state::{App, EditTarget, Focus, Mode};
 
+mod chord_adapter;
 mod insert;
 mod normal;
 mod overlay;
+mod plugin_chord;
 mod visual;
 
 pub(crate) use insert::handle_insert_key;

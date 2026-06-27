@@ -24,6 +24,8 @@ outl-actions = { workspace = true }
 outl-sync-iroh = { workspace = true }
 outl-config = { workspace = true }
 outl-exec = { workspace = true }
+outl-plugins = { workspace = true }
+outl-shortcuts = { workspace = true }
 outl-theme = { workspace = true }
 anyhow = { workspace = true }
 ratatui = { workspace = true }

@@ -53,6 +53,17 @@ The CLI/TUI/MCP read the device actor from `config.toml`, so pointing them at a 
 - `outl migrate-to-shared [<path>]` — copy local sqlite log into shared `ops/` JSONL for cross-device sync.
 - `outl import logseq|roam <src> <dst>` — graph import.
 - `outl theme list|show <preset>` — TUI theme inspection.
+- `outl plugin init|list|install|run|enable|disable|remove` — manage the workspace's JS plugins (under `<workspace>/.outl/plugins/`), wrapping `outl-plugins`.
+  `init <NAME> [--id <ID>] [--dir <PATH>]` scaffolds a buildable plugin project (manifest + `package.json` + `tsconfig` + `src/index.ts` + README); it touches no workspace.
+  Templates live in `cmd/plugin_init.rs`.
+  `list` loads every installed plugin and prints version + enabled state + contributed slash commands.
+  `install <SOURCE>` takes a local directory **or** a `github:owner/repo[/subdir][#tag]` source and shows the requested permissions.
+  GitHub sources are cloned at an immutable semver tag (newest when not pinned, never a mutable branch) — the clone + tag resolution live in `cmd/plugin_source.rs` (shells out to `git`).
+  It asks for approval (`--yes` to skip, required when stdin isn't a TTY) before copying the plugin in and freezing the approved permissions in the lockfile.
+  `run <ID> <CMD>` runs a contributed command and re-renders every `.md` (op log is source of truth; files are a projection).
+  `enable|disable <ID>` flip the `enabled` flag in `installed.json`.
+  `remove <ID>` (aliases `uninstall`, `rm`) deletes the plugin's directory and its lockfile entry (the id is validated against path traversal before any deletion).
+  Unlike the machine-shaped commands, `plugin` uses `anyhow` at the boundary (operator-facing, interactive), like `peer`.
 - `outl peer pair|list|remove|status` — manage paired devices for P2P sync.
   Reads the per-**device** `~/.outl/identity.key` + the per-**workspace** `<workspace>/.outl/peers.json` via `outl-sync-iroh` (`IrohIdentity`, `PeersStore`).
   All four resolve the workspace (`--workspace` / `resolve_path`) so the pair belongs to the graph, not the OS; a one-time migration copies any legacy global `~/.outl/peers.json` into the workspace on first touch.
@@ -144,6 +155,7 @@ src/
 │   ├── export.rs          # legacy `outl export --to fmt` placeholder
 │   ├── export_v2.rs       # outl export {hugo,md,json}
 │   ├── page.rs            # outl page …
+│   ├── plugin.rs          # outl plugin …
 │   ├── block.rs           # outl block …
 │   ├── daily.rs           # outl daily …
 │   ├── search.rs          # outl search

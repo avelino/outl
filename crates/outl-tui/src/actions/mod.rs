@@ -28,6 +28,7 @@ pub(crate) mod lifecycle;
 pub(crate) mod nav;
 pub(crate) mod overlay;
 pub(crate) mod paste;
+pub(crate) mod plugins;
 pub(crate) mod sidebar;
 pub(crate) mod text_ops;
 pub(crate) mod toast;

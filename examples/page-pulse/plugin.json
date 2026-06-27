@@ -1,0 +1,37 @@
+{
+  "$schema": "https://outl.app/schemas/plugin-v1.json",
+  "id": "app.outl.examples.page-pulse",
+  "name": "Page Pulse",
+  "version": "1.0.0",
+  "api": "^1.0",
+  "engines": {
+    "outl": ">=0.7.0"
+  },
+  "main": "index.js",
+  "description": "Counts blocks, open TODOs, and DONEs in the workspace at a glance. A tiny demo of the toolbar-button capability.",
+  "author": "Avelino",
+  "license": "MIT",
+  "category": "productivity",
+  "capabilities": [
+    "slash-command",
+    "toolbar-button"
+  ],
+  "permissions": [
+    "read-page"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "pulse",
+        "title": "Page pulse"
+      }
+    ],
+    "toolbar": [
+      {
+        "command": "pulse",
+        "icon": "💓",
+        "title": "Page pulse"
+      }
+    ]
+  }
+}

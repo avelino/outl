@@ -76,13 +76,22 @@ import {
   registerPickedCallback,
   setNativeSuggesterState,
 } from "../lib/native-suggester";
+import {
+  type PluginToolbarButton,
+  pluginRun,
+  pluginSyncHooks,
+  pluginToolbar,
+} from "../lib/api";
 import { Calendar } from "./Calendar";
 import { DevicesSheet } from "./DevicesSheet";
+import { PluginSheet } from "./PluginSheet";
+import { PluginViewOverlay } from "./PluginViewOverlay";
 import { PageSwitcher } from "./PageSwitcher";
 import { PullToRefresh } from "./PullToRefresh";
 import { SyncDot } from "./SyncDot";
 import { BlockRow } from "./BlockRow";
 import { SkeletonOutline } from "./Skeleton";
+import { loadTransformers } from "../lib/transformers";
 import { haptic } from "../lib/haptics";
 import { BacklinksSection } from "./BacklinksSection";
 import { BlockContextMenu, type BlockContextAction } from "./BlockContextMenu";
@@ -110,6 +119,13 @@ export function Journal() {
   const [switcherOpen, setSwitcherOpen] = createSignal(false);
   const [calendarOpen, setCalendarOpen] = createSignal(false);
   const [devicesOpen, setDevicesOpen] = createSignal(false);
+  const [pluginsOpen, setPluginsOpen] = createSignal(false);
+  // Plugin-contributed toolbar buttons — one inline glyph each in the
+  // header. Loaded after the workspace opens (plugins load lazily on the
+  // host's first request), refreshed alongside the plugin-command list.
+  const [toolbarButtons, setToolbarButtons] = createSignal<
+    PluginToolbarButton[]
+  >([]);
   // When set, the delete-confirmation dialog is open. Holds the
   // block id we're about to delete + a descendant count for the
   // copy. Cleared on confirm or cancel.
@@ -179,6 +195,46 @@ export function Journal() {
 
   function applyView(v: PageView) {
     setView(v);
+  }
+
+  // Imperative bridge to `<PluginViewOverlay />`: it hands us its `push`
+  // fn on mount so any path that receives plugin `ctx.ui.render` payloads
+  // (the sheet's `run`, the `commitEdit` hook sweep) can paint a sandboxed
+  // iframe overlay without threading state through the tree.
+  let pushPluginView: ((html: string) => void) | undefined;
+  function showPluginViews(views: string[] | undefined) {
+    if (!views || !pushPluginView) return;
+    for (const html of views) pushPluginView(html);
+  }
+
+  // Refresh the plugin-contributed toolbar buttons. Best-effort: plugins
+  // load lazily on the host's first request, so this is called after the
+  // workspace opens (a host with no toolbar plugins returns an empty list).
+  async function loadToolbar() {
+    try {
+      setToolbarButtons(await pluginToolbar());
+    } catch {
+      setToolbarButtons([]); // never let a plugin failure break the header
+    }
+  }
+
+  // Run a plugin's toolbar command. Mirrors `<PluginSheet />`'s `run`:
+  // surface `notify` / error output as a toast, paint any `ctx.ui.render`
+  // overlays, and re-render the on-screen page from the refreshed
+  // `PageView` (the host re-projects every page before returning, since a
+  // plugin can move blocks across pages). Guarded by `!editingId()` so it
+  // never resets a textarea mid-edit.
+  async function runToolbarButton(btn: PluginToolbarButton) {
+    haptic("light");
+    try {
+      const reply = await pluginRun(btn.plugin_id, btn.command_id, pageId());
+      for (const note of reply.notifications) setError(note);
+      for (const err of reply.errors) setError(`plugin: ${err}`);
+      showPluginViews(reply.views);
+      if (reply.view && !editingId()) applyView(reply.view);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   // Native bridges + reactive effects MUST register synchronously,
@@ -281,6 +337,15 @@ export function Journal() {
     // user sees fresh state without hitting refresh. Runs after the local load
     // so the UI is already up; best-effort.
     void pullAndReload();
+    // Plugin toolbar buttons load lazily on the host's first request, so
+    // pull them once the workspace is open. Best-effort — a host with no
+    // toolbar plugins just leaves the header unchanged.
+    void loadToolbar();
+    // Content transformers (plugin-claimed code-fence languages) load the
+    // same way: pull the registry once the workspace is open so a fenced
+    // block in a custom language can render its transformed view. Best-
+    // effort — failure leaves fences as plain highlighted code.
+    void loadTransformers();
     // iOS freezes JS in the background; on return to the foreground, pull again
     // so edits made on another device while we were away land right away.
     const onVisible = () => {
@@ -641,6 +706,31 @@ export function Journal() {
       // so the user can retry instead of silently losing the text.
       setEditingId(null);
       applyView(next);
+      // Fire the plugins' `onOp` sweep once, after the commit lands.
+      // `sync_hooks` dispatches EVERY op since the host's last sweep
+      // (not just this edit), so one call here also catches up the
+      // structural ops (indent / move / delete) that don't route
+      // through `commitEdit` — mirrors the desktop's single
+      // `OutlineView.onCommit` hook + the TUI's once-per-tick sweep.
+      // Best-effort: a host with no op-hook plugins is a cheap no-op,
+      // and any failure stays out of the edit path entirely.
+      void (async () => {
+        try {
+          const reply = await pluginSyncHooks(pid);
+          // Paint any `ctx.ui.render` payloads the hooks emitted — this is
+          // the confetti path: marking a block DONE → commit → this sweep
+          // → a confetti plugin emits HTML → sandboxed iframe overlay.
+          // Independent of the mutation guard below: a view can fire even
+          // when the workspace didn't change.
+          showPluginViews(reply.views);
+          // Re-render only if a hook actually mutated the workspace AND
+          // the user hasn't started editing again in the meantime (so
+          // we never reset a fresh textarea mid-edit).
+          if (reply.view && !editingId()) applyView(reply.view);
+        } catch {
+          // Plugins must never break editing.
+        }
+      })();
     } else if (error()) {
       // Save failed (timeout, backend error, etc). Offer a retry
       // affordance — the draft is still in the editor, so the
@@ -1012,21 +1102,21 @@ export function Journal() {
         class="z-30 shrink-0 bg-(--color-ios-bg)/80 px-3 pt-2 pb-3 backdrop-blur-xl dark:bg-(--color-iosd-bg)/80"
         style="padding-top: max(env(safe-area-inset-top), 12px);"
       >
-        <div class="grid grid-cols-[auto_1fr_auto] items-center gap-2">
+        <div class="grid grid-cols-[auto_auto_1fr] items-center gap-2">
           {/* Left capsule — visible only when the user has navigated
               away from today's journal. We always reserve a placeholder
               of the same width so the title doesn't jump horizontally
               when the back button appears / disappears. */}
           <Show
             when={view() && view()!.page.kind !== "journal"}
-            fallback={<span aria-hidden="true" class="block h-9 w-10" />}
+            fallback={<span aria-hidden="true" class="block h-9 w-9" />}
           >
             <div class="inline-flex rounded-full bg-(--color-ios-card)/85 shadow-[var(--shadow-capsule)] backdrop-blur-xl dark:bg-(--color-iosd-card)/85 dark:shadow-[var(--shadow-capsule-dark)]">
               <button
                 type="button"
                 aria-label="Back to today's journal"
                 onClick={handleJumpToday}
-                class="flex h-9 w-10 items-center justify-center rounded-full text-(--color-ios-accent) active:bg-(--color-ios-divider)/40 dark:text-(--color-iosd-accent) dark:active:bg-(--color-iosd-divider)/40"
+                class="flex h-9 w-9 items-center justify-center rounded-full text-(--color-ios-accent) active:bg-(--color-ios-divider)/40 dark:text-(--color-iosd-accent) dark:active:bg-(--color-iosd-divider)/40"
               >
                 <svg
                   width="20"
@@ -1071,7 +1161,7 @@ export function Journal() {
           {/* Right capsule — grouped page actions. SyncDot lives inline
               between pages-search and refresh so the user reads it as
               "status of the data this capsule controls". */}
-          <div class="inline-flex items-center rounded-full bg-(--color-ios-card)/85 shadow-[var(--shadow-capsule)] backdrop-blur-xl dark:bg-(--color-iosd-card)/85 dark:shadow-[var(--shadow-capsule-dark)]">
+          <div class="ios-scroll inline-flex max-w-full items-center justify-self-end overflow-x-auto rounded-full bg-(--color-ios-card)/85 shadow-[var(--shadow-capsule)] backdrop-blur-xl dark:bg-(--color-iosd-card)/85 dark:shadow-[var(--shadow-capsule-dark)]">
             <button
               type="button"
               aria-label="Calendar"
@@ -1079,7 +1169,7 @@ export function Journal() {
                 haptic("light");
                 setCalendarOpen(true);
               }}
-              class="flex h-9 w-10 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
+              class="flex h-9 w-9 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
             >
               <svg
                 width="20"
@@ -1103,7 +1193,7 @@ export function Journal() {
                 haptic("light");
                 setSwitcherOpen(true);
               }}
-              class="flex h-9 w-10 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
+              class="flex h-9 w-9 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
             >
               <svg
                 width="20"
@@ -1119,6 +1209,51 @@ export function Journal() {
                 <path d="M21 21l-4.3-4.3M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z" />
               </svg>
             </button>
+            {/* Plugin-contributed toolbar buttons — one inline glyph per
+                entry, sitting among the native header actions. Discreet:
+                the plugin's `icon` rendered as text, tap runs its command
+                (re-render + toast handled by `runToolbarButton`). */}
+            <For each={toolbarButtons()}>
+              {(btn) => (
+                <button
+                  type="button"
+                  aria-label={btn.title ?? `Plugin: ${btn.command_id}`}
+                  title={btn.title ?? btn.command_id}
+                  onClick={() => void runToolbarButton(btn)}
+                  class="flex h-9 w-9 items-center justify-center rounded-full text-[17px] leading-none text-(--color-ios-accent) active:bg-(--color-ios-divider)/40 dark:text-(--color-iosd-accent) dark:active:bg-(--color-iosd-divider)/40"
+                >
+                  {btn.icon}
+                </button>
+              )}
+            </For>
+            <button
+              type="button"
+              aria-label="Plugin commands"
+              onClick={() => {
+                haptic("light");
+                setPluginsOpen(true);
+              }}
+              class="flex h-9 w-9 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
+            >
+              {/* Stacked-squares "extensions/plugins" glyph, mirrors the
+                  desktop's `⧉` toggle. */}
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="var(--color-ios-accent)"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="3" y="3" width="8" height="8" rx="1.5" />
+                <rect x="13" y="3" width="8" height="8" rx="1.5" />
+                <rect x="3" y="13" width="8" height="8" rx="1.5" />
+                <rect x="13" y="13" width="8" height="8" rx="1.5" />
+              </svg>
+            </button>
             {/* The sync dot IS the devices/pairing affordance: it shows the
                 mesh status AND opens the pairing sheet on tap — no separate
                 (ugly) devices glyph. Mirrors the desktop's clickable dot. */}
@@ -1129,7 +1264,7 @@ export function Journal() {
                 haptic("light");
                 setDevicesOpen(true);
               }}
-              class="flex h-9 w-10 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
+              class="flex h-9 w-9 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
             >
               <SyncDot
                 status={
@@ -1150,7 +1285,7 @@ export function Journal() {
               type="button"
               aria-label="Sync now"
               onClick={handleRefresh}
-              class="flex h-9 w-10 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
+              class="flex h-9 w-9 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
             >
               <svg
                 width="18"
@@ -1367,6 +1502,20 @@ export function Journal() {
         onClose={() => setDevicesOpen(false)}
       />
 
+      <PluginSheet
+        open={pluginsOpen()}
+        pageId={pageId()}
+        onClose={() => setPluginsOpen(false)}
+        onMessage={(text) => setError(text)}
+        onView={(v) => applyView(v)}
+        onViews={(views) => showPluginViews(views)}
+      />
+
+      {/* Sandboxed, ephemeral iframe overlays for plugin `ctx.ui.render`
+          payloads (confetti, etc). Binds its `push` fn up to
+          `showPluginViews`. */}
+      <PluginViewOverlay bind={(push) => (pushPluginView = push)} />
+
       <ConfirmDialog
         open={pendingDelete() !== null}
         title="Delete block?"
@@ -1430,13 +1579,13 @@ function JournalHeader(props: {
   const isToday = () =>
     props.todaySlug !== null && props.todaySlug === props.slug;
   return (
-    <div class="flex-1">
-      <div class="flex items-center justify-center gap-2">
+    <div class="min-w-0">
+      <div class="flex items-center justify-center gap-1.5">
         <button
           type="button"
           aria-label="Previous day"
           onClick={props.onPrev}
-          class="rounded-full p-1 text-(--color-ios-accent) active:opacity-50 dark:text-(--color-iosd-accent)"
+          class="shrink-0 rounded-full p-1 text-(--color-ios-accent) active:opacity-50 dark:text-(--color-iosd-accent)"
         >
           <ChevronLeft />
         </button>
@@ -1450,7 +1599,7 @@ function JournalHeader(props: {
           type="button"
           aria-label="Next day"
           onClick={props.onNext}
-          class="rounded-full p-1 text-(--color-ios-accent) active:opacity-50 dark:text-(--color-iosd-accent)"
+          class="shrink-0 rounded-full p-1 text-(--color-ios-accent) active:opacity-50 dark:text-(--color-iosd-accent)"
         >
           <ChevronRight />
         </button>

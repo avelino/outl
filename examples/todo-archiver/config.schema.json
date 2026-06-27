@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TODO Archiver config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "archivePage": {
+      "type": "string",
+      "title": "Archive page",
+      "description": "Slug of the page DONE blocks are moved to.",
+      "default": "archive"
+    }
+  }
+}

@@ -25,6 +25,7 @@ outl-md = { workspace = true }
 outl-actions = { workspace = true }
 outl-config = { workspace = true }
 outl-exec = { workspace = true }
+outl-plugins = { workspace = true, features = ["registry"] }
 outl-shortcuts = { workspace = true }
 outl-theme = { workspace = true }
 outl-sync-iroh = { workspace = true }

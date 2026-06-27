@@ -1,0 +1,36 @@
+{
+  "$schema": "https://outl.app/schemas/plugin-v1.json",
+  "id": "app.outl.examples.random-task",
+  "name": "Random Task",
+  "version": "1.0.0",
+  "api": "^1.0",
+  "engines": {
+    "outl": ">=0.7.0"
+  },
+  "main": "index.js",
+  "description": "Picks one open TODO at random and tells you to focus on it. A tiny demo of the keybinding capability.",
+  "author": "Avelino",
+  "license": "MIT",
+  "category": "productivity",
+  "capabilities": [
+    "slash-command",
+    "keybinding"
+  ],
+  "permissions": [
+    "read-page"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "pick",
+        "title": "Pick a random task"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "pick",
+        "key": "Ctrl+Shift+R"
+      }
+    ]
+  }
+}

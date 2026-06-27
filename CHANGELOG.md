@@ -7,6 +7,25 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Added
 
+- **JavaScript plugin system (`outl-plugins`), shared by every client.**
+  Plugins are bundled JavaScript described by a `plugin.json` manifest; a plugin written once runs on every outl client because it talks to the new `outl-plugins` crate, never to anything client-specific.
+  The engine is **Boa** (pure-Rust, runs on iOS — no JIT, reused from `outl-exec`) behind a `PluginEngine` trait so it can move to QuickJS later only if a measured blocker appears.
+  Execution is **describe → apply**: the JS side reads a pre-computed `ReadModel` and emits `HostIntent`s; the host drains them through `outl-actions` → `Workspace::apply`, so the op log stays the single source of truth and `.md` stays 100% clean.
+  Live capabilities: `op-hook` (`onOp`), `slash-command`, `keybinding`, `config-schema` (read), `toolbar-button`, `ui-render`, and `content-transformer:text` / `:rich`; `sync-transport` is core-ready (convergence tested) but no client polls it on a timer yet.
+  `keybinding` fires a bound chord from the **TUI** (Normal mode, single + two-chord, never overriding a native binding) and the **desktop** (a native binding always wins); `toolbar-button` renders a chrome button on desktop + mobile and surfaces the command in the TUI slash menu; `content-transformer` (`ctx.content.register(lang, fn)`) renders a fenced block as text on every read surface (`:text`, inline in the TUI) or as HTML in a sandboxed iframe on the GUIs (`:rich`).
+  New host namespaces: `ctx.net.fetch` (blocking HTTP gated by `network:<domain>`; a denied domain returns `{ ok: false, error }` rather than throwing), `ctx.storage.{get,set,delete}` (per-plugin local KV gated by `storage:local`, stored at `<workspace>/.outl/plugins/<id>/storage.json`, deliberately outside the op log so it never converges), and `ctx.sync.register({ push, pull })`.
+  A query engine plugs in as a `content-transformer` for the `query` fence — there is no separate `query-provider` capability, and inline `{{query}}` waits on a markdown token the parser defers.
+  A capability the current client can't honor loads partially with a warning (never a crash); every host call is gated against the user-approved permission set (`read-page`/`write-page`/`read-op-log`/`submit-op`/`storage:local`/`network:<domain>`, with bare `network:*` rejected).
+  Anti-loop is structural: `PluginHost` tracks how far into the op log it has dispatched, so a plugin's own ops never re-trigger its hooks.
+  A runaway plugin can't wedge the engine either: Boa runs under `RuntimeLimits` (loop-iteration cap ~20M, recursion cap ~2000, stack cap), so an infinite loop or unbounded recursion surfaces as a JS error instead of a hung thread.
+  Wired into **TUI** (plugin commands in the slash menu, `onOp` after each mutation) and the **CLI** (`outl plugin list / install / run / enable / disable / remove`, the last aliased `uninstall` / `rm`); the desktop/mobile wiring runs the host on a dedicated thread (the Boa context is `!Send`).
+  Distribution day-zero: install from a local directory (`github:` source to follow), a `bundleHash` revalidated on every load, a per-workspace `installed.json` lockfile freezing the approved permissions, and a static `registry.json` index (the "store").
+  Authors get `@outl/plugin-sdk` (typed `definePlugin` + host API) and two working examples: `examples/todo-archiver` (archives DONE blocks to a configurable page) and `examples/confetti` (throws a confetti burst when a block is marked DONE).
+  The `ui-render` capability lets a plugin hand the GUI clients (desktop + mobile) a chunk of author-written HTML/JS via `ctx.ui.render(html)`, which they run in a **sandboxed iframe** (`sandbox="allow-scripts"`, no same-origin — isolated from the app DOM) as an ephemeral full-screen overlay.
+  The host stays agnostic: it only transports the string the plugin produced, so the visual is the author's creativity, not a fixed catalog of effects.
+  The TUI/CLI drop `ui-render` payloads (no webview); the op-hook still fires.
+  New `outl_actions::block::move_under` (re-parent a block under an arbitrary page/block) backs the plugin `Move` intent.
+  See `docs/plugins.md`, `docs/plugin-api.md`, and the manifest schema at `docs/schemas/plugin-v1.json`.
 - **`:shortcode:` emoji syntax + autocomplete across every client.**
   The outl inline dialect now recognises GitHub-style gemoji shortcodes (`:tada:`, `:rocket:`, `:smile_cat:`, `:+1:`, `:100:`) and renders them as the unicode glyph (🎉, 🚀, 😸, 👍, 💯) on every read surface.
   The catalog is the [`emojis`](https://crates.io/crates/emojis) crate (Unicode CLDR + GitHub aliases, ~1800 shortcodes) so `outl_md::emoji::search` is the one ranking source TUI, mobile, and desktop share through a single `outl_emoji_search` Tauri command — no parallel index on the JS side.

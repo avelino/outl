@@ -35,6 +35,8 @@ mod bg_sync;
 mod commands;
 mod helpers;
 mod iroh_sync;
+mod plugin_registry;
+mod plugin_service;
 mod state;
 mod workspace_open;
 mod workspace_picker;
@@ -54,10 +56,13 @@ use crate::commands::{
     list_all_pages, list_outline, move_block_down, move_block_up, next_day, open_journal_for,
     open_page_by_slug, open_ref, open_today_journal, outdent_block, outl_emoji_search,
     outl_peer_list, outl_peer_pair_host, outl_peer_pair_join, outl_peer_remove, outl_peer_status,
-    outl_sync_now, paste_markdown_at, previous_day, reload_workspace, resolve_ref, search_pages,
-    search_persons, set_block_collapsed, today_slug_cmd, toggle_quote, toggle_todo,
+    outl_sync_now, paste_markdown_at, plugin_install_official, plugin_list, plugin_registry_list,
+    plugin_run, plugin_set_enabled, plugin_sync_hooks, plugin_toolbar, plugin_transform,
+    plugin_transformers, plugin_uninstall, previous_day, reload_workspace, resolve_ref,
+    search_pages, search_persons, set_block_collapsed, today_slug_cmd, toggle_quote, toggle_todo,
     workspace_stats,
 };
+use crate::plugin_service::PluginService;
 use crate::state::AppState;
 use crate::workspace_open::{load_or_create_actor, resolve_storage_root, spawn_workspace_opener};
 
@@ -196,6 +201,16 @@ pub fn run() {
                 sync_cfg.transport,
             );
 
+            // Plugin host runs on its own thread (Boa `Context` is
+            // `!Send`, so it can't live in `AppState`). It shares the same
+            // `workspace` Arc every command locks, plus an owned clone of
+            // the (fixed-for-the-process) storage root and the per-device
+            // HLC, and loads plugins from `<root>/.outl/plugins/` on its
+            // first request once the workspace is open. See
+            // `plugin_service.rs`.
+            let plugins =
+                PluginService::spawn(workspace.clone(), storage_root.clone(), hlc.clone());
+
             app.manage(AppState {
                 workspace,
                 hlc,
@@ -203,6 +218,7 @@ pub fn run() {
                 registry,
                 iroh,
             });
+            app.manage(plugins);
             app.manage(PendingDeepLink(Mutex::new(None)));
 
             // `outl://` deep links (issue #98). iOS routes the URL to the
@@ -267,6 +283,18 @@ pub fn run() {
             outl_sync_now,
             outl_peer_pair_host,
             outl_peer_pair_join,
+            // Plugins (JS host on a dedicated thread — Boa is !Send)
+            plugin_list,
+            plugin_run,
+            plugin_sync_hooks,
+            plugin_toolbar,
+            plugin_transformers,
+            plugin_transform,
+            // Marketplace
+            plugin_registry_list,
+            plugin_install_official,
+            plugin_set_enabled,
+            plugin_uninstall,
             // Workspace folder selection (choose where the workspace lives)
             workspace_picker::set_workspace,
             // Code execution

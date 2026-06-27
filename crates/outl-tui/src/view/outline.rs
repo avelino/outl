@@ -98,10 +98,21 @@ pub(crate) fn render_block(
         app.theme.bullet
     };
 
-    // Determine which text and cursor position to render. Three cases:
-    //   1. Editing here       → buffer with caret cursor.
-    //   2. Selected in Normal → block text with block-style cursor.
-    //   3. Anything else      → block text, no cursor, pretty render.
+    // The block's stable id (needed both for the collapsed lookup
+    // below and the content-transformer cache lookup in the `mode`
+    // decision). `None` on a sidecar gap — no id, no cached transform.
+    let block_id = app.id_by_flat.get(*cursor).copied();
+
+    // Determine which text and cursor position to render. Four cases:
+    //   1. Editing here       → buffer with caret cursor (raw fence).
+    //   2. Selected in Normal → block text with block-style cursor (raw).
+    //   3. Plugin-transformed → cached transformer output (read-only).
+    //   4. Anything else      → block text, no cursor, pretty render.
+    //
+    // The cursor cases (1, 2) always win over a cached transform: a
+    // block under the cursor shows its real fence source so the user
+    // edits what they see. Only a read-only block swaps in the
+    // transformer output.
     let mode = if editing_here {
         if let Mode::Insert { buffer, .. } = &app.mode {
             RenderMode::Editing {
@@ -116,6 +127,10 @@ pub(crate) fn render_block(
             text: b.text.clone(),
             cursor_char: app.cursor_col,
         }
+    } else if let Some(content) = block_id.and_then(|id| app.transform_cache.get(&id)) {
+        RenderMode::Transformed {
+            content: content.clone(),
+        }
     } else {
         RenderMode::Pretty {
             text: b.text.clone(),
@@ -128,7 +143,6 @@ pub(crate) fn render_block(
     //   - `  ` (two spaces) when it has no children — keeps column
     //     alignment with the other two cases so the bullet column
     //     never jitters across blocks on the same indent.
-    let block_id = app.id_by_flat.get(*cursor).copied();
     let is_collapsed = block_id
         .map(|id| app.collapsed.contains(&id))
         .unwrap_or(false);
@@ -313,6 +327,13 @@ pub(crate) enum RenderMode {
     NormalCursor { text: String, cursor_char: usize },
     /// Anything else — markdown is rendered prettily; no cursor.
     Pretty { text: String },
+    /// A read-only block whose code fence a plugin content-transformer
+    /// turned into text/markdown. `content` replaces the raw fence in
+    /// the outline; the bullet stays so the block is still anchored.
+    /// Never carries a cursor — the cursor cases render the raw fence so
+    /// the user edits the real source. Multi-line `content` becomes a
+    /// bullet row plus continuation rows.
+    Transformed { content: String },
 }
 
 /// Emit one or more ratatui [`Line`]s for a block's text.
@@ -342,8 +363,15 @@ pub(crate) fn emit_block_lines(
             (text.as_str(), Some(*cursor_char), Some(CursorStyle::Block))
         }
         RenderMode::Pretty { text } => (text.as_str(), None, None),
+        // Transformer output renders as pretty markdown — same styling
+        // path as `Pretty`, just sourced from the cached `content`
+        // instead of the raw fence text.
+        RenderMode::Transformed { content } => (content.as_str(), None, None),
     };
-    let pretty = matches!(mode, RenderMode::Pretty { .. });
+    let pretty = matches!(
+        mode,
+        RenderMode::Pretty { .. } | RenderMode::Transformed { .. }
+    );
     let rows = block_to_rows(text, indent, cursor_char);
 
     // TODO/DONE checkbox decoration only fits on single-line bullets

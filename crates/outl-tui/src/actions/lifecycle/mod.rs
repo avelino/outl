@@ -66,6 +66,7 @@ impl App {
             help_scroll: 0,
             pending_chord: None,
             pending_input_op: None,
+            pending_plugin_chord: None,
             last_visual: None,
             status: String::new(),
             parse_warnings: Vec::new(),
@@ -98,13 +99,23 @@ impl App {
             theme,
             exec_registry: RuntimeRegistry::with_builtins(),
             command_registry: CommandRegistry::with_builtins(),
+            plugin_host: None,
             collapsed: std::collections::HashSet::new(),
             id_by_flat: Vec::new(),
             hidden_by_collapse: Vec::new(),
+            transform_cache: std::collections::HashMap::new(),
         };
         s.refresh_page_list();
         s.ensure_view_file_exists()?;
         s.load_current();
+        // Load JS plugins from `<root>/.outl/plugins/`. Best-effort: any
+        // failure leaves `plugin_host = None` and the TUI runs normally.
+        s.load_plugins();
+        // The first `load_current` above ran before the plugin host
+        // existed, so its transform pass was a no-op. Now that plugins
+        // are loaded, populate the content-transformer cache for the
+        // page already on screen.
+        s.recompute_transforms();
         // Wire the optional iroh transport BEFORE spawning the poller —
         // `spawn_jsonl_poller` reads `sync_transport` to decide between
         // iroh-driven detection and the FileSyncTransport fallback.
