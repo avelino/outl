@@ -35,7 +35,6 @@ mod bg_sync;
 mod commands;
 mod helpers;
 mod iroh_sync;
-mod plugin_registry;
 mod plugin_service;
 mod state;
 mod workspace_open;

@@ -238,8 +238,15 @@ impl PluginManifest {
         if self.name.trim().is_empty() {
             return Err(PluginError::Manifest("name must not be empty".into()));
         }
-        if self.main.trim().is_empty() {
-            return Err(PluginError::Manifest("main must not be empty".into()));
+        // `main` and any `config_schema` are read from disk relative to the
+        // plugin's own directory (`.outl/plugins/<id>/`) on install AND on
+        // every load, so they must stay inside it. A `..` or absolute path
+        // would let a crafted manifest read/write outside the plugin dir
+        // (path traversal) — defense in depth for the registry/marketplace,
+        // where a published manifest a human reviewed reaches every installer.
+        validate_resource_path("main", &self.main)?;
+        if let Some(schema) = &self.contributes.config_schema {
+            validate_resource_path("config_schema", schema)?;
         }
         // Every keybinding must reference a declared command — a binding to a
         // command that doesn't exist is a silent dead key otherwise.
@@ -267,6 +274,30 @@ impl PluginManifest {
     pub fn is_api_compatible(&self, host_api: &Version) -> bool {
         self.api.matches(host_api)
     }
+}
+
+/// Reject a manifest resource path (`main`, `config_schema`) that could
+/// escape the plugin's directory when joined onto it. The path is read from
+/// disk relative to `.outl/plugins/<id>/`, so an absolute path or a `..`
+/// component would traverse out of it. Rejects: empty, absolute (`/…`,
+/// `\…`, `~…`, a drive `C:…`), and any `..` segment (both `/` and `\`
+/// separators, so a Windows-style `..\x` is caught too).
+fn validate_resource_path(field: &str, value: &str) -> Result<()> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Err(PluginError::Manifest(format!("{field} must not be empty")));
+    }
+    let escapes = v.starts_with('/')
+        || v.starts_with('\\')
+        || v.starts_with('~')
+        || v.contains(':')
+        || v.split(['/', '\\']).any(|seg| seg == "..");
+    if escapes {
+        return Err(PluginError::Manifest(format!(
+            "{field} must be a relative path inside the plugin, got `{value}`"
+        )));
+    }
+    Ok(())
 }
 
 /// Validate a reverse-DNS plugin id: lowercase, dot-separated labels of
@@ -376,6 +407,50 @@ mod tests {
     fn rejects_empty_main() {
         let json = VALID.replace("\"index.js\"", "\"\"");
         assert!(PluginManifest::parse(json.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn rejects_main_path_traversal() {
+        // `main` is joined onto the plugin dir on install + every load, so a
+        // traversal / absolute path must be rejected (it would read/write
+        // outside `.outl/plugins/<id>/`).
+        for evil in [
+            "../../etc/passwd",
+            "../index.js",
+            "a/../../b.js",
+            "/etc/passwd",
+            "\\\\server\\share",
+            "..\\\\windows\\\\x",
+            "~/secret",
+            "C:/x.js",
+        ] {
+            let json = VALID.replace("\"index.js\"", &format!("\"{evil}\""));
+            assert!(
+                PluginManifest::parse(json.as_bytes()).is_err(),
+                "main `{evil}` must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_config_schema_traversal() {
+        let json = VALID.replace(
+            "\"configSchema\": \"config.schema.json\"",
+            "\"configSchema\": \"../../steal.json\"",
+        );
+        // The VALID fixture may not declare configSchema; build one that does.
+        let with_schema = json.replace(
+            "\"contributes\": {",
+            "\"contributes\": {\n    \"configSchema\": \"../../steal.json\",",
+        );
+        assert!(PluginManifest::parse(with_schema.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn accepts_subdir_main() {
+        // A relative path into a subdirectory is fine — only escapes are rejected.
+        let json = VALID.replace("\"index.js\"", "\"dist/index.js\"");
+        assert!(PluginManifest::parse(json.as_bytes()).is_ok());
     }
 
     #[test]

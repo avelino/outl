@@ -153,24 +153,3 @@ impl From<PluginRun> for PluginRunDto {
         }
     }
 }
-
-/// One marketplace row: a registry entry plus this workspace's local state
-/// (whether it's installed, and if so whether it's enabled). The frontend
-/// renders the browse list + the install / enable / disable affordances off
-/// this.
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct RegistryItemDto {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub author: Option<String>,
-    pub category: Option<String>,
-    pub capabilities: Vec<String>,
-    pub permissions: Vec<String>,
-    pub latest: Option<String>,
-    /// Already present in this workspace's lockfile.
-    pub installed: bool,
-    /// Installed *and* enabled (false when installed-but-disabled, or not
-    /// installed at all).
-    pub enabled: bool,
-}

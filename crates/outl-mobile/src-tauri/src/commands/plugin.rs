@@ -10,11 +10,11 @@
 use tauri::State;
 
 use crate::helpers::{build_page_view, parse_node_id, with_ws};
-use crate::plugin_registry::RegistryItemDto;
 use crate::plugin_service::{
     PluginCommandDto, PluginService, ToolbarButtonDto, TransformResultDto, TransformerDto,
 };
 use crate::state::{AppState, PageView};
+use outl_plugins::MarketplaceItem;
 use serde::Serialize;
 
 /// Reply for [`plugin_run`]: the plugin's notifications / errors / applied
@@ -178,7 +178,7 @@ pub(crate) fn plugin_sync_hooks(
 #[tauri::command]
 pub(crate) fn plugin_registry_list(
     plugins: State<'_, PluginService>,
-) -> Result<Vec<RegistryItemDto>, String> {
+) -> Result<Vec<MarketplaceItem>, String> {
     plugins.registry_list()
 }
 

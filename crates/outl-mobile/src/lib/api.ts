@@ -191,43 +191,5 @@ export function pluginSyncHooks(
   return invoke<PluginSyncReply>("plugin_sync_hooks", { pageId });
 }
 
-/**
- * One marketplace row: a registry entry (plugins.outl.app) plus this
- * workspace's local state. `installed` / `enabled` drive the install vs.
- * manage affordances.
- */
-export interface RegistryItem {
-  id: string;
-  name: string;
-  description: string;
-  author: string | null;
-  category: string | null;
-  capabilities: string[];
-  permissions: string[];
-  latest: string | null;
-  installed: boolean;
-  enabled: boolean;
-}
-
-/** Fetch the marketplace: the official registry crossed with the lockfile. */
-export function pluginRegistryList(): Promise<RegistryItem[]> {
-  return invoke<RegistryItem[]>("plugin_registry_list");
-}
-
-/** Tap-to-install an official plugin by id; resolves to its display name. */
-export function pluginInstallOfficial(id: string): Promise<string> {
-  return invoke<string>("plugin_install_official", { id });
-}
-
-/** Enable / disable an installed plugin. */
-export function pluginSetEnabled(
-  id: string,
-  enabled: boolean,
-): Promise<void> {
-  return invoke<void>("plugin_set_enabled", { id, enabled });
-}
-
-/** Uninstall a plugin; resolves `true` if anything was removed. */
-export function pluginUninstall(id: string): Promise<boolean> {
-  return invoke<boolean>("plugin_uninstall", { id });
-}
+// The plugin marketplace types + wrappers + `filterRegistryItems` live in
+// `@outl/shared` (both clients register identical commands).

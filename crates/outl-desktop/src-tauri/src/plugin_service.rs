@@ -35,9 +35,10 @@ use parking_lot::Mutex;
 use tracing::warn;
 
 use crate::plugin_dto::{
-    PluginCommandDto, PluginKeybindingDto, PluginRunDto, RegistryItemDto, ToolbarButtonDto,
-    TransformResultDto, TransformerDto,
+    PluginCommandDto, PluginKeybindingDto, PluginRunDto, ToolbarButtonDto, TransformResultDto,
+    TransformerDto,
 };
+use outl_plugins::MarketplaceItem;
 
 /// The client id the host filters plugin contributions by. Plugins
 /// declare which surfaces a keybinding / toolbar button targets; the
@@ -96,7 +97,7 @@ enum PluginRequest {
     /// workspace's lockfile → the marketplace rows. Network + lockfile read;
     /// runs on this (non-tokio) thread so blocking HTTP is fine.
     RegistryList {
-        reply: Sender<Result<Vec<RegistryItemDto>, String>>,
+        reply: Sender<Result<Vec<MarketplaceItem>, String>>,
     },
     /// Download + install an official plugin by id (tap-to-install), then
     /// reload the host so it's live immediately. Reply is the installed name.
@@ -268,7 +269,7 @@ impl PluginService {
     }
 
     /// Marketplace rows: the official registry crossed with the lockfile.
-    pub(crate) fn registry_list(&self) -> Result<Vec<RegistryItemDto>, String> {
+    pub(crate) fn registry_list(&self) -> Result<Vec<MarketplaceItem>, String> {
         let (reply, rx) = mpsc::channel();
         self.tx
             .send(PluginRequest::RegistryList { reply })
@@ -454,92 +455,43 @@ fn run_plugin_thread(
     }
 }
 
-/// Registry marketplace rows: fetch the official index, then mark each entry
-/// installed/enabled from this workspace's lockfile.
-fn registry_list(
-    storage_root: &Arc<Mutex<Option<PathBuf>>>,
-) -> Result<Vec<RegistryItemDto>, String> {
-    let index = outl_plugins::registry::fetch(outl_plugins::DEFAULT_REGISTRY_URL)
-        .map_err(|e| e.to_string())?;
-    let lock = storage_root
+/// Resolve the live `Arc<Mutex>` storage root to an owned path, erroring when
+/// no workspace is open. The marketplace functions live in `outl-plugins`
+/// (shared with mobile); these thin wrappers only bridge the desktop's
+/// swap-capable root to the shared `&Path` API.
+fn root(storage_root: &Arc<Mutex<Option<PathBuf>>>) -> Result<PathBuf, String> {
+    storage_root
         .lock()
         .clone()
-        .map(|root| {
-            let pdir = outl_plugins::plugins_dir(&root);
-            outl_plugins::InstalledPlugins::load(&outl_plugins::lockfile_path(&pdir))
-                .unwrap_or_default()
-        })
-        .unwrap_or_default();
-    Ok(index
-        .plugins
-        .into_iter()
-        .map(|e| {
-            let entry = lock.plugins.get(&e.id);
-            RegistryItemDto {
-                installed: entry.is_some(),
-                enabled: entry.map(|x| x.enabled).unwrap_or(false),
-                id: e.id,
-                name: e.name,
-                description: e.description,
-                author: e.author,
-                category: e.category,
-                capabilities: e.capabilities,
-                permissions: e.permissions,
-                latest: e.latest,
-            }
-        })
-        .collect())
+        .ok_or_else(|| "no workspace open".to_string())
 }
 
-/// Download + install an official plugin, returning its display name.
+fn registry_list(
+    storage_root: &Arc<Mutex<Option<PathBuf>>>,
+) -> Result<Vec<MarketplaceItem>, String> {
+    outl_plugins::marketplace_list(&root(storage_root)?).map_err(|e| e.to_string())
+}
+
 fn install_official(
     storage_root: &Arc<Mutex<Option<PathBuf>>>,
     hlc: &HlcGenerator,
     id: &str,
 ) -> Result<String, String> {
-    let root = storage_root
-        .lock()
-        .clone()
-        .ok_or_else(|| "no workspace open".to_string())?;
-    let pdir = outl_plugins::plugins_dir(&root);
-    std::fs::create_dir_all(&pdir).map_err(|e| e.to_string())?;
-    let manifest = outl_plugins::registry::install_official(
-        &pdir,
-        outl_plugins::DEFAULT_REGISTRY_BASE,
-        id,
-        Some(hlc.actor().to_string()),
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(manifest.name)
+    outl_plugins::marketplace_install(&root(storage_root)?, &hlc.actor(), id)
+        .map_err(|e| e.to_string())
 }
 
-/// Flip `enabled` in the lockfile.
 fn set_enabled(
     storage_root: &Arc<Mutex<Option<PathBuf>>>,
     id: &str,
     enabled: bool,
 ) -> Result<(), String> {
-    let root = storage_root
-        .lock()
-        .clone()
-        .ok_or_else(|| "no workspace open".to_string())?;
-    let lock_path = outl_plugins::lockfile_path(&outl_plugins::plugins_dir(&root));
-    let mut lock = outl_plugins::InstalledPlugins::load(&lock_path).map_err(|e| e.to_string())?;
-    let entry = lock
-        .plugins
-        .get_mut(id)
-        .ok_or_else(|| format!("`{id}` is not installed"))?;
-    entry.enabled = enabled;
-    lock.save(&lock_path).map_err(|e| e.to_string())
+    outl_plugins::set_enabled(&root(storage_root)?, id, enabled).map_err(|e| e.to_string())
 }
 
-/// Delete a plugin's directory + lockfile entry.
 fn uninstall(storage_root: &Arc<Mutex<Option<PathBuf>>>, id: &str) -> Result<bool, String> {
-    let root = storage_root
-        .lock()
-        .clone()
-        .ok_or_else(|| "no workspace open".to_string())?;
-    outl_plugins::uninstall(&outl_plugins::plugins_dir(&root), id).map_err(|e| e.to_string())
+    outl_plugins::uninstall(&outl_plugins::plugins_dir(&root(storage_root)?), id)
+        .map_err(|e| e.to_string())
 }
 
 /// Load installed plugins the first time the workspace is available, or

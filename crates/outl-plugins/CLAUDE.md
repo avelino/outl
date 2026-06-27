@@ -47,8 +47,20 @@ src/
 ├── runtime.rs     # PluginEngine trait (engine seam: load / run_command / dispatch_op)
 ├── engine.rs      # BoaEngine (feature `js`): native bridge + JS prelude (describe→apply)
 ├── host.rs        # PluginHost: load, commands(), run_command(), sync_hooks() + intent apply
-└── loader.rs      # disk loader + install_from_dir (.outl/plugins/<id>/ + installed.json + _dev)
+├── loader.rs      # disk loader + install_from_dir (.outl/plugins/<id>/ + installed.json + _dev)
+└── registry.rs    # registry index (fetch/search) + marketplace API (feature `registry`)
 ```
+
+## Marketplace API (one owner, both GUI clients wrap)
+
+`registry.rs` owns the shared marketplace surface so the desktop and mobile Tauri layers stay thin shims (the bug this prevents: the same `registry ∩ lockfile` mapping written once per client and drifting).
+All four take a `&Path` storage root; the desktop resolves its `Arc<Mutex<Option<PathBuf>>>` to a `&Path` at the call site, mobile passes its owned `PathBuf` directly.
+
+- `MarketplaceItem` — a registry entry + local `installed`/`enabled` state (the serialized row both clients render).
+- `marketplace_list(&Path)` — fetch the index, cross-reference the lockfile.
+- `marketplace_install(&Path, &ActorId, id)` — download + install an official plugin, returns its name.
+- `set_enabled(&Path, id, enabled)` — flip the lockfile flag (no network).
+- Uninstall reuses the existing `loader::uninstall`.
 
 ## Execution model: describe → apply
 

@@ -4,15 +4,14 @@ import { Portal } from "solid-js/web";
 import type { PageView } from "@outl/shared/api/types";
 
 import {
+  filterRegistryItems,
   pluginInstallOfficial,
-  pluginList,
   pluginRegistryList,
-  pluginRun,
   pluginSetEnabled,
   pluginUninstall,
-  type PluginCommand,
-  type RegistryItem,
-} from "../lib/api";
+} from "@outl/shared/api/commands";
+import type { RegistryItem } from "@outl/shared/api/types";
+import { pluginList, pluginRun, type PluginCommand } from "../lib/api";
 import { haptic } from "../lib/haptics";
 
 /**
@@ -89,17 +88,7 @@ export function PluginSheet(props: {
     else void refreshCommands();
   });
 
-  const filtered = () => {
-    const q = query().trim().toLowerCase();
-    if (!q) return items();
-    return items().filter(
-      (i) =>
-        i.id.toLowerCase().includes(q) ||
-        i.name.toLowerCase().includes(q) ||
-        i.description.toLowerCase().includes(q) ||
-        i.capabilities.some((c) => c.toLowerCase().includes(q)),
-    );
-  };
+  const filtered = () => filterRegistryItems(items(), query());
 
   async function withBusy(id: string, fn: () => Promise<unknown>) {
     if (busyId()) return;

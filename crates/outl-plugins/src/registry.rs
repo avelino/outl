@@ -179,6 +179,106 @@ pub fn install_official(
     .map_err(|e| RegistryError::Install(e.to_string()))
 }
 
+/// One marketplace row: a registry entry plus a workspace's local install
+/// state (`installed` / `enabled`). Built by `marketplace_list`; serialized
+/// straight to the clients (desktop + mobile share this shape).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MarketplaceItem {
+    /// Reverse-DNS plugin id.
+    pub id: String,
+    /// Human-readable name.
+    pub name: String,
+    /// One-line summary.
+    pub description: String,
+    /// Author handle/name.
+    pub author: Option<String>,
+    /// Coarse category.
+    pub category: Option<String>,
+    /// Declared capabilities.
+    pub capabilities: Vec<String>,
+    /// Declared permissions (shown to the user before install).
+    pub permissions: Vec<String>,
+    /// Newest published version.
+    pub latest: Option<String>,
+    /// Present in the workspace's lockfile.
+    pub installed: bool,
+    /// Installed **and** enabled (false when disabled or not installed).
+    pub enabled: bool,
+}
+
+/// Marketplace rows for a workspace: fetch the official index, then mark each
+/// entry installed/enabled from the lockfile under `storage_root`. Both GUI
+/// clients call this (the only divergence — desktop's `Arc<Mutex>` storage
+/// root — is resolved to a `&Path` at the call site).
+#[cfg(feature = "registry")]
+pub fn marketplace_list(
+    storage_root: &std::path::Path,
+) -> Result<Vec<MarketplaceItem>, RegistryError> {
+    let index = fetch(DEFAULT_REGISTRY_URL)?;
+    let pdir = crate::loader::plugins_dir(storage_root);
+    let lock = crate::lockfile::InstalledPlugins::load(&crate::loader::lockfile_path(&pdir))
+        .unwrap_or_default();
+    Ok(index
+        .plugins
+        .into_iter()
+        .map(|e| {
+            let entry = lock.plugins.get(&e.id);
+            MarketplaceItem {
+                installed: entry.is_some(),
+                enabled: entry.map(|x| x.enabled).unwrap_or(false),
+                id: e.id,
+                name: e.name,
+                description: e.description,
+                author: e.author,
+                category: e.category,
+                capabilities: e.capabilities,
+                permissions: e.permissions,
+                latest: e.latest,
+            }
+        })
+        .collect())
+}
+
+/// Tap-to-install: download + install an official plugin into the workspace
+/// under `storage_root`, returning its display name. Wraps
+/// [`install_official`] with the plugins-dir setup both clients repeated.
+#[cfg(feature = "registry")]
+pub fn marketplace_install(
+    storage_root: &std::path::Path,
+    installed_by: &outl_core::id::ActorId,
+    id: &str,
+) -> Result<String, RegistryError> {
+    let pdir = crate::loader::plugins_dir(storage_root);
+    std::fs::create_dir_all(&pdir).map_err(|e| RegistryError::Install(e.to_string()))?;
+    let manifest = install_official(
+        &pdir,
+        DEFAULT_REGISTRY_BASE,
+        id,
+        Some(installed_by.to_string()),
+    )?;
+    Ok(manifest.name)
+}
+
+/// Flip an installed plugin's `enabled` flag in the workspace lockfile. No
+/// network — lockfile only — so it lives here next to the rest of the
+/// marketplace surface the clients share.
+pub fn set_enabled(
+    storage_root: &std::path::Path,
+    id: &str,
+    enabled: bool,
+) -> Result<(), RegistryError> {
+    let lock_path = crate::loader::lockfile_path(&crate::loader::plugins_dir(storage_root));
+    let mut lock = crate::lockfile::InstalledPlugins::load(&lock_path)
+        .map_err(|e| RegistryError::Install(e.to_string()))?;
+    let entry = lock
+        .plugins
+        .get_mut(id)
+        .ok_or_else(|| RegistryError::Install(format!("`{id}` is not installed")))?;
+    entry.enabled = enabled;
+    lock.save(&lock_path)
+        .map_err(|e| RegistryError::Install(e.to_string()))
+}
+
 #[cfg(feature = "registry")]
 fn http_client() -> Result<reqwest::blocking::Client, RegistryError> {
     reqwest::blocking::Client::builder()

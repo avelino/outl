@@ -53,8 +53,11 @@ pub use lockfile::{bundle_hash, InstalledEntry, InstalledPlugins};
 pub use manifest::PluginManifest;
 pub use model::{HostIntent, LogOpView, MoveTarget, ReadModel, TransformResult};
 pub use permission::{NetworkDomain, Permission, PermissionSet};
+#[cfg(feature = "registry")]
+pub use registry::{marketplace_install, marketplace_list};
 pub use registry::{
-    RegistryEntry, RegistryError, RegistryIndex, DEFAULT_REGISTRY_BASE, DEFAULT_REGISTRY_URL,
+    set_enabled, MarketplaceItem, RegistryEntry, RegistryError, RegistryIndex,
+    DEFAULT_REGISTRY_BASE, DEFAULT_REGISTRY_URL,
 };
 pub use runtime::{EngineError, PluginEngine};
 

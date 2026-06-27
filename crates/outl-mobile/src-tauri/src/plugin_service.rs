@@ -50,9 +50,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use tracing::warn;
 
-use crate::plugin_registry::{
-    install_official, registry_list, set_enabled, uninstall_plugin, RegistryItemDto,
-};
+use outl_plugins::MarketplaceItem;
 
 /// One plugin command, projected to the wire shape the frontend lists.
 #[derive(Debug, Clone, Serialize)]
@@ -207,7 +205,7 @@ enum PluginRequest {
     /// lockfile → the marketplace rows. Network + lockfile read; runs on
     /// this (non-tokio) thread so blocking HTTP is fine.
     RegistryList {
-        reply: Sender<Result<Vec<RegistryItemDto>, String>>,
+        reply: Sender<Result<Vec<MarketplaceItem>, String>>,
     },
     /// Download + install an official plugin by id (tap-to-install), then
     /// reload the host so it's live. Reply is the installed name.
@@ -362,7 +360,7 @@ impl PluginService {
     }
 
     /// Marketplace rows: the official registry crossed with the lockfile.
-    pub(crate) fn registry_list(&self) -> Result<Vec<RegistryItemDto>, String> {
+    pub(crate) fn registry_list(&self) -> Result<Vec<MarketplaceItem>, String> {
         let (reply, rx) = mpsc::channel();
         self.tx
             .send(PluginRequest::RegistryList { reply })
@@ -528,6 +526,25 @@ fn run_plugin_thread(
             }
         }
     }
+}
+
+// Thin bridges to the shared marketplace API in `outl-plugins` (one owner,
+// desktop wraps it too). Mobile's root is an owned `PathBuf`, so these only
+// map the error to a String for the reply channel.
+fn registry_list(root: &Path) -> Result<Vec<MarketplaceItem>, String> {
+    outl_plugins::marketplace_list(root).map_err(|e| e.to_string())
+}
+
+fn install_official(root: &Path, hlc: &HlcGenerator, id: &str) -> Result<String, String> {
+    outl_plugins::marketplace_install(root, &hlc.actor(), id).map_err(|e| e.to_string())
+}
+
+fn set_enabled(root: &Path, id: &str, enabled: bool) -> Result<(), String> {
+    outl_plugins::set_enabled(root, id, enabled).map_err(|e| e.to_string())
+}
+
+fn uninstall_plugin(root: &Path, id: &str) -> Result<bool, String> {
+    outl_plugins::uninstall(&plugins_dir(root), id).map_err(|e| e.to_string())
 }
 
 /// Load installed plugins the first time the workspace is available.

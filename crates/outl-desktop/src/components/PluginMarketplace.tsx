@@ -1,12 +1,13 @@
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 
 import {
+  filterRegistryItems,
   pluginInstallOfficial,
   pluginRegistryList,
   pluginSetEnabled,
   pluginUninstall,
-  type RegistryItem,
-} from "../lib/api";
+} from "@outl/shared/api/commands";
+import type { RegistryItem } from "@outl/shared/api/types";
 import { appState, setAppState } from "../lib/store";
 
 /**
@@ -64,17 +65,7 @@ export function PluginMarketplace() {
     if (appState.marketplaceOpen) void refresh();
   });
 
-  const filtered = () => {
-    const q = query().trim().toLowerCase();
-    if (!q) return items();
-    return items().filter(
-      (i) =>
-        i.id.toLowerCase().includes(q) ||
-        i.name.toLowerCase().includes(q) ||
-        i.description.toLowerCase().includes(q) ||
-        i.capabilities.some((c) => c.toLowerCase().includes(q)),
-    );
-  };
+  const filtered = () => filterRegistryItems(items(), query());
 
   async function withBusy(id: string, fn: () => Promise<unknown>) {
     if (busyId()) return;

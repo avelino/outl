@@ -279,3 +279,22 @@ export interface WorkspaceSummary {
    */
   ready: boolean;
 }
+
+/**
+ * One plugin marketplace row: a registry entry (plugins.outl.app) plus the
+ * workspace's local state. Wire shape of `outl_plugins::MarketplaceItem`,
+ * returned by `plugin_registry_list` on both clients. `installed` / `enabled`
+ * drive the install vs. manage affordances.
+ */
+export interface RegistryItem {
+  id: string;
+  name: string;
+  description: string;
+  author: string | null;
+  category: string | null;
+  capabilities: string[];
+  permissions: string[];
+  latest: string | null;
+  installed: boolean;
+  enabled: boolean;
+}

@@ -23,6 +23,7 @@ import type {
   PageView,
   PeerDto,
   PeerStatusDto,
+  RegistryItem,
   RunCodeBlockReply,
   WorkspaceSummary,
 } from "./types";
@@ -410,4 +411,50 @@ function describeHref(href: string): string {
     })
     .join("");
   return cleaned.length > 100 ? `${cleaned.slice(0, 100)}…` : cleaned;
+}
+
+// ── Plugin marketplace ──────────────────────────────────────────────
+// Both GUI clients register identical `plugin_registry_list` /
+// `plugin_install_official` / `plugin_set_enabled` / `plugin_uninstall`
+// commands on their src-tauri side, so the wrappers live here once.
+
+/** Fetch the marketplace: the official registry crossed with the lockfile. */
+export function pluginRegistryList(): Promise<RegistryItem[]> {
+  return invoke<RegistryItem[]>("plugin_registry_list");
+}
+
+/** Tap-to-install an official plugin by id; resolves to its display name. */
+export function pluginInstallOfficial(id: string): Promise<string> {
+  return invoke<string>("plugin_install_official", { id });
+}
+
+/** Enable / disable an installed plugin. */
+export function pluginSetEnabled(id: string, enabled: boolean): Promise<void> {
+  return invoke<void>("plugin_set_enabled", { id, enabled });
+}
+
+/** Uninstall a plugin; resolves `true` if anything was removed. */
+export function pluginUninstall(id: string): Promise<boolean> {
+  return invoke<boolean>("plugin_uninstall", { id });
+}
+
+/**
+ * Filter marketplace rows by a query (case-insensitive substring over id,
+ * name, description, and capabilities). Empty query returns every item.
+ * Pure — both the desktop modal and the mobile sheet derive their list from
+ * it, so the match rule stays in one place.
+ */
+export function filterRegistryItems(
+  items: readonly RegistryItem[],
+  query: string,
+): RegistryItem[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [...items];
+  return items.filter(
+    (i) =>
+      i.id.toLowerCase().includes(q) ||
+      i.name.toLowerCase().includes(q) ||
+      i.description.toLowerCase().includes(q) ||
+      i.capabilities.some((c) => c.toLowerCase().includes(q)),
+  );
 }
