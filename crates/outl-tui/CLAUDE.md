@@ -109,7 +109,10 @@ TUI-specific contracts worth remembering:
   Terminals don't reflow, and `Paragraph::wrap` can't be used because it expands lines *after* layout and would desync the `selected_line` scroll index.
   So `view::wrap::push_wrapped` emits the wrapped `Line`s up front: the first visual row keeps the bullet/fold `head`, continuations re-indent under the text column, and the `│ ` indent rails repeat on every row.
   Wrapping runs on the already-styled `Span`s (post-tokenization), so a break never splits a `**bold**` token back into literal asterisks.
-  **Cursor rows (Insert / Normal-selected) never wrap** — the cursor column is a byte offset into the unwrapped row, so the caller passes width `0` (the "don't wrap" sentinel) for them.
+  **Cursor rows (Insert / Normal-selected) wrap too** — `emit_row_with_cursor` bakes the caret / block cursor into the row's `Span`s *before* `push_wrapped` runs.
+  Reflowing just carries the cursor onto its wrapped visual row: the char offset was already consumed turning it into a span, so there's nothing left to desync.
+  The earlier "cursor rows pass width `0`" workaround was the actual #99 regression: the selected block stayed on one overflowing line and only wrapped once the cursor left it (`viewing mode won't wrap until I navigate away`).
+  `text_width == 0` is still the "don't wrap" sentinel, but only headless renders pass it now.
 
 ## Reuse across UI surfaces (Tauri, mobile)
 

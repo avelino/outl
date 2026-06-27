@@ -460,16 +460,14 @@ pub(crate) fn emit_block_lines(
             }
         }
 
-        // Cursor rows must stay on a single visual line: the cursor's
-        // column is a byte offset into the unwrapped row text, so
-        // splitting it across wrap rows would desync the caret from
-        // what the user typed. Only wrap when no cursor sits here.
-        let wrap_width = if row.cursor_col.is_some() {
-            0
-        } else {
-            text_width
-        };
-        push_wrapped(guides, head, content, wrap_width, out);
+        // Cursor rows wrap too (#99). The cursor is already baked into
+        // `content` as a styled span by `emit_row_with_cursor` *before*
+        // we wrap, so reflowing the spans just carries the cursor onto
+        // its wrapped visual row — the char offset was already consumed
+        // turning it into a span, there's nothing left to desync. A
+        // `text_width` of 0 (headless render) is still the "don't wrap"
+        // sentinel for every row, cursor or not.
+        push_wrapped(guides, head, content, text_width, out);
     }
 }
 
@@ -522,6 +520,167 @@ enum CursorStyle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use outl_core::id::ActorId;
+    use outl_core::workspace::Workspace;
+    use tempfile::TempDir;
+
+    fn test_app() -> (App, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let actor = ActorId::new();
+        let ws = Workspace::open_in_memory(actor).unwrap();
+        let app = App::new(
+            dir.path().to_path_buf(),
+            ws,
+            actor,
+            crate::theme::default_theme(),
+            false,
+            outl_config::SyncConfig::default(),
+        )
+        .unwrap();
+        (app, dir)
+    }
+
+    /// Concatenate a rendered line's spans into one `String`.
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    // The text used by the wrap regression tests: 43 cells of prose
+    // that cannot fit in a 16-cell pane, so a correct renderer must
+    // emit more than one visual row.
+    const LONG: &str = "the quick brown fox jumps over the lazy dog";
+
+    /// #99: the selected block in Normal mode used to render on a single
+    /// overflowing line and only wrap once the cursor moved off it. It
+    /// must wrap *while* the cursor sits on it.
+    #[test]
+    fn normal_cursor_block_wraps_to_pane_width() {
+        let (app, _dir) = test_app();
+        let mut out = Vec::new();
+        let mode = RenderMode::NormalCursor {
+            text: LONG.into(),
+            cursor_char: 0,
+        };
+        emit_block_lines(
+            0,
+            app.theme.bullet,
+            &mode,
+            false,
+            FoldMarker::None,
+            &app,
+            &mut out,
+            16,
+        );
+        assert!(out.len() > 1, "expected wrap, got {} line(s)", out.len());
+    }
+
+    /// #99: the same must hold in Insert mode, and the thin caret has to
+    /// survive the reflow (it's baked into the spans before wrapping).
+    #[test]
+    fn editing_block_wraps_and_keeps_the_caret() {
+        let (app, _dir) = test_app();
+        let mut out = Vec::new();
+        let mode = RenderMode::Editing {
+            text: LONG.into(),
+            cursor_char: 0,
+        };
+        emit_block_lines(
+            0,
+            app.theme.bullet,
+            &mode,
+            false,
+            FoldMarker::None,
+            &app,
+            &mut out,
+            16,
+        );
+        assert!(out.len() > 1, "expected wrap, got {} line(s)", out.len());
+        let has_caret = out.iter().any(|l| line_text(l).contains('▏'));
+        assert!(has_caret, "caret lost after wrap");
+    }
+
+    /// The block cursor travels with its character across a wrap break:
+    /// a cursor on a word that lands on a continuation row still paints
+    /// exactly one inverted cell.
+    #[test]
+    fn block_cursor_survives_the_wrap_break() {
+        let (app, _dir) = test_app();
+        let mut out = Vec::new();
+        // Cursor on the "d" of the trailing "dog" — past the first
+        // 16-cell row, so it can only be drawn on a continuation row.
+        let cursor_char = LONG.len() - 3;
+        let mode = RenderMode::NormalCursor {
+            text: LONG.into(),
+            cursor_char,
+        };
+        emit_block_lines(
+            0,
+            app.theme.bullet,
+            &mode,
+            false,
+            FoldMarker::None,
+            &app,
+            &mut out,
+            16,
+        );
+        assert!(out.len() > 1, "expected wrap, got {} line(s)", out.len());
+        let cursor_cells = out
+            .iter()
+            .flat_map(|l| &l.spans)
+            .filter(|s| s.style == app.theme.cursor_block)
+            .count();
+        assert_eq!(cursor_cells, 1, "block cursor must appear exactly once");
+    }
+
+    /// A short block under the cursor still renders as a single line —
+    /// wrapping only kicks in past the pane width, cursor or not.
+    #[test]
+    fn short_cursor_block_stays_one_line() {
+        let (app, _dir) = test_app();
+        let mut out = Vec::new();
+        let mode = RenderMode::NormalCursor {
+            text: "short".into(),
+            cursor_char: 0,
+        };
+        emit_block_lines(
+            0,
+            app.theme.bullet,
+            &mode,
+            false,
+            FoldMarker::None,
+            &app,
+            &mut out,
+            80,
+        );
+        assert_eq!(out.len(), 1);
+    }
+
+    /// End-to-end of the #99 scenario: a page with one long block,
+    /// selected in Normal mode, rendered through the real
+    /// `render_outline` entry point into a narrow pane. The selected
+    /// block must occupy more than one visual line and the continuation
+    /// must re-indent under the bullet text.
+    #[test]
+    fn selected_block_wraps_through_render_outline() {
+        let (mut app, _dir) = test_app();
+        app.page = outl_md::parse::parse(&format!("- {LONG}"));
+        app.selected = 0;
+        app.cursor_col = 0;
+        app.mode = Mode::Normal;
+
+        let (lines, sel) = render_outline(&app.page, &app, 20);
+        assert_eq!(sel, Some(0), "selected block starts at line 0");
+        assert!(
+            lines.len() > 1,
+            "selected block must wrap, got {} line(s):\n{}",
+            lines.len(),
+            lines.iter().map(line_text).collect::<Vec<_>>().join("\n"),
+        );
+        // First row carries the bullet; the next is a continuation that
+        // re-indents under the text column (two leading spaces).
+        assert!(line_text(&lines[0]).contains("- "));
+        assert!(line_text(&lines[1]).starts_with("  "));
+    }
 
     #[test]
     fn embed_only_handle_detects_bare_token() {

@@ -27,9 +27,11 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 /// every row so the indent structure reads the same top to bottom.
 ///
 /// `text_width == 0` (or a prefix already wider than the pane) means
-/// "don't wrap" — the caller passes 0 for cursor rows and headless
-/// renders, and we'd rather overflow a pathologically narrow pane than
-/// loop. This is the hot path for the common short block, so it stays
+/// "don't wrap" — the caller passes 0 for headless renders, and we'd
+/// rather overflow a pathologically narrow pane than loop. Cursor rows
+/// *do* wrap now (#99): the cursor is baked into `content` as a styled
+/// span before this call, so reflowing carries it onto its wrapped row.
+/// This is the hot path for the common short block, so it stays
 /// allocation-light: one `Line` straight through.
 pub(crate) fn push_wrapped(
     guides: Vec<Span<'static>>,
@@ -275,8 +277,8 @@ mod tests {
 
     #[test]
     fn push_wrapped_zero_width_never_wraps() {
-        // text_width 0 (cursor rows, headless renders) is the
-        // "don't wrap" sentinel — one line straight through.
+        // text_width 0 (headless renders) is the "don't wrap"
+        // sentinel — one line straight through.
         let mut out = Vec::new();
         push_wrapped(
             vec![],
