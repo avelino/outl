@@ -545,6 +545,24 @@ mod tests {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
     }
 
+    /// Render one block at indent 0 with a leaf bullet and no auto-run,
+    /// the shape every wrap regression test needs. Keeps each test to
+    /// its `mode` + `width` instead of repeating the eight-arg call.
+    fn render_block_lines(app: &App, mode: RenderMode, width: u16) -> Vec<Line<'static>> {
+        let mut out = Vec::new();
+        emit_block_lines(
+            0,
+            app.theme.bullet,
+            &mode,
+            false,
+            FoldMarker::None,
+            app,
+            &mut out,
+            width,
+        );
+        out
+    }
+
     // The text used by the wrap regression tests: 43 cells of prose
     // that cannot fit in a 16-cell pane, so a correct renderer must
     // emit more than one visual row.
@@ -552,25 +570,15 @@ mod tests {
 
     /// #99: the selected block in Normal mode used to render on a single
     /// overflowing line and only wrap once the cursor moved off it. It
-    /// must wrap *while* the cursor sits on it.
+    /// must wrap while the cursor sits on it.
     #[test]
     fn normal_cursor_block_wraps_to_pane_width() {
         let (app, _dir) = test_app();
-        let mut out = Vec::new();
         let mode = RenderMode::NormalCursor {
             text: LONG.into(),
             cursor_char: 0,
         };
-        emit_block_lines(
-            0,
-            app.theme.bullet,
-            &mode,
-            false,
-            FoldMarker::None,
-            &app,
-            &mut out,
-            16,
-        );
+        let out = render_block_lines(&app, mode, 16);
         assert!(out.len() > 1, "expected wrap, got {} line(s)", out.len());
     }
 
@@ -579,21 +587,11 @@ mod tests {
     #[test]
     fn editing_block_wraps_and_keeps_the_caret() {
         let (app, _dir) = test_app();
-        let mut out = Vec::new();
         let mode = RenderMode::Editing {
             text: LONG.into(),
             cursor_char: 0,
         };
-        emit_block_lines(
-            0,
-            app.theme.bullet,
-            &mode,
-            false,
-            FoldMarker::None,
-            &app,
-            &mut out,
-            16,
-        );
+        let out = render_block_lines(&app, mode, 16);
         assert!(out.len() > 1, "expected wrap, got {} line(s)", out.len());
         let has_caret = out.iter().any(|l| line_text(l).contains('▏'));
         assert!(has_caret, "caret lost after wrap");
@@ -605,24 +603,14 @@ mod tests {
     #[test]
     fn block_cursor_survives_the_wrap_break() {
         let (app, _dir) = test_app();
-        let mut out = Vec::new();
-        // Cursor on the "d" of the trailing "dog" — past the first
+        // Cursor on the "d" of the trailing "dog", past the first
         // 16-cell row, so it can only be drawn on a continuation row.
         let cursor_char = LONG.len() - 3;
         let mode = RenderMode::NormalCursor {
             text: LONG.into(),
             cursor_char,
         };
-        emit_block_lines(
-            0,
-            app.theme.bullet,
-            &mode,
-            false,
-            FoldMarker::None,
-            &app,
-            &mut out,
-            16,
-        );
+        let out = render_block_lines(&app, mode, 16);
         assert!(out.len() > 1, "expected wrap, got {} line(s)", out.len());
         let cursor_cells = out
             .iter()
@@ -632,26 +620,16 @@ mod tests {
         assert_eq!(cursor_cells, 1, "block cursor must appear exactly once");
     }
 
-    /// A short block under the cursor still renders as a single line —
+    /// A short block under the cursor still renders as a single line:
     /// wrapping only kicks in past the pane width, cursor or not.
     #[test]
     fn short_cursor_block_stays_one_line() {
         let (app, _dir) = test_app();
-        let mut out = Vec::new();
         let mode = RenderMode::NormalCursor {
             text: "short".into(),
             cursor_char: 0,
         };
-        emit_block_lines(
-            0,
-            app.theme.bullet,
-            &mode,
-            false,
-            FoldMarker::None,
-            &app,
-            &mut out,
-            80,
-        );
+        let out = render_block_lines(&app, mode, 80);
         assert_eq!(out.len(), 1);
     }
 
