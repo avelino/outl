@@ -40,7 +40,7 @@ Instead it keeps two tiers, both reconstructed on open from the op log:
   The hot read path behind `Workspace::block_text`.
   Cheap, roughly the text size.
 - `cache: DocCache` — a bounded LRU (`DOC_CACHE_CAP = 512`) of live `Doc`s, only for blocks being edited or merged right now.
-  A cold block is rebuilt on demand via `Workspace::ensure_doc`, which replays that block's `Edit` ops from the log into a fresh `Doc`.
+  A cold block is rebuilt on demand via `ContentStore::ensure_doc` (private, in `src/content.rs`), which replays that block's `Edit` ops from the log into a fresh `Doc`.
   Yrs is a CRDT, so update order does not change the result — convergence is preserved.
 
 `open_with_storage` replays in **two passes**.

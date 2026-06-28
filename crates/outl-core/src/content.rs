@@ -149,14 +149,14 @@ impl ContentStore {
         if self.cache.contains(node) {
             return;
         }
-        let updates: Vec<Vec<u8>> = log
-            .iter()
-            .filter_map(|logged| match &logged.op {
-                Op::Edit { node: n, text_op } if *n == node => Some(text_op.clone()),
-                _ => None,
-            })
-            .collect();
-        let doc = build_doc(updates.iter().map(Vec::as_slice));
+        // Replay the block's edits straight from the log. `log` is a
+        // separate borrow from `self.cache`, so we can hand `build_doc`
+        // borrowed slices instead of cloning the block's whole history
+        // into a transient `Vec<Vec<u8>>` first.
+        let doc = build_doc(log.iter().filter_map(|logged| match &logged.op {
+            Op::Edit { node: n, text_op } if *n == node => Some(text_op.as_slice()),
+            _ => None,
+        }));
         self.cache.insert(node, doc);
     }
 
@@ -182,34 +182,37 @@ impl ContentStore {
     /// cold, and keeps the materialized string in sync.
     pub(crate) fn replace_text(&mut self, node: NodeId, log: &OpLog, new_text: &str) -> Vec<u8> {
         self.ensure_doc(node, log);
-        let update = self
+        // `ensure_doc` just cached this node, so the lookup can't miss. If
+        // it ever did, returning an empty update would silently drop the
+        // edit, so fail loud instead.
+        let doc = self
             .cache
             .get_mut(node)
-            .map(|doc| {
-                let text = doc.get_or_insert_text("content");
+            .expect("ensure_doc guarantees the node's doc is cached");
+        let text = doc.get_or_insert_text("content");
 
-                // Snapshot the state vector before our mutation so we can
-                // encode only the resulting delta.
-                let sv_before = {
-                    let txn = doc.transact();
-                    txn.state_vector()
-                };
+        // Snapshot the state vector before our mutation so we can encode
+        // only the resulting delta.
+        let sv_before = {
+            let txn = doc.transact();
+            txn.state_vector()
+        };
 
-                {
-                    let mut txn = doc.transact_mut();
-                    let len = text.len(&txn);
-                    if len > 0 {
-                        text.remove_range(&mut txn, 0, len);
-                    }
-                    if !new_text.is_empty() {
-                        text.insert(&mut txn, 0, new_text);
-                    }
-                }
+        {
+            let mut txn = doc.transact_mut();
+            let len = text.len(&txn);
+            if len > 0 {
+                text.remove_range(&mut txn, 0, len);
+            }
+            if !new_text.is_empty() {
+                text.insert(&mut txn, 0, new_text);
+            }
+        }
 
-                let txn = doc.transact();
-                txn.encode_state_as_update_v1(&sv_before)
-            })
-            .unwrap_or_default();
+        let update = {
+            let txn = doc.transact();
+            txn.encode_state_as_update_v1(&sv_before)
+        };
         self.text.insert(node, new_text.to_string());
         update
     }
