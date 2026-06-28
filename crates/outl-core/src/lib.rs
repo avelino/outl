@@ -13,6 +13,7 @@
 #![warn(missing_docs)]
 
 pub mod block;
+mod content;
 pub mod fractional;
 pub mod hlc;
 pub mod id;

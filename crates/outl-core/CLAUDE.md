@@ -29,6 +29,27 @@ Treat every change as production-bound.
     See `docs/storage.md` → Concurrency / Failure modes.
 - Domain models: `Workspace`, `Page`, `Journal`, `Block`, `Property`, `Tag`
 
+### Block text is two-tier, not one live `Doc` per block
+
+`Workspace`'s `ContentStore` does **not** keep a live Yrs `Doc` resident for every block.
+That was the cause of issue #108: a vault in the hundreds-of-thousands-of-blocks range held 0.5-1GB of resident docs and iOS jetsam killed the app on open.
+
+Instead it keeps two tiers, both reconstructed on open from the op log:
+
+- `text: HashMap<NodeId, String>` — the materialized string of every block.
+  The hot read path behind `Workspace::block_text`.
+  Cheap, roughly the text size.
+- `cache: DocCache` — a bounded LRU (`DOC_CACHE_CAP = 512`) of live `Doc`s, only for blocks being edited or merged right now.
+  A cold block is rebuilt on demand via `Workspace::ensure_doc`, which replays that block's `Edit` ops from the log into a fresh `Doc`.
+  Yrs is a CRDT, so update order does not change the result — convergence is preserved.
+
+`open_with_storage` replays in **two passes**.
+Pass 1 applies every op to the tree/log (`Edit` is a no-op on the tree).
+Pass 2 groups `Edit` ops by node and materializes one `Doc` at a time, so the open-time memory peak is a single live doc rather than one per block.
+
+This is a materialization change only: the op log stays the source of truth, the `Doc`/string are projections, and the public surface (`block_text`, `build_text_replace_update`, `apply`) is unchanged.
+The resident `OpLog` still holds every `Op::Edit`'s `text_op` bytes (the cheaper second copy of history); shrinking that is the separate per-page op-log shards work, not this change.
+
 ## What this crate does NOT own
 
 - Markdown parsing/rendering → `outl-md`

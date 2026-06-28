@@ -14,6 +14,7 @@
 //! Higher-level methods (page CRUD, journal CRUD, block edit shortcuts)
 //! live in `outl-actions` and `outl-cli`, not here.
 
+use crate::content::ContentStore;
 use crate::id::{ActorId, NodeId};
 use crate::log::OpLog;
 use crate::op::{LogOp, Op};
@@ -21,8 +22,6 @@ use crate::storage::{Storage, StorageError};
 use crate::tree::Tree;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use yrs::updates::decoder::Decode;
-use yrs::{Doc, GetString, ReadTxn, Text, Transact};
 
 /// Errors a workspace may surface to its caller.
 #[derive(Debug, thiserror::Error)]
@@ -30,36 +29,6 @@ pub enum WorkspaceError {
     /// Underlying storage failure.
     #[error(transparent)]
     Storage(#[from] StorageError),
-}
-
-/// Per-node Yrs documents holding block text.
-///
-/// Tree-level CRDT is structural only; per-block text convergence rides
-/// on Yrs. The store is private to the workspace and reconstructed on
-/// open from the op log.
-#[derive(Default)]
-struct ContentStore {
-    docs: HashMap<NodeId, Doc>,
-}
-
-impl ContentStore {
-    fn apply_update(&mut self, node: NodeId, update: &[u8]) {
-        let doc = self.docs.entry(node).or_default();
-        let mut txn = doc.transact_mut();
-        if let Ok(decoded) = yrs::Update::decode_v1(update) {
-            let _ = txn.apply_update(decoded);
-        }
-        // Silent ignore of malformed updates — those come from corrupted
-        // peers and shouldn't crash the local workspace. Surfaced via
-        // tracing instead.
-    }
-
-    fn text(&self, node: NodeId) -> Option<String> {
-        let doc = self.docs.get(&node)?;
-        let text = doc.get_or_insert_text("content");
-        let txn = doc.transact();
-        Some(text.get_string(&txn))
-    }
 }
 
 /// Top-level workspace.
@@ -105,13 +74,35 @@ impl Workspace {
             content: ContentStore::default(),
             storage,
         };
-        // Replay the persisted log.
+        // Pass 1: structural. Apply every op to the tree (`Edit` is a
+        // no-op there) and the log. Text is materialized in pass 2 so the
+        // open-time memory peak stays at a single live `Doc` instead of
+        // one per block — that peak is what jetsam was killing on iOS.
         let ops = ws.storage.all_ops()?;
         for op in ops {
-            if let Op::Edit { node, text_op } = &op.op {
-                ws.content.apply_update(*node, text_op);
-            }
             ws.tree.apply_op(&mut ws.log, op);
+        }
+
+        // Pass 2: text. Group `Edit` ops by node (indices only, no byte
+        // copies), then rebuild one `Doc` at a time, materialize its
+        // string, and drop it before moving on.
+        let mut edits_by_node: HashMap<NodeId, Vec<usize>> = HashMap::new();
+        for (i, logged) in ws.log.iter().enumerate() {
+            if let Op::Edit { node, .. } = &logged.op {
+                edits_by_node.entry(*node).or_default().push(i);
+            }
+        }
+        for (node, indices) in edits_by_node {
+            ws.content.materialize(
+                node,
+                indices.iter().filter_map(|&i| match ws.log.get(i) {
+                    Some(LogOp {
+                        op: Op::Edit { text_op, .. },
+                        ..
+                    }) => Some(text_op.as_slice()),
+                    _ => None,
+                }),
+            );
         }
         Ok(ws)
     }
@@ -124,7 +115,10 @@ impl Workspace {
     /// is responsible for surfacing the error and/or invoking `outl doctor`.
     pub fn apply(&mut self, op: LogOp) -> Result<(), WorkspaceError> {
         if let Op::Edit { node, text_op } = &op.op {
-            self.content.apply_update(*node, text_op);
+            // Merge the update into the block's text. The Doc is rebuilt
+            // from the log here, before this op is appended below, so the
+            // merge sees the prior state.
+            self.content.merge_update(*node, &self.log, text_op);
         }
         self.tree.apply_op(&mut self.log, op.clone());
         self.storage.append_op(&op)?;
@@ -146,6 +140,15 @@ impl Workspace {
         self.content.text(node)
     }
 
+    /// Number of live Yrs `Doc`s currently resident in the content cache.
+    ///
+    /// Test-only window into the bound that keeps large vaults under the
+    /// iOS memory limit (issue #108).
+    #[cfg(test)]
+    fn live_doc_count(&self) -> usize {
+        self.content.live_doc_count()
+    }
+
     /// Build a Yrs `update_v1` payload that, once wrapped in
     /// `Op::Edit { node, text_op }` and pushed through [`Self::apply`],
     /// rewrites the block's text to `new_text` exactly.
@@ -163,38 +166,18 @@ impl Workspace {
         if current == new_text {
             return Vec::new();
         }
-        let doc = self.content.docs.entry(node).or_default();
-        let text = doc.get_or_insert_text("content");
-
-        // Snapshot the state vector before our mutation so we can
-        // encode only the resulting delta.
-        let sv_before = {
-            let txn = doc.transact();
-            txn.state_vector()
-        };
-
-        {
-            let mut txn = doc.transact_mut();
-            let len = text.len(&txn);
-            if len > 0 {
-                text.remove_range(&mut txn, 0, len);
-            }
-            if !new_text.is_empty() {
-                text.insert(&mut txn, 0, new_text);
-            }
-        }
-
-        let txn = doc.transact();
-        txn.encode_state_as_update_v1(&sv_before)
+        self.content.replace_text(node, &self.log, new_text)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::content::DOC_CACHE_CAP;
     use crate::fractional::Fractional;
     use crate::hlc::HlcGenerator;
     use crate::op::Op;
+    use yrs::{Doc, Text, Transact};
 
     fn make_op(g: &HlcGenerator, op: Op) -> LogOp {
         let ts = g.next();
@@ -269,5 +252,155 @@ mod tests {
         .unwrap();
 
         assert_eq!(ws.block_text(n).as_deref(), Some("hello outl"));
+    }
+
+    /// Edit one block, then create + edit a fresh one. Reopening rebuilds
+    /// the text of both from the log even though neither Doc was kept
+    /// resident across the close.
+    #[test]
+    fn reopen_rebuilds_text_without_resident_docs() {
+        let actor = ActorId::new();
+        let g = HlcGenerator::new(actor);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().to_path_buf();
+
+        let storage = Box::new(crate::storage::JsonlStorage::open(dir.clone(), actor).unwrap());
+        let mut ws = Workspace::open_with_storage(actor, storage, None).unwrap();
+
+        let mut ids = Vec::new();
+        for i in 0..5 {
+            let n = NodeId::new();
+            ids.push(n);
+            ws.apply(make_op(
+                &g,
+                Op::Create {
+                    node: n,
+                    parent: NodeId::root(),
+                    position: Fractional::first(),
+                },
+            ))
+            .unwrap();
+            let update = ws.build_text_replace_update(n, &format!("block {i}"));
+            ws.apply(make_op(
+                &g,
+                Op::Edit {
+                    node: n,
+                    text_op: update,
+                },
+            ))
+            .unwrap();
+        }
+        drop(ws);
+
+        let storage = Box::new(crate::storage::JsonlStorage::open(dir, actor).unwrap());
+        let ws2 = Workspace::open_with_storage(actor, storage, None).unwrap();
+        for (i, n) in ids.iter().enumerate() {
+            assert_eq!(
+                ws2.block_text(*n).as_deref(),
+                Some(format!("block {i}").as_str())
+            );
+        }
+        // Pass 2 materializes strings and drops every Doc, so nothing is
+        // resident right after open — the whole point of issue #108.
+        assert_eq!(ws2.live_doc_count(), 0);
+    }
+
+    /// The live-Doc cache never grows past its cap, no matter how many
+    /// distinct blocks get edited in a session.
+    #[test]
+    fn doc_cache_is_bounded() {
+        let actor = ActorId::new();
+        let g = HlcGenerator::new(actor);
+        let mut ws = Workspace::open_in_memory(actor).unwrap();
+
+        let over = DOC_CACHE_CAP + 50;
+        for i in 0..over {
+            let n = NodeId::new();
+            ws.apply(make_op(
+                &g,
+                Op::Create {
+                    node: n,
+                    parent: NodeId::root(),
+                    position: Fractional::first(),
+                },
+            ))
+            .unwrap();
+            let update = ws.build_text_replace_update(n, &format!("b{i}"));
+            ws.apply(make_op(
+                &g,
+                Op::Edit {
+                    node: n,
+                    text_op: update,
+                },
+            ))
+            .unwrap();
+            assert!(ws.live_doc_count() <= DOC_CACHE_CAP);
+        }
+        assert_eq!(ws.live_doc_count(), DOC_CACHE_CAP);
+    }
+
+    /// A block evicted from the cache is rebuilt from the log on the next
+    /// edit, preserving its text instead of losing history.
+    #[test]
+    fn evicted_block_rebuilds_from_log() {
+        let actor = ActorId::new();
+        let g = HlcGenerator::new(actor);
+        let mut ws = Workspace::open_in_memory(actor).unwrap();
+
+        let first = NodeId::new();
+        ws.apply(make_op(
+            &g,
+            Op::Create {
+                node: first,
+                parent: NodeId::root(),
+                position: Fractional::first(),
+            },
+        ))
+        .unwrap();
+        let update = ws.build_text_replace_update(first, "hello");
+        ws.apply(make_op(
+            &g,
+            Op::Edit {
+                node: first,
+                text_op: update,
+            },
+        ))
+        .unwrap();
+
+        // Edit enough other blocks to evict `first` from the cache.
+        for i in 0..DOC_CACHE_CAP + 10 {
+            let n = NodeId::new();
+            ws.apply(make_op(
+                &g,
+                Op::Create {
+                    node: n,
+                    parent: NodeId::root(),
+                    position: Fractional::first(),
+                },
+            ))
+            .unwrap();
+            let u = ws.build_text_replace_update(n, &format!("x{i}"));
+            ws.apply(make_op(
+                &g,
+                Op::Edit {
+                    node: n,
+                    text_op: u,
+                },
+            ))
+            .unwrap();
+        }
+        assert!(!ws.content.is_cached(first));
+
+        // Rebuild on demand: appending to the evicted block keeps "hello".
+        let update = ws.build_text_replace_update(first, "hello world");
+        ws.apply(make_op(
+            &g,
+            Op::Edit {
+                node: first,
+                text_op: update,
+            },
+        ))
+        .unwrap();
+        assert_eq!(ws.block_text(first).as_deref(), Some("hello world"));
     }
 }

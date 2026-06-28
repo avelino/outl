@@ -60,6 +60,14 @@ impl OpLog {
         self.ops.iter()
     }
 
+    /// Op at index `i` in HLC order, if any.
+    ///
+    /// Indices are only stable between reorders; callers that hold one
+    /// across an `apply_op` must re-derive it.
+    pub fn get(&self, i: usize) -> Option<&LogOp> {
+        self.ops.get(i)
+    }
+
     /// Whether the log already contains an op with this HLC.
     ///
     /// Implementation uses binary search over the HLC-sorted ops, so this
