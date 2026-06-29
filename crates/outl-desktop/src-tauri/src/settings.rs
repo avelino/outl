@@ -112,14 +112,15 @@ pub fn load(_app_config_dir: &std::path::Path) -> Settings {
 /// thinks the app's config directory is.
 pub fn save(_app_config_dir: &std::path::Path, settings: &Settings) -> anyhow::Result<()> {
     let mut cfg: Config = settings.clone().into();
-    // The flat `Settings` now carries the transport choice (the Sync panel
+    // The flat `Settings` carries the transport choice (the Sync panel
     // writes it), so `into()` already set `cfg.sync.transport`. It does NOT
-    // model `relay_url`, so restore that one field from disk — otherwise saving
-    // the transport would wipe a custom relay.
-    cfg.sync.relay_url = outl_config::load().sync.relay_url;
-    // Likewise restore `[calendar]` — the flat Settings doesn't carry the
-    // timezone, so without this a settings save would wipe a hand-set zone.
-    cfg.calendar = outl_config::load().calendar;
+    // model `relay_url` or `[calendar]`, so restore those from disk in one
+    // read — otherwise saving the transport would wipe a custom relay or a
+    // hand-set timezone (and two reads could mix fields across a concurrent
+    // edit).
+    let on_disk = outl_config::load();
+    cfg.sync.relay_url = on_disk.sync.relay_url;
+    cfg.calendar = on_disk.calendar;
     outl_config::save(&cfg)
 }
 
