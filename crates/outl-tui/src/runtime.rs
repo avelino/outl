@@ -98,6 +98,10 @@ pub fn run_with_theme_override(path: &Path, theme_override: Option<&str>) -> Res
     // transport selection from it; loading once keeps the two reads
     // consistent within a single launch.
     let global_cfg = outl_config::load();
+    // Resolve the journal/clock timezone once for the whole process,
+    // before the first `clock::today()` builds the initial journal view
+    // (issue #107). No `[calendar] timezone` → OS local, as before.
+    outl_actions::clock::init(global_cfg.calendar.timezone.as_deref());
     let theme = resolve_theme(theme_override, &cfg, &global_cfg);
     let sync_cfg = global_cfg.sync.clone();
     // `shared_workspace` gates the peer-sync threads (iroh transport + the

@@ -51,6 +51,7 @@
 
 pub mod backlinks;
 pub mod block;
+pub mod clock;
 pub mod collapsed;
 pub mod deeplink;
 pub mod error;

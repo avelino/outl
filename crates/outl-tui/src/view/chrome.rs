@@ -11,7 +11,7 @@
 
 use crate::outline_ops::count_todos;
 use crate::state::{App, Mode, View, HELP_HINT_INSERT, HELP_HINT_NORMAL, HELP_HINT_VISUAL};
-use chrono::Local;
+use outl_actions::clock;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -286,7 +286,7 @@ fn left_segments(app: &App) -> Line<'static> {
 }
 
 fn right_segments(app: &App) -> Line<'static> {
-    let now = Local::now().format("%H:%M").to_string();
+    let now = clock::now_local().format("%H:%M").to_string();
     let saved = match app.last_saved_at {
         Some(_) if app.status.is_empty() => " 💾 saved ",
         Some(_) => " 💾 ",

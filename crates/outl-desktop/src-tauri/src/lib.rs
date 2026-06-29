@@ -186,6 +186,11 @@ pub fn run() {
             // transport choice straight from `outl_config` here. Default
             // (`File`) leaves iroh off and the `notify` watcher handles
             // detection on its own.
+            // Resolve the journal/clock timezone once, before any
+            // workspace opens and renders today's journal (#107). No
+            // `[calendar] timezone` → OS local, as before.
+            outl_actions::clock::init(outl_config::load().calendar.timezone.as_deref());
+
             let sync_transport_kind = outl_config::load().sync.transport;
 
             let workspace: Arc<Mutex<Option<Workspace>>> = Arc::new(Mutex::new(None));

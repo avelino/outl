@@ -82,6 +82,10 @@ impl From<Settings> for Config {
                 vim_mode: s.vim_mode,
                 font_size: s.font_size,
             },
+            // The flat desktop Settings doesn't model `[calendar]`; `save`
+            // restores it from disk so a hand-set timezone survives a
+            // settings write (same pattern as `sync.relay_url`).
+            calendar: outl_config::CalendarCfg::default(),
             sync: SyncConfig {
                 transport: parse_transport(&s.sync_transport),
                 // relay_url isn't modeled in the flat Settings; `save` restores
@@ -113,6 +117,9 @@ pub fn save(_app_config_dir: &std::path::Path, settings: &Settings) -> anyhow::R
     // model `relay_url`, so restore that one field from disk — otherwise saving
     // the transport would wipe a custom relay.
     cfg.sync.relay_url = outl_config::load().sync.relay_url;
+    // Likewise restore `[calendar]` — the flat Settings doesn't carry the
+    // timezone, so without this a settings save would wipe a hand-set zone.
+    cfg.calendar = outl_config::load().calendar;
     outl_config::save(&cfg)
 }
 

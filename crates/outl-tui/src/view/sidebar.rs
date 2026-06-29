@@ -10,7 +10,8 @@
 //! highlighted border so the user always knows where the cursor lives.
 
 use crate::state::{App, SidebarSection, View};
-use chrono::{Datelike, Local, NaiveDate};
+use chrono::{Datelike, NaiveDate};
+use outl_actions::clock;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
@@ -41,7 +42,7 @@ pub(crate) fn render_sidebar(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) 
 // ─── calendar ─────────────────────────────────────────────────────────
 
 fn render_calendar(f: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
-    let today = Local::now().date_naive();
+    let today = clock::today();
     let viewing = match &app.view {
         View::Journal(d) => *d,
         View::Page(_) => today,

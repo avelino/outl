@@ -211,9 +211,11 @@ pub fn write_config(paths: &Paths, cfg: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Today's date in the local timezone, as a `NaiveDate`.
+/// Today's date in the user's configured timezone (falling back to the
+/// OS local timezone), as a `NaiveDate`. Routes through
+/// [`outl_actions::clock`] so `[calendar] timezone` applies — see #107.
 pub fn today() -> NaiveDate {
-    Local::now().date_naive()
+    outl_actions::clock::today()
 }
 
 /// Whether `path` looks like an outl-managed `.md` file (under pages/ or

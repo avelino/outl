@@ -5,6 +5,15 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ## [Unreleased]
 
+### Fixed
+
+- **Journal date and status-line clock honour a configured timezone — new `[calendar] timezone` config key.**
+  The journal's "today" and the TUI clock used to call `chrono::Local::now()`, which trusts the operating system's local timezone.
+  In containers and Chrome OS **Crostini** the OS clock runs in UTC regardless of where the user is, so the date landed on the wrong day near midnight and the clock read an hour off (issue #107).
+  A user can now set `[calendar] timezone = "Europe/London"` (any IANA name) in `~/.config/outl/config.toml`; the journal date and clock resolve in that zone, DST-aware.
+  The fix is opt-in: with no timezone configured the clock stays on the OS local timezone, so nothing changes for a normally configured machine.
+  Internally this is the new `outl_actions::clock` module (`init` / `now_local` / `today`, backed by `chrono-tz`); every client calls `clock::init` once at boot and every "today" routes through it (`page::today` delegates), so there is a single source of truth for the user's wall clock.
+
 ### Added
 
 - **JavaScript plugin system (`outl-plugins`), shared by every client.**

@@ -169,6 +169,10 @@ pub fn run() {
             // app-local `<app-data-dir>/outl/`. Change detection is the iroh
             // reload signal — there is no filesystem watcher.
             let persisted = outl_config::load().workspace.last;
+            // Resolve the journal/clock timezone before the workspace opener
+            // renders today's journal (#107). No `[calendar] timezone` → OS
+            // local, as before.
+            outl_actions::clock::init(outl_config::load().calendar.timezone.as_deref());
             let storage_root = resolve_storage_root(&local_dir, persisted.as_deref());
             std::fs::create_dir_all(&storage_root)?;
             info!("workspace root {}", storage_root.display());

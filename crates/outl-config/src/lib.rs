@@ -27,6 +27,9 @@
 //! vim_mode = true
 //! font_size = 15
 //!
+//! [calendar]
+//! timezone = "Europe/London"   # IANA name; omit = OS local timezone
+//!
 //! [sync]
 //! transport = "iroh"   # "iroh" (P2P, default) | "file" (iCloud/fs opt-out)
 //! relay_url = ""        # optional; empty = use iroh n0 default relays
@@ -51,7 +54,9 @@ mod paths;
 mod schema;
 
 pub use paths::{config_dir, config_path};
-pub use schema::{Config, EditorCfg, SyncConfig, SyncTransportKind, ThemeCfg, WorkspaceCfg};
+pub use schema::{
+    CalendarCfg, Config, EditorCfg, SyncConfig, SyncTransportKind, ThemeCfg, WorkspaceCfg,
+};
 
 use std::fs;
 use std::path::Path;
