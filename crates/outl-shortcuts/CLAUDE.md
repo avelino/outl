@@ -105,7 +105,9 @@ A binding that only the TUI cares about still lives here (with `Mode::Normal` / 
 
 If you find yourself wanting two different actions on the same chord across modes, the catalog already supports it — just add two `Binding` rows with different `mode` fields and the `no_duplicate_chord_in_same_mode` test will let them through.
 `Cmd+Shift+X` ships exactly that split today: `WrapStrike` in Insert (textarea focused) and `RunCodeBlock` in Global — inside a textarea the mode-specific row wins, everywhere else the Global one fires.
-`Cmd+Shift+Enter` is a second example (issue #92): `CommitAndContinue` in Insert (commit the edit, start the next block) vs. `NewBlockBelow` in Normal (view mode — create a sibling below without a `vim_mode` requirement). Both splits are pinned by tests (`cmd_shift_x_splits_between_insert_and_global`, `cmd_shift_enter_splits_between_insert_and_normal`) so a future reorder of `default_bindings()` can't silently collapse them.
+`Cmd+Shift+Enter` is a second example (issue #92): `CommitAndContinue` in Insert (commit the edit, start the next block) vs. `NewBlockBelow` in Normal (view mode — create a sibling below without a `vim_mode` requirement).
+It is also dual-spelled per OS — `Cmd+Shift+Enter` (META) and `Ctrl+Shift+Enter` (CTRL) — bound twice in each mode because the desktop adapter never rewrites `Cmd`↔`Ctrl`, the same two-row pattern `Cmd/Ctrl+P` uses.
+Both splits are pinned by tests (`cmd_shift_x_splits_between_insert_and_global`, `cmd_shift_enter_splits_between_insert_and_normal`) so a future reorder of `default_bindings()` can't silently collapse them.
 
 **`Cmd+Z` / `Cmd+X` are the canonical "don't shadow the OS" examples:**
 

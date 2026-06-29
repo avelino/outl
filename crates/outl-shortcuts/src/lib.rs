@@ -204,25 +204,35 @@ mod tests {
         // The two rows live in different modes, so `lookup`'s
         // mode-specific resolution must keep them apart. No Global row
         // backs this chord, so the remaining modes resolve to nothing.
+        //
+        // The chord is also dual-spelled per OS: `Cmd+Shift+Enter`
+        // (META) on macOS and `Ctrl+Shift+Enter` (CTRL) on Windows /
+        // Linux. Both spellings must resolve identically in each mode —
+        // the desktop adapter never rewrites `Cmd`↔`Ctrl`, so a missing
+        // CTRL row would silently drop the chord off Windows / Linux.
         let shift_meta_enter =
             ChordSequence::chord(Chord::new(Modifiers::META | Modifiers::SHIFT, Key::Enter));
+        let shift_ctrl_enter =
+            ChordSequence::chord(Chord::new(Modifiers::CTRL | Modifiers::SHIFT, Key::Enter));
 
-        assert_eq!(
-            lookup(Mode::Insert, &shift_meta_enter),
-            Some(Action::CommitAndContinue),
-            "Cmd+Shift+Enter in Insert must commit + start the next block",
-        );
-        assert_eq!(
-            lookup(Mode::Normal, &shift_meta_enter),
-            Some(Action::NewBlockBelow),
-            "Cmd+Shift+Enter in Normal (view mode) must create a block below",
-        );
-        for mode in [Mode::Visual, Mode::Overlay, Mode::Global] {
+        for chord in [&shift_meta_enter, &shift_ctrl_enter] {
             assert_eq!(
-                lookup(mode, &shift_meta_enter),
-                None,
-                "Cmd+Shift+Enter has no binding in {mode:?}",
+                lookup(Mode::Insert, chord),
+                Some(Action::CommitAndContinue),
+                "Shift+Enter chord in Insert must commit + start the next block",
             );
+            assert_eq!(
+                lookup(Mode::Normal, chord),
+                Some(Action::NewBlockBelow),
+                "Shift+Enter chord in Normal (view mode) must create a block below",
+            );
+            for mode in [Mode::Visual, Mode::Overlay, Mode::Global] {
+                assert_eq!(
+                    lookup(mode, chord),
+                    None,
+                    "Shift+Enter chord has no binding in {mode:?}",
+                );
+            }
         }
     }
 }

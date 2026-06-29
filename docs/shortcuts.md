@@ -113,7 +113,10 @@ The desktop honours `Normal`/`Visual` only while `editor.vim_mode = true`. The T
 
 > **About `a` / `*` / `#` on the desktop.** The desktop's Normal mode has only a selected block id — no character cursor inside the block. So `a` collapses to `i` (the textarea's own caret takes over), and `*` / `#` seed the picker with the first few words of the selected block's text instead of doing a word-under-cursor search. The catalog still ships these chords so muscle memory from the TUI carries over.
 
-> **`Cmd/Ctrl+Shift+Enter` works without vim mode.** Unlike `o`, the `Cmd/Ctrl+Shift+Enter` "new block below" chord is not vim-gated: with no textarea focused the desktop falls into Normal dispatch regardless of the `vim_mode` setting, so every user can append a block from view mode. Inside a block editor the same chord commits the current edit first (Insert-mode `CommitAndContinue`).
+> **`Cmd/Ctrl+Shift+Enter` works without vim mode.**
+> Unlike `o`, the chord is not vim-gated: with no textarea focused the desktop falls into Normal dispatch regardless of the `vim_mode` setting, so every user can append a block from view mode.
+> Inside a block editor the same chord commits the current edit first (Insert-mode `CommitAndContinue`).
+> Both `Cmd+Shift+Enter` (macOS) and `Ctrl+Shift+Enter` (Windows / Linux) are bound in each mode.
 
 ### Cursor inside a block (Normal)
 
