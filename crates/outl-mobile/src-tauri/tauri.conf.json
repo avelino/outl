@@ -32,7 +32,8 @@
       "icons/icon.ico"
     ],
     "iOS": {
-      "developmentTeam": "CPEEKT3E77"
+      "developmentTeam": "CPEEKT3E77",
+      "frameworks": ["SystemConfiguration", "Network", "CoreFoundation"]
     }
   }
 }

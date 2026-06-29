@@ -1,0 +1,30 @@
+{
+  "$schema": "https://outl.app/schemas/plugin-v1.json",
+  "id": "app.outl.examples.inspire",
+  "name": "Inspire",
+  "version": "1.0.0",
+  "api": "^1.0",
+  "engines": {
+    "outl": ">=0.7.0"
+  },
+  "main": "index.js",
+  "description": "Fetches a random quote from a public HTTP API and shows it as a notification — the canonical template for any external integration from a plugin.",
+  "author": "Avelino <avelinorun@gmail.com>",
+  "license": "MIT",
+  "repository": "https://github.com/avelino/outl-inspire",
+  "category": "fun",
+  "capabilities": [
+    "slash-command"
+  ],
+  "permissions": [
+    "network:api.quotable.io"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "inspire",
+        "title": "Inspire me"
+      }
+    ]
+  }
+}

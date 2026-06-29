@@ -406,7 +406,7 @@ pub(crate) fn render_slash_overlay(
     // tuples bucketed by category.
     let mut buckets: Vec<(&str, Vec<(usize, &crate::state::SlashCommand)>)> = Vec::new();
     for (i, c) in s.candidates.iter().enumerate() {
-        let cat = category_for(c.name);
+        let cat = category_for(&c.name);
         // Insert preserving the canonical category order rather than
         // first-seen, so the palette layout is stable as the user
         // types and the candidate set shifts.
@@ -440,7 +440,7 @@ pub(crate) fn render_slash_overlay(
             let suffix = if c.needs_args { " …" } else { "" };
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("   {}  {}{suffix}  ", command_icon(c.name), c.name),
+                    format!("   {}  {}{suffix}  ", command_icon(&c.name), c.name),
                     style,
                 ),
                 Span::styled(c.description.to_string(), app.theme.dim),

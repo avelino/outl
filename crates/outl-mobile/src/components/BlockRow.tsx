@@ -21,6 +21,8 @@ import { looksLikeOutline, utf16OffsetToCharOffset } from "@outl/shared/paste";
 import { haptic } from "../lib/haptics";
 import { rawTextWithTodo } from "../lib/outline";
 import { parkCaret } from "../lib/textarea";
+import { transformerForLang } from "../lib/transformers";
+import { PluginFence } from "./PluginFence";
 import { SwipeRow } from "./SwipeRow";
 
 interface BlockRowProps {
@@ -303,12 +305,28 @@ function BlockBody(props: {
               fallback={(() => {
                 const fence = detectFenceText(props.block.text);
                 if (fence) {
-                  return (
+                  const plainFence = () => (
                     <HighlightedCode
                       language={fence.language}
                       code={fence.body || " "}
                     />
                   );
+                  // A plugin content-transformer may claim this fence's
+                  // language: render its descriptor inline (text/markdown
+                  // or a sandboxed iframe for `rich`), falling back to the
+                  // plain highlighted code while it loads or if it declines.
+                  const transformer = transformerForLang(fence.language);
+                  if (transformer) {
+                    return (
+                      <PluginFence
+                        blockId={props.block.id}
+                        transformer={transformer}
+                        body={fence.body}
+                        fallback={plainFence}
+                      />
+                    );
+                  }
+                  return plainFence();
                 }
                 // Chrome lives on the wrapper one level up; here we
                 // only strip `> ` from the first Plain token so the

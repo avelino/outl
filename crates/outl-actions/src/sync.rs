@@ -30,12 +30,132 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use outl_core::hlc::Hlc;
 use outl_core::id::{ActorId, NodeId};
 use outl_core::storage::JsonlStorage;
 use outl_core::workspace::Workspace;
 
 use crate::error::ActionError;
 use crate::journal::apply_page_md_with_sidecar;
+
+/// Reachability snapshot for one known peer, derived from the
+/// transport's own dial outcomes (never a fresh probe endpoint).
+///
+/// A GUI status indicator reads this from the running [`SyncTransport`]
+/// (`peer_health`) instead of binding a second iroh endpoint with the
+/// device identity — two endpoints sharing one `node_id` make the relay
+/// route the inbound sync to the wrong one (see
+/// `outl-sync-iroh/CLAUDE.md` → "One endpoint per identity").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerHealthSnapshot {
+    /// Peer's node id (string form), as stored in `peers.json`.
+    pub node_id: String,
+    /// `true` if the most recent dial (boot connect, catch-up, or an
+    /// inbound serve) to this peer succeeded.
+    pub reachable: bool,
+    /// Round-trip-ish duration of the last successful dial, in
+    /// milliseconds. `None` when the peer has never been reached this
+    /// session.
+    pub last_rtt_ms: Option<u64>,
+}
+
+/// Transport abstraction — how ops travel between devices.
+///
+/// iCloud/filesystem: detects file changes via polling.
+/// iroh: receives ops over QUIC streams, writes them to local FS, fires signal.
+///
+/// Both transports result in `ops-<peer>.jsonl` files landing on disk.
+/// `SyncEngine::reload_workspace` picks them up identically regardless of transport.
+pub trait SyncTransport: Send + Sync + 'static {
+    /// Start the transport.
+    ///
+    /// Spawns whatever background tasks are needed (polling thread, iroh runtime, …).
+    /// Sends on `tx` whenever peer ops have been written to the local `ops/`
+    /// directory and the workspace is ready to reload.
+    fn start(
+        &self,
+        workspace_root: std::path::PathBuf,
+        actor: outl_core::id::ActorId,
+        tx: std::sync::mpsc::Sender<()>,
+    );
+
+    /// Called after this device commits local ops to the op log.
+    ///
+    /// FileSyncTransport: no-op (iCloud/Syncthing carries the file).
+    /// IrohSyncTransport: gossip-announces the new HLC to connected peers.
+    fn announce_local_ops(&self, workspace_id: &str, hlc: Hlc);
+
+    /// Graceful shutdown. Transport must stop background tasks.
+    fn shutdown(&self);
+
+    /// Force an immediate sync pass against every known peer, instead of
+    /// waiting for the transport's own periodic catch-up tick.
+    ///
+    /// Drives the "pull to refresh" / "sync now" affordance in the GUI: the
+    /// user wants the freshest state right now, so re-dial every peer (even
+    /// healthy ones the catch-up loop would otherwise leave to gossip) and run
+    /// the same delta sync. A no-op when the transport is down.
+    ///
+    /// The default does nothing — only transports that actually dial peers
+    /// (iroh) have anything to force. [`FileSyncTransport`] relies on the OS
+    /// file watcher / its own polling and has no peer to dial.
+    fn sync_now(&self) {}
+
+    /// Reachability snapshot for every known peer, derived from the
+    /// transport's own dial outcomes.
+    ///
+    /// GUI status indicators call this instead of standing up a probe
+    /// endpoint. The default returns an empty vector — only transports
+    /// that actually dial peers (iroh) have anything to report;
+    /// [`FileSyncTransport`] has no peer concept.
+    fn peer_health(&self) -> Vec<PeerHealthSnapshot> {
+        Vec::new()
+    }
+}
+
+/// Filesystem / iCloud transport — the v0 implementation.
+///
+/// Detection: polls `ops/` every 2 s for peer file changes.
+/// Delivery: no-op — iCloud Drive / Syncthing / shared FS carries the bytes.
+#[derive(Debug, Clone, Default)]
+pub struct FileSyncTransport;
+
+impl SyncTransport for FileSyncTransport {
+    fn start(
+        &self,
+        workspace_root: std::path::PathBuf,
+        actor: outl_core::id::ActorId,
+        tx: std::sync::mpsc::Sender<()>,
+    ) {
+        // Build a temporary engine just for snapshot polling.
+        let engine = SyncEngine::new(workspace_root, actor);
+        std::thread::Builder::new()
+            .name("outl-file-sync".into())
+            .spawn(move || {
+                let mut last = engine.snapshot_peers();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    let current = engine.snapshot_peers();
+                    if current != last {
+                        last = current;
+                        if tx.send(()).is_err() {
+                            return;
+                        }
+                    }
+                }
+            })
+            .expect("failed to spawn outl-file-sync thread");
+    }
+
+    fn announce_local_ops(&self, _workspace_id: &str, _hlc: Hlc) {
+        // File transport: the file is already on disk; the peer's poller will
+        // notice it on the next 2 s tick. Nothing to announce explicitly.
+    }
+
+    fn shutdown(&self) {
+        // The polling thread exits when the mpsc Sender is dropped by the caller.
+    }
+}
 
 /// Snapshot of one `ops-<actor>.jsonl` file. Detectors compare these
 /// across polls to decide whether to fire a reload.
@@ -54,10 +174,24 @@ pub struct OpsFileSnapshot {
 /// Stateless beyond those two fields — every method opens what it
 /// needs and returns it. Multiple instances pointing at the same root
 /// are safe (the underlying op log is append-only per actor).
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SyncEngine {
     workspace_root: PathBuf,
     actor: ActorId,
+    transport: Option<std::sync::Arc<dyn SyncTransport>>,
+}
+
+impl std::fmt::Debug for SyncEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SyncEngine")
+            .field("workspace_root", &self.workspace_root)
+            .field("actor", &self.actor)
+            .field(
+                "transport",
+                &self.transport.as_ref().map(|_| "<dyn SyncTransport>"),
+            )
+            .finish()
+    }
 }
 
 impl SyncEngine {
@@ -66,6 +200,43 @@ impl SyncEngine {
         Self {
             workspace_root,
             actor,
+            transport: None,
+        }
+    }
+
+    /// Bind to a workspace root + actor with an explicit transport.
+    ///
+    /// `transport.start()` is NOT called here; call `start_transport` once the
+    /// caller's notification channel is ready.
+    pub fn with_transport(
+        workspace_root: PathBuf,
+        actor: ActorId,
+        transport: Box<dyn SyncTransport>,
+    ) -> Self {
+        Self {
+            workspace_root,
+            actor,
+            transport: Some(std::sync::Arc::from(transport)),
+        }
+    }
+
+    /// Start the transport's background tasks.
+    ///
+    /// Calls `transport.start(workspace_root, actor, tx)` if a transport is set.
+    /// No-op when no transport was configured (callers manage detection themselves).
+    pub fn start_transport(&self, peer_ready_tx: std::sync::mpsc::Sender<()>) {
+        if let Some(t) = &self.transport {
+            t.start(self.workspace_root.clone(), self.actor, peer_ready_tx);
+        }
+    }
+
+    /// Announce new local ops to connected peers.
+    ///
+    /// Calls `transport.announce_local_ops` if a transport is set.
+    /// No-op when no transport was configured.
+    pub fn announce_local_ops(&self, workspace_id: &str, hlc: Hlc) {
+        if let Some(t) = &self.transport {
+            t.announce_local_ops(workspace_id, hlc);
         }
     }
 

@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyEmojiSuggestion,
+  applySlashContext,
   applySuggestion,
   autoClosePair,
   autoDeletePair,
   autoPairBracket,
   detectEmojiContext,
   detectRefContext,
+  detectSlashContext,
   insertPair,
   insertText,
   withCreateNewPersonCandidate,
@@ -417,5 +419,55 @@ describe("applyEmojiSuggestion", () => {
     const ctx = detectEmojiContext(value, 12)!;
     const out = applyEmojiSuggestion(value, ctx, "rocket");
     expect(out.value).toBe("shipped :rocket: today");
+  });
+});
+
+describe("detectSlashContext", () => {
+  it("triggers on a block-initial slash", () => {
+    expect(detectSlashContext("/stats", 6)).toEqual({
+      query: "stats",
+      openIndex: 0,
+      replaceEnd: 6,
+    });
+  });
+
+  it("reports a partial query as the user types", () => {
+    expect(detectSlashContext("/sta", 4)).toEqual({
+      query: "sta",
+      openIndex: 0,
+      replaceEnd: 4,
+    });
+  });
+
+  it("triggers on a bare slash (empty query → show all)", () => {
+    expect(detectSlashContext("/", 1)).toEqual({
+      query: "",
+      openIndex: 0,
+      replaceEnd: 1,
+    });
+  });
+
+  it("does NOT trigger on a mid-text slash (path / URL)", () => {
+    expect(detectSlashContext("see docs/api", 12)).toBeNull();
+    expect(detectSlashContext("a/b", 3)).toBeNull();
+  });
+
+  it("closes the trigger once a space is typed", () => {
+    expect(detectSlashContext("/stats now", 10)).toBeNull();
+  });
+});
+
+describe("applySlashContext", () => {
+  it("removes the /command token, leaving the block empty", () => {
+    const ctx = detectSlashContext("/stats", 6)!;
+    expect(applySlashContext("/stats", ctx)).toEqual({ value: "", caret: 0 });
+  });
+
+  it("keeps text that follows the token", () => {
+    const ctx = detectSlashContext("/stats", 4)!; // caret mid-token
+    expect(applySlashContext("/stats rest", ctx)).toEqual({
+      value: " rest",
+      caret: 0,
+    });
   });
 });

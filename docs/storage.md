@@ -94,7 +94,7 @@ The non-dotted name pays a "visible directory" cost for guaranteed sync coverage
   Local, never synced.
 - `.outl/orphans.log` — diagnostic from the reconcile pipeline.
   Local.
-- `.outl/peers.toml` — phase-2 peer registry.
+- `.outl/peers.toml` — peer registry for P2P sync.
   Local.
 
 Anything that doesn't make sense to share between devices stays under `.outl/`.
@@ -160,6 +160,13 @@ Tracked: <https://github.com/avelino/outl/issues/1>.
   `JsonlStorage` uses `RwLock` around its in-memory cache; reads are concurrent, writes serialize.
 - `append_op` writes one line, then flushes.
   Crash-safe at line granularity: a partial write produces an unparseable tail line, which the loader skips on next open.
+- **Glued-op recovery on read.**
+  `JsonlStorage::reload` parses each line with a streaming `serde_json::Deserializer`.
+  A line carrying two (or more) concatenated JSON objects with no separating newline (`…}}}{"ts":…`) is recovered into all its ops instead of being dropped.
+  That signature is what an interleaved, non-atomic concurrent append produces; the recovery means an external writer that glued two ops together never silently loses the user's content.
+  A recovered line is logged at `warn` (it still signals a writer that should have serialized).
+  The op log dedups by op id, so re-reading a recovered op that another file also carries is harmless.
+  Writers inside this repo must still serialize their appends — recovery is the read-side safety net, not a license to write unsynchronized (see `outl-sync-iroh` → append-serialization invariant).
 
 ---
 
@@ -183,6 +190,7 @@ Implement when the log gets noticeably slow — not before.
 |---------|-----------|----------|
 | `append_op` fails to flush | `Result` propagated to caller | Caller decides; the in-memory tree should be considered stale; `outl doctor` can reload from disk |
 | Partial-write tail in a `.jsonl` | `JsonlStorage::reload` logs the unparseable line via `tracing::warn!` and skips it | Truncate that line; the next valid op is fine |
+| Glued ops on one line (`…}}}{"ts":…`) from an interleaved concurrent append | `JsonlStorage::reload` streams every concatenated JSON object off the line and warns | No action — both ops are recovered on next open; dedup makes a double-read harmless |
 | Sidecar lost | `outl doctor` detects missing `.outl` | Regenerate from op log by re-rendering the page |
 | HLC clock skew | `uhlc` clamps to avoid runaway logical counter | Tracked in HLC config; rare in practice |
 

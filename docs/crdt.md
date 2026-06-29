@@ -175,7 +175,15 @@ do_op(op):
 
         Create { node, parent, position }:
             // Idempotent: if node already in tree, no-op.
-            if !tree.contains(node):
+            // Cycle guard, exactly like Move: under reordering a Create can
+            // arrive after a Move already parented something under `node`, so
+            // `parent` may already be a descendant of `node`. Creating the edge
+            // would close a loop, so it's a NO-OP on the tree (LogOp still gets
+            // appended). Undo is safe: a node only ever comes into existence
+            // through its own Create (Move never inserts a new entry), so a
+            // cycle-skipped Create leaves `node` absent and `undo_op`'s remove
+            // is a no-op.
+            if !tree.contains(node) and not creates_cycle(node, parent):
                 tree.create(node, parent, position)
 ```
 
@@ -354,7 +362,7 @@ Yrs is itself a CRDT, so block content convergence is guaranteed by Yrs.
 Our job is just to deliver the right update to the right node.
 
 **Note on undo for `Edit`**: Yrs has an `UndoManager`, but its semantics don't perfectly align with our tree-level undo.
-For phase 1 we accept that undoing an `Edit` may be partial (the materialized text on undo may include parts of the edit that interleave with concurrent edits).
+For now we accept that undoing an `Edit` may be partial (the materialized text on undo may include parts of the edit that interleave with concurrent edits).
 This is **safe** — Yrs guarantees convergence — but it's worth documenting that user-facing "undo" in the TUI cannot rely on `undo_op` for text.
 
 ---
@@ -444,7 +452,7 @@ Be honest about the limits:
 
 - **No application-level conflict notification.** outl converges silently.
   A future feature could surface "concurrent edits to this block" in the UI.
-  Not in phase 1.
+  Not yet.
 
 - **No causal delivery enforcement.** We rely on HLC ordering, not vector clocks.
   The algorithm is correct under any delivery order (that's the point of `apply_op` doing undo/replay), but it's worth noting we don't need causal channels.

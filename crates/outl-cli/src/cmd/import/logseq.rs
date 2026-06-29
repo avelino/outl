@@ -7,10 +7,10 @@
 //! - **`id:: <uuid>`** lines: Logseq writes a UUID on every block
 //!   that's ever been referenced. Stripped — outl's IDs live in the
 //!   sidecar, not the markdown.
-//! - **`((<uuid>))`** block refs: we don't have block-level embeds yet
-//!   (phase 3). We try to resolve the UID to its page; if found, the
-//!   ref becomes `[[Page Title]]`. If not found, we leave it as plain
-//!   text and log a warning.
+//! - **`((<uuid>))`** block refs: there's no mapping from a Logseq UID to
+//!   an outl block handle, so we try to resolve the UID to its page; if
+//!   found, the ref becomes `[[Page Title]]`. If not found, we leave it as
+//!   plain text and log a warning.
 //! - **`#+...`** directives: Logseq's per-file frontmatter style. We
 //!   strip these (outl reads `title::` etc.).
 //! - **Underscore-encoded names**: Logseq uses `___` and `%2F` for

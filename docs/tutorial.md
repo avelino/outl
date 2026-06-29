@@ -288,8 +288,7 @@ Anything that can't be resolved stays in the file as `((unresolved:UID))` so you
 - **TUI manual** ([docs/tui.md](tui.md)) — full keymap, every overlay, every command, persistence behavior.
 - **Theming** ([docs/theming.md](theming.md)) — six presets, how to add your own.
 - **Sync, done right** ([docs/sync.md](sync.md)) — what makes the CRDT interesting.
-  Phase 2 will ship the actual P2P sync.
-- **Roadmap** ([docs/roadmap.md](roadmap.md)) — what's coming.
+  Sync runs over iroh P2P by default; file/iCloud is an opt-in transport.
 
 If something feels off, [open an issue][issues].
 If you wrote a patch, [the contributing guide][contrib] tells you what reviewers look at.

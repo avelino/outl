@@ -26,6 +26,7 @@ pub mod storage;
 pub mod tag;
 pub mod tree;
 pub mod workspace;
+pub mod workspace_id;
 
 pub use block::Block;
 pub use fractional::Fractional;
@@ -41,3 +42,4 @@ pub use storage::{Storage, StorageError};
 pub use tag::Tag;
 pub use tree::Tree;
 pub use workspace::Workspace;
+pub use workspace_id::{WorkspaceId, WorkspaceIdError};

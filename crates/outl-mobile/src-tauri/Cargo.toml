@@ -23,6 +23,18 @@ tempfile = { workspace = true }
 outl-core = { workspace = true }
 outl-md = { workspace = true }
 outl-actions = { workspace = true }
+# JS plugin host (Boa). Default feature `js` (the only runtime that ships on
+# iOS — no JIT, interpreted) compiles fine here. The host is `!Send` (embeds a
+# Boa `Context`), so it runs on a dedicated thread behind `PluginService` —
+# never in the `Send + Sync` `AppState`. See `plugin_service.rs`.
+outl-plugins = { workspace = true, features = ["registry"] }
+outl-sync-iroh = { workspace = true }
+outl-config = { workspace = true }
+dirs = { workspace = true }
+# Pin the rustls crypto provider. iroh pulls rustls with default features off,
+# dropping the workspace-wide default provider, which makes reqwest (Tauri's
+# webview asset protocol) panic at boot. `run()` installs `ring` explicitly.
+rustls = { workspace = true }
 # Code-block runtime. `lang-rust` deliberately disabled: it pulls in
 # wasmtime + Cranelift JIT, which inflates the IPA and runs into iOS
 # code-signing restrictions on dynamic code generation. Lisp / JS /
@@ -37,15 +49,30 @@ outl-exec = { path = "../../outl-exec", default-features = false, features = [
     "lang-lua",
 ] }
 
-tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
+tauri = { workspace = true }
+tauri-plugin-opener = { workspace = true }
+tauri-plugin-os = { workspace = true }
+# `outl://` deep links (links shared into the app, parity with desktop).
+# iOS has no second-instance problem, so no single-instance plugin here.
+tauri-plugin-deep-link = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 parking_lot = { workspace = true }
 ulid = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
+# Installs an stderr log subscriber at boot so the transport's info!/warn!/debug!
+# lines reach the device console (idevicesyslog / Xcode on iOS).
+tracing-subscriber = { workspace = true }
 yrs = { workspace = true }
+
+# Barcode / QR scanner — mobile-only (Android + iOS). The primary
+# mobile pairing flow is "scan the host's QR ticket", so the scanner is
+# the camera entry point into `peerPairJoin`. Desktop has no camera path,
+# hence the per-target gate (also keeps the plugin out of host-side
+# `cargo check`/clippy on macOS).
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-barcode-scanner = "2"
 
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2 = "0.6"

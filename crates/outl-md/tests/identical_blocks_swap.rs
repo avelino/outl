@@ -1,11 +1,11 @@
 //! Two blocks with identical text swap parents.
 //!
-//! Phase 1 matching is greedy first-fit on hash. Both blocks have the
+//! Matching is greedy first-fit on hash. Both blocks have the
 //! same hash, so the algorithm consumes them in order. Final assignment
 //! is deterministic; the test here is that the outcome converges and
 //! the algorithm does not crash on the ambiguity.
 //!
-//! Phase 4 will add parent/position tiebreaking. Documenting current
+//! Parent/position tiebreaking is not yet implemented. Documenting current
 //! behavior in test form so regressions are visible.
 
 use outl_core::id::NodeId;

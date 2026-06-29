@@ -1,9 +1,11 @@
-//! `outl export --to <fmt>` — placeholder for phase 4.
+//! `outl export --to <fmt>` — legacy placeholder, superseded by
+//! `outl export {hugo,md,json}` (see `export_v2.rs`).
 
 use anyhow::Result;
 
-/// Phase 4 will implement Hugo / static HTML / PDF exporters.
+/// Legacy `--to` entry point. The real exporters (Hugo / Markdown / JSON)
+/// live in `export_v2.rs`; static HTML / PDF targets are not yet implemented.
 pub fn run(_format: &str) -> Result<()> {
-    println!("export is a phase-4 feature; tracking issue: #2 (Hugo target)");
+    println!("use `outl export hugo|md|json` instead; tracking issue: #2 (Hugo target)");
     Ok(())
 }

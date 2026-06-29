@@ -51,7 +51,7 @@ fn editor_session_lifecycle() {
     let sc2 = sidecar::read(&sidecar_path_for(&md_path)).unwrap();
     // ID preserved across edits (content hash differs, but matching is
     // greedy and only one block — falls to level 3, gets a new ULID).
-    // This is the documented phase-1 behavior: heavy edits lose IDs,
+    // This is the documented matching behavior: heavy edits lose IDs,
     // but the old one shows up as orphan. The test asserts the
     // structural integrity, not ID preservation here.
     assert_eq!(sc2.blocks.len(), 1);

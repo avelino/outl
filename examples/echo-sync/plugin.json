@@ -1,0 +1,20 @@
+{
+  "$schema": "https://outl.app/schemas/plugin-v1.json",
+  "id": "app.outl.examples.echo-sync",
+  "name": "Echo Sync",
+  "version": "1.0.0",
+  "api": "^1.0",
+  "engines": {
+    "outl": ">=0.7.0"
+  },
+  "main": "index.js",
+  "description": "Educational sync-transport skeleton: shows the push/pull contract a real transport implements, with no backend wired in.",
+  "author": "Avelino <avelinorun@gmail.com>",
+  "license": "MIT",
+  "repository": "https://github.com/avelino/outl-echo-sync",
+  "category": "sync",
+  "capabilities": [
+    "sync-transport"
+  ],
+  "permissions": []
+}

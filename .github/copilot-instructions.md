@@ -85,7 +85,7 @@ Quote the invariant by name in your comment.
 
 9. **No reintroduction of SQLite, rusqlite, or any binary log format.** Cross-device sync depends on per-actor append-only JSONL.
 
-10. **Settled decisions are off-limits in a PR.** ULID for IDs, `uhlc` for time, MIT license, JSONL-per-actor, Tauri for mobile, iCloud as v0 transport — do not suggest changing these in a code-review comment.
+10. **Settled decisions are off-limits in a PR.** ULID for IDs, `uhlc` for time, MIT license, JSONL-per-actor, Tauri for mobile, iroh as the default sync transport (file/iCloud opt-in) — do not suggest changing these in a code-review comment.
     If a contributor disagrees, the path is an issue, not a PR.
 
 ---
@@ -220,6 +220,7 @@ Skim headings, then drill in.
 | Wrap an `Op` into a `LogOp` (timestamp + actor) for `apply` | `outl_core::Op` + `outl_core::LogOp` | `crates/outl-core/src/op.rs` |
 | Sentinel node ids (`root`, `trash`) | `outl_core::NodeId::root()` / `trash()` | `crates/outl-core/src/id.rs` |
 | Per-device identity for ops | `outl_core::ActorId` | `crates/outl-core/src/id.rs` |
+| Stable, shared workspace identity (read/generate, persist, pairing-adoption) — the gossip-topic key, NOT the path | `outl_core::WorkspaceId::read_or_create` / `write` / `from_raw` (errors: `outl_core::WorkspaceIdError`) | `crates/outl-core/src/workspace_id.rs` |
 | Fractional index for sibling ordering | `outl_core::Fractional` | `crates/outl-core/src/fractional.rs` |
 
 #### 2. Tree reads (outl-core + outl-actions::tree)
@@ -248,6 +249,7 @@ Reject PRs that build a `LogOp` from a client and call `apply` directly.
 | Create sibling after / child under a block | `outl_actions::block::create_after` / `create_under` | `crates/outl-actions/src/block.rs` |
 | Edit a block's text | `outl_actions::block::edit_text` | `crates/outl-actions/src/block.rs` |
 | Indent / outdent / move up / move down a block | `outl_actions::block::indent` / `outdent` / `move_up` / `move_down` | `crates/outl-actions/src/block.rs` |
+| Re-parent a block under an arbitrary page/block (cross-page move) | `outl_actions::block::move_under` | `crates/outl-actions/src/block.rs` |
 | Delete a block (`Move(node, TRASH_ROOT)`, **never** physical) | `outl_actions::block::delete` | `crates/outl-actions/src/block.rs` |
 | Toggle block collapsed (converges via `Op::SetCollapsed`) | `outl_actions::collapsed::toggle_block_collapsed` / `set_block_collapsed` | `crates/outl-actions/src/collapsed.rs` |
 | Cycle / split / read TODO/DONE state | `outl_actions::todo::cycle_todo` / `split_todo` / `TodoState` / `TODO_PREFIX` / `DONE_PREFIX` | `crates/outl-actions/src/todo.rs` |
@@ -272,6 +274,7 @@ Reject PRs that build a `LogOp` from a client and call `apply` directly.
 | Migrate pre-page-model blocks under today's journal | `outl_actions::page::migrate_legacy_into_today` | `crates/outl-actions/src/page.rs` |
 | Open / create journal for a date or today | `outl_actions::page::open_journal` / `open_today` | `crates/outl-actions/src/page.rs` |
 | Journal date utilities | `outl_actions::page::today` / `journal_slug` / `journal_title` / `date_from_slug` / `previous_journal_date` / `next_journal_date` | `crates/outl-actions/src/page.rs` |
+| Parse an `outl://` deep link into a navigation target (one parser, every GUI client routes the result — never reparse per client) | `outl_actions::parse_deep_link` / `DeepLinkTarget` / `DeepLinkError` | `crates/outl-actions/src/deeplink.rs` |
 | Filesystem paths | `outl_actions::journal::journals_dir` / `pages_dir` / `page_md_path` | `crates/outl-actions/src/journal.rs` |
 | Render a page out to `.md` | `outl_actions::journal::render_page_md` | `crates/outl-actions/src/journal.rs` |
 | Apply edited `.md` back into the workspace | `outl_actions::journal::apply_page_md` / `apply_page_md_with_sidecar` | `crates/outl-actions/src/journal.rs` |
@@ -398,6 +401,7 @@ Runtime selection (which languages ship) is per-binary via `outl-exec` features 
 | Re-project a page's `.md` + sidecar / reload + reproject in one call | `SyncEngine::reproject_page` / `refresh_page` | `crates/outl-actions/src/sync.rs` |
 | Snapshot every / peer-only `ops-*.jsonl` | `SyncEngine::snapshot` / `snapshot_peers` (`OpsFileSnapshot`) | `crates/outl-actions/src/sync.rs` |
 | Scan for orphan `.md` (no sidecar / stale hash) | `SyncEngine::scan_for_orphans` | `crates/outl-actions/src/sync.rs` |
+| Per-peer reachability snapshot from the transport's own dials (GUI status; never bind a probe endpoint) | `SyncTransport::peer_health` → `outl_actions::PeerHealthSnapshot` | `crates/outl-actions/src/sync.rs` |
 | Cross-process workspace lock | `outl_core::WorkspaceLock::acquire` | `crates/outl-core/src/lock.rs` |
 | Per-actor write lock | `outl_core::ActorWriteLock::try_acquire` | `crates/outl-core/src/lock.rs` |
 | Resolve which actor this process writes as | `outl_core::resolve_write_actor` | `crates/outl-core/src/lock.rs` |
@@ -584,10 +588,9 @@ A long review is a sign you are commenting on too much.
 
 ## 10. Out of scope right now
 
-The project is in Phase 0–1.
+outl ships continuously across TUI, CLI, desktop, and mobile.
 Do **not** suggest work on:
 
-- P2P sync transport (`iroh`) — iCloud is the v0 transport.
 - Query DSL (`{{query: ...}}`).
 - Tauri desktop shells beyond the existing mobile crate.
 - Plugin system (`rhai`).

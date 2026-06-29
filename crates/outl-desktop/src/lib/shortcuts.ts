@@ -24,15 +24,19 @@ import {
   type Binding,
   type Chord,
   type Key,
+  type PluginKeybinding,
   type ShortcutMode,
   MOD_ALT,
   MOD_CTRL,
   MOD_META,
   MOD_SHIFT,
   listShortcutBindings,
+  pluginKeybindings,
+  pluginRun,
 } from "./api";
 
-import { appState } from "./store";
+import { playPluginViews } from "./plugin-views";
+import { appState, setAppState } from "./store";
 
 // ---------------------------------------------------------------------------
 // KeyboardEvent → Chord
@@ -188,6 +192,43 @@ async function dispatch(action: Action, handlers: ActionHandlers) {
 }
 
 // ---------------------------------------------------------------------------
+// Plugin keybinding dispatch
+// ---------------------------------------------------------------------------
+
+/**
+ * Run a plugin-contributed chord: fire the plugin's command, surface its
+ * notifications / errors on the status line, re-render the page if it
+ * mutated, and play any `ui-render` overlays — exactly what the plugin
+ * palette does for a click. Best-effort: a failure lands on the status
+ * line, never throws out of the dispatcher.
+ */
+async function runPluginChord(kb: PluginKeybinding) {
+  try {
+    const reply = await pluginRun(
+      kb.plugin_id,
+      kb.command_id,
+      appState.page?.id ?? null,
+    );
+    for (const note of reply.notifications) setAppState("lastError", note);
+    for (const err of reply.errors)
+      setAppState("lastError", `plugin: ${err}`);
+    // Re-render the on-screen page from the refreshed view — same three
+    // fields `<AppShell>`'s `applyView` writes (a plugin can move blocks,
+    // so backlinks refresh too).
+    if (reply.view) {
+      setAppState({
+        page: reply.view.page,
+        outline: reply.view.outline,
+        backlinks: reply.view.backlinks,
+      });
+    }
+    playPluginViews(reply.views);
+  } catch (e) {
+    setAppState("lastError", e instanceof Error ? e.message : String(e));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -205,6 +246,16 @@ export async function installShortcuts(
   handlers: ActionHandlers,
 ): Promise<() => void> {
   const bindings = await loadBindings();
+
+  // Plugin-contributed chords, folded in as a Global overlay. They are
+  // always single-chord and `global` (the backend stamps the mode), so we
+  // match them against the live keystroke regardless of the active mode —
+  // BUT only after the native catalog has had its say, and only when no
+  // native binding (in any mode) already owns that exact chord. Native
+  // always wins; a plugin can never shadow `Cmd+B` / `Cmd+P` / etc.
+  const pluginBindings = await loadPluginBindings();
+  const nativeOwnsChord = (seq: Chord[]): boolean =>
+    bindings.some((b) => seqEq(b.chord, seq));
 
   /** Buffered chord prefix (e.g. user typed `g`, waiting for `j`). */
   let pending: Chord[] = [];
@@ -293,6 +344,27 @@ export async function installShortcuts(
       return;
     }
 
+    // No native binding (match or prefix) wanted this chord. Now give a
+    // plugin keybinding a shot. Plugin chords are single-chord, so only
+    // an unbuffered keystroke (`pending` empty) can match one — a chord
+    // mid-sequence belongs to a native prefix that just timed out. Skip
+    // any chord a native binding owns in another mode, so plugins can't
+    // shadow the OS-standard set.
+    if (pending.length === 0) {
+      const pluginHit = pluginBindings.find(
+        (kb) => seqEq(kb.chord, sequence) && !nativeOwnsChord(kb.chord),
+      );
+      if (pluginHit) {
+        e.preventDefault();
+        resetPending();
+        console.info(
+          `[shortcuts] plugin chord → ${pluginHit.plugin_id}/${pluginHit.command_id}`,
+        );
+        await runPluginChord(pluginHit);
+        return;
+      }
+    }
+
     // Not a match, not a prefix — reset and let the event through.
     resetPending();
   };
@@ -307,6 +379,24 @@ export async function installShortcuts(
 // ---------------------------------------------------------------------------
 // Catalog caching
 // ---------------------------------------------------------------------------
+
+/**
+ * Load plugin-contributed keybindings for one dispatcher install.
+ * Best-effort: a failure (no host, plugins not loaded yet) yields an
+ * empty list so the dispatcher keeps working with only the native
+ * catalog. Deliberately **not** module-cached: `installShortcuts` re-runs
+ * on a workspace swap (`<AppShell>` remount), and the new workspace can
+ * ship a different plugin set — a stale module cache would carry the old
+ * workspace's chords. Plugins load lazily on the host's first request, so
+ * this can still be empty at install time on a cold boot.
+ */
+async function loadPluginBindings(): Promise<PluginKeybinding[]> {
+  try {
+    return await pluginKeybindings();
+  } catch {
+    return [];
+  }
+}
 
 let cachedBindings: Binding[] | null = null;
 

@@ -9,6 +9,7 @@ import {
 } from "../lib/api";
 import { applyPaletteToRoot } from "../lib/palette";
 import { appState, setAppState } from "../lib/store";
+import { SyncPanel } from "./SyncPanel";
 
 /**
  * Settings modal, opened via `Cmd/Ctrl+,`.
@@ -154,6 +155,29 @@ export function SettingsModal() {
                   Use File → Switch workspace… to change.
                 </div>
               </div>
+
+              <label class="block">
+                <div class="mb-1 text-sm font-medium">Sync transport</div>
+                <select
+                  value={draft()!.sync_transport}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft()!,
+                      sync_transport: e.currentTarget.value,
+                    })
+                  }
+                  class="w-full rounded border border-(--color-outl-fg)/15 bg-(--color-outl-fg)/5 px-2 py-1 text-sm outline-none focus:border-(--color-outl-fg)/30"
+                >
+                  <option value="iroh">iroh — direct P2P (default)</option>
+                  <option value="file">file — iCloud / shared folder</option>
+                </select>
+                <div class="mt-1 text-xs opacity-50">
+                  iroh syncs device-to-device over QUIC; file relies on a synced
+                  folder. Takes effect after the app restarts.
+                </div>
+              </label>
+
+              <SyncPanel />
             </div>
           </Show>
 

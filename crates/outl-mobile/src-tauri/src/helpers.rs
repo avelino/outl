@@ -10,7 +10,7 @@ use std::str::FromStr;
 use chrono::NaiveDate;
 use outl_actions::{
     apply_page_md_with_sidecar, backlinks_for_page, date_from_slug, page_meta as page_meta_action,
-    read_page_outline_with_workspace, ActionError,
+    read_page_outline_with_workspace, ActionError, SyncTransport,
 };
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
@@ -132,7 +132,29 @@ where
         if let Err(e) = apply_page_md_with_sidecar(ws, &state.storage_root, page_id) {
             warn!("page md+sidecar sync failed: {e}");
         }
+        announce_after_commit(state, ws, page_id);
         let view = build_page_view(ws, &state.storage_root, page_id).map_err(|e| e.to_string())?;
         Ok((value, view))
     })
+}
+
+/// Post-commit hook: tell connected peers this device just produced new ops so a
+/// peer pulls **immediately** over iroh gossip, instead of waiting for the
+/// catch-up loop's maintenance re-sync.
+///
+/// Best-effort and non-fatal by design:
+/// - no transport wired (file-sync / not yet started) → nothing to announce;
+/// - the announce never crosses (flaky cross-network link) → the catch-up loop's
+///   periodic re-sync still converges.
+///
+/// This is the mobile mirror of the TUI's `save()` tail. Without it, GUI edits
+/// committed the op locally but never woke peers — so propagation depended
+/// entirely on the catch-up timing (the "edit never reached the other device"
+/// report).
+pub(crate) fn announce_after_commit(state: &State<'_, AppState>, ws: &Workspace, page_id: NodeId) {
+    let Some(transport) = &state.iroh else { return };
+    let Some(meta) = page_meta_action(ws, page_id) else {
+        return;
+    };
+    transport.announce_local_ops(&meta.slug, state.hlc.next());
 }

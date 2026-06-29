@@ -93,12 +93,28 @@ pub fn run_with_theme_override(path: &Path, theme_override: Option<&str>) -> Res
     // know about yet — re-projecting blindly would clobber those
     // edits before the orphan scanner has a chance to fold them in
     // via `reconcile_md`.
-    let theme = resolve_theme(theme_override, &cfg);
+    // Global config (`~/.config/outl/config.toml`) — shared with the
+    // desktop client. We read both the theme fallback and the `[sync]`
+    // transport selection from it; loading once keeps the two reads
+    // consistent within a single launch.
+    let global_cfg = outl_config::load();
+    let theme = resolve_theme(theme_override, &cfg, &global_cfg);
+    let sync_cfg = global_cfg.sync.clone();
+    // `shared_workspace` gates the peer-sync threads (iroh transport + the
+    // filesystem poller). JsonlStorage is the ONLY persistent backend
+    // (sqlite was removed in 0.5.0), so a workspace is shareable unless its
+    // config *explicitly* pins a non-jsonl storage. A GUI/sync-created
+    // workspace — and the CLI/TUI lazy-seeded config — omit the `storage`
+    // key entirely; treat that absence as the jsonl default, NOT as "not
+    // shared". The old `== Some("jsonl")` check made the TUI silently run
+    // with NO peer sync on exactly those workspaces (the "TUI ↔ mobile
+    // doesn't sync" bug: `~/outl-p2p/.outl/config.toml` has no `storage`
+    // line, so the TUI never started a transport or a poller).
     let shared_workspace = cfg
         .get("workspace")
         .and_then(|w| w.get("storage"))
         .and_then(|s| s.as_str())
-        == Some("jsonl");
+        .is_none_or(|s| s == "jsonl");
 
     // Install the panic hook BEFORE switching to raw mode. If
     // anything panics from here on — bug in the render path, OOM —
@@ -143,6 +159,7 @@ pub fn run_with_theme_override(path: &Path, theme_override: Option<&str>) -> Res
         actor,
         theme,
         shared_workspace,
+        sync_cfg,
     );
 
     if enhanced_keys {
@@ -194,7 +211,11 @@ fn install_panic_restore_hook() {
 ///
 /// An unknown name falls through silently to the next level. The
 /// caller can surface the choice via the status line if it cares.
-fn resolve_theme(cli_override: Option<&str>, cfg: &toml::Value) -> Theme {
+fn resolve_theme(
+    cli_override: Option<&str>,
+    cfg: &toml::Value,
+    global: &outl_config::Config,
+) -> Theme {
     if let Some(name) = cli_override {
         if let Some(t) = theme::by_name(name) {
             return t;
@@ -212,8 +233,8 @@ fn resolve_theme(cli_override: Option<&str>, cfg: &toml::Value) -> Theme {
     // Global fallback — same TOML file the desktop reads / writes,
     // so changing the theme in the desktop's Settings modal
     // propagates to the next `outl-tui` launch automatically (and
-    // vice versa).
-    let global = outl_config::load();
+    // vice versa). Passed in pre-loaded so the launch reads the file
+    // once for both theme and `[sync]`.
     if let Some(t) = theme::by_name(&global.theme.preset) {
         return t;
     }
@@ -250,13 +271,32 @@ fn open_workspace(
     let lock = outl_core::WorkspaceLock::acquire(root)
         .with_context(|| format!("could not acquire workspace lock at {}", root.display()))?;
 
-    let cfg_path = root.join(".outl").join("config.toml");
-    let cfg = fs::read_to_string(&cfg_path).with_context(|| {
-        format!(
-            "no outl workspace at {} — run `outl init` first",
-            root.display()
-        )
-    })?;
+    let dot_outl = root.join(".outl");
+    let cfg_path = dot_outl.join("config.toml");
+    let cfg = match fs::read_to_string(&cfg_path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && dot_outl.is_dir() => {
+            // The `.outl/` dir exists (real workspace) but there's no
+            // per-workspace `config.toml`. That's a workspace created by a GUI
+            // client (desktop / mobile) or by P2P sync, which only seed
+            // `.outl/workspace-id` and keep the device actor elsewhere. Seed a
+            // config with a fresh actor for this device so the TUI can open it
+            // instead of demanding `outl init`. Persisted, so it's a one-time
+            // cost and a re-open reuses the same actor.
+            let seed = format!("[workspace]\nactor_id = \"{}\"\n", ActorId::new().0);
+            fs::write(&cfg_path, &seed)
+                .with_context(|| format!("seeding config.toml at {}", cfg_path.display()))?;
+            seed
+        }
+        Err(e) => {
+            return Err(e).with_context(|| {
+                format!(
+                    "no outl workspace at {} — run `outl init` first",
+                    root.display()
+                )
+            });
+        }
+    };
     let cfg: toml::Value = toml::from_str(&cfg).context("parsing config.toml")?;
     let actor_str = cfg
         .get("workspace")
@@ -301,8 +341,16 @@ fn event_loop(
     actor: ActorId,
     theme: Theme,
     shared_workspace: bool,
+    sync_cfg: outl_config::SyncConfig,
 ) -> Result<()> {
-    let mut app = App::new(workspace_root, workspace, actor, theme, shared_workspace)?;
+    let mut app = App::new(
+        workspace_root,
+        workspace,
+        actor,
+        theme,
+        shared_workspace,
+        sync_cfg,
+    )?;
     loop {
         // Pick up the background index build if it finished since the
         // last frame. Non-blocking; costs ~one channel try_recv.
@@ -421,6 +469,15 @@ fn event_loop(
             Mode::Insert { .. } => handle_insert_key(&mut app, key)?,
             Mode::Visual { .. } => handle_visual_key(&mut app, key)?,
         }
+
+        // Single post-mutation point: a keystroke may have appended ops
+        // to the log (edit, indent, TODO toggle, …). Dispatch them to
+        // plugins' `onOp` hooks. Cheap + idempotent when nothing
+        // changed — the host short-circuits on an unchanged log length,
+        // so this is safe to call after every key. A hook that mutates
+        // the workspace re-projects `.md` and reparses inside
+        // `run_plugin_op_hooks`.
+        app.run_plugin_op_hooks();
     }
 }
 

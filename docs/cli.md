@@ -96,7 +96,7 @@ The MCP tool column is the name Claude Desktop (or any MCP host) sees.
 | CLI                                                            | MCP tool             |
 |----------------------------------------------------------------|----------------------|
 | `outl page get <slug> [--json]`                                | `outl_page_get`      |
-| `outl page create <slug> --title=… [--icon=…] [--content=<JSON\|->]` | `outl_page_create`   |
+| `outl page create <slug> --title=… [--icon=…] [--content=<JSON\|->] [--slugify]` | `outl_page_create`   |
 | `outl page update <slug> [--title=…] [--icon=…]`               | `outl_page_update`   |
 | `outl page delete <slug> [--confirm]`                          | `outl_page_delete`   |
 | `outl page list [--filter=tag:foo] [--json]`                   | `outl_page_list`     |
@@ -111,6 +111,10 @@ Affected blocks come back in `affected_refs` so the caller can decide whether to
 `page create --content` accepts a forest of `[{text, children?}, ...]` (or a single `{text, children?}` for ergonomics) so a brand-new page lands with its full outline in one op-log session instead of a chain of `block append` calls.
 Pass `--content -` to read the JSON from stdin.
 The returned `content` array mirrors the input and carries the freshly minted block ids, so the caller can keep referencing them in follow-ups.
+
+`page create --slugify` treats the positional argument as a human name and derives the slug from it through the shared `outl_md::slugify` rule (lowercase, fold Latin accents, non-alphanumeric → `-`, collapse + trim).
+It is opt-in and idempotent on an already-clean slug, so the default path — and the `outl_page_create` MCP tool — stay literal, keeping hierarchical slugs like `ai-agent/learning` verbatim.
+The flag exists so external clients (the Raycast extension's "New Page") can ask the user for a name only and let the one owner of the rule generate the slug, instead of re-implementing slugify.
 
 ### Block
 
@@ -156,7 +160,7 @@ Range is inclusive on both sides and emits one entry per day in the interval —
 
 `search` is full-text and lives today as the TUI's workspace search.
 `query` is the structured filter (tag, property, date range, kind).
-The `--raw='…'` flag is reserved for the phase 3 DSL and currently rejects with `INVALID_ARG` — when the DSL lands it folds into the same `outl_query` tool, not a new one.
+The `--raw='…'` flag is reserved for the not-yet-implemented query DSL and currently rejects with `INVALID_ARG` — when the DSL lands it folds into the same `outl_query` tool, not a new one.
 
 ### Backlinks / Refs
 
@@ -228,12 +232,31 @@ CLI exit code is `1` in that case; MCP returns the payload via the normal envelo
 | `outl doctor [--json]`                       | `outl_workspace_doctor` |
 | `outl reconcile`                             | —                       |
 | `outl mcp serve [--workspace=…]`             | —                       |
+| `outl peer pair\|list\|remove\|status`        | —                       |
+| `outl plugin list\|install\|run\|enable\|disable` | —                   |
+| `outl sync`                                  | —                       |
 | `outl workspace info [--json]`               | `outl_workspace_info`   |
 | `outl import logseq <src> <dst>`             | —                       |
 | `outl import obsidian <vault> <dst>`         | —                       |
 | `outl import roam <backup.json> <dst>`       | —                       |
 
-`init`, `serve`, `reconcile`, `import`, and `mcp serve` are CLI-only on purpose — they're either interactive, long-running, or bootstrap commands that don't fit a tool-call shape.
+`init`, `serve`, `reconcile`, `import`, `mcp serve`, `peer`, `plugin`, and `sync` are CLI-only on purpose — they're either interactive, long-running, or bootstrap commands that don't fit a tool-call shape.
+
+`outl plugin` manages the workspace's JS plugins (under `<workspace>/.outl/plugins/`), wrapping `outl-plugins`.
+`list` loads every installed plugin and prints each one's version, enabled state, and the slash commands it contributes.
+`install <DIR>` takes a local directory holding a `plugin.json` plus its bundle (the installed shape).
+It prints the permissions the manifest requests and asks for approval before copying the plugin in and freezing those permissions in the lockfile.
+Pass `--yes` to approve non-interactively (required when stdin is not a TTY).
+`github:user/repo` sources are not wired yet; clone the repo and point at the local checkout.
+`run <PLUGIN_ID> <COMMAND_ID>` runs a contributed command and re-renders every page's `.md` afterwards, because the op log is the source of truth and the files are a projection.
+`enable <ID>` / `disable <ID>` flip the plugin's `enabled` flag in the lockfile without uninstalling it.
+
+`outl peer pair` takes an optional `--name <NAME>` — the label this device advertises to the other (shown in the peer's `outl peer list`).
+It defaults to the machine hostname; the GUI clients default it to "desktop" / "mobile" and let the user edit it before pairing.
+
+`outl sync` forces a one-shot P2P sync pass (bring the iroh transport up, exchange ops with every paired device, exit).
+It's for scripts that mutate via the CLI and must flush to peers before the process dies — a normal short-lived CLI mutation can't keep a connection alive long enough.
+The long-lived surfaces (`outl mcp serve`, the desktop/TUI apps) sync continuously and don't need it.
 
 `outl doctor` also reports **parser warnings** — every `.md` whose content stepped outside the outl dialect and got recovered by the permissive parser (typical case: a leading `# heading`, a free paragraph, imported markdown).
 A warning row goes into the doctor report (one per affected file), and one entry per warning is appended to `.outl/orphans.log` tagged `parse-warning <iso> <path>:<line> <kind> <raw>` so the breadcrumb persists across runs.
@@ -306,7 +329,7 @@ Shipping today:
 - `outl workspace info`
 - `outl mcp serve` — full MCP protocol surface (tools, resources, prompts) over stdio.
 
-Still ahead (phase 3+):
+Still ahead:
 
 - Richer `outl query --raw='…'` DSL (today returns `INVALID_ARG`).
 - Per-page block-level property surface beyond the well-known keys the `prop list` probe enumerates.

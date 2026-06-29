@@ -1,14 +1,14 @@
 //! The block-matching algorithm that reconstructs IDs after an external
 //! edit to a `.md` file.
 //!
-//! Phase 1 implements levels 1 and 3 from `docs/markdown-format.md`:
+//! Today the algorithm implements levels 1 and 3 from `docs/markdown-format.md`:
 //!
 //! - **Level 1** — `content_hash` exact match. Preserves the ID.
 //! - **Level 3** — no match. New ULID assigned for new blocks; old blocks
 //!   without a match become orphans (caller moves them to `TRASH_ROOT`).
 //!
 //! Level 2 (Levenshtein similarity > 80%) requires retaining the old text
-//! verbatim, which the sidecar doesn't store. It's deferred to phase 4.
+//! verbatim, which the sidecar doesn't store. It's not yet implemented.
 //! Until then, heavy edits silently lose the block ID — but the block
 //! **never disappears**: it shows up as an orphan and goes through
 //! `outl reconcile`.
@@ -23,7 +23,7 @@ use std::collections::HashSet;
 pub enum MatchLevel {
     /// `content_hash` exact match.
     High,
-    /// Reserved for phase 4 (similarity-based). Never emitted in phase 1.
+    /// Reserved for similarity-based matching (level 2). Not yet emitted.
     Medium,
     /// No old block matched the new one — assign a fresh id.
     Low,
@@ -103,7 +103,7 @@ pub fn match_blocks(
         }
     }
 
-    // Pass 2 (reserved for level 2 — phase 4).
+    // Pass 2 (reserved for level 2 — similarity-based, not yet implemented).
 
     // Final pass: level 3 for the remainder.
     for (i, maybe_id) in found.iter().enumerate() {

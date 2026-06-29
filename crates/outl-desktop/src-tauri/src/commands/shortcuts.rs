@@ -14,7 +14,7 @@ use outl_shortcuts::Binding;
 /// frontend caches the result on first call and uses it for the
 /// rest of the session — bindings never change at runtime today,
 /// so a refresh is only needed when the user edits their config
-/// (Phase X feature).
+/// (a future feature).
 #[tauri::command]
 pub(crate) fn list_shortcut_bindings() -> Vec<Binding> {
     outl_shortcuts::default_bindings()

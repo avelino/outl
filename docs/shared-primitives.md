@@ -3,6 +3,7 @@
 **Before writing any helper, scan these tables first.**
 Most "I need a small string transform / id helper / md coercion / tree walk" needs already have an owner here — the cost of finding the existing one is a `grep`; the cost of missing it shows up later as drift between two parallel implementations (the user is the one who hits the divergence).
 
+
 > This catalog is mirrored at [`.github/copilot-instructions.md`](https://github.com/avelino/outl/blob/main/.github/copilot-instructions.md) §5.1.
 > When you edit either copy, sync both — a `PostToolUse` hook flags drift, but the discipline starts before the hook fires.
 
@@ -23,6 +24,7 @@ For the reuse-first rule (why this matters, past drift incidents, what to do whe
 | Wrap an `Op` into a `LogOp` (timestamp + actor) for `apply` | `outl_core::Op` + `outl_core::LogOp` | `crates/outl-core/src/op.rs` |
 | Sentinel node ids (`root`, `trash`) | `outl_core::NodeId::root()` / `trash()` | `crates/outl-core/src/id.rs` |
 | Per-device identity for ops | `outl_core::ActorId` | `crates/outl-core/src/id.rs` |
+| Stable, shared workspace identity (read/generate, persist, pairing-adoption) — the gossip-topic key, NOT the path | `outl_core::WorkspaceId::read_or_create` / `write` / `from_raw` (errors: `outl_core::WorkspaceIdError`) | `crates/outl-core/src/workspace_id.rs` |
 | Fractional index for sibling ordering | `outl_core::Fractional` | `crates/outl-core/src/fractional.rs` |
 
 ## 2. Tree reads (outl-core + outl-actions::tree)
@@ -52,6 +54,7 @@ Every entry here routes through `Workspace::apply` — never build a `LogOp` fro
 | Create sibling after / child under a block | `outl_actions::block::create_after` / `create_under` | `crates/outl-actions/src/block.rs` |
 | Edit a block's text | `outl_actions::block::edit_text` | `crates/outl-actions/src/block.rs` |
 | Indent / outdent / move up / move down a block | `outl_actions::block::indent` / `outdent` / `move_up` / `move_down` | `crates/outl-actions/src/block.rs` |
+| Re-parent a block under an arbitrary page/block (cross-page move) | `outl_actions::block::move_under` | `crates/outl-actions/src/block.rs` |
 | Delete a block (`Move(node, TRASH_ROOT)`, **never** physical) | `outl_actions::block::delete` | `crates/outl-actions/src/block.rs` |
 | Toggle a block's collapsed flag (converges via `Op::SetCollapsed`) | `outl_actions::collapsed::toggle_block_collapsed` / `set_block_collapsed` | `crates/outl-actions/src/collapsed.rs` |
 | Cycle / split / read TODO/DONE state (encoded as text prefix) | `outl_actions::todo::cycle_todo` / `split_todo` / `TodoState` / `TODO_PREFIX` / `DONE_PREFIX` | `crates/outl-actions/src/todo.rs` |
@@ -76,6 +79,7 @@ Every entry here routes through `Workspace::apply` — never build a `LogOp` fro
 | Migrate pre-page-model blocks under today's journal (run on boot) | `outl_actions::page::migrate_legacy_into_today` | `crates/outl-actions/src/page.rs` |
 | Open / create the journal for a specific date or today | `outl_actions::page::open_journal` / `open_today` | `crates/outl-actions/src/page.rs` |
 | Journal date utilities (today, slug ↔ date, prev/next day) | `outl_actions::page::today` / `journal_slug` / `journal_title` / `date_from_slug` / `previous_journal_date` / `next_journal_date` | `crates/outl-actions/src/page.rs` |
+| Parse an `outl://` deep link URL into a navigation target (one parser, every GUI client routes the result to its own `open_*` command — never reparse per client) | `outl_actions::parse_deep_link` / `DeepLinkTarget` / `DeepLinkError` / `DEEP_LINK_SCHEME` | `crates/outl-actions/src/deeplink.rs` |
 | Filesystem paths for journals / pages / a specific page | `outl_actions::journal::journals_dir` / `pages_dir` / `page_md_path` | `crates/outl-actions/src/journal.rs` |
 | Render a page node out to `.md` | `outl_actions::journal::render_page_md` | `crates/outl-actions/src/journal.rs` |
 | Apply an edited `.md` back into the workspace (with / without sidecar) | `outl_actions::journal::apply_page_md` / `apply_page_md_with_sidecar` | `crates/outl-actions/src/journal.rs` |
@@ -200,10 +204,16 @@ The runtime catalog (which languages are available) is selected by the **binary*
 | Intent | Use this | File |
 |---|---|---|
 | The shared sync entry point (TUI poller + mobile iCloud watcher both use it) | `outl_actions::SyncEngine::new` | `crates/outl-actions/src/sync.rs` |
+| Bind a sync engine to an explicit transport (iroh, test doubles) | `SyncEngine::with_transport` | `crates/outl-actions/src/sync.rs` |
+| Start the transport's background tasks once the caller's channel is ready | `SyncEngine::start_transport(tx)` | `crates/outl-actions/src/sync.rs` |
+| Announce new local ops to connected peers (no-op for file transport) | `SyncEngine::announce_local_ops(workspace_id, hlc)` | `crates/outl-actions/src/sync.rs` |
 | Reload workspace from disk after a peer change | `SyncEngine::reload_workspace` | `crates/outl-actions/src/sync.rs` |
 | Re-project a page's `.md` + sidecar to disk / reload + reproject in one call | `SyncEngine::reproject_page` / `refresh_page` | `crates/outl-actions/src/sync.rs` |
 | Snapshot every / peer-only `ops-*.jsonl` (size + mtime) for change detection | `SyncEngine::snapshot` / `snapshot_peers` (`OpsFileSnapshot`) | `crates/outl-actions/src/sync.rs` |
 | Scan `journals/` + `pages/` for orphan `.md` (no sidecar / stale hash) | `SyncEngine::scan_for_orphans` | `crates/outl-actions/src/sync.rs` |
+| Transport abstraction (iroh QUIC default; file/iCloud polling opt-in) | `outl_actions::SyncTransport` (trait) | `crates/outl-actions/src/sync.rs` |
+| Filesystem / iCloud opt-in transport (polls `ops/` every 2 s, delivery is no-op) | `outl_actions::FileSyncTransport` | `crates/outl-actions/src/sync.rs` |
+| Per-peer reachability snapshot from the running transport's own dials (GUI status; never bind a probe endpoint) | `SyncTransport::peer_health` → `outl_actions::PeerHealthSnapshot` | `crates/outl-actions/src/sync.rs` |
 | Acquire the cross-process workspace lock (one writer at a time) | `outl_core::WorkspaceLock::acquire` | `crates/outl-core/src/lock.rs` |
 | Acquire the per-actor write lock (one process writing this actor's jsonl) | `outl_core::ActorWriteLock::try_acquire` | `crates/outl-core/src/lock.rs` |
 | Resolve which actor this process writes as | `outl_core::resolve_write_actor` | `crates/outl-core/src/lock.rs` |

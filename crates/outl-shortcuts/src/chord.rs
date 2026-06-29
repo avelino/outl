@@ -141,4 +141,128 @@ impl ChordSequence {
     pub fn is_prefix_of(&self, other: &Self) -> bool {
         self.len() < other.len() && self.0[..] == other.0[..self.len()]
     }
+
+    /// Parse a human chord string like `"Ctrl+Shift+A"` or `"Ctrl+T S"`
+    /// (space-separated chords) into a sequence. Used to turn a plugin's
+    /// `contributes.keybindings[].key` into a real [`ChordSequence`] without
+    /// each client reimplementing the parse. Returns `None` on any malformed
+    /// part, or a sequence longer than two chords.
+    pub fn parse(s: &str) -> Option<Self> {
+        let chords: Option<Vec<Chord>> = s.split_whitespace().map(Chord::parse).collect();
+        let chords = chords?;
+        if chords.is_empty() || chords.len() > 2 {
+            return None;
+        }
+        Some(Self(chords))
+    }
+}
+
+impl Chord {
+    /// Parse a single chord like `"Ctrl+Shift+A"`: `+`-separated, the last part
+    /// is the key, the rest are modifiers (case-insensitive).
+    pub fn parse(s: &str) -> Option<Self> {
+        let parts: Vec<&str> = s
+            .split('+')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .collect();
+        let (key_str, mod_strs) = parts.split_last()?;
+        let mut mods = Modifiers::NONE;
+        for m in mod_strs {
+            mods = mods
+                | match m.to_ascii_lowercase().as_str() {
+                    "ctrl" | "control" => Modifiers::CTRL,
+                    "alt" | "option" | "opt" => Modifiers::ALT,
+                    "shift" => Modifiers::SHIFT,
+                    "meta" | "cmd" | "command" | "win" | "super" => Modifiers::META,
+                    _ => return None,
+                };
+        }
+        Some(Self {
+            mods,
+            key: parse_key(key_str)?,
+        })
+    }
+}
+
+/// Parse a key name (`"Enter"`, `"Space"`, `"F5"`) or a single character.
+fn parse_key(s: &str) -> Option<Key> {
+    match s.to_ascii_lowercase().as_str() {
+        "enter" | "return" => Some(Key::Enter),
+        "esc" | "escape" => Some(Key::Esc),
+        "tab" => Some(Key::Tab),
+        "backspace" => Some(Key::Backspace),
+        "delete" | "del" => Some(Key::Delete),
+        "space" => Some(Key::Space),
+        "up" => Some(Key::Up),
+        "down" => Some(Key::Down),
+        "left" => Some(Key::Left),
+        "right" => Some(Key::Right),
+        "home" => Some(Key::Home),
+        "end" => Some(Key::End),
+        "pageup" | "pgup" => Some(Key::PageUp),
+        "pagedown" | "pgdn" => Some(Key::PageDown),
+        other => {
+            if let Some(n) = other.strip_prefix('f').and_then(|d| d.parse::<u8>().ok()) {
+                if (1..=12).contains(&n) {
+                    return Some(Key::Function(n));
+                }
+            }
+            let mut chars = other.chars();
+            let c = chars.next()?;
+            chars.next().is_none().then(|| Key::char(c))
+        }
+    }
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+
+    #[test]
+    fn single_chord_with_mods() {
+        let seq = ChordSequence::parse("Ctrl+Shift+A").unwrap();
+        assert_eq!(
+            seq.0,
+            vec![Chord {
+                mods: Modifiers::CTRL | Modifiers::SHIFT,
+                key: Key::Char('a')
+            }]
+        );
+    }
+
+    #[test]
+    fn two_chord_sequence() {
+        let seq = ChordSequence::parse("Ctrl+T S").unwrap();
+        assert_eq!(seq.len(), 2);
+        assert_eq!(
+            seq.0[0],
+            Chord {
+                mods: Modifiers::CTRL,
+                key: Key::Char('t')
+            }
+        );
+        assert_eq!(
+            seq.0[1],
+            Chord {
+                mods: Modifiers::NONE,
+                key: Key::Char('s')
+            }
+        );
+    }
+
+    #[test]
+    fn named_keys_and_function() {
+        assert_eq!(Chord::parse("Cmd+Enter").unwrap().key, Key::Enter);
+        assert_eq!(Chord::parse("F5").unwrap().key, Key::Function(5));
+        assert_eq!(Chord::parse("Space").unwrap().key, Key::Space);
+    }
+
+    #[test]
+    fn rejects_garbage() {
+        assert!(Chord::parse("Ctrl+").is_none());
+        assert!(Chord::parse("Bogus+A").is_none());
+        assert!(ChordSequence::parse("a b c").is_none()); // > 2 chords
+        assert!(ChordSequence::parse("").is_none());
+    }
 }

@@ -51,7 +51,7 @@ Treat matching with the same paranoia as the CRDT.
     `outl-actions` attaches the result to `OutlineNode.tokens` so mobile renders without a TS tokenizer.
     Adding a variant to `InlineTok` requires adding the matching variant to `InlineToken` plus the conversion in `InlineToken::from_borrowed` in the same change.
 - **Block index** (`block_index.rs`) — `NodeId → BlockEntry`, `ref_handle → NodeId`, `NodeId → [BlockReference]` (reverse refs), `(slug, dfs_path) → NodeId` for location lookup.
-  Population is two-phase (`collect_page_blocks` then `collect_page_refs`) so reverse edges survive arbitrary page-load order during the initial build.
+  Population is two-pass (`collect_page_blocks` then `collect_page_refs`) so reverse edges survive arbitrary page-load order during the initial build.
   Lookups are O(1).
 - **Workspace index** (`index.rs`) — page-level (`slug → PageEntry`, backlinks) plus block-level (re-exports the `BlockIndex` API).
   Public surface includes `resolve_block_ref(handle)`, `block_by_id`, `block_at_location(slug, &[usize])`, `block_refs_to(id)`, `iter_blocks`, `block_count`, `search_block_text(query, limit)`.
@@ -73,7 +73,7 @@ Treat matching with the same paranoia as the CRDT.
 - The op log → `outl-core`
 - File watching / debounce → `outl-cli`
 - Reconcile TUI → `outl-tui`
-- Network sync → `outl-sync` (phase 2)
+- Network sync → `outl-sync-iroh` (P2P via iroh, default transport; file/iCloud opt-in)
 
 ## The 3-level matching algorithm
 
@@ -155,7 +155,7 @@ tags:: #project
 - `#tag` = tag (page reference with classification semantics).
 - `((blk-XXXXXX))` = inline block reference (renders as the source block's text).
 - `!((blk-XXXXXX))` = block embed (renders source block expanded with subtree).
-- `{{query: ...}}` = saved query (phase 3, parse as opaque for now).
+- `{{query: ...}}` = saved query (query DSL not yet implemented, parse as opaque for now).
 
 **No `id::`, no UUID, no HTML comments** — IDs go in the sidecar only.
 

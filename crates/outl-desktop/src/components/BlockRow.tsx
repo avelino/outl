@@ -1,4 +1,14 @@
-import { For, Show, createEffect, createSignal } from "solid-js";
+import {
+  For,
+  Match,
+  Show,
+  Switch,
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  onCleanup,
+} from "solid-js";
 
 import type { BlockNode, PageMeta, TodoState } from "@outl/shared/api/types";
 import {
@@ -10,11 +20,13 @@ import {
 } from "@outl/shared/markdown";
 import {
   applyEmojiSuggestion,
+  applySlashContext,
   applySuggestion,
   autoDeletePair,
   autoPairBracket,
   detectEmojiContext,
   detectRefContext,
+  detectSlashContext,
   withCreateNewPersonCandidate,
 } from "@outl/shared/autocomplete";
 import {
@@ -29,6 +41,9 @@ import { looksLikeOutline, utf16OffsetToCharOffset } from "@outl/shared/paste";
 
 import { detectFence } from "@outl/shared/highlight";
 import { appState, setAppState } from "../lib/store";
+import { transformCached, transformerFor } from "../lib/transformers";
+import { pluginList, type PluginCommand, type PluginTransformResult } from "../lib/api";
+import { rankSlashCommands } from "../lib/slash-commands";
 
 export interface BlockCallbacks {
   /** A textarea was double-clicked → enter edit mode on `id`. */
@@ -51,6 +66,10 @@ export interface BlockCallbacks {
   onPasteMarkdown: (id: string, caret: number, text: string) => Promise<void>;
   /** Run a fenced code block through `outl-exec`. */
   onRunCodeBlock: (id: string) => Promise<void>;
+  /** Run a plugin command picked from the inline `/` slash menu. The
+   *  parent owns the `pluginRun` round-trip + view/overlay application,
+   *  same as `PluginPalette` does for the `⧉` palette. */
+  onRunPluginCommand: (pluginId: string, commandId: string) => Promise<void>;
   /** Ref / tag click handlers (forwarded to MarkdownInline). */
   onRefClick: (target: string) => void;
   onTagClick: (tag: string) => void;
@@ -111,6 +130,22 @@ export function BlockRow(props: {
   // popup is active at a time.
   const [emojiSuggestions, setEmojiSuggestions] = createSignal<EmojiHit[]>([]);
   const [emojiIndex, setEmojiIndex] = createSignal(0);
+  // ── `/command` inline slash menu ─────────────────────────────────
+  // Block-initial `/` opens a filterable list of plugin commands —
+  // the desktop's inline equivalent of the TUI's `/` slash overlay
+  // (the `⧉` palette is the other surface). Trigger detection +
+  // token removal reuse the shared `@outl/shared/autocomplete`
+  // helpers; the command universe comes from `pluginList()`, loaded
+  // once on the first `/` and filtered client-side as the user types.
+  const [slashCommands, setSlashCommands] = createSignal<PluginCommand[]>([]);
+  const [slashIndex, setSlashIndex] = createSignal(0);
+  // Lazily-loaded, cached command list (null until the first `/`).
+  let allSlashCommands: PluginCommand[] | null = null;
+  async function ensureSlashCommands(): Promise<PluginCommand[]> {
+    if (allSlashCommands) return allSlashCommands;
+    allSlashCommands = await pluginList().catch(() => []);
+    return allSlashCommands;
+  }
   // `query` last sent to the backend — skip redundant round-trips when
   // the caret moves without changing the in-ref text (mirrors mobile's
   // `lastQuery` guard). `null` means "not in a ref right now".
@@ -132,6 +167,8 @@ export function BlockRow(props: {
     setSuggestIndex(0);
     if (emojiSuggestions().length > 0) setEmojiSuggestions([]);
     setEmojiIndex(0);
+    if (slashCommands().length > 0) setSlashCommands([]);
+    setSlashIndex(0);
   }
 
   /**
@@ -146,6 +183,37 @@ export function BlockRow(props: {
     const ta = textareaRef;
     if (!ta) return closeSuggest();
     const cursor = ta.selectionStart ?? 0;
+    // Block-initial `/` opens the slash menu. Checked first: it only
+    // fires when `/` is the very first character (never mid-prose), so
+    // it can't shadow the `:`/`[[` triggers below — but when it IS
+    // active those are irrelevant.
+    const slashCtx = detectSlashContext(ta.value, cursor);
+    if (slashCtx) {
+      const key = `slash:${slashCtx.query}`;
+      if (key === lastQuery) return;
+      lastQuery = key;
+      const token = ++searchToken;
+      void ensureSlashCommands()
+        .then((all) => {
+          if (token !== searchToken) return;
+          // Stale-caret guard: the caret may have left the trigger
+          // while the command list was loading.
+          const cur = textareaRef
+            ? detectSlashContext(textareaRef.value, textareaRef.selectionStart ?? 0)
+            : null;
+          if (!cur) return;
+          // Match on the command id (what the user types, mirrors the
+          // TUI / CLI) and the human title. Rank id-prefix first, then
+          // id-substring, then title — so `/sta` puts `stats` on top.
+          const ranked = rankSlashCommands(all, cur.query);
+          if (suggestions().length > 0) setSuggestions([]);
+          if (emojiSuggestions().length > 0) setEmojiSuggestions([]);
+          setSlashCommands(ranked);
+          setSlashIndex(0);
+        })
+        .catch(() => closeSuggest());
+      return;
+    }
     // Emoji takes precedence over ref detection: a `:` typed inside a
     // stray `[[…` window must still surface the glyph popup. The two
     // triggers don't overlap on real prose because `:` is rejected on
@@ -269,6 +337,29 @@ export function BlockRow(props: {
     ta.focus();
   }
 
+  /** Accept a slash command: strip the `/query` token from the block,
+   *  commit the cleaned text, then hand the run to the parent (which
+   *  owns `pluginRun` + view/overlay application, same as the palette). */
+  function acceptSlashCommand(cmd: PluginCommand) {
+    const ta = textareaRef;
+    if (!ta) return;
+    const ctx = detectSlashContext(ta.value, ta.selectionStart ?? 0);
+    if (!ctx) return closeSuggest();
+    const completion = applySlashContext(ta.value, ctx);
+    setDraft(completion.value);
+    ta.value = completion.value;
+    ta.setSelectionRange(completion.caret, completion.caret);
+    closeSuggest();
+    // Persist the now-cleaned block (drops the `/stats` literal), then
+    // run. `commit` is a no-op round-trip when the text is unchanged
+    // (the common case: a fresh empty block), so a plain command still
+    // just fires.
+    void (async () => {
+      await commit();
+      await props.cb.onRunPluginCommand(cmd.plugin_id, cmd.command_id);
+    })();
+  }
+
   function focusTextarea() {
     queueMicrotask(() => {
       textareaRef?.focus();
@@ -346,6 +437,42 @@ export function BlockRow(props: {
   }
 
   async function handleKeydown(e: KeyboardEvent) {
+    // Slash menu owns the arrows / Enter / Tab / Esc while it's open.
+    // It never co-exists with the emoji / ref popups (block-initial `/`
+    // vs. `:` / `[[`), so checking it first is safe.
+    const slash = slashCommands();
+    if (slash.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSlashIndex((i) => (i + 1) % slash.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSlashIndex((i) => (i - 1 + slash.length) % slash.length);
+        return;
+      }
+      if (
+        (e.key === "Enter" || e.key === "Tab") &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.shiftKey &&
+        !e.altKey
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        acceptSlashCommand(slash[slashIndex()]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeSuggest();
+        return;
+      }
+    }
     // Emoji popup takes precedence over the ref popup (they never
     // co-exist, but checking first keeps the branching cheap).
     const emoji = emojiSuggestions();
@@ -682,6 +809,7 @@ export function BlockRow(props: {
                     fallback={
                       fence ? (
                         <CodeFenceView
+                          blockId={props.block.id}
                           language={fence.language}
                           body={fence.body}
                           onEdit={() => {
@@ -770,6 +898,12 @@ export function BlockRow(props: {
                         activeIndex={emojiIndex()}
                         onHover={setEmojiIndex}
                         onPick={acceptEmojiSuggestion}
+                      />
+                      <SlashCommandPopup
+                        items={slashCommands()}
+                        activeIndex={slashIndex()}
+                        onHover={setSlashIndex}
+                        onPick={acceptSlashCommand}
                       />
                     </div>
                   </Show>
@@ -915,12 +1049,77 @@ function EmojiSuggestPopup(props: {
 }
 
 /**
+ * Floating `/command` slash menu shown while the caret is inside a
+ * block-initial `/` trigger — the desktop's inline equivalent of the
+ * TUI slash overlay. Same anchoring/keyboard pattern as
+ * `RefSuggestPopup`. Each row shows the command **id** monospaced (what
+ * the user types, mirrors `/stats` in the CLI) with the human title
+ * dimmed beside it.
+ */
+function SlashCommandPopup(props: {
+  items: PluginCommand[];
+  activeIndex: number;
+  onHover: (i: number) => void;
+  onPick: (cmd: PluginCommand) => void;
+}) {
+  return (
+    <Show when={props.items.length > 0}>
+      <ul
+        class="absolute top-full left-0 z-30 mt-1 max-h-56 w-72 overflow-y-auto rounded-md border border-(--color-outl-border) bg-(--color-outl-bg-elev) py-1 text-[13px] shadow-lg"
+        role="listbox"
+      >
+        <For each={props.items}>
+          {(cmd, i) => (
+            <li role="option" aria-selected={i() === props.activeIndex}>
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  props.onPick(cmd);
+                }}
+                onMouseEnter={() => props.onHover(i())}
+                class={`flex w-full items-center gap-2 px-2 py-1 text-left ${
+                  i() === props.activeIndex
+                    ? "bg-(--color-outl-accent) text-(--color-outl-bg)"
+                    : "hover:bg-(--color-outl-bg)/50"
+                }`}
+              >
+                <span class="shrink-0 font-mono text-[12px]">
+                  /{cmd.command_id}
+                </span>
+                <span class="truncate opacity-70">{cmd.title}</span>
+              </button>
+            </li>
+          )}
+        </For>
+      </ul>
+    </Show>
+  );
+}
+
+/**
  * Rendered view of a `\`\`\`lang\n…\n\`\`\`` block. Shows the source
  * monospaced, a tiny language chip, and a Run button. Clicking the
  * source body kicks the editor in (so the user can edit the fence
  * just like any other block).
+ *
+ * When a plugin declares a **content transformer** for `language`, the
+ * source is replaced by the transformer's rendered output:
+ * - `kind: "text"` — rendered as plain, whitespace-preserving text (no
+ *   client-side markdown parse — a transformer wanting rich formatting
+ *   emits `kind: "rich"` HTML).
+ * - `kind: "rich"` — HTML run in a sandboxed `<iframe>` **inline** in the
+ *   block (one per fence, persistent while the block exists). The iframe is
+ *   `sandbox="allow-scripts"` **without** `allow-same-origin` — the same
+ *   isolation as the `ui-render` overlay; the plugin JS runs in a null
+ *   origin with no access to the app DOM/cookies. Clicking the chip's edit
+ *   affordance still drops into the raw fence editor.
+ *
+ * The transform runs the plugin's JS, so it is cached by `(blockId, body)`
+ * (`transformCached`) and only re-runs when the body changes.
  */
 function CodeFenceView(props: {
+  blockId: string;
   language: string;
   body: string;
   onEdit: () => void;
@@ -937,27 +1136,144 @@ function CodeFenceView(props: {
     }
   }
 
+  // Reactive transformer lookup: a fence that mounts before the registry
+  // loads picks the transformer up once `loadTransformers` resolves.
+  const match = createMemo(() => transformerFor(props.language));
+
+  // Run (or replay) the transformer when one matches, re-keyed by body so a
+  // fence edit re-transforms. `undefined` source ⇒ resource stays unset and
+  // the plain source view shows.
+  const [transformed] = createResource(
+    () => {
+      const m = match();
+      return m ? { m, body: props.body } : undefined;
+    },
+    (k) => transformCached(props.blockId, k.m, props.language, k.body),
+  );
+
+  // Whether to show transformed output: a transformer matched AND it
+  // produced a non-null descriptor. A declined transform (null) or an
+  // in-flight first run falls back to the source view.
+  const result = (): PluginTransformResult | null =>
+    transformed.state === "ready" ? (transformed() ?? null) : null;
+
   return (
     <div class="rounded-md border border-(--color-outl-fg)/10 bg-(--color-outl-bg-elev)/60">
       <div class="flex items-center justify-between border-b border-(--color-outl-fg)/10 px-2 py-1">
         <span class="font-mono text-[10px] uppercase opacity-60">
           {props.language}
         </span>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            void run();
-          }}
-          disabled={busy()}
-          class="rounded bg-(--color-outl-fg)/10 px-2 py-0.5 text-[11px] hover:bg-(--color-outl-fg)/20 disabled:opacity-50"
+        <Show
+          when={match()}
+          fallback={
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                void run();
+              }}
+              disabled={busy()}
+              class="rounded bg-(--color-outl-fg)/10 px-2 py-0.5 text-[11px] hover:bg-(--color-outl-fg)/20 disabled:opacity-50"
+            >
+              {busy() ? "Running…" : "▶ Run"}
+            </button>
+          }
         >
-          {busy() ? "Running…" : "▶ Run"}
-        </button>
+          {/* Transformed fences aren't "run" — clicking edits the source. */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              props.onEdit();
+            }}
+            class="rounded bg-(--color-outl-fg)/10 px-2 py-0.5 text-[11px] hover:bg-(--color-outl-fg)/20"
+          >
+            ✎ Edit
+          </button>
+        </Show>
       </div>
-      <div onClick={props.onEdit} class="cursor-text">
-        <HighlightedCode language={props.language} code={props.body || " "} />
-      </div>
+      <Switch
+        fallback={
+          <div onClick={props.onEdit} class="cursor-text">
+            <HighlightedCode
+              language={props.language}
+              code={props.body || " "}
+            />
+          </div>
+        }
+      >
+        <Match when={result()?.kind === "text"}>
+          {/* `text` output is rendered as plain, whitespace-preserving
+              text. We deliberately do NOT run a client-side markdown
+              parser here (root CLAUDE.md forbids a parallel
+              implementation of `outl_md`); a transformer that wants rich
+              formatting emits `kind: "rich"` HTML instead. */}
+          <div class="cursor-text whitespace-pre-wrap break-words px-2 py-1 leading-snug">
+            {result()?.content ?? ""}
+          </div>
+        </Match>
+        <Match when={result()?.kind === "rich"}>
+          <RichFenceFrame html={result()?.content ?? ""} />
+        </Match>
+      </Switch>
     </div>
+  );
+}
+
+/**
+ * Inline sandboxed iframe for a `rich` content-transformer's HTML output.
+ *
+ * **Security — do not weaken.** `sandbox="allow-scripts"` with **no**
+ * `allow-same-origin`: the plugin's JS runs in a null origin, isolated from
+ * the app's DOM, cookies, `localStorage`, and credentialed fetch. HTML
+ * enters via `srcdoc`, never `innerHTML` on the host document. This is the
+ * same isolation as the `ui-render` overlay (`PluginEffectLayer`); the
+ * difference is only placement (inline in the block, not a fullscreen
+ * overlay) and lifetime (persistent while the block exists, not ephemeral).
+ *
+ * The iframe is sized to its content via a postMessage handshake the plugin
+ * may opt into (`parent.postMessage({ outlHeight: n }, "*")`); absent that,
+ * it falls back to a reasonable default height so the content is visible.
+ */
+function RichFenceFrame(props: { html: string }) {
+  // Default height until the plugin reports its content height. Bounded so a
+  // misbehaving plugin can't grow the iframe without limit.
+  const DEFAULT_H = 240;
+  const MAX_H = 2000;
+  const [height, setHeight] = createSignal(DEFAULT_H);
+
+  let frame: HTMLIFrameElement | undefined;
+
+  function onMessage(e: MessageEvent) {
+    // Only trust height reports from *this* iframe's null-origin document.
+    if (frame && e.source === frame.contentWindow) {
+      const h = (e.data as { outlHeight?: unknown } | null)?.outlHeight;
+      if (typeof h === "number" && h > 0) {
+        setHeight(Math.min(Math.ceil(h), MAX_H));
+      }
+    }
+  }
+
+  // Listen for the plugin's height report for this frame's lifetime;
+  // removed on cleanup so a re-render (new html) doesn't leak handlers.
+  window.addEventListener("message", onMessage);
+  onCleanup(() => window.removeEventListener("message", onMessage));
+
+  return (
+    <iframe
+      ref={frame}
+      // SECURITY: allow-scripts WITHOUT allow-same-origin — the plugin JS
+      // runs in a null origin, isolated from the app. Never add
+      // allow-same-origin here (mirrors PluginEffectLayer / ui-render).
+      sandbox="allow-scripts"
+      srcdoc={props.html}
+      title="content-transformer"
+      style={{
+        width: "100%",
+        height: `${height()}px`,
+        border: "0",
+        display: "block",
+      }}
+    />
   );
 }

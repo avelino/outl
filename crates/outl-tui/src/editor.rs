@@ -1,1 +1,2 @@
-//! Block-level editor. Phase 1 is read-only; phase 4 grows full editing.
+//! Block-level editor. Placeholder for dedicated block-level editor
+//! widgets, not yet built.

@@ -113,21 +113,41 @@ impl App {
 
     /// Fuzzy-match slash command names against `q`. Empty `q` shows
     /// every command (in registry order).
-    fn candidates_for_slash(&self, q: &str) -> Vec<String> {
-        if q.is_empty() {
-            return self
-                .command_registry
-                .all()
-                .map(|c| c.name().to_string())
-                .collect();
-        }
-        let mut scored: Vec<(i32, String)> = self
+    ///
+    /// The universe is built-in commands **plus** every command a loaded
+    /// plugin contributes — keyed by the command **id** (`stats`), the
+    /// same name the slash overlay, the CLI (`/stats`), and `accept`
+    /// resolve against. Without the plugin half, typing `/` inside a
+    /// block (Insert mode) only ever lists built-ins, even with a plugin
+    /// installed (the bug behind "the plugin command never shows in `/`").
+    pub(crate) fn candidates_for_slash(&self, q: &str) -> Vec<String> {
+        let mut names: Vec<String> = self
             .command_registry
             .all()
-            .filter_map(|c| {
-                let name = c.name();
-                crate::fuzzy::fuzzy_score(q, name).map(|s| (s, name.to_string()))
-            })
+            .map(|c| c.name().to_string())
+            .collect();
+        if let Some(host) = &self.plugin_host {
+            let mut seen = std::collections::HashSet::new();
+            for cmd in host.commands() {
+                if seen.insert(cmd.command_id.clone()) {
+                    names.push(cmd.command_id);
+                }
+            }
+            // A toolbar button is a runnable command too; the terminal
+            // has no chrome bar, so it joins the slash list (skip ids
+            // already surfaced as a slash command).
+            for tb in host.toolbar_buttons("tui") {
+                if seen.insert(tb.command_id.clone()) {
+                    names.push(tb.command_id);
+                }
+            }
+        }
+        if q.is_empty() {
+            return names;
+        }
+        let mut scored: Vec<(i32, String)> = names
+            .into_iter()
+            .filter_map(|name| crate::fuzzy::fuzzy_score(q, &name).map(|s| (s, name)))
             .collect();
         scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         scored.into_iter().take(8).map(|(_, n)| n).collect()
@@ -376,8 +396,15 @@ impl App {
 
         let registry = self.command_registry.clone();
         let Some(cmd) = registry.get(choice) else {
+            // Not a built-in → it's a plugin command (the trigger is
+            // already erased above). Commit the in-flight edit, then run
+            // it through the same path the slash overlay / palette use.
             self.commit_insert();
-            self.status = format!("unknown command: {choice}");
+            if let Some((plugin_id, command_id)) = self.find_plugin_command(choice) {
+                self.run_plugin_command(&plugin_id, &command_id);
+            } else {
+                self.status = format!("unknown command: {choice}");
+            }
             return;
         };
         if !cmd.inserts_inline() {

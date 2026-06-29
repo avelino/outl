@@ -205,7 +205,7 @@ The third line (`- this is a regular child block`) is a real child.
 | `((blk-XXXXXX))` | Block reference — renders as the source block's text, links to it |
 | `!((blk-XXXXXX))` | Block embed — renders the source block expanded with its subtree |
 | `:shortcode:` | GitHub gemoji shortcode — renders as the unicode glyph (`:tada:` → 🎉) |
-| `{{query: ...}}` | Saved query (phase 3 — parse as opaque) |
+| `{{query: ...}}` | Saved query (not yet implemented — parse as opaque) |
 | `**bold**`, `*italic*`, `\`code\`` | Standard CommonMark |
 
 #### Block refs and embeds
@@ -484,7 +484,7 @@ When two new blocks would match the same old block (or vice versa) at the same c
 1. Prefer matches at the same position.
 2. Prefer matches with the same parent.
 3. Prefer matches where the parent chain matches deepest.
-4. If still tied: pick the one that minimizes total moves across the matching as a whole (greedy is fine for phase 1; optimal can come later).
+4. If still tied: pick the one that minimizes total moves across the matching as a whole (greedy is fine for now; optimal can come later).
 
 ---
 

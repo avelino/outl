@@ -5,11 +5,23 @@
  * paste) are **not** redeclared here — import them directly from
  * `@outl/shared/api/commands`. This file is reserved for commands the
  * desktop client adds on top: workspace picker, settings, and the
- * (Phase 4) code execution wrapper.
+ * code execution wrapper.
  */
 import { invoke } from "@tauri-apps/api/core";
 
 import type { PageView, WorkspaceSummary } from "@outl/shared/api/types";
+import type { DeepLinkNavigate } from "./events";
+
+/**
+ * Take (and clear) an `outl://` deep link that arrived during cold
+ * start — i.e. a URL that *launched* the app, before the `AppShell`
+ * mounted its `deep-link://navigate` listener (issue #98). Returns
+ * `null` on a normal launch. Call once on `AppShell` mount; the warm
+ * path (app already running) is handled by the live event listener.
+ */
+export function takePendingDeepLink(): Promise<DeepLinkNavigate | null> {
+  return invoke<DeepLinkNavigate | null>("take_pending_deep_link");
+}
 
 // ---------------------------------------------------------------------------
 // Workspace lifecycle (desktop-only)
@@ -83,6 +95,12 @@ export interface Settings {
    */
   theme: string;
   font_size: number;
+  /**
+   * Sync transport: `"iroh"` (direct P2P over QUIC, the default) or
+   * `"file"` (iCloud Drive / shared filesystem). Mirrors the Rust
+   * `Settings.sync_transport` and the `[sync] transport` config key.
+   */
+  sync_transport: string;
 }
 
 /**
@@ -281,3 +299,194 @@ export function updateSettings(next: Settings): Promise<Settings> {
 // every desktop caller keeps importing from one place.
 export type { ExecOutputDto, RunCodeBlockReply } from "@outl/shared/api/types";
 export { runCodeBlock } from "@outl/shared/api/commands";
+
+// ---------------------------------------------------------------------------
+// Plugins (desktop-only)
+// ---------------------------------------------------------------------------
+//
+// The plugin host (`outl_plugins::PluginHost`) embeds a Boa `Context` that is
+// `!Send`, so it runs on a dedicated thread behind `PluginService` (see
+// `src-tauri/src/plugin_service.rs`). These commands talk to that thread.
+
+/** A command a loaded plugin contributes — surfaced in the plugin palette. */
+export interface PluginCommand {
+  plugin_id: string;
+  command_id: string;
+  title: string;
+}
+
+/**
+ * Outcome of running a plugin command. `view` is the refreshed `PageView`
+ * of the page that was on screen when the command fired (so the caller
+ * re-renders in one trip); absent when no page id was supplied or the page
+ * no longer resolves.
+ */
+export interface PluginRunReply {
+  applied: number;
+  notifications: string[];
+  errors: string[];
+  view?: PageView;
+  /**
+   * HTML documents the plugin emitted via `ctx.ui.render` (gated by the
+   * `ui-render` capability). Each is played as an ephemeral sandboxed
+   * iframe overlay — untrusted plugin output, never injected into the
+   * app DOM. See `playPluginViews` in `lib/plugin-views.ts`.
+   */
+  views: string[];
+}
+
+/**
+ * Reply from {@link pluginSyncHooks}: a refreshed `PageView` **only**
+ * when an op-hook mutated the on-screen page (`view` absent otherwise),
+ * plus any `ui-render` views the hooks emitted. The `views` path is the
+ * confetti trigger — present even when no page re-render is needed.
+ */
+export interface PluginSyncHooksReply {
+  view?: PageView;
+  views: string[];
+}
+
+/**
+ * List every command contributed by a loaded plugin. Empty until the
+ * workspace opens and plugins load (best-effort — never throws on an empty
+ * or failed host).
+ */
+export function pluginList(): Promise<PluginCommand[]> {
+  return invoke<PluginCommand[]>("plugin_list");
+}
+
+/**
+ * Run a plugin command. Pass the currently-open page id so the reply
+ * carries its refreshed `PageView` — the plugin thread re-projects every
+ * page's `.md` before returning (a plugin can move blocks across pages).
+ */
+export function pluginRun(
+  pluginId: string,
+  commandId: string,
+  pageId: string | null,
+): Promise<PluginRunReply> {
+  return invoke<PluginRunReply>("plugin_run", {
+    pluginId,
+    commandId,
+    pageId,
+  });
+}
+
+/**
+ * Fire the plugins' `onOp` hook sweep after a user mutation. The reply's
+ * `view` is the refreshed `PageView` of `pageId` **only** when a hook
+ * actually mutated the workspace (absent otherwise, so the caller skips a
+ * needless render); `views` carries any `ui-render` HTML the hooks emitted
+ * (the confetti path — present even when nothing was re-rendered).
+ * Best-effort — a host with no op-hook plugins is a cheap no-op.
+ */
+export function pluginSyncHooks(
+  pageId: string | null,
+): Promise<PluginSyncHooksReply> {
+  return invoke<PluginSyncHooksReply>("plugin_sync_hooks", { pageId });
+}
+
+// The plugin marketplace types + wrappers (`RegistryItem`,
+// `pluginRegistryList` / `pluginInstallOfficial` / `pluginSetEnabled` /
+// `pluginUninstall`, `filterRegistryItems`) live in `@outl/shared` — both
+// clients register identical commands, so the wrapper is client-agnostic.
+
+/**
+ * A keybinding a loaded plugin contributes for the desktop.
+ *
+ * `chord` and `mode` serialize **identically** to the `outl-shortcuts`
+ * catalog ({@link Binding}) — `chord` is a `Chord[]` (`ChordSequence` is
+ * `#[serde(transparent)]` over `Vec<Chord>`), `mode` is a lowercase
+ * {@link ShortcutMode}. The dispatcher in `lib/shortcuts.ts` reuses the
+ * same `seqEq` comparison it already runs against native bindings, so an
+ * `eventToChord(e)` matches a plugin chord byte-for-byte the way it
+ * matches a native one. Plugin chords are always `"global"`.
+ */
+export interface PluginKeybinding {
+  chord: Chord[];
+  mode: ShortcutMode;
+  plugin_id: string;
+  command_id: string;
+  description: string;
+}
+
+/** A toolbar button a loaded plugin contributes for the desktop chrome. */
+export interface ToolbarButton {
+  plugin_id: string;
+  command_id: string;
+  /** Glyph / emoji rendered in the chrome button. */
+  icon: string;
+  /** Optional tooltip / accessible label. */
+  title?: string;
+}
+
+/**
+ * List plugin-contributed desktop keybindings. The dispatcher folds these
+ * into the chord pipeline as a Global overlay that only fires when **no**
+ * native binding already owns the chord (native wins). Empty until plugins
+ * load (best-effort — never throws).
+ */
+export function pluginKeybindings(): Promise<PluginKeybinding[]> {
+  return invoke<PluginKeybinding[]>("plugin_keybindings");
+}
+
+/**
+ * List plugin-contributed desktop toolbar buttons — one chrome button per
+ * entry (glyph = `icon`, tooltip = `title`, click = {@link pluginRun}).
+ * Empty until plugins load (best-effort — never throws).
+ */
+export function pluginToolbar(): Promise<ToolbarButton[]> {
+  return invoke<ToolbarButton[]>("plugin_toolbar");
+}
+
+/**
+ * A content transformer a loaded plugin declared for a code-fence
+ * language. The frontend loads the list once per workspace open and, when
+ * a fence's language matches a `lang` here, calls {@link pluginTransform}
+ * to render it.
+ */
+export interface PluginTransformer {
+  plugin_id: string;
+  lang: string;
+  /** `"text"` (inline markdown) or `"rich"` (HTML for a sandboxed iframe). */
+  kind: "text" | "rich";
+}
+
+/**
+ * The descriptor a content transformer produced for a fence body.
+ * `kind: "text"` → `content` is markdown/text rendered inline;
+ * `kind: "rich"` → `content` is HTML run in a sandboxed iframe (untrusted
+ * plugin output, never injected into the app DOM — see `CodeFenceView`).
+ */
+export interface PluginTransformResult {
+  kind: "text" | "rich";
+  content: string;
+}
+
+/**
+ * List every content transformer a loaded plugin declared. Load once per
+ * workspace open and match each code fence's language against the result.
+ * Empty until plugins load (best-effort — never throws).
+ */
+export function pluginTransformers(): Promise<PluginTransformer[]> {
+  return invoke<PluginTransformer[]>("plugin_transformers");
+}
+
+/**
+ * Run a content transformer for `lang` against a fence `input` (its body).
+ * Read-only: never mutates the workspace. Resolves to `null` when the
+ * transformer declined or no plugin owns `lang`, otherwise the
+ * `{ kind, content }` descriptor. Cache the result by `(blockId, body)` —
+ * re-run only when the body changes.
+ */
+export function pluginTransform(
+  pluginId: string,
+  lang: string,
+  input: string,
+): Promise<PluginTransformResult | null> {
+  return invoke<PluginTransformResult | null>("plugin_transform", {
+    pluginId,
+    lang,
+    input,
+  });
+}

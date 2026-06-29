@@ -1,11 +1,32 @@
 {
   "name": "outl-frontend",
   "private": true,
-  "description": "outl frontend monorepo — shared Solid+Tailwind lib consumed by mobile and (upcoming) desktop clients.",
+  "description": "outl frontend monorepo — shared Solid+Tailwind lib consumed by mobile and desktop clients.",
   "license": "MIT",
-  "workspaces": [
-    "crates/outl-frontend-shared",
-    "crates/outl-mobile",
-    "crates/outl-desktop"
-  ]
+  "workspaces": {
+    "packages": [
+      "crates/outl-frontend-shared",
+      "crates/outl-mobile",
+      "crates/outl-desktop",
+      "extensions/raycast",
+      "plugin-sdk",
+      "examples/*"
+    ],
+    "catalog": {
+      "@tailwindcss/vite": "^4.3.1",
+      "@tauri-apps/api": "^2.11.1",
+      "@tauri-apps/cli": "^2.11.3",
+      "@tauri-apps/plugin-opener": "^2.5.4",
+      "@tauri-apps/plugin-os": "^2.3.2",
+      "@types/node": "^26.0.1",
+      "@vitest/ui": "^4.1.9",
+      "happy-dom": "^20.10.6",
+      "solid-js": "^1.9.3",
+      "tailwindcss": "^4.3.1",
+      "typescript": "^6.0.3",
+      "vite": "^8.1.0",
+      "vite-plugin-solid": "^2.11.0",
+      "vitest": "^4.1.9"
+    }
+  }
 }

@@ -1,8 +1,8 @@
 //! Terminal UI for the outl outliner.
 //!
-//! Phase 1 is read-only and journal-first: opening the TUI lands on
-//! today's journal. Navigation between dates and between pages works;
-//! editing in-place lands in phase 4.
+//! Journal-first: opening the TUI lands on today's journal. Navigation
+//! between dates and between pages works, and blocks are editable in place
+//! (text editing, create, indent / outdent, move, delete).
 //!
 //! Reused by the `outl` binary so that `outl` with no subcommand opens
 //! the TUI in the current directory. See `crates/outl-tui/CLAUDE.md`.

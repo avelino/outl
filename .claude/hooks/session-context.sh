@@ -2,7 +2,7 @@
 # SessionStart hook: inject critical context every session.
 #
 # Reminds Claude of the invariants that MUST NOT be violated and the
-# current phase of the project. Keeps the model from drifting on long
+# current state of the project. Keeps the model from drifting on long
 # sessions where the original spec scrolls out of the immediate window.
 
 set -uo pipefail
@@ -37,9 +37,12 @@ You are working on **outl**, a local-first outliner with CRDT-based tree sync.
 - The paper: <https://martin.kleppmann.com/papers/move-op.pdf>
 - Tests in `crates/outl-core/tests/` are spec, not afterthought.
 
-## Phase
+## State
 
-Phase 0–1 (day-zero usable). No P2P sync, no queries, no Tauri, no mobile yet.
+TUI, CLI, desktop (Tauri 2), mobile (iOS), and the JavaScript plugin system
+(Boa) are all shipped, along with code-block execution and iCloud Drive sync.
+Not yet built: P2P sync via iroh (iCloud Drive is the transport today),
+the query DSL (`{{query}}`), ChronDB storage, Android, and graph view.
 EOF
 
 exit 0

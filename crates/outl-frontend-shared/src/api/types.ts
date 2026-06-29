@@ -224,6 +224,45 @@ export interface RunCodeBlockReply {
   view: PageView;
 }
 
+/**
+ * A paired device, as returned by `outl_peer_list` and
+ * `outl_peer_pair_join`. Mirrors the Rust `PeerDto` in both clients'
+ * `src-tauri/src/commands/peers.rs` (and `outl_sync_iroh::PeerEntry`).
+ *
+ * - `node_id` is the iroh node id (hex), the stable identity of the
+ *   remote device. Clients show a short prefix; `outl_peer_remove`
+ *   matches on a prefix of this.
+ * - `alias` is the optional human label set during pairing (`null`
+ *   when the user didn't name the device).
+ * - `added_at` is an RFC3339 timestamp string of when the pairing was
+ *   persisted to `peers.json`.
+ */
+export interface PeerDto {
+  node_id: string;
+  alias: string | null;
+  added_at: string;
+}
+
+/**
+ * A paired peer's live reachability, as returned by `outl_peer_status`.
+ * Mirrors the Rust `PeerStatusDto` in both clients' `commands/peers.rs`.
+ * On GUI clients this reads the running transport's `peer_health()` snapshot
+ * (populated by the transport's own boot / catch-up / gossip dials), NOT a
+ * transient probe endpoint — a second endpoint with the device identity would
+ * hijack the relay route (see outl-sync-iroh "One endpoint per identity").
+ * Only the CLI `outl peer status`, which has no running transport, probes.
+ *
+ * - `online` is `true` when the peer is currently reachable.
+ * - `rtt_ms` is the last round-trip time in milliseconds when reachable,
+ *   `null` when the peer is offline.
+ */
+export interface PeerStatusDto {
+  node_id: string;
+  alias: string | null;
+  online: boolean;
+  rtt_ms: number | null;
+}
+
 export interface WorkspaceSummary {
   blocks: number;
   ops: number;
@@ -239,4 +278,23 @@ export interface WorkspaceSummary {
    * need a safe default.
    */
   ready: boolean;
+}
+
+/**
+ * One plugin marketplace row: a registry entry (plugins.outl.app) plus the
+ * workspace's local state. Wire shape of `outl_plugins::MarketplaceItem`,
+ * returned by `plugin_registry_list` on both clients. `installed` / `enabled`
+ * drive the install vs. manage affordances.
+ */
+export interface RegistryItem {
+  id: string;
+  name: string;
+  description: string;
+  author: string | null;
+  category: string | null;
+  capabilities: string[];
+  permissions: string[];
+  latest: string | null;
+  installed: boolean;
+  enabled: boolean;
 }

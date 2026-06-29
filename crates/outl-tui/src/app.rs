@@ -11,7 +11,7 @@
 //!
 //! Callers (the `outl` CLI, the `outl-tui` binary) still import
 //! `outl_tui::run` and `outl_tui::run_with_theme_override`; those are
-//! re-exported from here for backwards compatibility with phase-1
+//! re-exported from here for backwards compatibility with existing
 //! consumers.
 
 pub use crate::runtime::{run, run_with_theme_override};

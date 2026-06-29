@@ -1,8 +1,8 @@
 //! `outl reconcile` — print orphan log and (eventually) open a TUI for
 //! manual resolution.
 //!
-//! Phase 1 ships a read-only listing. The TUI flow lands once `outl-tui`
-//! has its read-write paths.
+//! Today this is a read-only listing. The interactive TUI resolution flow
+//! is not yet wired up.
 
 use crate::workspace_layout::Paths;
 use anyhow::{Context, Result};
@@ -28,6 +28,6 @@ pub fn run(path: &Path) -> Result<()> {
         println!("  {line}");
     }
     println!();
-    println!("Interactive resolution lands with `outl-tui` (phase 5+).");
+    println!("Interactive resolution in the TUI is not yet available.");
     Ok(())
 }

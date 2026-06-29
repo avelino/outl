@@ -126,3 +126,53 @@ jobs:
         # build via `mobile.yml` on macOS; desktop docs build via the
         # `desktop.yml` matrix.
         run: cargo doc --workspace --exclude outl-mobile --exclude outl-desktop --no-deps
+
+  # Dedicated sync-convergence gate. The `test` job above already
+  # compiles and runs `outl-core` + `outl-sync-iroh` (including their
+  # `tests/` integration + property suites via `--all-targets`), but it
+  # runs proptests at the dev default (200 cases) and buries a sync
+  # regression inside a broad matrix job. This job exists so a sync
+  # regression surfaces as its own obviously-red check, and so the
+  # convergence/chaos proptests actually *explore* in CI.
+  #
+  # `PROPTEST_CASES` is proptest's built-in override of each suite's
+  # `ProptestConfig::with_cases(...)`. Dev runs stay fast at the 200
+  # baked into the test files; CI bumps it to 1024 here so the
+  # probabilistic convergence bugs (op reordering, cycle no-ops,
+  # concurrent moves) get a real number of generated cases. Keep this
+  # budget on this one job only — running 1024 across the whole
+  # `test` matrix would burn runner minutes for no extra signal.
+  #
+  # Branch protection: mark **`sync`** as a required status check in
+  # the repo settings so a red convergence run blocks merge. (Required
+  # checks are a GitHub repo setting, not something this file can
+  # declare.)
+  sync:
+    name: sync
+    runs-on: ubuntu-latest
+    env:
+      # Higher than the dev default baked into the proptest files so CI
+      # explores the convergence/chaos space. Bump further (2048+) when
+      # chasing a rare flake; lower only with a recorded reason.
+      PROPTEST_CASES: 1024
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: rustup show
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-sync-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-sync-
+            ${{ runner.os }}-cargo-
+      - name: cargo test (sync convergence)
+        # `--all-targets` pulls in the `tests/` integration + property
+        # suites for both crates, not just the unit tests. These two
+        # crates own the op-log → CRDT → convergence path that every
+        # device relies on.
+        run: cargo test -p outl-core -p outl-sync-iroh --all-targets

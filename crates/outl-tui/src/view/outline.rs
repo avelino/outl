@@ -6,6 +6,7 @@ use crate::outline_ops::path_for_index;
 use crate::state::{App, Focus, Mode};
 use crate::theme::Theme;
 use crate::view::inline::{highlight_inline, render_markdown_inline, render_pretty_block_text};
+use crate::view::wrap::push_wrapped;
 use outl_md::inline::{byte_index_for_char, tokenize, InlineTok};
 use outl_md::parse::{OutlineNode, ParsedPage};
 use outl_md::view::{block_to_rows, BlockRowKind};
@@ -30,7 +31,11 @@ const EMBED_MAX_DEPTH: u32 = 4;
 /// report the visual line index where the *selected* block's bullet
 /// row landed. The caller uses that index to keep the selection
 /// inside the scrolled viewport.
-pub(crate) fn render_outline(p: &ParsedPage, app: &App) -> (Vec<Line<'static>>, Option<usize>) {
+pub(crate) fn render_outline(
+    p: &ParsedPage,
+    app: &App,
+    text_width: u16,
+) -> (Vec<Line<'static>>, Option<usize>) {
     let mut out = Vec::new();
     for (k, v) in &p.properties {
         out.push(Line::from(vec![
@@ -44,11 +49,20 @@ pub(crate) fn render_outline(p: &ParsedPage, app: &App) -> (Vec<Line<'static>>, 
     let mut cursor = 0usize;
     let mut selected_line: Option<usize> = None;
     for block in &p.blocks {
-        render_block(block, 0, &mut cursor, app, &mut out, &mut selected_line);
+        render_block(
+            block,
+            0,
+            &mut cursor,
+            app,
+            &mut out,
+            &mut selected_line,
+            text_width,
+        );
     }
     (out, selected_line)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_block(
     b: &OutlineNode,
     indent: u32,
@@ -56,6 +70,7 @@ pub(crate) fn render_block(
     app: &App,
     out: &mut Vec<Line<'static>>,
     selected_line: &mut Option<usize>,
+    text_width: u16,
 ) {
     // Outline only owns selection/cursor decoration when focus lives
     // here. With `Focus::Backlink`, the bullet/caret belong to the
@@ -83,10 +98,21 @@ pub(crate) fn render_block(
         app.theme.bullet
     };
 
-    // Determine which text and cursor position to render. Three cases:
-    //   1. Editing here       → buffer with caret cursor.
-    //   2. Selected in Normal → block text with block-style cursor.
-    //   3. Anything else      → block text, no cursor, pretty render.
+    // The block's stable id (needed both for the collapsed lookup
+    // below and the content-transformer cache lookup in the `mode`
+    // decision). `None` on a sidecar gap — no id, no cached transform.
+    let block_id = app.id_by_flat.get(*cursor).copied();
+
+    // Determine which text and cursor position to render. Four cases:
+    //   1. Editing here       → buffer with caret cursor (raw fence).
+    //   2. Selected in Normal → block text with block-style cursor (raw).
+    //   3. Plugin-transformed → cached transformer output (read-only).
+    //   4. Anything else      → block text, no cursor, pretty render.
+    //
+    // The cursor cases (1, 2) always win over a cached transform: a
+    // block under the cursor shows its real fence source so the user
+    // edits what they see. Only a read-only block swaps in the
+    // transformer output.
     let mode = if editing_here {
         if let Mode::Insert { buffer, .. } = &app.mode {
             RenderMode::Editing {
@@ -101,6 +127,10 @@ pub(crate) fn render_block(
             text: b.text.clone(),
             cursor_char: app.cursor_col,
         }
+    } else if let Some(content) = block_id.and_then(|id| app.transform_cache.get(&id)) {
+        RenderMode::Transformed {
+            content: content.clone(),
+        }
     } else {
         RenderMode::Pretty {
             text: b.text.clone(),
@@ -113,7 +143,6 @@ pub(crate) fn render_block(
     //   - `  ` (two spaces) when it has no children — keeps column
     //     alignment with the other two cases so the bullet column
     //     never jitters across blocks on the same indent.
-    let block_id = app.id_by_flat.get(*cursor).copied();
     let is_collapsed = block_id
         .map(|id| app.collapsed.contains(&id))
         .unwrap_or(false);
@@ -133,6 +162,7 @@ pub(crate) fn render_block(
         fold_marker,
         app,
         out,
+        text_width,
     );
 
     for (k, v) in &b.properties {
@@ -162,7 +192,7 @@ pub(crate) fn render_block(
             // `outer_indent` matches the carrying block's own indent so
             // the `│ ` guides line up with the outline's normal indent
             // pattern. Embed-internal nesting comes from `depth`.
-            emit_embedded_children(&entry.children, indent, 1, app, out);
+            emit_embedded_children(&entry.children, indent, 1, app, out, text_width);
         }
     }
 
@@ -176,7 +206,15 @@ pub(crate) fn render_block(
         *cursor += outl_md::outline_ops::flat_count(&b.children);
     } else {
         for child in &b.children {
-            render_block(child, indent + 1, cursor, app, out, selected_line);
+            render_block(
+                child,
+                indent + 1,
+                cursor,
+                app,
+                out,
+                selected_line,
+                text_width,
+            );
         }
     }
 }
@@ -221,16 +259,20 @@ fn emit_embedded_children(
     depth: u32,
     app: &App,
     out: &mut Vec<Line<'static>>,
+    text_width: u16,
 ) {
     if depth > EMBED_MAX_DEPTH {
         return;
     }
     for child in children {
-        let mut spans: Vec<Span<'static>> = Vec::new();
+        // `guides` repeat on every wrapped row; the `↳ ` marker lives in
+        // `head` so it only appears once and continuations re-indent
+        // under the embedded text (same split `emit_block_lines` uses).
+        let mut guides: Vec<Span<'static>> = Vec::new();
         // 1. Outline indent guides (mirrors what `emit_block_lines`
         //    draws for a regular block at the same depth in the doc).
         for _ in 0..outer_indent {
-            spans.push(Span::styled("│ ", app.theme.dim));
+            guides.push(Span::styled("│ ", app.theme.dim));
         }
         // 2. Embed-internal indent so children land **below the source
         //    root's text**, not alongside its `↳ `. The carrying
@@ -241,16 +283,19 @@ fn emit_embedded_children(
         //    another two per nested level. `(depth + 1) * 2` spaces
         //    keeps the geometry: depth 1 → 4 spaces, depth 2 → 6, etc.
         for _ in 0..(depth + 1) {
-            spans.push(Span::raw("  "));
+            guides.push(Span::raw("  "));
         }
-        spans.push(Span::styled("↳ ", app.theme.dim));
-        spans.extend(render_pretty_block_text(
-            &child.text,
-            &app.theme,
-            &app.index,
-        ));
-        out.push(Line::from(spans));
-        emit_embedded_children(&child.children, outer_indent, depth + 1, app, out);
+        let head = vec![Span::styled("↳ ", app.theme.dim)];
+        let content = render_pretty_block_text(&child.text, &app.theme, &app.index);
+        push_wrapped(guides, head, content, text_width, out);
+        emit_embedded_children(
+            &child.children,
+            outer_indent,
+            depth + 1,
+            app,
+            out,
+            text_width,
+        );
     }
 }
 
@@ -282,6 +327,13 @@ pub(crate) enum RenderMode {
     NormalCursor { text: String, cursor_char: usize },
     /// Anything else — markdown is rendered prettily; no cursor.
     Pretty { text: String },
+    /// A read-only block whose code fence a plugin content-transformer
+    /// turned into text/markdown. `content` replaces the raw fence in
+    /// the outline; the bullet stays so the block is still anchored.
+    /// Never carries a cursor — the cursor cases render the raw fence so
+    /// the user edits the real source. Multi-line `content` becomes a
+    /// bullet row plus continuation rows.
+    Transformed { content: String },
 }
 
 /// Emit one or more ratatui [`Line`]s for a block's text.
@@ -292,6 +344,7 @@ pub(crate) enum RenderMode {
 /// clients use the same classification. This function is the
 /// TUI-specific mapping: each [`outl_md::view::BlockRow`] becomes a
 /// `Line` of `Span`s using the active theme.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_block_lines(
     indent: u32,
     bullet_style: Style,
@@ -300,6 +353,7 @@ pub(crate) fn emit_block_lines(
     fold: FoldMarker,
     app: &App,
     out: &mut Vec<Line<'static>>,
+    text_width: u16,
 ) {
     let (text, cursor_char, cursor_style) = match mode {
         RenderMode::Editing { text, cursor_char } => {
@@ -309,8 +363,15 @@ pub(crate) fn emit_block_lines(
             (text.as_str(), Some(*cursor_char), Some(CursorStyle::Block))
         }
         RenderMode::Pretty { text } => (text.as_str(), None, None),
+        // Transformer output renders as pretty markdown — same styling
+        // path as `Pretty`, just sourced from the cached `content`
+        // instead of the raw fence text.
+        RenderMode::Transformed { content } => (content.as_str(), None, None),
     };
-    let pretty = matches!(mode, RenderMode::Pretty { .. });
+    let pretty = matches!(
+        mode,
+        RenderMode::Pretty { .. } | RenderMode::Transformed { .. }
+    );
     let rows = block_to_rows(text, indent, cursor_char);
 
     // TODO/DONE checkbox decoration only fits on single-line bullets
@@ -318,10 +379,16 @@ pub(crate) fn emit_block_lines(
     let single_line_pretty = pretty && rows.len() == 1;
 
     for row in &rows {
-        let mut spans: Vec<Span<'_>> = Vec::new();
+        // The line is built in three parts so word-wrap can keep the
+        // prefix on the first visual row and re-indent continuations:
+        //   - `guides`  : the `│ ` indent rails (repeated on every wrap row)
+        //   - `head`    : fold marker + bullet (first wrap row only)
+        //   - `content` : the styled block text that may wrap
+        let mut guides: Vec<Span<'static>> = Vec::new();
         for _ in 0..row.indent {
-            spans.push(Span::styled("│ ", app.theme.dim));
+            guides.push(Span::styled("│ ", app.theme.dim));
         }
+        let mut head: Vec<Span<'static>> = Vec::new();
         match row.kind {
             BlockRowKind::Bullet => {
                 // Fold indicator goes first — two-cell slot whether
@@ -329,17 +396,17 @@ pub(crate) fn emit_block_lines(
                 // column stable across siblings (leaf next to a
                 // parent must line up).
                 match fold {
-                    FoldMarker::None => spans.push(Span::raw("  ")),
-                    FoldMarker::Expanded => spans.push(Span::styled("▼ ", app.theme.dim)),
-                    FoldMarker::Collapsed => spans.push(Span::styled("▶ ", app.theme.hint)),
+                    FoldMarker::None => head.push(Span::raw("  ")),
+                    FoldMarker::Expanded => head.push(Span::styled("▼ ", app.theme.dim)),
+                    FoldMarker::Collapsed => head.push(Span::styled("▶ ", app.theme.hint)),
                 }
                 // Blocks with `auto-run::` get a ⚡ before the bullet
                 // so the user can see at a glance which cells re-run
                 // themselves on page open.
                 if has_auto_run {
-                    spans.push(Span::styled("⚡", app.theme.hint));
+                    head.push(Span::styled("⚡", app.theme.hint));
                 }
-                spans.push(Span::styled("- ", bullet_style));
+                head.push(Span::styled("- ", bullet_style));
             }
             BlockRowKind::Continuation
             | BlockRowKind::CodeFenceMarker
@@ -348,19 +415,20 @@ pub(crate) fn emit_block_lines(
                 // continuation rows stay aligned with the bullet
                 // column above them (two cells for the fold slot,
                 // one extra cell when `⚡` is present).
-                spans.push(Span::raw("  "));
+                head.push(Span::raw("  "));
                 if has_auto_run {
-                    spans.push(Span::raw(" "));
+                    head.push(Span::raw(" "));
                 }
-                spans.push(Span::raw("  "));
+                head.push(Span::raw("  "));
             }
         }
 
+        let mut content: Vec<Span<'static>> = Vec::new();
         // If the cursor is on this row we always go raw — we want
         // bytes to line up with what the user typed, regardless of
         // fence state.
         if let (Some(col), Some(style)) = (row.cursor_col, cursor_style) {
-            emit_row_with_cursor(row.text, col, style, &app.theme, &mut spans);
+            emit_row_with_cursor(row.text, col, style, &app.theme, &mut content);
         } else {
             // A bullet row whose text opens a code fence (`` ```lisp ``)
             // is *both* a bullet and a fence marker — style the text
@@ -370,13 +438,13 @@ pub(crate) fn emit_block_lines(
                 && row.text.trim_start().starts_with("```");
             match row.kind {
                 _ if pretty && bullet_is_fence_opener => {
-                    spans.push(Span::styled(row.text.to_string(), app.theme.dim));
+                    content.push(Span::styled(row.text.to_string(), app.theme.dim));
                 }
                 BlockRowKind::CodeFenceMarker if pretty => {
-                    spans.push(Span::styled(row.text.to_string(), app.theme.dim));
+                    content.push(Span::styled(row.text.to_string(), app.theme.dim));
                 }
                 BlockRowKind::CodeFenceBody if pretty => {
-                    spans.push(Span::styled(row.text.to_string(), app.theme.code));
+                    content.push(Span::styled(row.text.to_string(), app.theme.code));
                 }
                 BlockRowKind::Bullet if single_line_pretty => {
                     // Single owner for the bullet's pretty render: it
@@ -386,12 +454,20 @@ pub(crate) fn emit_block_lines(
                     // function the embed expansion uses, so the
                     // chrome stays in lockstep between bullet and
                     // embed root.
-                    spans.extend(render_pretty_block_text(row.text, &app.theme, &app.index));
+                    content.extend(render_pretty_block_text(row.text, &app.theme, &app.index));
                 }
-                _ => spans.extend(render_markdown_inline(row.text, &app.theme, &app.index)),
+                _ => content.extend(render_markdown_inline(row.text, &app.theme, &app.index)),
             }
         }
-        out.push(Line::from(spans));
+
+        // Cursor rows wrap too (#99). The cursor is already baked into
+        // `content` as a styled span by `emit_row_with_cursor` *before*
+        // we wrap, so reflowing the spans just carries the cursor onto
+        // its wrapped visual row — the char offset was already consumed
+        // turning it into a span, there's nothing left to desync. A
+        // `text_width` of 0 (headless render) is still the "don't wrap"
+        // sentinel for every row, cursor or not.
+        push_wrapped(guides, head, content, text_width, out);
     }
 }
 
@@ -444,6 +520,145 @@ enum CursorStyle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use outl_core::id::ActorId;
+    use outl_core::workspace::Workspace;
+    use tempfile::TempDir;
+
+    fn test_app() -> (App, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let actor = ActorId::new();
+        let ws = Workspace::open_in_memory(actor).unwrap();
+        let app = App::new(
+            dir.path().to_path_buf(),
+            ws,
+            actor,
+            crate::theme::default_theme(),
+            false,
+            outl_config::SyncConfig::default(),
+        )
+        .unwrap();
+        (app, dir)
+    }
+
+    /// Concatenate a rendered line's spans into one `String`.
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    /// Render one block at indent 0 with a leaf bullet and no auto-run,
+    /// the shape every wrap regression test needs. Keeps each test to
+    /// its `mode` + `width` instead of repeating the eight-arg call.
+    fn render_block_lines(app: &App, mode: RenderMode, width: u16) -> Vec<Line<'static>> {
+        let mut out = Vec::new();
+        emit_block_lines(
+            0,
+            app.theme.bullet,
+            &mode,
+            false,
+            FoldMarker::None,
+            app,
+            &mut out,
+            width,
+        );
+        out
+    }
+
+    // The text used by the wrap regression tests: 43 cells of prose
+    // that cannot fit in a 16-cell pane, so a correct renderer must
+    // emit more than one visual row.
+    const LONG: &str = "the quick brown fox jumps over the lazy dog";
+
+    /// #99: the selected block in Normal mode used to render on a single
+    /// overflowing line and only wrap once the cursor moved off it. It
+    /// must wrap while the cursor sits on it.
+    #[test]
+    fn normal_cursor_block_wraps_to_pane_width() {
+        let (app, _dir) = test_app();
+        let mode = RenderMode::NormalCursor {
+            text: LONG.into(),
+            cursor_char: 0,
+        };
+        let out = render_block_lines(&app, mode, 16);
+        assert!(out.len() > 1, "expected wrap, got {} line(s)", out.len());
+    }
+
+    /// #99: the same must hold in Insert mode, and the thin caret has to
+    /// survive the reflow (it's baked into the spans before wrapping).
+    #[test]
+    fn editing_block_wraps_and_keeps_the_caret() {
+        let (app, _dir) = test_app();
+        let mode = RenderMode::Editing {
+            text: LONG.into(),
+            cursor_char: 0,
+        };
+        let out = render_block_lines(&app, mode, 16);
+        assert!(out.len() > 1, "expected wrap, got {} line(s)", out.len());
+        let has_caret = out.iter().any(|l| line_text(l).contains('▏'));
+        assert!(has_caret, "caret lost after wrap");
+    }
+
+    /// The block cursor travels with its character across a wrap break:
+    /// a cursor on a word that lands on a continuation row still paints
+    /// exactly one inverted cell.
+    #[test]
+    fn block_cursor_survives_the_wrap_break() {
+        let (app, _dir) = test_app();
+        // Cursor on the "d" of the trailing "dog", past the first
+        // 16-cell row, so it can only be drawn on a continuation row.
+        let cursor_char = LONG.len() - 3;
+        let mode = RenderMode::NormalCursor {
+            text: LONG.into(),
+            cursor_char,
+        };
+        let out = render_block_lines(&app, mode, 16);
+        assert!(out.len() > 1, "expected wrap, got {} line(s)", out.len());
+        let cursor_cells = out
+            .iter()
+            .flat_map(|l| &l.spans)
+            .filter(|s| s.style == app.theme.cursor_block)
+            .count();
+        assert_eq!(cursor_cells, 1, "block cursor must appear exactly once");
+    }
+
+    /// A short block under the cursor still renders as a single line:
+    /// wrapping only kicks in past the pane width, cursor or not.
+    #[test]
+    fn short_cursor_block_stays_one_line() {
+        let (app, _dir) = test_app();
+        let mode = RenderMode::NormalCursor {
+            text: "short".into(),
+            cursor_char: 0,
+        };
+        let out = render_block_lines(&app, mode, 80);
+        assert_eq!(out.len(), 1);
+    }
+
+    /// End-to-end of the #99 scenario: a page with one long block,
+    /// selected in Normal mode, rendered through the real
+    /// `render_outline` entry point into a narrow pane. The selected
+    /// block must occupy more than one visual line and the continuation
+    /// must re-indent under the bullet text.
+    #[test]
+    fn selected_block_wraps_through_render_outline() {
+        let (mut app, _dir) = test_app();
+        app.page = outl_md::parse::parse(&format!("- {LONG}"));
+        app.selected = 0;
+        app.cursor_col = 0;
+        app.mode = Mode::Normal;
+
+        let (lines, sel) = render_outline(&app.page, &app, 20);
+        assert_eq!(sel, Some(0), "selected block starts at line 0");
+        assert!(
+            lines.len() > 1,
+            "selected block must wrap, got {} line(s):\n{}",
+            lines.len(),
+            lines.iter().map(line_text).collect::<Vec<_>>().join("\n"),
+        );
+        // First row carries the bullet; the next is a continuation that
+        // re-indents under the text column (two leading spaces).
+        assert!(line_text(&lines[0]).contains("- "));
+        assert!(line_text(&lines[1]).starts_with("  "));
+    }
 
     #[test]
     fn embed_only_handle_detects_bare_token() {
@@ -470,7 +685,7 @@ mod tests {
     #[test]
     fn embed_only_handle_rejects_two_embeds_on_one_block() {
         // Two embeds in the same block is ambiguous (which one expands
-        // first?) — phase 1 keeps the rule strict: exactly one token,
+        // first?) — for now keeps the rule strict: exactly one token,
         // surrounded by whitespace.
         assert_eq!(embed_only_handle("!((blk-aaaaaa)) !((blk-bbbbbb))"), None);
     }

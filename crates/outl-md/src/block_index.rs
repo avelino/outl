@@ -212,7 +212,7 @@ impl BlockIndex {
     /// handle that exists somewhere in the workspace is already in
     /// `handle_to_block`, so reverse-edge resolution works on the
     /// first walk. During the initial build, where pages are loaded
-    /// in arbitrary order, use the two-phase variants
+    /// in arbitrary order, use the two-pass variants
     /// ([`collect_page_blocks`](Self::collect_page_blocks) +
     /// [`collect_page_refs`](Self::collect_page_refs)) so a citing
     /// page processed before its target still records its edge.
@@ -227,7 +227,7 @@ impl BlockIndex {
         self.collect_page_refs(source_slug, blocks, sidecar_blocks);
     }
 
-    /// Phase 1 of the two-phase build: register every block of a page
+    /// Pass 1 of the two-pass build: register every block of a page
     /// (id, handle, text, subtree) without touching reverse refs.
     pub fn collect_page_blocks(
         &mut self,
@@ -248,7 +248,7 @@ impl BlockIndex {
         );
     }
 
-    /// Phase 2 of the two-phase build: scan every block's text for
+    /// Pass 2 of the two-pass build: scan every block's text for
     /// `((blk-XXXXXX))` / `!((blk-XXXXXX))` and record the reverse
     /// edge. Assumes [`collect_page_blocks`](Self::collect_page_blocks)
     /// has already run for **every** page in the workspace —

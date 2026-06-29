@@ -9,7 +9,7 @@ Everything else is a convention on top.
 ~/notes/                            # workspace root
 ├── .outl/
 │   ├── config.toml                 # workspace identity + settings
-│   ├── peers.toml                  # P2P peers (phase 2+)
+│   ├── peers.toml                  # P2P peers
 │   └── orphans.log                 # blocks that lost their ID during external edits
 ├── ops/
 │   ├── ops-<this-actor>.jsonl      # this device's append-only op log
@@ -90,7 +90,7 @@ status:: active          ← page property
   owner:: [[avelino]]    ← block property
 ```
 
-Properties drive queries (phase 3) and influence display.
+Properties drive queries (the `{{query: ...}}` DSL is planned) and influence display.
 
 ### Tag
 
@@ -148,14 +148,14 @@ The autocomplete on `[[` searches by title (not slug), so users type the way the
 
 - **Trash isn't a directory.** Deleted blocks are moved to a `TRASH_ROOT` node in the op log, not deleted from any file.
 - **No `archive/` folder.** Archived pages are just pages you stopped referencing — they're still in `pages/`.
-- **No per-workspace plugins / config beyond `config.toml`.** Plugin system is phase 4 ([issue #4](https://github.com/avelino/outl/issues/4)).
+- **No per-workspace config beyond `config.toml`.** Plugins (JavaScript, via the Boa engine) are global, not workspace-scoped.
 
 ## Sharing a workspace
 
-Today: drag the directory between devices and reopen.
+By default: `outl peer pair` exchanges a pairing ticket between devices and P2P sync (iroh) starts converging them over QUIC — no shared folder required.
 The sidecar files carry the IDs, the op log carries the history.
 
-Phase 2: `outl share` generates a pairing ticket, the other device runs `outl join <ticket>`, P2P sync starts.
+Opt-in alternative: set `transport = "file"` and point each device at the same iCloud Drive / Syncthing / shared folder, or drag the directory between devices and reopen.
 
-Phase 2+ doesn't change the file layout.
-The wire protocol just keeps the two directories converging.
+Neither path changes the file layout.
+The transport just keeps the two directories converging.

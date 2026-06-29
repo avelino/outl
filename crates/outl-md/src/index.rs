@@ -67,13 +67,13 @@ impl WorkspaceIndex {
     /// `.md`, and return the populated index. Files that fail to parse
     /// are skipped with no error — the index is best-effort.
     ///
-    /// Block-level indexing runs in two phases (register every block
+    /// Block-level indexing runs in two passes (register every block
     /// first, then collect reverse references) so a page B citing a
     /// block of page A still wins an edge even when B is walked first.
     pub fn build(workspace_root: &Path) -> Self {
         let mut idx = WorkspaceIndex::default();
         // Buffer of (slug, parsed AST, sidecar). Populated alongside
-        // the `pages` map; consumed below for the block-index phase 2.
+        // the `pages` map; consumed below for the block-index pass 2.
         let mut parsed_pages: Vec<(String, crate::parse::ParsedPage, Option<Sidecar>)> =
             Vec::with_capacity(64);
 
@@ -147,9 +147,9 @@ impl WorkspaceIndex {
                 );
                 idx.title_to_slug.insert(title.clone(), slug.to_string());
 
-                // Block-level indexing phase 1: register every block
+                // Block-level indexing pass 1: register every block
                 // (id, handle, text, subtree) without recording
-                // reverse refs yet. Phase 2 below scans citations
+                // reverse refs yet. Pass 2 below scans citations
                 // once all handles are known.
                 let cached_sidecar = read_sidecar_best_effort(path);
                 if let Some(sc) = &cached_sidecar {
@@ -161,7 +161,7 @@ impl WorkspaceIndex {
             }
         }
 
-        // Phase 2 of block indexing: now that every handle is in
+        // Pass 2 of block indexing: now that every handle is in
         // `handle_to_block`, scan each page's blocks for
         // `((blk-XXXXXX))` and record the reverse edges.
         for (slug, parsed, cached_sidecar) in &parsed_pages {

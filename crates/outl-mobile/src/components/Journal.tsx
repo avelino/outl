@@ -25,6 +25,7 @@ import {
   openTodayJournal,
   outdentBlock,
   pasteMarkdown,
+  peerStatus,
   previousDay,
   reloadWorkspace,
   runCodeBlock,
@@ -32,10 +33,12 @@ import {
   searchPages,
   searchPersons,
   setBlockCollapsed,
+  syncNow,
   todaySlug,
   toggleTodo,
   workspaceStats,
 } from "@outl/shared/api/commands";
+import { peersOnline } from "@outl/shared/peers";
 import { detectFence } from "@outl/shared/highlight";
 import {
   countDescendants,
@@ -53,6 +56,15 @@ import { ParseWarningsBanner } from "@outl/shared/warnings";
 import { parkCaret, spliceText } from "../lib/textarea";
 import { withTimeout } from "../lib/async";
 
+/**
+ * Payload shapes emitted by the backend's `deep-link://navigate` event
+ * (and buffered for cold start via `take_pending_deep_link`) — issue #98.
+ */
+type DeepLinkNavigate =
+  | { kind: "today" }
+  | { kind: "daily"; date: string }
+  | { kind: "page"; slug: string };
+
 /** Maximum time we wait for a single Tauri command to settle before
  *  surfacing a timeout error. Keeps the UI from getting stuck in
  *  "syncing…" forever when iCloud coordination stalls. */
@@ -64,12 +76,22 @@ import {
   registerPickedCallback,
   setNativeSuggesterState,
 } from "../lib/native-suggester";
+import {
+  type PluginToolbarButton,
+  pluginRun,
+  pluginSyncHooks,
+  pluginToolbar,
+} from "../lib/api";
 import { Calendar } from "./Calendar";
+import { DevicesSheet } from "./DevicesSheet";
+import { PluginSheet } from "./PluginSheet";
+import { PluginViewOverlay } from "./PluginViewOverlay";
 import { PageSwitcher } from "./PageSwitcher";
 import { PullToRefresh } from "./PullToRefresh";
 import { SyncDot } from "./SyncDot";
 import { BlockRow } from "./BlockRow";
 import { SkeletonOutline } from "./Skeleton";
+import { loadTransformers } from "../lib/transformers";
 import { haptic } from "../lib/haptics";
 import { BacklinksSection } from "./BacklinksSection";
 import { BlockContextMenu, type BlockContextAction } from "./BlockContextMenu";
@@ -96,6 +118,14 @@ export function Journal() {
   const [stats] = createResource(workspaceStats);
   const [switcherOpen, setSwitcherOpen] = createSignal(false);
   const [calendarOpen, setCalendarOpen] = createSignal(false);
+  const [devicesOpen, setDevicesOpen] = createSignal(false);
+  const [pluginsOpen, setPluginsOpen] = createSignal(false);
+  // Plugin-contributed toolbar buttons — one inline glyph each in the
+  // header. Loaded after the workspace opens (plugins load lazily on the
+  // host's first request), refreshed alongside the plugin-command list.
+  const [toolbarButtons, setToolbarButtons] = createSignal<
+    PluginToolbarButton[]
+  >([]);
   // When set, the delete-confirmation dialog is open. Holds the
   // block id we're about to delete + a descendant count for the
   // copy. Cleared on confirm or cancel.
@@ -108,13 +138,31 @@ export function Journal() {
     string | null
   >(null);
   const [syncing, setSyncing] = createSignal(false);
-  // Network state — drives the `<SyncDot>` "offline" pill so the
-  // user knows iCloud peer pushes are stalled. `navigator.onLine`
-  // is not perfectly accurate (it lies when a captive portal eats
-  // requests) but it's the best signal a WebView has.
+  // PRIMARY sync signal: is at least one iroh peer reachable right now?
+  // Polled from the transport's own dial outcomes (`peerStatus()` →
+  // `peer_health()`), NOT from `navigator.onLine`. The phone having WiFi
+  // says nothing about whether a P2P peer answered — iroh is outl's
+  // default transport, so the dot must reflect the mesh, not the radio.
+  // `false` means nothing to sync with (no peers paired, or all down).
+  const [peersUp, setPeersUp] = createSignal(false);
+  // SECONDARY signal — drives the `<SyncDot>` "offline" pill when the
+  // device itself is offline (truly no radio → no peer can be up
+  // anyway). `navigator.onLine` is not perfectly accurate (it lies when
+  // a captive portal eats requests) but it's a cheap floor.
   const [online, setOnline] = createSignal(
     typeof navigator !== "undefined" ? navigator.onLine : true,
   );
+
+  // Poll the iroh transport's per-peer health so the dot tracks the live
+  // mesh. Best-effort: a failed probe leaves the last value rather than
+  // flapping the dot to offline on a transient error.
+  async function refreshPeerStatus() {
+    try {
+      setPeersUp(peersOnline(await peerStatus()));
+    } catch {
+      // keep the previous value; the next tick retries
+    }
+  }
   // Single in-flight `editBlock` lock. Two concurrent edits to the
   // same block can land in arbitrary order at the backend (e.g.
   // toggle-todo's optimistic commit racing with a delayed onBlur
@@ -149,6 +197,46 @@ export function Journal() {
     setView(v);
   }
 
+  // Imperative bridge to `<PluginViewOverlay />`: it hands us its `push`
+  // fn on mount so any path that receives plugin `ctx.ui.render` payloads
+  // (the sheet's `run`, the `commitEdit` hook sweep) can paint a sandboxed
+  // iframe overlay without threading state through the tree.
+  let pushPluginView: ((html: string) => void) | undefined;
+  function showPluginViews(views: string[] | undefined) {
+    if (!views || !pushPluginView) return;
+    for (const html of views) pushPluginView(html);
+  }
+
+  // Refresh the plugin-contributed toolbar buttons. Best-effort: plugins
+  // load lazily on the host's first request, so this is called after the
+  // workspace opens (a host with no toolbar plugins returns an empty list).
+  async function loadToolbar() {
+    try {
+      setToolbarButtons(await pluginToolbar());
+    } catch {
+      setToolbarButtons([]); // never let a plugin failure break the header
+    }
+  }
+
+  // Run a plugin's toolbar command. Mirrors `<PluginSheet />`'s `run`:
+  // surface `notify` / error output as a toast, paint any `ctx.ui.render`
+  // overlays, and re-render the on-screen page from the refreshed
+  // `PageView` (the host re-projects every page before returning, since a
+  // plugin can move blocks across pages). Guarded by `!editingId()` so it
+  // never resets a textarea mid-edit.
+  async function runToolbarButton(btn: PluginToolbarButton) {
+    haptic("light");
+    try {
+      const reply = await pluginRun(btn.plugin_id, btn.command_id, pageId());
+      for (const note of reply.notifications) setError(note);
+      for (const err of reply.errors) setError(`plugin: ${err}`);
+      showPluginViews(reply.views);
+      if (reply.view && !editingId()) applyView(reply.view);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   // Native bridges + reactive effects MUST register synchronously,
   // before any `await`. Solid loses the owner context across an
   // `await` boundary, so `createEffect` / `onCleanup` called after
@@ -159,7 +247,6 @@ export function Journal() {
   // published once and then never updated as the user typed inside
   // `[[…]]`.
   registerNativeToolbarBridge();
-  registerOpsChangeBridge();
   registerNativeSuggesterBridge();
 
   // Track connectivity so the SyncDot can show "offline" when iCloud
@@ -171,9 +258,29 @@ export function Journal() {
     const upOffline = () => setOnline(false);
     window.addEventListener("online", upOnline);
     window.addEventListener("offline", upOffline);
+    // Probe iroh peer health on mount, then every 5s, so the dot tracks
+    // the mesh without a user action. `peer-ops-changed` (ops bridge)
+    // and a force-sync also poke `refreshPeerStatus` for a fresher read.
+    void refreshPeerStatus();
+    const peerPoll = window.setInterval(() => {
+      void refreshPeerStatus();
+      // Pull from peers AND reload the view every tick so an edit on the
+      // desktop OR the TUI shows up without the refresh button. The mobile side
+      // initiating the dial is NAT-friendly (waiting for the desktop to reach an
+      // iPhone behind carrier NAT is not), which is why desktop/TUI→mobile needs
+      // us to pull. We call the full `pullAndReload` (not just `syncNow`):
+      // relying on the `workspace-ready` event alone left the ops on disk
+      // without re-rendering — the symptom was "only shows after I hit sync".
+      // Skipped mid-edit so it never resets the textarea; cheap no-op when the
+      // vector clocks already match. `background: true` keeps this silent — no
+      // sync spinner every tick, and it only swaps the view when the content
+      // actually changed, so a quiet poll never re-renders under the user.
+      if (!editingId()) void pullAndReload({ background: true });
+    }, 3000);
     onCleanup(() => {
       window.removeEventListener("online", upOnline);
       window.removeEventListener("offline", upOffline);
+      window.clearInterval(peerPoll);
     });
   }
 
@@ -211,7 +318,41 @@ export function Journal() {
 
   onMount(async () => {
     listenForWorkspaceReady();
+    listenForDeepLink();
     await loadTodayWithRetry();
+    // Cold-start deep link: a URL that *launched* the app was buffered
+    // by the backend before the listener above existed. Drain it now
+    // that the workspace is open and override today's journal with the
+    // target. A normal launch returns null and keeps the journal.
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const pending = await invoke<DeepLinkNavigate | null>(
+        "take_pending_deep_link",
+      );
+      if (pending) await navigateDeepLink(pending);
+    } catch {
+      // best-effort — a failed drain just leaves the journal showing
+    }
+    // Opening the app: pull whatever peers produced while it was closed, so the
+    // user sees fresh state without hitting refresh. Runs after the local load
+    // so the UI is already up; best-effort.
+    void pullAndReload();
+    // Plugin toolbar buttons load lazily on the host's first request, so
+    // pull them once the workspace is open. Best-effort — a host with no
+    // toolbar plugins just leaves the header unchanged.
+    void loadToolbar();
+    // Content transformers (plugin-claimed code-fence languages) load the
+    // same way: pull the registry once the workspace is open so a fenced
+    // block in a custom language can render its transformed view. Best-
+    // effort — failure leaves fences as plain highlighted code.
+    void loadTransformers();
+    // iOS freezes JS in the background; on return to the foreground, pull again
+    // so edits made on another device while we were away land right away.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void pullAndReload();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    onCleanup(() => document.removeEventListener("visibilitychange", onVisible));
   });
 
   /**
@@ -337,37 +478,53 @@ export function Journal() {
   }
 
   /**
-   * Bridge for the iCloud watcher in `main.mm`. iOS calls this when
-   * `ops-*.jsonl` files inside the ubiquitous container change —
-   * meaning a sibling device pushed new ops. We reload the workspace
-   * + refresh the current view so the user sees peer changes without
-   * having to pull-to-refresh.
+   * Navigate in response to an `outl://` deep link (issue #98). The Rust
+   * backend parsed + validated the URL through the shared
+   * `outl_actions::parse_deep_link`; map each shape onto the same
+   * `open*` command the ref-tap path uses. Shared by the warm listener
+   * and the cold-start drain so the two can't diverge.
    */
-  function registerOpsChangeBridge() {
-    let pending = false;
-    (window as unknown as {
-      __outlOpsChanged?: () => void;
-    }).__outlOpsChanged = async () => {
-      if (pending) return;
-      pending = true;
-      setSyncing(true);
-      try {
-        await reloadWorkspace();
-        const cur = view();
-        if (cur) {
-          const next =
-            cur.page.kind === "journal"
-              ? await openJournalFor(cur.page.slug)
-              : await openPageBySlug(cur.page.slug);
-          applyView(next);
-        }
-      } catch {
-        // best effort; next interaction will refresh
-      } finally {
-        pending = false;
-        setSyncing(false);
-      }
-    };
+  async function navigateDeepLink(p: DeepLinkNavigate) {
+    try {
+      const next =
+        p.kind === "today"
+          ? await openTodayJournal()
+          : p.kind === "daily"
+            ? await openJournalFor(p.date)
+            : await openPageBySlug(p.slug);
+      applyView(next);
+      setError(null);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  function listenForDeepLink() {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    // Register cleanup synchronously (inside the component owner, before
+    // the dynamic import resolves) so the listener is torn down if
+    // Journal ever unmounts — matching the desktop's `onCleanup`. Journal
+    // is the mobile root today (singleton), so this is defensive, but it
+    // keeps the two clients consistent. If we unmount before `listen()`
+    // resolves, dispose the late-arriving handle right away.
+    onCleanup(() => {
+      disposed = true;
+      unlisten?.();
+    });
+    import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<DeepLinkNavigate>("deep-link://navigate", async (e) => {
+          // Skip while editing so a warm-path navigation never yanks the
+          // textarea out from under the user mid-keystroke.
+          if (editingId()) return;
+          await navigateDeepLink(e.payload);
+        }),
+      )
+      .then((un) => {
+        if (disposed) un();
+        else unlisten = un;
+      });
   }
 
   async function loadTodayWithRetry() {
@@ -408,6 +565,10 @@ export function Journal() {
     // "loading" window converges on the freshly opened workspace.
     import("@tauri-apps/api/event").then(({ listen }) => {
       listen("workspace-ready", async () => {
+        // Don't reopen the page out from under an in-flight edit — it would
+        // reset the textarea. The ops are already on disk; the next idle
+        // workspace-ready (or the user committing) picks them up.
+        if (editingId()) return;
         const v = view();
         if (!v) {
           await loadTodayWithRetry();
@@ -545,6 +706,31 @@ export function Journal() {
       // so the user can retry instead of silently losing the text.
       setEditingId(null);
       applyView(next);
+      // Fire the plugins' `onOp` sweep once, after the commit lands.
+      // `sync_hooks` dispatches EVERY op since the host's last sweep
+      // (not just this edit), so one call here also catches up the
+      // structural ops (indent / move / delete) that don't route
+      // through `commitEdit` — mirrors the desktop's single
+      // `OutlineView.onCommit` hook + the TUI's once-per-tick sweep.
+      // Best-effort: a host with no op-hook plugins is a cheap no-op,
+      // and any failure stays out of the edit path entirely.
+      void (async () => {
+        try {
+          const reply = await pluginSyncHooks(pid);
+          // Paint any `ctx.ui.render` payloads the hooks emitted — this is
+          // the confetti path: marking a block DONE → commit → this sweep
+          // → a confetti plugin emits HTML → sandboxed iframe overlay.
+          // Independent of the mutation guard below: a view can fire even
+          // when the workspace didn't change.
+          showPluginViews(reply.views);
+          // Re-render only if a hook actually mutated the workspace AND
+          // the user hasn't started editing again in the meantime (so
+          // we never reset a fresh textarea mid-edit).
+          if (reply.view && !editingId()) applyView(reply.view);
+        } catch {
+          // Plugins must never break editing.
+        }
+      })();
     } else if (error()) {
       // Save failed (timeout, backend error, etc). Offer a retry
       // affordance — the draft is still in the editor, so the
@@ -734,24 +920,49 @@ export function Journal() {
     }
   }
 
-  async function handleRefresh() {
-    const pid = pageId();
-    if (!pid) return;
-    setRefreshing(true);
-    setSyncing(true);
-    haptic("light");
+  /**
+   * Core P2P pull, shared by the manual pull-to-refresh and the automatic
+   * open/foreground sync. Force a sync pass against every iroh peer NOW (dial
+   * instead of waiting for the catch-up tick), reload the local op log, and
+   * reopen the current page so the re-render reflects what peers delivered.
+   * Best-effort: `syncNow` is a no-op when iroh isn't wired, and tolerated
+   * (toast, don't wedge) on a flaky peer so it never blocks the local reload.
+   */
+  async function pullAndReload(opts?: { background?: boolean }) {
+    // `background` = the silent 4s poll. It still pulls + replays the op log,
+    // but it only swaps the rendered view when the content ACTUALLY changed and
+    // the user isn't editing — so an unchanged poll never re-renders (no scroll
+    // jump, no cursor churn) and a desktop/TUI edit arriving mid-typing never
+    // yanks the textarea out from under the user. The foreground paths (button,
+    // app open, resume) always apply and show the spinner.
+    const bg = opts?.background ?? false;
+    if (!bg) setSyncing(true);
+    await withError(syncNow);
     await withError(reloadWorkspace);
-    // Reopen current page after refresh.
     const cur = view();
     if (cur) {
       const next =
         cur.page.kind === "journal"
           ? await withError(() => openJournalFor(cur.page.slug))
           : await withError(() => openPageBySlug(cur.page.slug));
-      if (next) applyView(next);
+      if (next) {
+        const changed =
+          JSON.stringify(next.outline) !== JSON.stringify(cur.outline);
+        if ((!bg || changed) && !editingId()) applyView(next);
+      }
     }
+    // Re-read the dot off the fresh dial outcomes the force-sync produced.
+    void refreshPeerStatus();
+    if (!bg) setSyncing(false);
+  }
+
+  async function handleRefresh() {
+    const pid = pageId();
+    if (!pid) return;
+    setRefreshing(true);
+    haptic("light");
+    await pullAndReload();
     setRefreshing(false);
-    setSyncing(false);
   }
 
   async function handlePrevDay() {
@@ -891,21 +1102,21 @@ export function Journal() {
         class="z-30 shrink-0 bg-(--color-ios-bg)/80 px-3 pt-2 pb-3 backdrop-blur-xl dark:bg-(--color-iosd-bg)/80"
         style="padding-top: max(env(safe-area-inset-top), 12px);"
       >
-        <div class="grid grid-cols-[auto_1fr_auto] items-center gap-2">
+        <div class="grid grid-cols-[auto_auto_1fr] items-center gap-2">
           {/* Left capsule — visible only when the user has navigated
               away from today's journal. We always reserve a placeholder
               of the same width so the title doesn't jump horizontally
               when the back button appears / disappears. */}
           <Show
             when={view() && view()!.page.kind !== "journal"}
-            fallback={<span aria-hidden="true" class="block h-9 w-10" />}
+            fallback={<span aria-hidden="true" class="block h-9 w-9" />}
           >
             <div class="inline-flex rounded-full bg-(--color-ios-card)/85 shadow-[var(--shadow-capsule)] backdrop-blur-xl dark:bg-(--color-iosd-card)/85 dark:shadow-[var(--shadow-capsule-dark)]">
               <button
                 type="button"
                 aria-label="Back to today's journal"
                 onClick={handleJumpToday}
-                class="flex h-9 w-10 items-center justify-center rounded-full text-(--color-ios-accent) active:bg-(--color-ios-divider)/40 dark:text-(--color-iosd-accent) dark:active:bg-(--color-iosd-divider)/40"
+                class="flex h-9 w-9 items-center justify-center rounded-full text-(--color-ios-accent) active:bg-(--color-ios-divider)/40 dark:text-(--color-iosd-accent) dark:active:bg-(--color-iosd-divider)/40"
               >
                 <svg
                   width="20"
@@ -950,7 +1161,7 @@ export function Journal() {
           {/* Right capsule — grouped page actions. SyncDot lives inline
               between pages-search and refresh so the user reads it as
               "status of the data this capsule controls". */}
-          <div class="inline-flex items-center rounded-full bg-(--color-ios-card)/85 shadow-[var(--shadow-capsule)] backdrop-blur-xl dark:bg-(--color-iosd-card)/85 dark:shadow-[var(--shadow-capsule-dark)]">
+          <div class="ios-scroll inline-flex max-w-full items-center justify-self-end overflow-x-auto rounded-full bg-(--color-ios-card)/85 shadow-[var(--shadow-capsule)] backdrop-blur-xl dark:bg-(--color-iosd-card)/85 dark:shadow-[var(--shadow-capsule-dark)]">
             <button
               type="button"
               aria-label="Calendar"
@@ -958,7 +1169,7 @@ export function Journal() {
                 haptic("light");
                 setCalendarOpen(true);
               }}
-              class="flex h-9 w-10 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
+              class="flex h-9 w-9 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
             >
               <svg
                 width="20"
@@ -982,7 +1193,7 @@ export function Journal() {
                 haptic("light");
                 setSwitcherOpen(true);
               }}
-              class="flex h-9 w-10 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
+              class="flex h-9 w-9 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
             >
               <svg
                 width="20"
@@ -998,18 +1209,83 @@ export function Journal() {
                 <path d="M21 21l-4.3-4.3M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z" />
               </svg>
             </button>
-            <span class="px-1.5">
-              <SyncDot
-                status={
-                  !online() ? "offline" : syncing() ? "syncing" : "synced"
-                }
-              />
-            </span>
+            {/* Plugin-contributed toolbar buttons — one inline glyph per
+                entry, sitting among the native header actions. Discreet:
+                the plugin's `icon` rendered as text, tap runs its command
+                (re-render + toast handled by `runToolbarButton`). */}
+            <For each={toolbarButtons()}>
+              {(btn) => (
+                <button
+                  type="button"
+                  aria-label={btn.title ?? `Plugin: ${btn.command_id}`}
+                  title={btn.title ?? btn.command_id}
+                  onClick={() => void runToolbarButton(btn)}
+                  class="flex h-9 w-9 items-center justify-center rounded-full text-[17px] leading-none text-(--color-ios-accent) active:bg-(--color-ios-divider)/40 dark:text-(--color-iosd-accent) dark:active:bg-(--color-iosd-divider)/40"
+                >
+                  {btn.icon}
+                </button>
+              )}
+            </For>
             <button
               type="button"
-              aria-label="Sync from iCloud"
+              aria-label="Plugin commands"
+              onClick={() => {
+                haptic("light");
+                setPluginsOpen(true);
+              }}
+              class="flex h-9 w-9 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
+            >
+              {/* Stacked-squares "extensions/plugins" glyph, mirrors the
+                  desktop's `⧉` toggle. */}
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="var(--color-ios-accent)"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="3" y="3" width="8" height="8" rx="1.5" />
+                <rect x="13" y="3" width="8" height="8" rx="1.5" />
+                <rect x="3" y="13" width="8" height="8" rx="1.5" />
+                <rect x="13" y="13" width="8" height="8" rx="1.5" />
+              </svg>
+            </button>
+            {/* The sync dot IS the devices/pairing affordance: it shows the
+                mesh status AND opens the pairing sheet on tap — no separate
+                (ugly) devices glyph. Mirrors the desktop's clickable dot. */}
+            <button
+              type="button"
+              aria-label="Devices and sync — tap to pair"
+              onClick={() => {
+                haptic("light");
+                setDevicesOpen(true);
+              }}
+              class="flex h-9 w-9 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
+            >
+              <SyncDot
+                status={
+                  // PRIMARY signal is iroh peer health, not navigator.onLine.
+                  // A force-sync in flight wins (spinner); else a reachable
+                  // peer → synced (green); else offline/orange — either the
+                  // device has no radio, or peers exist but none answered
+                  // (or none are paired, so there's nothing to sync with).
+                  syncing()
+                    ? "syncing"
+                    : online() && peersUp()
+                      ? "synced"
+                      : "offline"
+                }
+              />
+            </button>
+            <button
+              type="button"
+              aria-label="Sync now"
               onClick={handleRefresh}
-              class="flex h-9 w-10 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
+              class="flex h-9 w-9 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
             >
               <svg
                 width="18"
@@ -1221,6 +1497,25 @@ export function Journal() {
         onPick={handlePickDate}
       />
 
+      <DevicesSheet
+        open={devicesOpen()}
+        onClose={() => setDevicesOpen(false)}
+      />
+
+      <PluginSheet
+        open={pluginsOpen()}
+        pageId={pageId()}
+        onClose={() => setPluginsOpen(false)}
+        onMessage={(text) => setError(text)}
+        onView={(v) => applyView(v)}
+        onViews={(views) => showPluginViews(views)}
+      />
+
+      {/* Sandboxed, ephemeral iframe overlays for plugin `ctx.ui.render`
+          payloads (confetti, etc). Binds its `push` fn up to
+          `showPluginViews`. */}
+      <PluginViewOverlay bind={(push) => (pushPluginView = push)} />
+
       <ConfirmDialog
         open={pendingDelete() !== null}
         title="Delete block?"
@@ -1284,13 +1579,13 @@ function JournalHeader(props: {
   const isToday = () =>
     props.todaySlug !== null && props.todaySlug === props.slug;
   return (
-    <div class="flex-1">
-      <div class="flex items-center justify-center gap-2">
+    <div class="min-w-0">
+      <div class="flex items-center justify-center gap-1.5">
         <button
           type="button"
           aria-label="Previous day"
           onClick={props.onPrev}
-          class="rounded-full p-1 text-(--color-ios-accent) active:opacity-50 dark:text-(--color-iosd-accent)"
+          class="shrink-0 rounded-full p-1 text-(--color-ios-accent) active:opacity-50 dark:text-(--color-iosd-accent)"
         >
           <ChevronLeft />
         </button>
@@ -1304,7 +1599,7 @@ function JournalHeader(props: {
           type="button"
           aria-label="Next day"
           onClick={props.onNext}
-          class="rounded-full p-1 text-(--color-ios-accent) active:opacity-50 dark:text-(--color-iosd-accent)"
+          class="shrink-0 rounded-full p-1 text-(--color-ios-accent) active:opacity-50 dark:text-(--color-iosd-accent)"
         >
           <ChevronRight />
         </button>

@@ -5,14 +5,14 @@
 //! CLI and TUI consume the workspace; they don't reach into `Tree` or
 //! `OpLog` directly.
 //!
-//! Phase 1 implements a minimal API:
+//! This module exposes a deliberately minimal API:
 //!
 //! - [`Workspace::open_in_memory`] / [`Workspace::open_with_storage`]
 //! - [`Workspace::apply`] — accept an op, route to tree + storage + Yrs
 //! - read-only accessors for the tree, log, and block text
 //!
 //! Higher-level methods (page CRUD, journal CRUD, block edit shortcuts)
-//! land in Step 4 alongside `outl-cli`.
+//! live in `outl-actions` and `outl-cli`, not here.
 
 use crate::id::{ActorId, NodeId};
 use crate::log::OpLog;

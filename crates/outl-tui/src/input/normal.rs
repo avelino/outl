@@ -14,6 +14,19 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
+    // Plugin keybindings get first crack — but `try_plugin_binding`
+    // refuses to shadow any native action (see `super::plugin_chord`),
+    // so this never steals a key the user expects to do its built-in
+    // thing. We must not fire while a help popup, sidebar focus, or a
+    // pending native op/chord is active, so guard on those first.
+    if !app.show_help
+        && app.sidebar_focus.is_none()
+        && app.pending_input_op.is_none()
+        && app.pending_chord.is_none()
+        && super::plugin_chord::try_plugin_binding(app, key)
+    {
+        return Ok(false);
+    }
     // Help popup owns the keyboard exclusively while open. Any key
     // that isn't a tab switch / scroll / close is *swallowed* — we
     // don't want `j` to move the outline behind the popup while the

@@ -30,15 +30,13 @@ In order of impact:
    Keep aligned with `.github/copilot-instructions.md`.
 6. **`docs/architecture.md`** — design decisions.
    Update when a feature **changes how the system is designed** (not every feature).
-7. **`docs/roadmap.md`** — current phase.
-   Mark items as delivered, add items discovered along the way.
-8. **Per-crate `CLAUDE.md`** (in `crates/<name>/CLAUDE.md`) — technical contract of the crate.
+7. **Per-crate `CLAUDE.md`** (in `crates/<name>/CLAUDE.md`) — technical contract of the crate.
    Public APIs, invariants, file layout.
-9. **Root `CLAUDE.md`** — global conventions, anti-patterns, critical project syntax, **the Documentation triggers table itself**.
-10. **`.github/copilot-instructions.md`** — automated review prompt.
+8. **Root `CLAUDE.md`** — global conventions, anti-patterns, critical project syntax, **the Documentation triggers table itself**.
+9. **`.github/copilot-instructions.md`** — automated review prompt.
     Mirrors `docs/contributing.md` and the § 5.3 documentation-drift table.
     Keep in sync.
-11. **Other `docs/*.md`** (sync, storage, theming, crdt, concepts, getting-started, tutorial, why-outl, cli, mcp, clients, homebrew, config, shortcuts) — update when relevant.
+10. **Other `docs/*.md`** (sync, storage, theming, crdt, concepts, getting-started, tutorial, why-outl, cli, mcp, clients, homebrew, config, shortcuts) — update when relevant.
 
 ## What you do NOT document
 
@@ -76,7 +74,6 @@ The **Documentation triggers** table in root `CLAUDE.md` and § 5.3 of `.github/
 | New slash command / changed `/check` / `/check-invariants` / `/roundtrip` / `/coverage` / `/new-op` / `/init-playground` semantics | `development.md` § 4 |
 | New PostToolUse hook or agent | `development.md` § 4 ("Hooks", "Agents"), `.claude/agents/<name>.md` |
 | New public crate API | per-crate `CLAUDE.md`, root `CLAUDE.md` "Shared primitives catalog" if it's reusable across crates, `.github/copilot-instructions.md` § 5.1 (mirror) |
-| New roadmap phase delivered | `roadmap.md` |
 | Sidecar format change | `markdown-format.md`, `outl-md/CLAUDE.md`, `development.md` § 6 cookbook if migration story changed |
 | Op log format change | `crdt.md`, `outl-core/CLAUDE.md`, `development.md` § 6 cookbook |
 | Storage trait change | `storage.md`, `outl-core/CLAUDE.md`, `development.md` § 5 |

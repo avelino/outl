@@ -22,12 +22,11 @@ outl takes the parts of [Roam Research][roam] and [Logseq][logseq] that work —
 | Script outl or plug it into Claude Code | [CLI](cli.md) |
 | Connect outl to Claude Desktop, Cursor, etc. | [MCP](mcp.md) |
 | Build an MCP-driven skill or slash command on top of outl | [MCP recipes](mcp-recipes.md) |
-| See where the project is going | [Roadmap](roadmap.md) |
 | Send a PR and know what reviewers look at | [Contributing & code review](contributing.md) |
 
 ## What's locked in
 
-The shape of outl is settled, even though phase 1 ships one device at a time:
+The shape of outl is settled:
 
 - **Markdown is on disk, untouched.** No `id::` lines.
   No HTML comments.
@@ -39,10 +38,9 @@ The shape of outl is settled, even though phase 1 ships one device at a time:
   A sequence of [`Move` / `Edit` / `Create` / `SetProp`][crdt] ops with HLC timestamps.
   The tree you see is a projection.
 - **Storage is a trait, not a struct.** JSONL (one append-only file per device) ships today; [ChronDB][chrondb] is tracked publicly for when you want git-style history with branches and time travel.
-- **Every UI surface shares one core.** The TUI is just the first client.
-  The Tauri desktop (phase 5) and the iOS/Android apps (phase
-  6) reuse [`outl-core`][outl-core] and [`outl-md`][outl-md] —
+- **Every UI surface shares one core.** The TUI, the Tauri desktop, and the iOS app all reuse [`outl-core`][outl-core] and [`outl-md`][outl-md] —
   including the tokens, the index, the slugify rules.
+  Android is not built yet.
 
 [crdt]: crdt.md
 [chrondb]: https://github.com/avelino/outl/issues/1
@@ -53,13 +51,18 @@ The shape of outl is settled, even though phase 1 ships one device at a time:
 
 - Single-device editor: **works**.
   Modes, undo/redo, autocomplete, backlinks, theming, fuzzy switcher, workspace-wide search, command palette.
-- Cross-device sync: **works today** over iCloud Drive (macOS TUI ↔ iOS app).
+- Cross-device sync: **works today** (macOS TUI ↔ iOS app).
   The iOS client is on public TestFlight beta — [join here][testflight].
-- P2P transport: **phase 2**.
-  The algorithm is implemented and tested ([170+ tests][tests]); the wire transport (iroh) replaces iCloud later without touching the algorithm.
-- Tauri desktop: **phase 5**.
+- P2P transport: **iroh (default)**.
+  QUIC, end-to-end encrypted, no central server; pairing via `outl peer pair`.
+  The CRDT algorithm is implemented and tested ([170+ tests][tests]); the `file` transport (iCloud Drive / Syncthing / shared FS) is the opt-in alternative.
+- Tauri desktop: **works** (macOS / Linux / Windows).
+
+Where it's headed: the [roadmap lives on the GitHub Project][roadmap].
 
 [testflight]: https://testflight.apple.com/join/P2GdWAMd
+
+[roadmap]: https://github.com/users/avelino/projects/2/views/1
 
 [tests]: https://github.com/avelino/outl/actions
 

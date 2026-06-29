@@ -9,6 +9,7 @@
 ## Sync — done right
 
 * [The problem with how the others do it](sync.md)
+* [Relay & NAT traversal](relay.md)
 * [Tree CRDT walkthrough](crdt.md)
 
 ## Editor
@@ -23,6 +24,11 @@
 * [CLI](cli.md)
 * [MCP](mcp.md)
 * [MCP recipes (skills & commands)](mcp-recipes.md)
+* [Plugins](plugins.md)
+* [Build your first plugin](plugin-tutorial.md)
+* [Plugin API](plugin-api.md)
+* [Plugin architecture](plugin-architecture.md)
+* [Plugin examples](plugin-examples.md)
 
 ## Format
 
@@ -37,6 +43,5 @@
 
 ## Project
 
-* [Roadmap](roadmap.md)
 * [Development guide](development.md)
 * [Contributing & code review](contributing.md)

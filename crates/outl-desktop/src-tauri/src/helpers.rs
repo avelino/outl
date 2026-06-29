@@ -166,9 +166,34 @@ where
         if let Err(e) = apply_page_md_with_sidecar(ws, &root, page_id) {
             warn!("page md+sidecar sync failed: {e}");
         }
+        announce_after_commit(state, ws, page_id);
         let view = build_page_view(ws, &root, page_id).map_err(|e| e.to_string())?;
         Ok((value, view))
     })
+}
+
+/// Post-commit hook: tell connected peers this device just produced new ops so a
+/// peer pulls **immediately** over iroh gossip, instead of waiting for the
+/// catch-up loop's maintenance re-sync.
+///
+/// Best-effort and non-fatal by design:
+/// - no transport wired (file-sync / not yet started) → nothing to announce;
+/// - the announce never crosses (flaky cross-network link) → the catch-up loop's
+///   periodic re-sync still converges.
+///
+/// This is the desktop mirror of the TUI's `save()` tail. Without it, GUI edits
+/// committed the op locally but never woke peers — so propagation depended
+/// entirely on the catch-up timing (the "edit never reached the other device"
+/// report).
+pub(crate) fn announce_after_commit(state: &State<'_, AppState>, ws: &Workspace, page_id: NodeId) {
+    let guard = state.iroh_transport.lock();
+    let Some(transport) = guard.as_ref() else {
+        return;
+    };
+    let Some(meta) = page_meta_action(ws, page_id) else {
+        return;
+    };
+    transport.announce_local_ops(&meta.slug, state.hlc.next());
 }
 
 #[cfg(test)]

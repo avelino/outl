@@ -16,8 +16,12 @@
 pub(crate) mod block;
 pub(crate) mod exec;
 pub(crate) mod page;
+pub(crate) mod peers;
+pub(crate) mod plugin;
 pub(crate) mod workspace;
 
 pub(crate) use block::*;
 pub(crate) use page::*;
+pub(crate) use peers::*;
+pub(crate) use plugin::*;
 pub(crate) use workspace::*;

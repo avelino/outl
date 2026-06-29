@@ -68,6 +68,9 @@ pub fn call(params: Value, ctx: &Arc<ServerCtx>) -> Result<Value, JsonRpcError> 
 
     if outcome.is_ok() && MUTATING.contains(&name) {
         ctx.invalidate_index();
+        // Wake connected peers so they pull these ops in real time (iroh
+        // gossip). No-op when the device has no peers / the transport is off.
+        ctx.announce_after_mutation();
     }
 
     Ok(match outcome {

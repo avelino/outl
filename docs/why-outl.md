@@ -21,18 +21,18 @@ outl picks the parts that worked — the outliner UX, the bi-directional graph, 
 | **Files on disk?** | No — cloud only | Yes (`.md` files) | Yes (`.md` files) |
 | **Markdown stays clean?** | N/A | No — `id::` lines on every block | Yes — IDs in dotfile sidecar |
 | **Offline editing?** | Limited | Yes | Yes |
-| **Multi-device sync** | Cloud sync (paid plan, no merge surfaced) | File rsync (paid plan, last-write-wins) | Tree CRDT, P2P (phase 2) |
+| **Multi-device sync** | Cloud sync (paid plan, no merge surfaced) | File rsync (paid plan, last-write-wins) | Tree CRDT, P2P over iroh (default); file/iCloud opt-in |
 | **Conflict on concurrent moves?** | Silent loss | Silent loss | Deterministic resolution, no loss |
 | **Time travel / history** | Paid tier | Per-file git, optional | Issue [#1][i1] tracks ChronDB |
 | **Open source** | No | Yes (frontend) | Yes (MIT) |
 | **Plugin system** | Yes (JS) | Yes (JS, complex) | Issue [#4][i4] tracks `rhai` |
-| **Mobile** | Native, fine | Native, known-bad | Issue [#3][i3] tracks phase 6 |
+| **Mobile** | Native, fine | Native, known-bad | iOS app (Tauri 2), TestFlight beta; Android not yet |
 | **Desktop** | Electron | Electron | Issue [#2][i2] tracks Tauri |
 | **TUI** | No | No | Yes — first-class |
 | **Daily journal** | Yes | Yes | Yes |
 | **`[[refs]]` / `#tags`** | Yes | Yes | Yes |
 | **Block refs `((blk-XXXXXX))` + embeds `!((blk-XXXXXX))`** | Yes (long uids) | Yes (long uids) | Short, sidecar-backed handles; clean `.md` |
-| **Queries** | `{{query: ...}}` rich | Datalog-ish | `{{query: ...}}` DSL — phase 3 |
+| **Queries** | `{{query: ...}}` rich | Datalog-ish | `{{query: ...}}` DSL — planned |
 
 [i1]: https://github.com/avelino/outl/issues/1
 [i2]: https://github.com/avelino/outl/issues/2
@@ -44,9 +44,8 @@ outl picks the parts that worked — the outliner UX, the bi-directional graph, 
 Be honest about what we're not building:
 
 - **Not a Notion replacement.** No database views, no kanban boards, no team workspaces with permissions. outl is for one human (or a few) thinking through nested bullets.
-- **Not a web app.** Phase 5 is desktop (Tauri), phase 6 is mobile.
-  No browser-based version is planned.
-- **Not a federation protocol.** P2P sync (phase 2) keeps your notes syncing between *your* devices.
+- **Not a web app.** There's a Tauri desktop and an iOS app; no browser-based version is planned.
+- **Not a federation protocol.** Sync keeps your notes flowing between *your* devices.
   It's not Mastodon for notes — there's no public graph, no following, no shared spaces.
 - **Not opinionated about your workflow.** No templates beyond the optional `journal.md`.
   No required tags.
@@ -60,21 +59,19 @@ Be honest about what we're not building:
 - People who got tired of `id::` lines.
 - People who want to inspect their notes with `grep`, `awk`, whatever — without first parsing a proprietary format.
 - People comfortable with a keyboard-driven TUI.
-  (The desktop and mobile apps will come; the TUI is what's solid today.)
+  (The desktop and iOS apps ship too; the TUI is the most battle-tested.)
 
 ## Who outl is **not** for, yet
 
 - Visual thinkers who need a mind-map or a graph view.
-  The TUI is text; phase 5 will bring a graph.
+  The clients are text/outline first; a graph view is not yet built.
 - Teams that need shared editing today.
-  Phase 2 sync is between *your* devices.
-- People who don't want to build from source.
-  Phase 4 ships pre-built binaries.
+  Sync is between *your* devices, not a shared workspace.
 
 ## The pitch in one paragraph
 
 We took everything Roam and Logseq taught us about how outlines feel, threw away the parts where they cut corners on storage and sync, and rebuilt the foundation with a CRDT that has a formal proof and 170+ tests covering it.
 The markdown on your disk is exactly what you'd write by hand.
-The sync — when phase 2 lands — won't lose your work when two devices edit offline.
-The architecture is layered so the same engine drives the TUI today, a Tauri desktop tomorrow, and mobile apps after that.
+The sync won't lose your work when two devices edit offline.
+The architecture is layered so the same engine drives the TUI, the Tauri desktop, and the iOS app.
 If you want to know exactly how the algorithm works, [we wrote a whole page on it](sync.md).

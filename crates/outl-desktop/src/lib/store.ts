@@ -150,6 +150,15 @@ export interface AppStateShape {
   pickerSeed: string | null;
   /** Settings modal open state. `Cmd/Ctrl+,` toggles. */
   settingsOpen: boolean;
+  /**
+   * Plugin palette open state. Lists every command contributed by a
+   * loaded plugin (`outl_plugins::PluginHost::commands`) and runs the
+   * picked one. Opened from the `⧉` button in `<ChromeToggleBar />`;
+   * there is no keyboard chord yet (plugin commands are not in the
+   * `outl-shortcuts` catalog).
+   */
+  /** Plugin marketplace (browse + install from plugins.outl.app) open state. */
+  marketplaceOpen: boolean;
   /** Help overlay open state. `?` in Normal mode toggles. */
   helpOpen: boolean;
   /** Last error surfaced to the user (status line). */
@@ -176,6 +185,7 @@ const [state, setState] = createStore<AppStateShape>({
   pickerOpen: false,
   pickerSeed: null,
   settingsOpen: false,
+  marketplaceOpen: false,
   helpOpen: false,
   lastError: null,
 });

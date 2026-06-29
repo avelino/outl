@@ -100,6 +100,7 @@ pub(crate) fn render_backlinks_inline(
             app,
             &mut out,
             &mut selected_line,
+            inner_width,
         );
     }
 
@@ -121,6 +122,7 @@ fn render_backlink_node(
     app: &App,
     out: &mut Vec<Line<'static>>,
     selected_line: &mut Option<usize>,
+    text_width: u16,
 ) {
     let is_focused = focus_path == Some(current_path.as_slice());
     if is_focused && selected_line.is_none() {
@@ -193,6 +195,7 @@ fn render_backlink_node(
         crate::view::outline::FoldMarker::None,
         app,
         out,
+        text_width,
     );
 
     for (k, v) in &node.properties {
@@ -217,6 +220,7 @@ fn render_backlink_node(
             app,
             out,
             selected_line,
+            text_width,
         );
         current_path.pop();
     }

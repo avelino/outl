@@ -73,7 +73,7 @@ pub struct Paths {
     pub config: PathBuf,
     /// `.outl/orphans.log`.
     pub orphans: PathBuf,
-    /// `.outl/peers.toml` (phase 2+ peer registry).
+    /// `.outl/peers.toml` (legacy peer-registry placeholder).
     pub peers: PathBuf,
     /// `templates/journal.md`.
     pub journal_template: PathBuf,
@@ -151,9 +151,10 @@ pub fn init(paths: &Paths) -> Result<()> {
             .with_context(|| format!("writing {}", paths.orphans.display()))?;
     }
 
-    // Empty peers.toml is fine for phase 1.
+    // An empty peers.toml placeholder is fine; the live P2P peer registry
+    // is `.outl/peers.json`, written by `outl peer pair`.
     if !paths.peers.exists() {
-        fs::write(&paths.peers, "# Sync peers go here in phase 2+\n")
+        fs::write(&paths.peers, "# Sync peers live in .outl/peers.json\n")
             .with_context(|| format!("writing {}", paths.peers.display()))?;
     }
 
@@ -180,6 +181,27 @@ pub fn read_config(paths: &Paths) -> Result<Config> {
         .with_context(|| format!("reading {}", paths.config.display()))?;
     let cfg: Config = toml::from_str(&s).with_context(|| "parsing config.toml")?;
     Ok(cfg)
+}
+
+/// Read the workspace config, lazily seeding it when absent.
+///
+/// A workspace created by a GUI client (desktop / mobile) or by P2P sync only
+/// seeds `.outl/workspace-id`, never the per-workspace `config.toml` the CLI /
+/// TUI / MCP read the device actor from. When the `.outl/` dir exists but the
+/// config doesn't, write a fresh one (new actor) and return it, so opening such
+/// a workspace doesn't demand `outl init`. A parse error on an existing file
+/// still propagates, and a genuinely-missing `.outl/` is rejected by the opener
+/// (`ws::open` checks `dot_outl.exists()` first).
+pub fn read_or_init_config(paths: &Paths) -> Result<Config> {
+    match read_config(paths) {
+        Ok(cfg) => Ok(cfg),
+        Err(_) if !paths.config.exists() && paths.dot_outl.is_dir() => {
+            let cfg = Config::fresh();
+            write_config(paths, &cfg)?;
+            Ok(cfg)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Write the workspace config.

@@ -5,6 +5,19 @@ import WebKit
 
 /// iCloud real-time watcher.
 ///
+/// **Conditional on the workspace being in iCloud (Fase 2).** Storage is
+/// now a folder the user picks — it may be local, in the Files app, or
+/// inside an iCloud container — and iroh P2P is the primary sync. This
+/// watcher is the *iCloud-only* change detector: it covers the case where
+/// the chosen folder lives in iCloud and the iCloud daemon downloads a
+/// peer's `ops-*.jsonl`. For a **local** folder it is naturally dormant:
+/// the query is scoped to `NSMetadataQueryUbiquitousDocumentsScope`, which
+/// only ever matches files iCloud is syncing, so a workspace outside
+/// iCloud produces no results and the watcher never fires. The iroh
+/// transport's own reload signal (bridged to the `workspace-ready` Tauri
+/// event in `iroh_sync.rs`) is what keeps a local folder fresh — this
+/// watcher is **not required** for it.
+///
 /// `NSMetadataQuery` is the only public API for being told when iCloud
 /// documents change. We scope it to `ops-*.jsonl` files anywhere in the
 /// app's ubiquitous documents and notify the WebView via

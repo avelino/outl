@@ -1,0 +1,31 @@
+{
+  "name": "@outl/plugin-sdk",
+  "version": "1.0.0",
+  "description": "TypeScript SDK for authoring outl plugins. Types-only contract — the host implementation is injected by the outl runtime (Boa/Rust) at load time.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src"
+  ],
+  "sideEffects": false,
+  "keywords": [
+    "outl",
+    "plugin",
+    "sdk",
+    "outliner"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/avelino/outl",
+    "directory": "plugin-sdk"
+  }
+}

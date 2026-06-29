@@ -1,0 +1,43 @@
+{
+  "$schema": "https://outl.app/schemas/plugin-v1.json",
+  "id": "app.outl.examples.todo-archiver",
+  "name": "TODO Archiver",
+  "version": "1.0.0",
+  "api": "^1.0",
+  "engines": {
+    "outl": ">=0.7.0"
+  },
+  "main": "index.js",
+  "description": "Moves DONE blocks to an archive page on demand, keeping working pages focused on what's still open.",
+  "author": "Avelino <avelinorun@gmail.com>",
+  "license": "MIT",
+  "repository": "https://github.com/avelino/outl-todo-archiver",
+  "category": "productivity",
+  "capabilities": [
+    "op-hook",
+    "slash-command",
+    "keybinding",
+    "config-schema"
+  ],
+  "permissions": [
+    "read-page",
+    "write-page",
+    "submit-op",
+    "storage:local"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "todo-archive-done",
+        "title": "Archive DONE blocks"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "todo-archive-done",
+        "key": "Ctrl+Shift+A"
+      }
+    ],
+    "configSchema": "config.schema.json"
+  }
+}

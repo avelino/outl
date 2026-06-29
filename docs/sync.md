@@ -8,8 +8,11 @@ This page is about *why* — what breaks in the other tools, what's running in p
 
 The doc is split in two:
 
-- **[Part 1 — What's in production today](#part-1--whats-in-production-today)** is the design that ships now: tree CRDT core, op log on disk, iCloud Drive transport, the shared `SyncEngine`, what we explicitly trade off to get here.
-- **[Part 2 — What's still ahead](#part-2--whats-still-ahead)** is the designed-but-not-built work: per-page op log shards for 10k+ pages, per-page snapshots, the iroh P2P transport, and the migration path from today's layout to that one.
+- **[Part 1 — What's in production today](#part-1--whats-in-production-today)** is the design that ships now.
+  Tree CRDT core, op log on disk, the `SyncTransport` abstraction with **both** the file transport (iCloud Drive / shared filesystem) and the iroh P2P transport behind it.
+  Plus the shared `SyncEngine`, the `outl peer` pairing flow, and what we explicitly trade off to get here.
+- **[Part 2 — What's still ahead](#part-2--whats-still-ahead)** is the designed-but-not-built work.
+  Per-page op log shards for 10k+ pages, per-page snapshots, signed ops, iroh-blobs snapshot transfer, and the migration path from today's layout to that one.
 
 > **Companion read:** [File sync isn't trivial][avelino-file-sync] — a long-form post on *why* the problem is hard before this doc shows *how* outl solves it.
 > Same author, written as the project was being built.
@@ -31,11 +34,14 @@ Roam keeps every workspace in a central database on their servers.
 Real-time sync is great when it works.
 The cost:
 
-- **Your data lives on their machines.** Export is JSON; the moment Roam decides to throttle, raise prices, or shut down, your notes are stranded.
-- **No offline merge.** Two devices edit the same block while disconnected?
+- **Your data lives on their machines.**
+  Export is JSON; the moment Roam decides to throttle, raise prices, or shut down, your notes are stranded.
+- **No offline merge.**
+  Two devices edit the same block while disconnected?
   The one that connects last wins, the other one's changes silently vanish.
   There's no conflict surfaced, no merge prompt, no history of what was lost.
-- **No interop.** You can't open a Roam graph in another editor.
+- **No interop.**
+  You can't open a Roam graph in another editor.
   There's no `.md` on disk to inspect.
 
 Roam was an inspiration for what an outliner *feels* like.
@@ -57,11 +63,14 @@ Every block gets a UUID written *into the file*.
 Open it in VS Code, Obsidian, or `cat`, and it's full of metadata.
 Worse:
 
-- **Sync is a paid Pro tier.** And it's a file-rsync flavor — there is no merge algorithm.
+- **Sync is a paid Pro tier.**
+  And it's a file-rsync flavor — there is no merge algorithm.
   When two devices write the same file, the newer one wins.
   Same loss as Roam, just with extra steps.
-- **DB version split the community.** Logseq's pivot to a database backend left the file-based users behind and shipped half-broken for over a year.
-- **Mobile is a known-bad experience.** Years of users asking for parity.
+- **DB version split the community.**
+  Logseq's pivot to a database backend left the file-based users behind and shipped half-broken for over a year.
+- **Mobile is a known-bad experience.**
+  Years of users asking for parity.
 
 Logseq pointed at the right idea — files on disk — and stopped halfway.
 
@@ -104,14 +113,17 @@ flowchart TB
     md -. projection .-> tree
 ```
 
-1. **The op log is the source of truth.** Every change to the tree — moving a block, editing its text, setting a property, deleting — is recorded as a `LogOp` with a [Hybrid Logical Clock][hlc] timestamp.
+1. **The op log is the source of truth.**
+   Every change to the tree — moving a block, editing its text, setting a property, deleting — is recorded as a `LogOp` with a [Hybrid Logical Clock][hlc] timestamp.
    The list of ops, sorted by HLC, deterministically produces the tree.
 
-2. **The materialized tree and the `.md` are projections.** Both can be thrown away.
+2. **The materialized tree and the `.md` are projections.**
+   Both can be thrown away.
    If your sidecar is lost, `outl doctor` regenerates it from the op log.
    If your `.md` is deleted, the op log still has every block.
 
-3. **Markdown on disk is *clean*.** No `id::`, no HTML comments, no YAML frontmatter delimiters.
+3. **Markdown on disk is *clean*.**
+   No `id::`, no HTML comments, no YAML frontmatter delimiters.
    Block IDs live in `pages/foo.outl` (JSON, next to the `.md`, not dotted — iCloud Documents skips dotted paths when syncing across devices).
    When you edit `pages/foo.md` externally, outl's [3-level matching algorithm][matching] reconstructs which block had which ID.
 
@@ -242,12 +254,15 @@ Every change to the algorithm has to pass it.
 [Automerge][automerge] is a great general-purpose CRDT.
 Why didn't we use it?
 
-- **Tree CRDT specifically.** Automerge has tree support but it's experimental, and we'd need to bolt on the move-with-cycle logic ourselves.
+- **Tree CRDT specifically.**
+  Automerge has tree support but it's experimental, and we'd need to bolt on the move-with-cycle logic ourselves.
   Better to implement Kleppmann's algorithm directly — it fits in ~300 lines of Rust and we control the entire on-disk format.
-- **Domain semantics.** Our `Op` enum talks about `Move(node, new_parent, position)` and `SetProp(node, key, value)`.
+- **Domain semantics.**
+  Our `Op` enum talks about `Move(node, new_parent, position)` and `SetProp(node, key, value)`.
   Automerge is generic — every operation goes through a JSON-patch-like API.
   Specialization makes error messages and tests dramatically clearer.
-- **Storage control.** We own the JSONL line format, the JSON serialization of ops, and the bytes that go on the wire.
+- **Storage control.**
+  We own the JSONL line format, the JSON serialization of ops, and the bytes that go on the wire.
   With Automerge we'd be locked into their binary format forever.
 
 The cost: we're on the hook for correctness.
@@ -258,10 +273,45 @@ That's why [the test battery][tests] is huge and the coverage target on the four
 
 ---
 
-## Transport: iCloud Drive
+## Transport: a trait, not a hard-coded provider
 
-The algorithm runs on every device; the transport is whatever ships each actor's `ops-*.jsonl` to every other device.
-Today that is iCloud Drive, used by the iOS mobile client and reachable from the macOS TUI by pointing `--workspace` at the same iCloud ubiquity container (`~/Library/Mobile Documents/iCloud~app~outl~mobile-app/Documents`).
+The algorithm runs on every device; the *transport* is whatever ships each actor's `ops-*.jsonl` to every other device.
+Both transports outl ships today sit behind one trait, `outl_actions::SyncTransport`:
+
+```rust
+pub trait SyncTransport: Send + Sync + 'static {
+    /// Spawn background tasks; signal `tx` whenever peer ops land in `ops/`.
+    fn start(&self, workspace_root: PathBuf, actor: ActorId, tx: Sender<()>);
+    /// Called after this device commits local ops to the log.
+    fn announce_local_ops(&self, workspace_id: &str, hlc: Hlc);
+    /// Stop background tasks.
+    fn shutdown(&self);
+}
+```
+
+The contract is deliberately thin: **both transports result in `ops-<peer>.jsonl` files landing on disk**, and `SyncEngine::reload_workspace` picks them up identically regardless of which transport delivered the bytes.
+The CRDT never knows or cares which medium moved an op.
+
+Which one a client wires up at boot is driven by the `[sync] transport` key in `~/.config/outl/config.toml` (`"file"` | `"iroh"`, default `"iroh"`).
+The full key reference lives in [config.md → `[sync]`](config.md#sync); this section is about what each transport *does*.
+
+### Transport 1: `iroh` (P2P) — the default
+
+`transport = "iroh"` (the default) syncs directly between devices over [iroh][iroh] QUIC — no cloud dependency, no shared folder required.
+It works across Apple and non-Apple devices.
+Details are in the [iroh transport section below](#transport-2-iroh-p2p).
+
+### Transport 2: `file` (iCloud Drive / shared filesystem) — opt-out
+
+`transport = "file"` is the opt-out for users who prefer iCloud Drive, Syncthing, or any other folder-level sync.
+`FileSyncTransport` polls `<root>/ops/` every 2 s for peer file changes; delivery is a no-op because the folder sync already carries the bytes.
+
+The workspace is a folder the user chooses — it can live in iCloud or anywhere else.
+Point the TUI at an iCloud ubiquity container to share with the iOS mobile client:
+
+```bash
+outl --workspace ~/Library/Mobile\ Documents/iCloud~app~outl~mobile-app/Documents
+```
 
 The layout is:
 
@@ -288,12 +338,99 @@ Two iCloud-specific decisions fall out of this transport:
   The mobile client wraps every read in `NSFileCoordinator` after calling `startDownloadingUbiquitousItemAtURL` so the Rust side never sees a placeholder.
   Details in [`crates/outl-mobile/CLAUDE.md`](../crates/outl-mobile/CLAUDE.md#peer-file-materialisation-the-icloud-catch).
 
+### Transport 2: `iroh` (P2P)
+
+`transport = "iroh"` swaps iCloud for direct device-to-device sync over [iroh][iroh] QUIC, so the project stops depending on a third-party cloud and starts working across non-Apple devices.
+It is opt-in today and lives in the `outl-sync-iroh` crate as `IrohSyncTransport`, implementing the same `SyncTransport` trait.
+
+What it gives you:
+
+- **QUIC + automatic hole punching.**
+  No central server for the data path.
+  When two peers can't connect directly (symmetric NAT), a relay forwards their already-encrypted bytes — it never sees your notes.
+  See [relay.md](relay.md) for the relay's exact threat model and the `relay_url` config.
+- **E2E encrypted by default.**
+  Every iroh connection is QUIC + TLS 1.3 keyed to the peers' identities.
+- **Vector-clock delta sync, both directions.**
+  On connect, each side exchanges `Storage::last_ts_per_actor()` and streams only the ops the other hasn't seen.
+  This is the offline catch-up path: the op log (`ops-<actor>.jsonl`) *is* the buffer, so a device that was off for a week reconnects and pulls exactly the missing ops, no full resync.
+- **Transitive relay of ops.**
+  Ops authored by actor C and received via peer B are stored locally as `ops-<C>.jsonl`.
+  A can therefore get C's ops through an A↔B sync even if A never connects to C directly.
+- **An HLC sanity gate.**
+  Ops timestamped more than 24 h in the future are logged and skipped rather than applied, so one device with a wrong clock can't poison the merge.
+
+The device identity is per-machine and lives in `~/.outl/`; the paired-peer list is per-graph and lives inside the workspace, in `<workspace>/.outl/`:
+
+```
+~/.outl/
+└── identity.key            ← this device's ed25519 keypair (iroh node identity)
+
+<workspace>/.outl/
+└── peers.json              ← peers paired into THIS graph (node id, alias, added_at)
+```
+
+The pair belongs to the graph, not the OS: pairing a device into one workspace must not expose it to a different workspace on the same machine.
+A one-time migration copies any legacy global `~/.outl/peers.json` into a workspace the first time that workspace is opened (the global is left in place).
+Both files are managed by `outl peer …` (below), not hand-edited.
+
+#### Pairing: `outl peer pair`
+
+Two devices establish a pairing over a one-shot iroh handshake (ALPN `outl-sync/pair/1`).
+**Pairing is CLI-only today** — the GUI clients read and probe peers but don't run the handshake.
+
+On the **host** device:
+
+```
+$ outl peer pair
+Node ID: 35c8fc38bf…
+Scan this QR on the other device, or copy the ticket:
+
+  █▀▀▀▀▀█ ▀▄▀ █▀▀▀▀▀█
+  …ASCII QR…
+
+Ticket:
+  eyJpZCI6Ij…            ← base64 EndpointAddr
+On the other device, run:
+  outl peer pair --ticket <ticket>
+
+Waiting for the other device to connect…
+```
+
+On the **joining** device:
+
+```
+$ outl peer pair --ticket eyJpZCI6Ij…
+Connecting to the other device…
+Paired with 35c8fc38bf…
+```
+
+> The ticket is **not** an iroh `NodeTicket` — that type doesn't exist in iroh 1.0.0.
+> It is a base64 of `serde_json(EndpointAddr)` (node id + relay + direct addrs), which feeds straight back into `endpoint.connect`.
+
+Both sides exchange one `PeerEntry` over a single bi-directional stream and persist the other to `peers.json`.
+
+#### Managing peers
+
+| Command | What it does |
+|---------|--------------|
+| `outl peer list` | Print every paired device — node-id prefix, alias, added-at. Reads `peers.json` only (no network). |
+| `outl peer remove <id>` | Unpair a device by node-id prefix. Rewrites `peers.json`. |
+| `outl peer status` | Probe each paired peer for **live** reachability + RTT. Opens a transient iroh endpoint and connects to each peer with a short timeout; prints `online (Nms)` / `offline`. |
+
+The same three read/probe operations are exposed to the GUI clients as Tauri commands — `outl_peer_list`, `outl_peer_remove`, `outl_peer_status` — so the mobile and desktop apps can show and prune the peer list and surface live status.
+**Pairing stays CLI-only**; there is no `outl_peer_pair` command, because the handshake's interactive ticket exchange has no good GUI surface yet.
+
 ---
 
 ## The shared sync engine
 
+`SyncTransport` (above) gets peer ops *onto disk*; `SyncEngine` is what merges them *into the tree*.
+The transport fires a signal on its `tx` channel once `ops-<peer>.jsonl` has landed, and the client calls into the engine.
 Both clients (TUI and mobile) use `outl_actions::SyncEngine` for the reload-workspace + reproject-page flow.
-**Detection** is client-specific (each transport has its own notification mechanism), **policy** is client-specific (the TUI defers reloads while the user is in Insert mode; mobile commits each mutation atomically), **the work itself is shared**.
+**Detection** is transport-specific (the file transport polls, iroh pushes over QUIC).
+**Policy** is client-specific (the TUI defers reloads while the user is in Insert mode; mobile commits each mutation atomically).
+**The work itself is shared.**
 
 ```rust
 let engine = SyncEngine::new(workspace_root, actor);
@@ -339,6 +476,22 @@ Same engine, simpler policy.
 The TUI runs the scan every 10 seconds on a worker thread; mobile runs it once at boot.
 Both call into `outl_md::reconcile::reconcile_md`, which uses 3-level matching to emit the minimum ops that translate the on-disk state into the op log.
 
+### Background sync on iOS
+
+While the app is in the foreground, the iroh transport syncs continuously (catch-up loop + real-time gossip).
+The moment the app backgrounds, iOS suspends its network sockets, so **there is no continuous background P2P** — that's an OS limit, not an outl choice.
+
+What outl does instead is use iOS's sanctioned background mechanism: a `BGProcessingTask`.
+When the system grants a window (it decides when — typically a handful of times a day, on Wi-Fi, often while charging), outl wakes, runs **one forced sync pass** against every paired device, and suspends again.
+The phone initiates the connection, which is what makes it work even when a peer (a Mac behind NAT) can't reach the phone directly.
+So edits made on another device while your phone was closed are usually already there when you reopen it, without you hitting refresh.
+
+This needs **Background App Refresh** enabled for outl (Settings → outl → Background App Refresh, and the global Settings → General → Background App Refresh).
+The toggle only appears because the app declares `UIBackgroundModes` + `BGTaskSchedulerPermittedIdentifiers`; with it off, sync only happens while the app is open.
+There's no battery cost to speak of — the OS schedules the windows, and each pass is a short op-log diff, not a live connection.
+
+> Wiring (Info.plist → `OutlBackgroundRefresh.swift` → the `bg_sync.rs` FFI that drives `sync_now`) is documented in [`crates/outl-mobile/CLAUDE.md`](../crates/outl-mobile/CLAUDE.md#background-sync-ios).
+
 ---
 
 ## Honest trade-offs (today)
@@ -346,24 +499,37 @@ Both call into `outl_md::reconcile::reconcile_md`, which uses 3-level matching t
 Be skeptical of any sync story that claims zero compromises.
 Here are ours:
 
-- **One move wins per concurrent pair.** If you and your friend both move block B to different parents at the same time, exactly one move is materialized.
+- **One move wins per concurrent pair.**
+  If you and your friend both move block B to different parents at the same time, exactly one move is materialized.
   The other goes into the log but doesn't take effect.
   Pretending both succeed would lose information — that's Logseq's mistake.
-- **Text-level undo through Yrs is partial.** Block text is a Yrs document.
+- **Text-level undo through Yrs is partial.**
+  Block text is a Yrs document.
   Yrs guarantees character-level convergence, but reversing a single `Edit` op via `undo_op` may not produce the exact pre-edit string if other edits interleaved.
   The string still converges; only the local `undo` semantics weaken.
   Documented at `crdt.md#text-content`.
-- **Conflict surfacing is silent.** Today outl just resolves and moves on.
+- **Conflict surfacing is silent.**
+  Today outl just resolves and moves on.
   A future feature could pop up "concurrent edits on this block" the way Notion does.
   Not now.
-- **No causal delivery enforcement.** HLC is total order, not causal.
+- **No causal delivery enforcement.**
+  HLC is total order, not causal.
   In practice this is fine — `apply_op` handles any delivery order — but we don't promise vector-clock semantics.
-- **Single jsonl per device caps practical scale.** Today everything the device has ever done lives in one `ops-<actor>.jsonl` file.
+- **Single jsonl per device caps practical scale.**
+  Today everything the device has ever done lives in one `ops-<actor>.jsonl` file.
   The whole file gets loaded at boot.
   Works comfortably up to roughly **1k pages × 50 ops/page = 50k ops** (boot 0.5–5 s, memory proportional to the history).
   Beyond that we need per-page op log shards — designed in Part 2.
-- **iCloud is a third-party transport.** It's the v0 shortcut for shipping a working multi-device experience without writing network code.
-  Replacing iCloud with iroh (Part 2) removes the dependency on a cloud provider and brings non-Apple devices into the same sync pool, without changing the algorithm or the on-disk layout.
+- **The `file` transport requires a shared folder.**
+  `transport = "file"` leans on iCloud Drive, Syncthing, or any other folder-level sync to move per-actor files between devices.
+  The `iroh` transport (the default) removes that dependency and works across non-Apple devices without changing the algorithm or the on-disk layout.
+- **iroh sync still trusts a relay for NAT traversal.**
+  Content is E2E encrypted, but a relay operator can see *that* two devices sync, *when*, and roughly *how much* — never *what*.
+  Today that relay is n0's public infrastructure; running our own (`relay.outl.app`) is on the roadmap.
+  Full threat model in [relay.md](relay.md).
+- **iroh pairing is CLI-only today.**
+  `outl peer pair` runs the handshake; the mobile and desktop apps can list, remove, and probe peers but don't yet run the interactive ticket exchange.
+  QR pairing on mobile and paste-ticket on desktop are in progress.
 
 ---
 
@@ -372,7 +538,7 @@ Here are ours:
 What's in Part 1 ships and works.
 What follows is designed, referenced from the code, and waiting for the right moment to land — the order is roughly the order in which we expect the constraints to bite.
 
-## Phase A — Per-page op log shards (for 10k+ pages)
+## Per-page op log shards (for 10k+ pages)
 
 ### Why the monolithic jsonl breaks at scale
 
@@ -445,7 +611,7 @@ When iCloud delivers a new `ops/<slug>/ops-<peer>.jsonl`:
 There's no "reload everything" path anymore.
 Granularity stays at the page.
 
-## Phase B — Snapshots
+## Snapshots
 
 Even with per-page op logs, a very active page (1k+ ops) still pays the replay cost on open.
 
@@ -473,24 +639,25 @@ Trade-off:
 
 Working rule: each `apply_page_md_with_sidecar` checks whether the ops since the snapshot exceed N; if so, re-snapshot.
 
-## Phase C — iroh transport (replaces iCloud)
+## iroh hardening
 
-iCloud is the v0 transport.
-Phase C swaps it for [iroh][iroh] so the project stops depending on a third-party cloud and starts working across non-Apple devices:
+The iroh transport itself **shipped** — QUIC + hole punching, bidirectional vector-clock delta sync, transitive op relay, and the `outl peer pair` flow are all in Part 1 above.
+What's left is hardening on top of it:
 
-- QUIC + automatic hole punching.
-  No central server.
-  No STUN/TURN unless your network is genuinely awful.
-- Discovery via shareable ticket: `outl share` prints a string, the other device runs `outl join <ticket>`, both are now in the same swarm.
-- Each replica keeps a vector clock (`last_ts_per_actor`).
-  The sync protocol sends only the ops the other peer hasn't seen.
-- E2E encrypted by default.
-  Your notes never leave the devices you own.
+- **GUI pairing.**
+  Today `outl peer pair` is CLI-only.
+  The mobile and desktop apps already list, remove, and probe peers via `outl_peer_list` / `outl_peer_remove` / `outl_peer_status`, but the interactive ticket handshake still needs a GUI surface (QR scan on mobile, paste-ticket on desktop).
+- **Op signing.**
+  Ops are delivered over an E2E-encrypted channel, but the ops themselves aren't individually signed.
+  Signing each op with the author's ed25519 key would let a recipient verify provenance independent of the transport, closing the "a paired-but-malicious peer relays forged ops for actor C" gap.
+- **iroh-blobs snapshot transfer.**
+  Once per-page snapshots exist (see [Snapshots](#snapshots)), a freshly paired device shouldn't replay the entire op log over the wire.
+  iroh-blobs can ship the binary snapshot directly, then stream only the delta ops past `snapshot.cursor`.
+- **Self-hosted relay (`relay.outl.app`).**
+  iroh uses n0's public relays today; running our own removes the last third party from the coordination path.
+  Design + trigger conditions in [relay.md](relay.md).
 
 [iroh]: https://www.iroh.computer
-
-The algorithm doesn't change between transports. iCloud-today and iroh-tomorrow both deliver per-actor jsonls; the CRDT handles arrival order, duplication, and delay regardless of which medium got the bytes there.
-The `outl-actions::SyncEngine` API stays the same — only the *detector* (replaces `NSMetadataQuery` / file polling with iroh event streams) changes.
 
 ## Migration path
 
@@ -526,7 +693,7 @@ No change to the `.md` + `.outl` wire format, so older clients reading the proje
 2. Add `outl-cli migrate-to-per-page-ops` + tests.
 3. Update mobile to use scopes in every Tauri command.
 4. Update TUI likewise.
-5. Add snapshots (Phase B — independent, can land as a follow-up).
+5. Add snapshots (see [Snapshots](#snapshots) — independent, can land as a follow-up).
 6. Document the cross-page operation trade-off in the migration notes.
 
 ---

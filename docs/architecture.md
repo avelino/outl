@@ -8,7 +8,7 @@ outl is split into six crates today:
 
 ```mermaid
 flowchart TB
-    bins["<b>Clients</b><br/>outl-cli · outl-tui · outl-mobile (Tauri 2 + Solid, iOS) · (phase 5: Tauri desktop)"]
+    bins["<b>Clients</b><br/>outl-cli · outl-tui · outl-mobile (Tauri 2 + Solid, iOS) · outl-desktop (Tauri 2)"]
     actions["<b>outl-actions</b><br/>UI-agnostic workspace operations + SyncEngine<br/>(edit, indent, toggle TODO, render md, reload workspace, scan orphans)"]
     md["<b>outl-md</b><br/>parse / render / sidecar / 3-level matching / diff / inline tokens / outline_ops"]
     core["<b>outl-core</b><br/>Tree CRDT, op log, storage trait, domain models<br/>(Workspace, Page, Journal, Block, Property, Tag)"]
@@ -63,7 +63,7 @@ trait Storage: Send + Sync {
 
 **Why:** swapping backends is a single-file change.
 Test doubles are trivial.
-Phase 2's sync code can mock storage.
+The sync code can mock storage.
 Future ChronDB integration is a PR adding `storage/chrondb.rs`.
 
 ### 4. Sidecar JSON instead of inline IDs
@@ -76,7 +76,7 @@ The `.md` stays clean.
 VS Code shows what the user wrote.
 GitHub renders it beautifully.
 Obsidian doesn't get confused.
-The sidecar lives in the same directory so iCloud Drive ships it alongside the `.md` — the dotfile form was abandoned because iCloud Documents skips dotted paths when syncing across devices.
+The sidecar lives in the same directory so the sync transport ships it alongside the `.md` — the dotfile form was abandoned because iCloud Documents (one `file`-transport option) skips dotted paths when syncing across devices.
 
 **Trade-off:** external edits require **matching** to reconstruct IDs.
 That's a real algorithm (`outl-md/src/matching.rs`) with three confidence levels and an orphan log.
@@ -131,7 +131,7 @@ Anything that makes journal access slow or hidden is wrong.
 One license, no dual-license boilerplate to maintain, no patent grant language to argue about.
 Permissive enough for any downstream — including plugin authors who want to relicense their own crates differently.
 
-### 11. iroh for P2P (phase 2)
+### 11. iroh for P2P
 
 QUIC, hole punching, no central servers, no STUN/TURN dependency in the common case, in Rust, BSD-licensed.
 The alternatives are heavier (libp2p) or non-Rust.
@@ -148,7 +148,7 @@ A handful of pure-data, dep-light crates exist solely to keep the clients (`outl
 
 The rule: a new helper or constant only lands in a client crate when it's *genuinely* client-specific. Otherwise it belongs in one of the shared crates above. The root `CLAUDE.md` "Reuse-first" section is the policy.
 
-### 12. Tauri for desktop (phase 5)
+### 12. Tauri for desktop
 
 Rust core reuse, smaller binary than Electron, native webview.
 Slightly worse UX consistency than fully-native, but acceptable for an outliner where the bulk of the UX is text and lists.
@@ -185,7 +185,7 @@ flowchart TB
     notify["Workspace notifies<br/>'page X changed'"]
     render["outl-md::render(page_ast)<br/>→ new .md text<br/>outl-md::sidecar_write"]
     fs["File system:<br/>pages/X.md + .X.outl updated"]
-    p2p["(Phase 2+) broadcast Op<br/>to peers via iroh"]
+    p2p["broadcast Op<br/>to peers via iroh"]
 
     keystroke --> input --> action --> applyop
     applyop --> storage
@@ -206,7 +206,7 @@ flowchart TB
     diff["outl-md::diff::diff_to_ops(...) → Vec&lt;Op&gt;"]
     apply["For each Op: outl-core::apply_op<br/>(commits via transaction)"]
     write["outl-md::sidecar_write (refresh)"]
-    p2p["(Phase 2+) broadcast Ops to peers"]
+    p2p["broadcast Ops to peers"]
 
     save --> notify --> parse --> match --> diff --> apply --> write --> p2p
 ```
@@ -222,7 +222,7 @@ All mutations route through `outl_actions::*` functions that take `&mut Workspac
 The TUI's optional file watcher and the mobile's Tauri command surface are the two writers; they serialise on the workspace lock.
 
 **Across devices.** Each device only ever writes to its own `ops-<actor>.jsonl`.
-The transport (iCloud Drive today, iroh in phase 2) is responsible for shipping each actor's file to every other device.
+The transport (iroh by default, file/iCloud opt-in) is responsible for shipping each actor's file to every other device.
 `outl_actions::SyncEngine` is the shared piece that both the TUI poller and the mobile `NSMetadataQuery` watcher call when a peer file changes:
 
 - `snapshot_peers()` lists every `ops-*.jsonl` *except this device's* so a client never reacts to its own writes (the destructive save-reload-race loop is closed at this filter).
@@ -254,5 +254,4 @@ Insert mode in the TUI defers the reload via a `pending_reload` flag drained on 
 - **End-to-end encryption** of sync traffic — iroh supports it, we'll enable.
 - **Per-workspace identity** — each device gets a stable ActorId stored in the workspace's `.outl/config.toml`. (Global preferences — theme, vim mode, font size, last workspace — live separately in `~/.config/outl/config.toml` via the `outl-config` crate.)
 - **Read-only export** — Hugo, static HTML, PDF.
-- **Plugin system** — `rhai` scripts that consume op stream, expose new query types, render hooks for TUI.
-  Phase 4.
+- **Plugin system** — a JavaScript runtime (Boa) ships today (consume op stream, op hooks, slash commands); deeper hooks (new query types, richer render hooks) are still planned.

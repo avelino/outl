@@ -30,6 +30,8 @@ A binding that only the TUI cares about still lives here (with `Mode::Normal` / 
 - **[`Action`]** — every named operation outl performs in response to a key.
   Tagged-union serde (`{"kind": "OpenToday"}`) so the desktop frontend can `switch` on a string instead of an arbitrary integer.
 - **[`Chord`] / [`ChordSequence`]** — modifier-prefixed key combos, expressed independently of any input library so `crossterm::KeyEvent` (TUI) and `KeyboardEvent` (browser DOM) can both map into them.
+  `Chord::parse` / `ChordSequence::parse` turn a human string (`"Ctrl+Shift+A"`, `"Ctrl+T S"`) into the typed form.
+  This is the one owner of that parse, so a plugin's `contributes.keybindings[].key` resolves the same way on every client instead of each reimplementing it.
 - **[`Mode`]** — which modal state a binding applies to. `Global` matches everywhere; `Normal` / `Insert` / `Visual` / `Overlay` are the vim modes (desktop subscribes only while `settings.vim_mode == true`).
 - **[`Binding`]** — `(mode, chord, action, description)` row.
   The description is what the help overlay displays — keep it short and verb-led ("Open today's journal", not "This shortcut opens today's journal in the current window").

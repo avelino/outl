@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "@outl/shared/highlight/styles";
 @import "@outl/shared/warnings/styles";
+@import "@outl/shared/peers/styles";
 
 /* Spring-ish ease curves used across the app. Apple's UIKit defaults
    land somewhere between these two — `--ease-spring-out` is for sheets
@@ -170,6 +171,62 @@ html,
 body,
 #root {
   height: 100%;
+}
+
+/* Barcode scanner (windowed:true) draws the live camera *behind* the webview.
+   While scanning, <html> carries `.barcode-scanning` (set by DevicesSheet):
+   the app goes fully transparent and #root is hidden so the camera shows
+   through. The `.scan-overlay` is portalled to <body> (outside #root) so it
+   stays visible over the feed with framing + a Cancel button. */
+html.barcode-scanning,
+html.barcode-scanning body,
+html.barcode-scanning #root {
+  background: transparent !important;
+}
+html.barcode-scanning #root {
+  visibility: hidden;
+}
+
+.scan-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: calc(env(safe-area-inset-top) + 24px) 24px
+    calc(env(safe-area-inset-bottom) + 24px);
+  pointer-events: none;
+}
+.scan-frame {
+  width: min(72vw, 280px);
+  aspect-ratio: 1;
+  border: 3px solid rgba(255, 255, 255, 0.95);
+  border-radius: 28px;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.35);
+}
+.scan-hint {
+  margin: 0;
+  color: #fff;
+  font-weight: 600;
+  font-size: 15px;
+  text-align: center;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.7);
+}
+.scan-cancel {
+  pointer-events: auto;
+  padding: 13px 36px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #000;
+  font-weight: 600;
+  font-size: 16px;
+}
+.scan-cancel:active {
+  opacity: 0.8;
 }
 
 html {

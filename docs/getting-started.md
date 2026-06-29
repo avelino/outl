@@ -74,7 +74,7 @@ You'll get:
 ~/notes/
 ├── .outl/
 │   ├── config.toml     # workspace identity + settings
-│   ├── peers.toml      # P2P peers (phase 2+)
+│   ├── peers.toml      # P2P peers
 │   └── orphans.log     # log of unmatched blocks during external edits
 ├── ops/                # the op log, one ops-<actor>.jsonl per device
 ├── pages/              # your named pages live here
@@ -169,4 +169,3 @@ When you save and reopen the TUI, outl matches each block back to its sidecar en
 - The [TUI manual](tui.md) — every key, every overlay, persistence rules, gotchas.
 - [Why outl](why-outl.md) — the pitch vs. Roam and Logseq.
 - [Sync, done right](sync.md) — what makes the algorithm interesting.
-- The [Roadmap](roadmap.md) — what's coming.

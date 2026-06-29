@@ -1,9 +1,10 @@
 //! When a block's text changes substantially, the hash no longer matches
-//! the sidecar entry. Phase 1 (level 1 + level 3 only) treats this as a
-//! delete + new block. The orphan must show up — never silent loss.
+//! the sidecar entry. The matcher (level 1 + level 3 only today) treats
+//! this as a delete + new block. The orphan must show up — never silent
+//! loss.
 //!
-//! Phase 4 will introduce level 2 (similarity > 80%) and the warning
-//! path in `.outl/orphans.log`. Until then this test documents the
+//! Level 2 (similarity > 80%) and the warning path in `.outl/orphans.log`
+//! are not yet implemented. Until then this test documents the
 //! conservative-but-safe behavior.
 
 use outl_core::id::NodeId;

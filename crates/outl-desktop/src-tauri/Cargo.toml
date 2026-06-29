@@ -25,12 +25,25 @@ outl-md = { workspace = true }
 outl-actions = { workspace = true }
 outl-config = { workspace = true }
 outl-exec = { workspace = true }
+outl-plugins = { workspace = true, features = ["registry"] }
 outl-shortcuts = { workspace = true }
 outl-theme = { workspace = true }
+outl-sync-iroh = { workspace = true }
+dirs = { workspace = true }
+# Pin the rustls crypto provider. iroh pulls rustls with default features off,
+# dropping the workspace-wide default provider, which makes reqwest (Tauri's
+# webview asset protocol) panic at boot. `run()` installs `ring` explicitly.
+rustls = { workspace = true }
 
-tauri = { version = "2", features = [] }
+tauri = { workspace = true }
 tauri-plugin-dialog = "2"
-tauri-plugin-opener = "2"
+tauri-plugin-opener = { workspace = true }
+tauri-plugin-os = { workspace = true }
+# `outl://` deep links (Raycast "open in app", shared launchers). The
+# single-instance plugin's `deep-link` feature forwards the URL to the
+# already-running instance on Linux/Windows (macOS routes it natively).
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 notify = "8"
 notify-debouncer-full = "0.7"
 serde = { workspace = true }
@@ -39,5 +52,8 @@ parking_lot = { workspace = true }
 ulid = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
+# Installs an stderr log subscriber at boot so the iroh transport's
+# info!/warn!/debug! lines are visible in the terminal running the app.
+tracing-subscriber = { workspace = true }
 yrs = { workspace = true }
 anyhow = { workspace = true }

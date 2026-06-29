@@ -25,6 +25,13 @@ Precedence — first hit wins:
 
 A path stored in `config.toml` that no longer exists on disk is **skipped silently** (`tracing::warn!` only) so a deleted/unmounted workspace doesn't crash the launch — the chain falls through to cwd.
 
+**Opening a workspace created by a GUI client or P2P sync.**
+The desktop, mobile, and the iroh transport seed a workspace with `.outl/workspace-id` + `ops/` + the page/journal dirs, but **never** the per-workspace `.outl/config.toml`.
+They keep the device actor in `<app-config-dir>/actor`, not in the workspace.
+The CLI/TUI/MCP read the device actor from `config.toml`, so pointing them at a GUI-made workspace used to fail with "no outl workspace — run `outl init`".
+`workspace_layout::read_or_init_config` fixes that: when the `.outl/` dir exists but `config.toml` doesn't, it seeds a fresh one (new actor) and proceeds, so `outl --workspace <gui-folder>` just works.
+`ws::open` (CLI + MCP) and `outl_tui`'s `open_workspace` both go through this lazy-seed path; a genuinely-missing `.outl/` still errors.
+
 > Full schema + per-OS path of `config.toml` is documented in [`docs/config.md`](../../docs/config.md).
 > The `outl-config` crate is the only reader; never re-parse the TOML by hand here.
 
@@ -46,6 +53,27 @@ A path stored in `config.toml` that no longer exists on disk is **skipped silent
 - `outl migrate-to-shared [<path>]` — copy local sqlite log into shared `ops/` JSONL for cross-device sync.
 - `outl import logseq|roam <src> <dst>` — graph import.
 - `outl theme list|show <preset>` — TUI theme inspection.
+- `outl plugin init|list|install|run|enable|disable|remove` — manage the workspace's JS plugins (under `<workspace>/.outl/plugins/`), wrapping `outl-plugins`.
+  `init <NAME> [--id <ID>] [--dir <PATH>]` scaffolds a buildable plugin project (manifest + `package.json` + `tsconfig` + `src/index.ts` + README); it touches no workspace.
+  Templates live in `cmd/plugin_init.rs`.
+  `list` loads every installed plugin and prints version + enabled state + contributed slash commands.
+  `install <SOURCE>` takes a local directory **or** a `github:owner/repo[/subdir][#tag]` source and shows the requested permissions.
+  GitHub sources are cloned at an immutable semver tag (newest when not pinned, never a mutable branch) — the clone + tag resolution live in `cmd/plugin_source.rs` (shells out to `git`).
+  It asks for approval (`--yes` to skip, required when stdin isn't a TTY) before copying the plugin in and freezing the approved permissions in the lockfile.
+  `run <ID> <CMD>` runs a contributed command and re-renders every `.md` (op log is source of truth; files are a projection).
+  `enable|disable <ID>` flip the `enabled` flag in `installed.json`.
+  `remove <ID>` (aliases `uninstall`, `rm`) deletes the plugin's directory and its lockfile entry (the id is validated against path traversal before any deletion).
+  Unlike the machine-shaped commands, `plugin` uses `anyhow` at the boundary (operator-facing, interactive), like `peer`.
+- `outl peer pair|list|remove|status` — manage paired devices for P2P sync.
+  Reads the per-**device** `~/.outl/identity.key` + the per-**workspace** `<workspace>/.outl/peers.json` via `outl-sync-iroh` (`IrohIdentity`, `PeersStore`).
+  All four resolve the workspace (`--workspace` / `resolve_path`) so the pair belongs to the graph, not the OS; a one-time migration copies any legacy global `~/.outl/peers.json` into the workspace on first touch.
+  `pair` runs the real iroh handshake.
+  The host prints a ticket + ASCII QR and waits for one inbound connection.
+  `--ticket <str>` connects, exchanges `PeerEntry`s, and writes the peer to `peers.json`.
+  `--name <str>` is the alias THIS device advertises (it lands under our node id in the peer's `peers.json`).
+  It defaults to the machine hostname via `default_device_name` (best-effort `hostname` shell-out, `.local` trimmed) so the peer list reads a real name instead of a node-id stub.
+  A small `tokio` runtime drives the async `host_pairing` / `join_pairing` helpers from this sync binary.
+  `status` is still a static listing; live reachability lands with the running transport.
 
 ### Machine-shaped (JSON envelope, `--json` everywhere)
 
@@ -70,6 +98,25 @@ The full mapping (CLI ↔ MCP tool) is documented in [`docs/cli.md`](../../docs/
 
 - `outl mcp serve [--workspace=…]` — JSON-RPC 2.0 over stdio implementing the MCP protocol surface Claude Desktop expects (`initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, `prompts/get`).
   Every tool is a thin router that delegates to the same handler the CLI subcommand calls — there is no second business-logic path.
+
+## P2P sync: MCP is a first-class peer, the ephemeral CLI is a passive writer
+
+iroh's relay only lets ONE endpoint per `node_id` hold the inbound route at a time.
+But two endpoints that **both serve the sync ALPN** coexist fine: the relay-hijack is *benign and stable* (the loser keeps working via outbound dial; no flapping).
+See [`outl-sync-iroh/CLAUDE.md`](../outl-sync-iroh/CLAUDE.md) → "One endpoint per identity".
+That fact splits the two surfaces:
+
+- **The MCP server brings the transport UP.**
+  `outl mcp serve` is **long-lived** (it lives for the whole Claude Desktop session).
+  So on the first workspace open it spins up `IrohSyncTransport` (shared `~/.outl/identity.key`, the workspace's `.outl/peers.json`) **when the workspace has paired peers**, and tears it down when stdin closes.
+  Every mutating tool calls `announce_local_ops` after committing, so an edit made through Claude reaches the other devices in real time **without any GUI open**.
+  Inbound peer pushes flip a dirty flag so the next tool call reopens the workspace and serves the freshly-arrived ops.
+  Wired in `mcp/mod.rs` (`ServerCtx::ensure_transport` / `announce_after_mutation` / `shutdown_transport`).
+- **The ephemeral CLI stays a passive writer.**
+  A `page`/`block`/`daily`/`batch`/`import` command runs in ~200ms — far too short to establish a QUIC connection (which takes seconds), so binding a transport just to drop it would steal the relay route from a running GUI/MCP for nothing.
+  These commands write `ops-<actor>.jsonl` and rely on a co-resident long-lived peer (GUI / MCP) plus every device's catch-up re-sync (`MAINTENANCE_RESYNC`) to converge.
+  `outl sync` is the explicit escape hatch: it brings a transport up, forces a push/pull pass against every peer, waits, and exits — for scripts that must flush before the process dies.
+- **`outl peer pair`/`status`** use a transient endpoint they close before returning (CLI-only, no long-lived client should be mid-pair at the same time).
 
 ## JSON envelope (CLI + MCP)
 
@@ -108,6 +155,7 @@ src/
 │   ├── export.rs          # legacy `outl export --to fmt` placeholder
 │   ├── export_v2.rs       # outl export {hugo,md,json}
 │   ├── page.rs            # outl page …
+│   ├── plugin.rs          # outl plugin …
 │   ├── block.rs           # outl block …
 │   ├── daily.rs           # outl daily …
 │   ├── search.rs          # outl search
@@ -147,7 +195,7 @@ New tools land by:
 - ❌ Parse markdown (use `outl-md`)
 - ❌ Hold workspace mutation logic (use `outl-actions`)
 - ❌ Render TUI directly (use `outl-tui` as a library or sub-binary)
-- ❌ Network anything (phase 2)
+- ❌ Network anything (P2P sync lives in `outl-sync`)
 - ❌ Duplicate logic between CLI and MCP shim (always route through the same `cmd/*::pub fn`)
 - ❌ Add a helper here that re-implements something already in `outl-core` / `outl-md` / `outl-actions`.
   `cmd/*` handlers are glue — they parse args, call the upstream API, and JSON-envelope the result.

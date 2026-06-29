@@ -40,9 +40,10 @@ The interesting attack surface is narrow:
 - **Compromised local machine**: outl trusts the operator.
   If your machine is owned, your workspace is owned.
   We can't help.
-- **Sync transport** (phase 2): not implemented yet.
-  When iroh-based sync lands, it gets its own threat model and disclosure section here.
-- **Third-party plugin code** (phase 4+): when the rhai plugin system ships, plugins run with workspace access.
+- **P2P sync transport** (`iroh`): the default transport (QUIC, end-to-end encrypted, no central server).
+  Its on-the-wire crypto and pairing flow are in scope; the broader network threat model (relay trust, peer authentication edge cases) is being written up here and will get its own disclosure section as it firms up.
+  The `file` transport (iCloud Drive / Syncthing / shared FS) is the opt-in alternative — it has no network surface of its own and inherits the trust model of whatever folder you point it at.
+- **Third-party plugin code**: the JavaScript plugin system (Boa engine) is shipped, and plugins run with workspace access.
   We'll document the sandbox and what's expected of plugin authors.
 - **Denial-of-service via huge workspaces**: pathological inputs that slow down `outl doctor` are bugs, not vulns.
   File a regular issue.

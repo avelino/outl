@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 /// Value types supported as property values.
 ///
-/// Phase 1 keeps the surface narrow; query DSL (phase 3) may expand it.
+/// The surface is intentionally narrow today; the query DSL may expand it later.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PropValue {
     /// Plain text value.

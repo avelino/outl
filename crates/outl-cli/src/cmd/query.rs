@@ -2,7 +2,7 @@
 //!
 //! v1 surface: `--tag=foo`, `--priority=p1`, `--since=Nd`,
 //! `--kind=page|journal`. Filters are AND-composed. `--raw` is reserved
-//! for the phase 3 DSL and currently returns `INVALID_ARG`.
+//! for the query DSL (not yet implemented) and currently returns `INVALID_ARG`.
 
 use std::path::Path;
 
@@ -36,7 +36,7 @@ pub struct QueryArgs {
     /// Restrict to a single page kind: `page` | `journal`.
     #[arg(long)]
     pub kind: Option<String>,
-    /// Reserved for phase 3 DSL — currently rejected.
+    /// Reserved for the query DSL (not yet implemented) — currently rejected.
     #[arg(long)]
     pub raw: Option<String>,
     /// Force JSON output.
@@ -64,7 +64,7 @@ pub fn handler(ctx: &WsCtx, args: &QueryArgs) -> Result<Value, ApiError> {
     if args.raw.is_some() {
         return Err(ApiError::new(
             codes::INVALID_ARG,
-            "--raw is reserved for the phase 3 DSL and not yet implemented".to_string(),
+            "--raw is reserved for the query DSL and not yet implemented".to_string(),
         ));
     }
 

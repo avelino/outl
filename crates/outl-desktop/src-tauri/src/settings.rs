@@ -10,7 +10,26 @@
 
 use serde::{Deserialize, Serialize};
 
-use outl_config::{Config, EditorCfg, ThemeCfg, WorkspaceCfg};
+use outl_config::{Config, EditorCfg, SyncConfig, SyncTransportKind, ThemeCfg, WorkspaceCfg};
+
+/// Parse the flat wire string into a transport kind. Anything that isn't an
+/// explicit `"file"` opt-out (including an empty string from an older frontend)
+/// resolves to iroh — P2P is the default.
+fn parse_transport(s: &str) -> SyncTransportKind {
+    match s {
+        "file" => SyncTransportKind::File,
+        _ => SyncTransportKind::Iroh,
+    }
+}
+
+/// Render a transport kind to the lowercase wire string the frontend uses.
+fn transport_str(t: SyncTransportKind) -> String {
+    match t {
+        SyncTransportKind::File => "file",
+        SyncTransportKind::Iroh => "iroh",
+    }
+    .to_string()
+}
 
 /// Flat shape the Solid frontend's `Settings` interface
 /// (`crates/outl-desktop/src/lib/api.ts`) expects. Matches what
@@ -27,6 +46,9 @@ pub struct Settings {
     pub theme: String,
     /// Outline font size in pixels.
     pub font_size: u32,
+    /// Sync transport: `"iroh"` (P2P, default) or `"file"` (iCloud /
+    /// shared filesystem opt-out). The Sync panel writes this.
+    pub sync_transport: String,
 }
 
 impl Settings {
@@ -44,6 +66,7 @@ impl From<Config> for Settings {
             vim_mode: c.editor.vim_mode,
             theme: c.theme.preset,
             font_size: c.editor.font_size,
+            sync_transport: transport_str(c.sync.transport),
         }
     }
 }
@@ -58,6 +81,12 @@ impl From<Settings> for Config {
             editor: EditorCfg {
                 vim_mode: s.vim_mode,
                 font_size: s.font_size,
+            },
+            sync: SyncConfig {
+                transport: parse_transport(&s.sync_transport),
+                // relay_url isn't modeled in the flat Settings; `save` restores
+                // the on-disk value so editing the transport doesn't drop it.
+                relay_url: None,
             },
         }
     }
@@ -78,7 +107,12 @@ pub fn load(_app_config_dir: &std::path::Path) -> Settings {
 /// (`~/.config/outl/config.toml`) regardless of where the OS
 /// thinks the app's config directory is.
 pub fn save(_app_config_dir: &std::path::Path, settings: &Settings) -> anyhow::Result<()> {
-    let cfg: Config = settings.clone().into();
+    let mut cfg: Config = settings.clone().into();
+    // The flat `Settings` now carries the transport choice (the Sync panel
+    // writes it), so `into()` already set `cfg.sync.transport`. It does NOT
+    // model `relay_url`, so restore that one field from disk — otherwise saving
+    // the transport would wipe a custom relay.
+    cfg.sync.relay_url = outl_config::load().sync.relay_url;
     outl_config::save(&cfg)
 }
 
@@ -97,6 +131,7 @@ mod tests {
         );
         assert_eq!(s.theme, "outl");
         assert_eq!(s.font_size, 15);
+        assert_eq!(s.sync_transport, "iroh", "P2P is the default transport");
     }
 
     #[test]
@@ -106,6 +141,7 @@ mod tests {
             vim_mode: false,
             theme: "dracula".into(),
             font_size: 18,
+            sync_transport: "file".into(),
         };
         let cfg: Config = s.clone().into();
         let back: Settings = cfg.into();
@@ -113,5 +149,6 @@ mod tests {
         assert_eq!(back.vim_mode, s.vim_mode);
         assert_eq!(back.theme, s.theme);
         assert_eq!(back.font_size, s.font_size);
+        assert_eq!(back.sync_transport, s.sync_transport);
     }
 }

@@ -166,6 +166,10 @@ pub(crate) fn set_block_collapsed(
     let node = parse_node_id(&id)?;
     with_ws_mut(&state, |ws| {
         action_set_block_collapsed(ws, &state.hlc, node, collapsed).map_err(|e| e.to_string())?;
+        // SetCollapsed is still a real op that must converge — announce it like
+        // any other commit (this path bypasses `finish_in_page`, which is where
+        // the announce normally lives).
+        crate::helpers::announce_after_commit(&state, ws, page);
         build_page_view(ws, &state.storage_root, page).map_err(|e| e.to_string())
     })
 }

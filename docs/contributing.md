@@ -54,7 +54,7 @@ If the description doesn't answer these, the PR gets a top-level comment request
 3. **For a refactor, answer "why now?".** "The code is cleaner" is not enough — name the concrete thing this unblocks or the debt it pays down.
 4. **For a bug fix, describe the bug.** Steps to reproduce, observed behaviour, expected behaviour.
    Ideally a failing test that the patch turns green.
-5. **For a feature, point at the roadmap or an approved issue.** `docs/roadmap.md` is public; if a feature isn't on it or in an accepted issue, open the issue first.
+5. **For a feature, point at an approved issue.** If a feature isn't in an accepted issue, open the issue first.
 
 The template at [`.github/PULL_REQUEST_TEMPLATE.md`](https://github.com/avelino/outl/blob/main/.github/PULL_REQUEST_TEMPLATE.md) walks you through this.
 Use it.
@@ -158,8 +158,8 @@ Binary formats and DB files don't merge across those transports.
 
 ### 10. Settled decisions are off-limits in a PR
 
-ULID for IDs, `uhlc` for time, MIT license, JSONL-per-actor, Tauri for mobile, iCloud as v0 transport, `comrak` for markdown.
-These were debated and chosen in phase 0.
+ULID for IDs, `uhlc` for time, MIT license, JSONL-per-actor, Tauri for mobile, iroh as the default sync transport (file/iCloud opt-in), `comrak` for markdown.
+These were debated and chosen at the start.
 The full table is in the root [`CLAUDE.md`](https://github.com/avelino/outl/blob/main/CLAUDE.md#decisions-you-dont-get-to-revisit) and [`CONTRIBUTING.md`](https://github.com/avelino/outl/blob/main/CONTRIBUTING.md#decisions-you-dont-get-to-revisit).
 
 **Why:** these are foundational.
@@ -400,18 +400,15 @@ If a reviewer comments on one of these without a behavioural reason, push back p
 
 ## What we are not building yet
 
-The project is in Phase 0–1.
-Reviewers will push back on PRs that try to introduce these without an explicit issue and a roadmap entry:
+outl ships continuously; the CRDT core, TUI, CLI, desktop, iOS mobile, plugins, and code-block execution are all in.
+Reviewers will push back on PRs that try to introduce these without an explicit issue:
 
-- P2P sync transport (`iroh`) — iCloud is the v0 transport.
 - Query DSL (`{{query: ...}}`).
-- Tauri desktop shells beyond the existing mobile crate.
-- Plugin system (`rhai`).
 - `ChronDbStorage` backend ([issue #1](https://github.com/avelino/outl/issues/1)).
 - Android mobile build (iOS only today).
-- Per-page op log shards (Phase A in `docs/sync.md`, only when the workspace hits 10k pages).
+- Per-page op log shards ([Per-page op log shards](sync.md#per-page-op-log-shards-for-10k-pages) in `docs/sync.md`, only when the workspace hits 10k pages).
 
-If your PR genuinely belongs to one of these, link the tracking issue and the relevant `docs/roadmap.md` section.
+If your PR genuinely belongs to one of these, link the tracking issue.
 
 ---
 
@@ -458,7 +455,6 @@ If not, they run in CI on the PR.
 - [`docs/architecture.md`](architecture.md) — design decisions.
 - [`docs/crdt.md`](crdt.md) — the algorithm.
 - [`docs/markdown-format.md`](markdown-format.md) — the markdown dialect and sidecar spec.
-- [`docs/storage.md`](storage.md) — the `Storage` trait and roadmap.
-- [`docs/roadmap.md`](roadmap.md) — what's planned, what's done.
+- [`docs/storage.md`](storage.md) — the `Storage` trait.
 
 Welcome aboard.

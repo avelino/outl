@@ -2,7 +2,7 @@
 //!
 //! Holds a `Vec<char>` plus a cursor index; exposes the small set of
 //! cursor + edit operations the TUI needs. Block text in outl is
-//! single-line in phase 1 — multi-line support lives behind the same
+//! single-line for now — multi-line support lives behind the same
 //! API for when block content grows (Yrs already supports it).
 
 /// Edit buffer with cursor.

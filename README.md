@@ -61,7 +61,7 @@ The importer strips `id::` lines, resolves `((uid))` block refs to page links, s
 - [Developer setup](https://outl.app/docs/development.html)
 - [Contributing guide](https://outl.app/docs/contributing.html)
 - [Architecture](https://outl.app/docs/architecture.html)
-- [Roadmap](https://outl.app/docs/roadmap.html)
+- [Roadmap](https://github.com/users/avelino/projects/2/views/1) — where the project is going
 
 ## Background reading
 

@@ -255,6 +255,21 @@ Garbage input (`/date nope`, `/date +3x`, invalid date) shows `usage: date +Nd |
 > **ISO week year:** `week-num` uses `%G-W%V` (ISO 8601), not `%Y-W%V`.
 > The ISO year can differ from the calendar year on a few days around year boundaries — e.g. 2025-12-31 (Wednesday) belongs to ISO week `2026-W01`, not `2025-W01`.
 
+#### Plugin commands
+
+JavaScript plugins installed under `<workspace>/.outl/plugins/` are loaded at startup.
+Each command a plugin contributes (its `contributes.commands`) appears in the **same** `/` slash menu, listed by its title with a `plugin · <plugin-id>` description so you can tell it apart from a built-in.
+Selecting one runs the plugin's handler; any `notify` message or error it produces shows as a toast.
+If the plugin mutates the workspace, the affected `.md` files are re-rendered and the current page reloads so the change is visible immediately.
+
+Plugins are **best-effort**: a plugin that fails to load (bad manifest, tampered bundle, mismatched API version) is skipped with a toast, and the TUI runs normally.
+A workspace with no plugins behaves exactly as before.
+
+Plugins can also register `onOp` hooks that fire after every workspace mutation (your edits, or ops arriving from a peer).
+Hooks are dispatched once per mutation; a hook that itself mutates the workspace never re-triggers itself (loop-safe).
+
+> Keybinding contribution (`contributes.keybindings`) and the install / permission-approval flow are not implemented yet; today the TUI surfaces plugin **slash commands** and runs **op hooks**.
+
 ## Panels
 
 ```
@@ -369,12 +384,15 @@ and how to set a theme via config or CLI.
 
 ## What's NOT in the TUI yet
 
-Phase 1 lands the core editor and most-used surfaces. Some things are
-explicitly deferred:
+The core editor and most-used surfaces ship today.
+Some things are explicitly deferred:
 
-- **`{{query: ...}}`** — inline saved queries; phase 3.
+- **`{{query: ...}}`** — inline saved queries; not yet implemented.
 - **Visual mode batch indent / yank / paste** — only delete is wired
   today.
-- **Graph view** — phase 5 desktop has it; the TUI may grow one but
+- **Graph view** — the desktop has it; the TUI may grow one but
   not a priority.
-- **Live collaboration / P2P sync** — phase 2.
+- **P2P sync via iroh** — works today (default transport, single-user
+  multi-device over QUIC); the `file` transport (iCloud Drive) is opt-in.
+- **Live multi-user collaboration** — multiple people editing the same
+  workspace concurrently is still out of scope.

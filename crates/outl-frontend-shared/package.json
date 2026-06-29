@@ -15,27 +15,32 @@
     "solid-js": "^1.9.3"
   },
   "dependencies": {
-    "highlight.js": "^11.10.0"
+    "highlight.js": "^11.10.0",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2",
-    "@types/node": "^20",
-    "happy-dom": "^20.9.0",
-    "solid-js": "^1.9.3",
-    "typescript": "~5.6.2",
-    "vite-plugin-solid": "^2.11.0",
-    "vitest": "^4.1.7"
+    "@tauri-apps/api": "catalog:",
+    "@tauri-apps/plugin-opener": "catalog:",
+    "@types/node": "catalog:",
+    "@types/qrcode": "^1.5.5",
+    "happy-dom": "catalog:",
+    "solid-js": "catalog:",
+    "typescript": "catalog:",
+    "vite-plugin-solid": "catalog:",
+    "vitest": "catalog:"
   },
   "exports": {
     ".": "./src/index.ts",
     "./api/types": "./src/api/types.ts",
     "./api/commands": "./src/api/commands.ts",
     "./markdown": "./src/markdown/index.ts",
+    "./onboarding": "./src/onboarding/index.ts",
     "./paste": "./src/paste/index.ts",
     "./autocomplete": "./src/autocomplete/index.ts",
     "./highlight": "./src/highlight/index.ts",
     "./highlight/styles": "./src/highlight/styles.css",
+    "./peers": "./src/peers/index.ts",
+    "./peers/styles": "./src/peers/styles.css",
     "./warnings": "./src/warnings/index.ts",
     "./warnings/styles": "./src/warnings/styles.css"
   }

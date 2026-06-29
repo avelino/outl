@@ -1,12 +1,31 @@
-//! iCloud workspace resolution + background opener.
+//! Workspace resolution + background opener.
 //!
-//! All the mobile-specific divergences from the desktop client live
-//! here:
+//! ## Storage is a local folder, synced by iroh (no iCloud)
 //!
-//! - The workspace root is always `<ubiquity-container>/Documents/`
-//!   (the iCloud Documents folder); the user does not pick a path.
-//! - Peer-file materialisation is handled outside Rust (NSMetadataQuery
-//!   + NSFileCoordinator in `gen/apple/.../main.mm`).
+//! The workspace root is a folder on this device; iroh P2P is the only
+//! sync. A fresh install works with **no iCloud at all**: the default
+//! root is `<app-data-dir>/outl/` and iroh ships the op log to paired
+//! devices.
+//!
+//! Resolution order in [`resolve_storage_root`]:
+//!
+//! 1. The persisted `WorkspaceCfg.last` path, when present and usable
+//!    (survives restarts — written by [`persist_workspace_path`]).
+//! 2. The app-local default `<app-data-dir>/outl/`.
+//!
+//! Picking an arbitrary folder is the deferred native-picker concern (see
+//! `workspace_picker`); until that lands the default local root is the
+//! only path a fresh install ever opens.
+//!
+//! ## Change detection is the iroh signal
+//!
+//! The iroh transport signals reloads when it writes peer ops (see
+//! `iroh_sync::wire_iroh_transport`). There is no filesystem watcher: a
+//! single device needs none, and peer ops arrive through iroh, which pokes
+//! the reload itself.
+//!
+//! ## Other mobile divergences from desktop
+//!
 //! - Orphan `.md` reconcile runs **inline** in the boot path (desktop
 //!   spawns a background thread). Mobile workspaces are smaller and
 //!   the UI waits on `workspace-ready` anyway, so blocking the opener
@@ -26,36 +45,21 @@ use parking_lot::Mutex;
 use tauri::Emitter;
 use tracing::{info, warn};
 
-use crate::icloud_path;
-
-/// Sub-path under the iCloud Ubiquity Container where the workspace
-/// lives.
+/// Folder name for the **local** default workspace, created under the
+/// app's data dir when the user hasn't picked anything yet.
 ///
-/// The container itself is already namespaced as
-/// `iCloud.app.outl.mobile-app`, so re-tagging an inner `outl/`
-/// folder underneath it is noise. We use the standard iOS
-/// `Documents/` directory directly: iCloud Documents only syncs that
-/// path between devices, and the resulting layout matches what the
-/// user sees in the Files app.
-///
-/// Kept non-dotted because iCloud Documents skips paths starting
-/// with `.` when syncing between devices.
-const WORKSPACE_SUBDIR: [&str; 1] = ["Documents"];
-
-/// iCloud Ubiquity Container identifier registered in the
-/// `com.apple.developer.icloud-container-identifiers` entitlement.
-const ICLOUD_CONTAINER_ID: &str = "iCloud.app.outl.mobile-app";
-
-pub(crate) fn workspace_root_in(container: &Path) -> PathBuf {
-    let mut p = container.to_path_buf();
-    for seg in WORKSPACE_SUBDIR {
-        p.push(seg);
-    }
-    p
-}
+/// A fresh install lands here — iroh is the sync.
+const LOCAL_WORKSPACE_DIR: &str = "outl";
 
 fn ops_dir(workspace_root: &Path) -> PathBuf {
     workspace_root.join("ops")
+}
+
+/// The app-local default workspace root: `<app-data-dir>/outl/`.
+///
+/// This is what a fresh install uses — iroh syncs it P2P.
+pub(crate) fn local_default_root(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join(LOCAL_WORKSPACE_DIR)
 }
 
 pub(crate) fn load_or_create_actor(local_dir: &Path) -> std::io::Result<ActorId> {
@@ -75,16 +79,58 @@ pub(crate) fn load_or_create_actor(local_dir: &Path) -> std::io::Result<ActorId>
     Ok(actor)
 }
 
-pub(crate) fn resolve_storage_root(local_fallback: &Path) -> PathBuf {
-    if let Some(container) = icloud_path::resolve_container(ICLOUD_CONTAINER_ID) {
-        info!("using iCloud container at {}", container.display());
-        container
-    } else {
+/// Resolve the workspace root to open on boot.
+///
+/// Order:
+///
+/// 1. A previously chosen folder, if `persisted` points at something
+///    usable (the user picked it; it survived this restart).
+/// 2. The app-local default `<app-data-dir>/outl/` — a fresh install,
+///    synced by iroh.
+///
+/// `persisted` is `WorkspaceCfg.last` from `outl-config`. A `None` (first
+/// launch) or a path that no longer resolves falls through to the local
+/// default.
+pub(crate) fn resolve_storage_root(app_data_dir: &Path, persisted: Option<&Path>) -> PathBuf {
+    if let Some(chosen) = persisted {
+        // Accept the chosen path as long as its parent exists (the
+        // workspace dir itself is created by the caller). A path whose
+        // parent vanished — e.g. a removed external volume — falls through
+        // to the local default instead of failing the boot.
+        let usable = chosen.exists() || chosen.parent().map(|p| p.exists()).unwrap_or(false);
+        if usable {
+            info!("opening chosen workspace at {}", chosen.display());
+            return chosen.to_path_buf();
+        }
         warn!(
-            "iCloud container unavailable, falling back to local {}",
-            local_fallback.display()
+            "chosen workspace {} no longer resolves; using local default",
+            chosen.display()
         );
-        local_fallback.to_path_buf()
+    }
+
+    let default_root = local_default_root(app_data_dir);
+    info!(
+        "no workspace chosen; using local default {}",
+        default_root.display()
+    );
+    default_root
+}
+
+/// Persist the chosen workspace path so the next launch reopens it
+/// instead of the default.
+///
+/// Writes `WorkspaceCfg.last` through `outl-config` (the single config
+/// reader/writer — never hand-edit the TOML). Best-effort: a failure is
+/// logged, never fatal, because the workspace is already open in memory.
+#[allow(dead_code)] // Wired by the folder picker; see workspace_picker.rs.
+pub(crate) fn persist_workspace_path(path: &Path) {
+    let mut cfg = outl_config::load();
+    if cfg.workspace.last.as_deref() == Some(path) {
+        return;
+    }
+    cfg.workspace.last = Some(path.to_path_buf());
+    if let Err(e) = outl_config::save(&cfg) {
+        warn!("could not persist chosen workspace {}: {e}", path.display());
     }
 }
 

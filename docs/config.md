@@ -45,6 +45,17 @@ vim_mode = true
 # Outline font size in pixels (desktop only — the TUI uses your
 # terminal font).
 font_size = 15
+
+[sync]
+# Which transport moves the per-actor op log between devices.
+#   "iroh" (default) — direct P2P over QUIC (hole punching + relay).
+#   "file"           — iCloud Drive / shared filesystem. Zero infra opt-out.
+# Missing [sync] falls back to "iroh" — P2P is outl's primary sync.
+transport = "iroh"
+
+# Optional relay URL for the "iroh" transport. Empty (or omitted)
+# means use iroh's n0 default relays. Ignored by the "file" transport.
+relay_url = ""
 ```
 
 ### Field reference
@@ -70,6 +81,16 @@ Available presets: `outl`, `default-dark`, `light`, `logseq-light`, `dracula`, `
 | `vim_mode` | bool | `true` | desktop | When `false`, the desktop drops the modal `Normal / Insert / Visual` model and only listens to OS-standard chrome chords (`⌘P`, `⌘B`, …). The TUI is vim-style by definition and ignores this. |
 | `font_size` | integer (pixels) | `15` | desktop | Outline body font size. The TUI uses the user's terminal font; setting this has no effect there. |
 
+#### `[sync]`
+
+| Field | Type | Default | Read by | Effect |
+|---|---|---|---|---|
+| `transport` | `"iroh"` \| `"file"` | `"iroh"` | every client (TUI / desktop / mobile / MCP) | Which transport ships each device's `ops-<actor>.jsonl` to the others. `"iroh"` opens direct P2P QUIC connections to paired peers; `"file"` is the opt-out that relies on iCloud Drive / a shared filesystem. Missing `[sync]` defaults to iroh (P2P is the primary sync). |
+| `relay_url` | string (URL) | _empty_ | TUI peer-sync wiring | iroh relay used for NAT traversal + fallback. Empty means iroh's n0 public relays. Ignored when `transport = "file"`. See [relay.md](relay.md). |
+
+> The iroh transport also reads `~/.outl/identity.key` (this device's ed25519 keypair, per-machine) and `<workspace>/.outl/peers.json` (the paired-device list, per-graph).
+> Those are managed by `outl peer …`, not by this config file — see [sync.md → iroh transport](sync.md#transport-2-iroh-p2p).
+
 ---
 
 ## Per-workspace config (`<workspace>/.outl/config.toml`)
@@ -86,6 +107,11 @@ Written by `outl init`; carries the device's per-workspace identity and (optiona
 # log can attribute writes correctly.
 actor_id = "01HKZX9YBPDC5XJZ3R8K2QGM7E"
 
+# Persistent storage backend. JSONL (one append-only `ops-<actor>.jsonl`
+# per device) is the ONLY backend, so this is almost always omitted.
+# Omitting it means "jsonl" — leave it out unless you have a reason.
+storage = "jsonl"
+
 [theme]
 # Workspace-only override. When set, takes precedence over the
 # global `[theme] preset` while you're inside this workspace.
@@ -94,6 +120,17 @@ preset = "monokai"
 
 > The `[workspace] actor_id` field **cannot** move to the global config — it's per-device-per-workspace by design.
 > A peer's op log identifies writes by this id; sharing it across machines silently breaks convergence.
+
+### `[workspace] storage` and peer sync
+
+| Field | Type | Default | Read by | Effect |
+|---|---|---|---|---|
+| `storage` | `"jsonl"` | `"jsonl"` (when absent) | TUI | Selects the persistent backend. JSONL is the only one, so the key is normally absent. The TUI treats **absent OR `"jsonl"`** as a shareable workspace and starts its peer-sync threads (the iroh transport + the filesystem poller); only an explicit non-`jsonl` value turns them off. |
+
+This matters because a workspace **created by a GUI client or P2P sync** (not by `outl init`) seeds its `config.toml` without a `storage` line.
+The TUI must read that absence as the jsonl default, or it would open such a workspace with **no peer sync at all**.
+The symptom was the TUI never receiving a paired phone's edits — the desktop, which the phone had already reached over iroh, wrote those ops to the shared `ops/`, but the TUI never started a poller to notice.
+Storage is a trait with one persistent impl (`JsonlStorage`); the `storage` key is a legacy selector from when a second backend was on the table, kept only so an explicit opt-out is still expressible.
 
 ---
 

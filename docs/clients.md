@@ -44,7 +44,7 @@ To keep them honest, we route every workspace operation through one shared crate
 | Code-block execution (runtimes + orchestration) | `outl-exec`            |
 | Cross-client "run a fence" glue (`run_code_block`) | `outl-actions::exec` |
 | TUI: keymaps, modes, overlays, in-flight AST manipulation | `outl-tui`         |
-| Mobile: iCloud storage, Tauri commands, Solid frontend | `outl-mobile`         |
+| Mobile: local storage + iroh P2P (incl. iOS background sync), Tauri commands, Solid frontend | `outl-mobile` |
 | CLI subcommands                      | `outl-cli`                      |
 
 ## When to put logic in `outl-actions`
@@ -188,6 +188,14 @@ The policy diverges; the engine does not.
 The TUI runs the scan every 10s on a worker thread; mobile runs it once at boot.
 Both feed the same `outl_md::reconcile::reconcile_md`.
 
+### Peer reachability indicator (P2P / iroh transport)
+
+When the iroh transport is running, the desktop / mobile "online / offline" dot reads `SyncTransport::peer_health()` — a reachability snapshot the transport fills from its **own** dials (boot connect, catch-up loop, gossip-triggered sync).
+The GUI must **never** stand up a second iroh endpoint to probe peers: a second endpoint sharing the device identity hijacks the relay route from the live sync endpoint, and inbound sync gets refused.
+The `outl_peer_status` command merges the snapshot onto the full `peers.json` list, so a peer the transport hasn't dialed yet shows offline.
+The CLI's `outl peer status` is the lone exception (no running transport), so it keeps the transient-endpoint probe.
+See `crates/outl-sync-iroh/CLAUDE.md` → "One endpoint per identity".
+
 See `crates/outl-mobile/CLAUDE.md` for the full bundle ID, signing team, container ID set required to build it, and the `NSFileCoordinator`-based peer-file materialisation step that has to run before any read of a peer `ops-*.jsonl`.
 
 ## Opening a page from a user-typed ref
@@ -231,6 +239,31 @@ Plain pages do not, so a stray `[[@projeto]]` in a non-person page's backlinks d
 Every client that turns a tap on a ref / tag / picker entry into a page view should wrap this single helper.
 There is no client-side discrimination to maintain.
 The `open_or_create_by_name(name, kind)` variant stays for callers that already know they want a regular page (no date branch).
+
+## Deep links (`outl://`)
+
+External launchers open a client at a specific page or daily note through an `outl://` URL.
+The Raycast extension's "Enter → open in app" is the first consumer; links shared into the mobile app are the second.
+
+The scheme is tiny and identical on every platform:
+
+| URL | Opens |
+|---|---|
+| `outl://daily/today` | today's journal |
+| `outl://daily/2026-06-25` | the daily for that ISO date |
+| `outl://page/<slug>` | the page (slug may nest: `outl://page/ai-agent/learning`) |
+
+Parsing lives in **one** place: `outl_actions::parse_deep_link` returns a `DeepLinkTarget` (`Today` / `Daily(date)` / `Page(slug)`).
+Each client maps that target onto the same `open_*` command its UI already calls (`open_today_journal` / `open_journal_for` / `open_page_by_slug`) and focuses its window.
+The parser never touches a `Workspace` — it is pure string → enum — so the desktop and mobile handlers cannot drift on the contract the way two hand-rolled URL parsers would.
+
+A malformed URL (wrong scheme, unknown kind, bad date, path-traversal slug) returns `DeepLinkError`; the client logs it and no-ops.
+It must never crash the app or materialise a stray page.
+
+Registration is per-client transport, not shared logic:
+the desktop registers the scheme via `tauri-plugin-deep-link` (+ `tauri-plugin-single-instance` so the URL reaches an already-running instance on Linux/Windows);
+iOS registers the same scheme through the plugin's mobile config, which injects `CFBundleURLTypes` into the generated `Info.plist`.
+Universal Links (`https://outl.app/…`) are a later addition — they need an Associated Domains entitlement and a hosted `apple-app-site-association`, so the custom scheme ships first.
 
 ## Adding a new client
 

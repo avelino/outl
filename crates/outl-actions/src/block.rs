@@ -341,6 +341,24 @@ pub fn delete(
     move_to(workspace, hlc, node, NodeId::trash(), Fractional::first())
 }
 
+/// Move `node` to become the last child of `new_parent`.
+///
+/// The cross-page / arbitrary re-parent the plugin host needs (e.g. archive a
+/// block under another page). A move that would create a cycle is a
+/// deterministic no-op on the materialized tree, but the op still lands in the
+/// log (root invariant #4) — that is handled inside `apply`, not here.
+pub fn move_under(
+    workspace: &mut Workspace,
+    hlc: &HlcGenerator,
+    node: NodeId,
+    new_parent: NodeId,
+) -> Result<(), ActionError> {
+    ensure_in_tree(workspace, node)?;
+    ensure_in_tree(workspace, new_parent)?;
+    let pos = position_for_new_last_child(workspace, new_parent);
+    move_to(workspace, hlc, node, new_parent, pos)
+}
+
 /// Indent `node` so it becomes the last child of its previous sibling.
 pub fn indent(
     workspace: &mut Workspace,

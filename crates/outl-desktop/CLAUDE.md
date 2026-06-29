@@ -5,7 +5,7 @@ Solid + Tailwind frontend, Rust backend that **must stay thin** — every worksp
 
 ## Status
 
-**Phase 6 — feature-complete v0.**
+**Feature-complete v0.**
 Outline edit, journal nav, picker (Cmd+P), backlinks panel, `outl-exec` code blocks, cross-platform FS watcher + auto-reload, settings modal, and the `desktop.yml` CI workflow are all in.
 Signed bundles, Homebrew cask, and graph view ride incrementally on top.
 
@@ -54,7 +54,7 @@ crates/outl-desktop/
 ├── index.html
 ├── src/                       # frontend (Solid)
 │   ├── index.tsx              # mount
-│   ├── App.tsx                # WorkspacePicker / AppShell switch
+│   ├── App.tsx                # Onboarding / AppShell switch (first-run gate)
 │   ├── styles.css             # Tailwind v4 entry + theme tokens
 │   ├── setup.test.ts          # smoke (@outl/shared resolves)
 │   ├── components/
@@ -65,6 +65,9 @@ crates/outl-desktop/
 │   │   ├── BacklinksPanel.tsx # right pane
 │   │   ├── Picker.tsx         # Cmd+P quick switcher
 │   │   ├── SettingsModal.tsx  # Cmd+, settings
+│   │   ├── ChromeToggleBar.tsx# bottom-left cluster: sidebar / help toggles + SyncIndicator
+│   │   ├── SyncIndicator.tsx  # always-visible sync dot → opens Settings → Sync
+│   │   ├── Onboarding.tsx     # first-run flow (storage pick → optional pairing)
 │   │   └── WorkspacePicker.tsx
 │   └── lib/
 │       ├── api.ts             # desktop-only commands (workspace, settings, exec)
@@ -86,37 +89,63 @@ crates/outl-desktop/
         ├── state.rs           # AppState, PageView, WorkspaceSummary
         ├── helpers.rs         # parse_node_id, with_ws*, finish_in_page
         ├── workspace_open.rs  # open_workspace_at + spawn_workspace_opener
+        ├── plugin_service.rs  # PluginService + dedicated plugin thread (Boa is !Send)
+        ├── plugin_dto.rs      # wire shapes (PluginCommandDto / PluginKeybindingDto / ToolbarButtonDto / PluginRunDto) + From projections
         ├── fs_watcher.rs      # notify + debouncer → peer-ops-changed
         └── commands/
             ├── mod.rs
             ├── workspace.rs   # set_workspace, current_workspace, reload, settings, stats
             ├── page.rs        # list / search / open / journal nav / resolve_ref
             ├── block.rs       # create / edit / todo / move / collapsed / paste
-            └── exec.rs        # run_code_block — thin Tauri adapter over outl_actions::exec::run_code_block (shared with mobile)
+            ├── exec.rs        # run_code_block — thin Tauri adapter over outl_actions::exec::run_code_block (shared with mobile)
+            ├── peers.rs       # outl_peer_list / outl_peer_remove — read/edit <workspace>/.outl/peers.json via outl_sync_iroh::PeersStore
+            └── plugin.rs      # plugin_list / plugin_run / plugin_sync_hooks / plugin_keybindings / plugin_toolbar — thin shims over PluginService
 ```
+
+## First-run onboarding
+
+`components/Onboarding.tsx` is the first-run flow. `App.tsx` decides between it and `<AppShell />`:
+
+- **Returning user** — workspace already opens at boot (`currentWorkspace()` + `workspaceStats().ready`) → straight to `<AppShell />`. `refresh()` also silently sets the onboarded flag for them, so they never see the flow.
+- **First run** (or workspace folder removed) → `<Onboarding />`.
+
+The flow is two honest steps, no filler:
+
+1. **Storage** — reuses the existing `<WorkspacePicker />` (folder pick via `tauri-plugin-dialog` → `set_workspace`).
+   On pick it fires `onWorkspacePicked` (re-runs `App`'s gate) and advances.
+2. **Sync (optional)** — the shared `SYNC_STEP` copy (`@outl/shared/onboarding`) + the existing `<SyncPanel />` so the user can pair right there, or skip.
+   A single device is first-class.
+
+The "has the user onboarded" flag is a **per-install UI flag in `localStorage`** (`outl.onboarded`), **not** workspace state — it deliberately does NOT go through the op log (it must not converge across devices; each device onboards once).
+It is intentionally not in `settings.json` either, since `settings.last_workspace` is the only first-run signal the backend tracks.
+
+The onboarding **copy** lives in `@outl/shared/onboarding` (identical to mobile); only the chrome is desktop-local.
+Pairing is **not** reimplemented — `Onboarding` renders the real `<SyncPanel />`.
+
+### Sync status dot (always-visible)
+
+`<SyncIndicator />` sits in the bottom-left `<ChromeToggleBar />` cluster so the mesh state is glanceable without opening Settings (GUI users expect that, the way mobile shows a dot in its toolbar).
+Green = at least one iroh peer reachable, orange = none, dim = first probe still running; clicking opens Settings → Sync (the full `<SyncPanel />`).
+It derives reachability from `peerStatus()` → `peersOnline()` (`@outl/shared/peers`) — the **same source** the Sync panel and the mobile dot use, so the three never disagree.
+It re-probes on a slow interval and immediately on `peer-ops-changed` (a delivery proves the mesh is up).
+Do not add a second reachability path; `peersOnline` is the one owner.
 
 ## Blockquote chrome
 
-A block whose `text` starts with the CommonMark `"> "` marker renders with a left border (`border-l-2 border-(--color-outl-fg-dimmer)/50`),
-a very faint tint (`bg-(--color-outl-fg-dimmer)/[0.06]`),
-a right-rounded corner (`rounded-r-md`),
-and **full body colour** — refs, tags, bold, code keep their normal palette so the styled-token affordance isn't lost.
-The tint is intentionally ~6% alpha: enough to read as a soft box at a glance, low enough to not fight with surrounding outline rows.
+A block whose `text` starts with the CommonMark `"> "` marker renders with a left border, a ~6% tint (`bg-(--color-outl-fg-dimmer)/[0.06]`), and a right-rounded corner.
+Body keeps **full colour** — refs, tags, bold, code stay on their normal palette so the styled-token affordance isn't lost.
 
-The chrome wrapper sits one level above the bullet button — it envelops **both bullet *and* body** as one flex container.
-That order (`│ ☐ body`) matches the TUI exactly and reads as "this is a quoted task" instead of "a task whose body happens to be a quote".
-The fold chevron and indent guides stay *outside* the chrome so the gutter chrome doesn't end up boxed twice.
-When the block isn't quoted, the wrapper degrades to a plain `flex min-w-0 flex-1 items-start` container, so non-quoted rows render byte-identical to before.
+The chrome wrapper sits one level above the bullet button — it envelops **both bullet *and* body** as one flex container (`│ ☐ body`, matching the TUI).
+The fold chevron and indent guides stay *outside* the chrome so the gutter isn't boxed twice.
+A non-quoted block degrades the wrapper to a plain `flex min-w-0 flex-1 items-start` container, so those rows render byte-identical to before.
 
 TUI has no per-line background available in ratatui, so it stays with just the `│ ` bar — the tint is a desktop/mobile addition that costs nothing to omit on terminal.
 The detection uses `splitQuote` from `@outl/shared/markdown` (mirror of `outl_actions::quote::split_quote`);
 `stripQuoteFromTokens` drops the `> ` from the first `Plain` token before handing the list to `<MarkdownInline />` so the marker doesn't render twice.
 
-Composition: the marker stacks with TODO/DONE the same way the TUI does (`> TODO foo` → quote chrome + checkbox).
-Toggling the marker goes through the `toggleQuote(pageId, id)` wrapper in `@outl/shared/api/commands`,
-which calls the `toggle_quote` Tauri command (`src-tauri/src/commands/block.rs`),
-which delegates to `outl_actions::block::toggle_quote` — the same Rust function the mobile and TUI surfaces hit.
-**No string surgery on the TS side** — the prefix arithmetic owns the rule and stays in one place.
+Composition: the marker stacks with TODO/DONE like the TUI (`> TODO foo` → quote chrome + checkbox).
+Toggling routes `toggleQuote` (`@outl/shared/api/commands`) → `toggle_quote` command → `outl_actions::block::toggle_quote` (same Rust fn as mobile/TUI).
+**No string surgery on the TS side** — the prefix arithmetic stays in one place.
 
 ## Theme tokens
 
@@ -153,8 +182,8 @@ The Vite dev server runs on **port 1421** so it can coexist with `outl-mobile` (
 
 | Layer | Tool | What it covers |
 |-------|------|----------------|
-| Rust commands | `cargo test -p outl-desktop` | command shims, settings IO, fs_watcher (Phases 1+), surgical undo invalidation across a peer reload (`helpers::invalidate_changed_history` — only pages whose projection changed lose their stacks) |
-| Frontend logic | `bun --filter outl-desktop test` | scaffold smoke (today), components + helpers (Phases 1+) |
+| Rust commands | `cargo test -p outl-desktop` | command shims, settings IO, fs_watcher, surgical undo invalidation across a peer reload (`helpers::invalidate_changed_history` — only pages whose projection changed lose their stacks) |
+| Frontend logic | `bun --filter outl-desktop test` | scaffold smoke, components + helpers |
 
 Frontend suites today: `src/setup.test.ts` (scaffold smoke — `@outl/shared` alias resolves),
 `src/lib/chord-format.test.ts`,
@@ -188,9 +217,7 @@ The cluster floats over the main pane on an elevated, bordered surface (clear co
 | `Cmd/Ctrl+Shift+B` | Toggle backlinks panel |
 | `Cmd/Ctrl+,` | Open settings |
 
-> **Why `Cmd+J` for the journal and not `Cmd+T`?** `T` is universally "task" in outliners (TUI's `Ctrl+T`, Logseq's `Cmd+T`, every Markdown task list shortcut). We don't make the user re-learn that. `J` for **journal** is unambiguous and lines up with the `g j` chord the TUI uses.
-> **Why not `Cmd+B` / `Cmd+\`?** `Cmd+B` is **reserved for bold** in every popular markdown editor (Notion, Obsidian, Discord, Slack) — retraining users on a non-standard meaning is hostile. `Cmd+\` is **1Password's** global autofill chord on macOS; hijacking it breaks every user with 1Password installed.
-> **Why did `Cmd+X` stop running code blocks?** It shadowed the OS-universal **cut** inside every textarea (the dispatcher `preventDefault`s matched Global chords even in Insert mode). Clipboard muscle memory beats the e**x**ecute mnemonic in a text-editing app, so run-code moved to `Cmd+Shift+X` and plain `Cmd+X` now falls through to the webview's native cut. See issue #80.
+> **Chord rationale:** `Cmd+J` (not `Cmd+T`) is the journal because `T` is universally "task"; `Cmd+B` / `Cmd+\` are avoided (bold / 1Password autofill); run-code moved from `Cmd+X` to `Cmd+Shift+X` because the dispatcher `preventDefault`s Global chords even in Insert mode and `Cmd+X` shadowed OS cut (issue #80).
 
 ### Undo / redo (Normal mode — fire when no textarea is focused)
 
@@ -212,33 +239,18 @@ Pages the peer didn't touch keep their full undo depth.
 
 ### Inline markdown (Insert mode — fire when a textarea is focused)
 
-Wrap the current selection (or insert the delimiter pair around the caret) — mirrors the convention every popular markdown editor ships.
-
-| Chord | Action | Output |
-|---|---|---|
-| `Cmd/Ctrl+B` | Bold | `**text**` |
-| `Cmd/Ctrl+I` | Italic | `_text_` |
-| `Cmd/Ctrl+E` | Inline code | `` `text` `` |
-| `Cmd/Ctrl+Shift+X` | Strikethrough | `~~text~~` |
-| `Cmd/Ctrl+K` | Link | `[text](url)` — `url` is pre-selected |
-
+`Cmd/Ctrl+B`/`I`/`E`/`Shift+X`/`K` wrap the selection (or insert the delimiter pair around the caret) — bold / italic / inline code / strikethrough / link.
+The full chord + output table lives in [`docs/shortcuts.md`](../../docs/shortcuts.md).
 Implementation lives in `lib/markdown-wrap.ts`: each handler reads `document.activeElement`, splices the value, dispatches an `input` event so `<BlockRow />`'s Solid signal stays in sync, then repositions the caret / selection.
 
 ### Block-editor chords (inside a block's textarea)
 
-| Chord | Action |
-|---|---|
-| `Enter` | Insert a `\n` inside the current block (multi-line text) |
-| `Cmd/Ctrl+Shift+Enter` | Commit + create a sibling below + edit it |
-| `Cmd/Ctrl+T` / `Cmd/Ctrl+Enter` | Toggle TODO / DONE on this block |
-| `Cmd/Ctrl+X` | Native cut — falls through to the webview (no catalog binding matches inside a textarea) |
-| `Cmd/Ctrl+Z` | Falls through to the webview too, but native per-keystroke undo is still broken: the controlled `value={draft()}` binding resets the textarea's undo stack on every keystroke (tracked as follow-up in issue #80) |
-| `Tab` / `Shift-Tab` | Indent / outdent |
-| `Esc` / blur | Commit |
-| `Backspace` on empty | Delete the block |
-| `[[` / `((` | Auto-close pair (`@outl/shared/autocomplete`) |
-| `(` / `[` / `{` | Auto-pair with the matching closer, caret between (`autoPairBracket`, TUI parity); typing `)` / `]` / `}` over an identical closer steps past it instead of doubling |
-| `Backspace` inside an empty pair | Collapses the whole pair — `[[]]` / `(())` (4 chars) and `()` / `[]` / `{}` (2 chars) — via `autoDeletePair` |
+The user-facing chord table lives in [`docs/shortcuts.md`](../../docs/shortcuts.md).
+Load-bearing notes a contributor needs:
+
+- `Cmd/Ctrl+X` (cut) and `Cmd/Ctrl+Z` (undo) deliberately fall through to the webview — no catalog binding matches inside a textarea.
+  Native per-keystroke undo is still broken: the controlled `value={draft()}` binding resets the textarea's undo stack on every keystroke (issue #80).
+- Bracket auto-pairing (`[[`/`((` auto-close, `(`/`[`/`{` auto-pair with caret between, closer step-over, empty-pair collapse on `Backspace`) all live in `@outl/shared/autocomplete` (`autoPairBracket` / `autoDeletePair`, TUI parity).
 
 ### Vim parity (Normal + Visual)
 
@@ -263,32 +275,23 @@ This section captures only the **architectural decisions** a contributor needs t
   Document this in `docs/shortcuts.md` so users aren't surprised.
 
 - **Range ops walk bottom-up + tolerate id-already-gone.**
-  `DeleteRange` iterates `[hi → lo]` so children go before parents (the parent's move-to-trash would otherwise pull a still-targeted descendant out from under us).
-  NodeIds are stable across the CRDT (`deleteBlock` is `Move(node, TRASH)`, not a re-keying), so the id snapshot taken before the loop stays valid;
-  we only have to swallow individual failures (`safeCall` writes them to the status line) when a peer ate the same id concurrently or the range straddled a parent + descendants.
+  `DeleteRange` iterates `[hi → lo]` so children go before parents (a parent's move-to-trash would otherwise pull a still-targeted descendant out from under us).
+  NodeIds are stable (`deleteBlock` is `Move(node, TRASH)`), so the pre-loop id snapshot stays valid; `safeCall` swallows per-id failures (a peer ate the same id, or the range straddled parent + descendants).
 
 - **`UnfoldAll` / `FoldAll` walk via `flattenAll` / `flattenParents`, never `flattenVisible`.**
-  The whole point of `zR` is to expand subtrees currently hidden under a collapsed parent.
-  The visible-only walk would silently no-op on every descendant of a folded node, so this is a real bug if `applyCollapsedToAll` reaches for the wrong helper.
-  **`zM` (fold-all) uses `flattenParents`**: foldar leaf hoje é invisível,
-  mas `outl_actions::set_block_collapsed` **sempre** escreve `Op::SetCollapsed` no log (a CRDT precisa de cada flip pra convergir),
-  então adicionar children embaixo de uma "leaf que foi foldada" faz eles aparecerem colapsados — future-surprise real.
-  **`zR` (unfold-all) usa `flattenAll`**: descolapsar leaf não tem efeito futuro.
-  Mirror exato de `outl-tui`'s `collect_collapse_candidates` pra a contagem de ops bater entre os clients.
+  `zR` must expand subtrees hidden under a collapsed parent; a visible-only walk would no-op on every descendant of a folded node.
+  `zM` (fold-all) uses `flattenParents` because `set_block_collapsed` always writes `Op::SetCollapsed` (the CRDT needs every flip to converge), so folding a leaf would make future children appear collapsed.
+  `zR` (unfold-all) uses `flattenAll` (unfolding a leaf has no future effect).
+  Mirrors `outl-tui`'s `collect_collapse_candidates` so the op count matches across clients.
 
 - **`A` (`EnterInsertAtEnd`) routes through `appState.caretIntent`.**
-  The textarea is mounted by Solid's `<Show>` swap;
-  poking it via `queueMicrotask` + `document.querySelector` after flipping `editingBlockId` was racey (the DOM node wasn't guaranteed to exist by the next microtask).
-  The handler now sets `caretIntent: "end"` *before* `editingBlockId`;
-  `<BlockRow />`'s own `createEffect` reads the intent on mount, applies `setSelectionRange`, and clears the signal.
-  Same hook applies for any future caret-intent gestures (`B`/`b`-style "land at start of word", etc).
+  The handler sets `caretIntent: "end"` *before* `editingBlockId`; `<BlockRow />`'s `createEffect` reads it on mount, applies `setSelectionRange`, clears the signal.
+  (Poking the textarea via `queueMicrotask` after flipping `editingBlockId` was racey — the `<Show>`-swapped DOM node wasn't guaranteed to exist.)
+  Same hook for any future caret-intent gesture.
 
 - **Visual highlight uses a memoised `Set<id>` at the parent, not a per-row predicate.**
-  `<OutlineView />` builds `visualSet = createMemo(() => visualRangeSet(...))` once per outline/anchor/cursor/mode change and passes it down as a prop;
-  `<BlockRow />` answers `props.visualSet?.has(id) ?? false` in O(1).
-  The earlier shape called `isInVisualRange(id, anchor, cursor, outline)` per row, which rebuilt `flattenVisible(blocks)` from scratch each call — N rows × N DFS = O(N²) per Visual extension keystroke (visibly laggy from ~500 blocks on).
-  The predicate `isInVisualRange` still exists in `lib/outline-walk.ts` but only for the unit-test suite; **no render path should call it**.
-  Outside vim-visual mode, `visualSet` is `null` so every row short-circuits before touching the Set.
+  `<OutlineView />` builds `visualSet = createMemo(() => visualRangeSet(...))` once per change; `<BlockRow />` answers `props.visualSet?.has(id) ?? false` in O(1) (`null` outside vim-visual → short-circuit).
+  The old per-row `isInVisualRange` rebuilt `flattenVisible` each call (O(N²)/keystroke); it survives in `lib/outline-walk.ts` for unit tests only — **no render path calls it**.
 
 - **Char-cursor nudge is one shared handler.**
   All 10 char-cursor catalog entries (`x` `X` `D` `C` `s` `r` `~` `e` `f` `F`) point at `charCursorNudge`.
@@ -306,21 +309,19 @@ With a block selected and no textarea focused (the DOM fallback puts the dispatc
 `Enter` resolves to the shared `OpenRefUnderCursor` action — but the desktop handler **always enters Insert on the selected block**.
 The one exception: when the selection sits on a **backlink row** (read-only), `Enter` opens the source page and lands the cursor on the referencing block.
 
-Why the divergence from the TUI: the TUI's Normal mode has a character cursor, so "open the ref under the cursor" is well-defined (`ref_at_cursor`) and falls back to Insert when the cursor isn't on a ref.
-The desktop's Normal mode only has a selected block — an earlier handler approximated "under cursor" as "first `[[ref]]` in the block", which made every ref-carrying block impossible to edit via `Enter`.
-On the desktop, **following a ref is the click on the token** (`onRefClick` in `OutlineView`); `Enter` means edit.
+Why diverge from the TUI: the TUI has a char cursor so "open the ref under cursor" is well-defined.
+The desktop only has a selected block — approximating it as "first `[[ref]]` in the block" made ref-carrying blocks impossible to edit via `Enter`.
+On the desktop, **following a ref is the click on the token** (`onRefClick`); `Enter` means edit.
 
 ### `:shortcode:` emoji autocomplete
 
 While the caret sits inside an open `:shortcode` trigger, `BlockRow` shows a floating popup (`EmojiSuggestPopup`, anchored under the textarea — same pattern as `RefSuggestPopup`).
 It reuses `detectEmojiContext` / `applyEmojiSuggestion` from `@outl/shared/autocomplete` and the `searchEmojis` command (`outl_emoji_search` Tauri side, backed by `outl_md::emoji::search`).
 `↑`/`↓` move the highlight,
-`Enter`/`Tab` accept (inserting the canonical `:shortcode:` form into the buffer — the `.md` stores the shortcode literal, never the codepoint),
-`Esc` closes the popup (a second `Esc` then commits the block),
-and clicking a row picks it (via `onMouseDown` + `preventDefault`).
-The emoji popup takes precedence over the ref popup at the same caret;
-the two never co-exist because `detectEmojiContext` only triggers on word-initial `:[a-z]`.
-No keyboard shortcut lives in `outl-shortcuts` for this — it's pure trigger-detection inside the textarea.
+`Enter`/`Tab` accept (inserting the canonical `:shortcode:` form — the `.md` stores the literal, never the codepoint),
+`Esc` closes (a second `Esc` commits the block), clicking a row picks it (`onMouseDown` + `preventDefault`).
+The emoji popup beats the ref popup at the same caret (`detectEmojiContext` only triggers on word-initial `:[a-z]`).
+No `outl-shortcuts` binding — pure trigger-detection.
 
 ### `[[page]]` ref autocomplete
 
@@ -343,6 +344,92 @@ The `[[ref]]` / `#tag` click handlers are unchanged (they navigate the workspace
 The opener call lives in the shared wrapper — not a custom Tauri command — so mobile can opt in later by registering the same plugin and passing `onLinkClick`.
 Backlink rows stay inert (the whole row is already a navigate-to-source button; nesting a second click target would conflict).
 
+## Plugins
+
+JS plugins (`outl_plugins::PluginHost`) run on the desktop, but the host embeds a Boa `Context` that is **`!Send`**, so it can never live in the `Send + Sync` `AppState`.
+The host therefore runs on a **dedicated plugin thread** (`src-tauri/src/plugin_service.rs`); `AppState` holds only a `PluginService` (a `Send + Sync` clone of a `std::sync::mpsc::Sender<PluginRequest>`).
+
+Design:
+
+- `PluginService::spawn(workspace, storage_root, hlc)` (called once in `lib.rs::setup`, after `open_today`/opener wiring) starts the thread.
+  It is handed **clones of the same `Arc<Mutex<Option<Workspace>>>` and `Arc<Mutex<Option<PathBuf>>>` every Tauri command locks**, plus the per-device `HlcGenerator`.
+  The `Workspace` is `Send`; the Boa `Context` never crosses a thread boundary.
+- The thread owns the `PluginHost`.
+  It loads plugins from `<root>/.outl/plugins/` lazily on the **first request after the workspace opens** (`ensure_loaded`), then `mark_synced` so pre-existing ops don't fire `onOp` hooks at boot.
+  A workspace **swap** (different `storage_root`) rebuilds the host against the new root.
+- Each request (`ListCommands` / `RunCommand` / `SyncHooks`) carries a one-shot `std::sync::mpsc::Sender` reply channel.
+  The Tauri command sends the request, then **blocks on `recv()` with the workspace `Mutex` released** (never held across the reply) — the plugin thread is the one that locks the workspace to run the host.
+  No `.await` ever holds the lock.
+- After a plugin mutation (`run.applied > 0`), the plugin thread re-projects **every** page's `.md` via `outl_actions::apply_all_pages_md` before replying.
+  A plugin can move blocks to any page — same rationale as the TUI's `reproject_after_plugin`.
+
+Capabilities honored: `slash-command` + `op-hook` + `ui-render` + `keybinding` + `toolbar-button`.
+The host filters `keybinding` / `toolbar-button` by declared capability **before** `keybindings("desktop")` / `toolbar_buttons("desktop")` return anything,
+so both must be in `client_capabilities()` or the desktop sees an empty list.
+
+Tauri commands (`commands/plugin.rs`):
+
+| Command | Returns | Behaviour |
+|---|---|---|
+| `plugin_list` | `Vec<PluginCommandDto>` | Every contributed command (best-effort; empty until plugins load) |
+| `plugin_run(plugin_id, command_id, page_id?)` | `PluginRunReply` (`applied`, `notifications`, `errors`, `view?`, `views`) | Runs the command on the plugin thread; `view` is the refreshed `PageView` of the on-screen page, `views` are emitted `ui-render` HTML overlays |
+| `plugin_sync_hooks(page_id?)` | `PluginSyncHooksReply` (`view?`, `views`) | Fires the `onOp` sweep; `view` is a refreshed `PageView` **only** when a hook mutated the workspace, `views` are emitted `ui-render` overlays (present even on the no-mutation path) |
+| `plugin_keybindings` | `Vec<PluginKeybindingDto>` (`chord`, `mode`, `plugin_id`, `command_id`, `description`) | Plugin-contributed desktop chords (best-effort; empty until plugins load) |
+| `plugin_toolbar` | `Vec<ToolbarButtonDto>` (`plugin_id`, `command_id`, `icon`, `title?`) | Plugin-contributed desktop chrome buttons (best-effort; empty until plugins load) |
+| `plugin_transformers` | `Vec<TransformerDto>` (`plugin_id`, `lang`, `kind`) | Content transformers a plugin declared for a code-fence language (best-effort; empty until plugins load) |
+| `plugin_transform(plugin_id, lang, input)` | `Option<TransformResultDto>` (`kind`, `content`) | Runs the content transformer for `lang` against a fence body. **Read-only** — never mutates the workspace, no re-projection. `None` when the transformer declined or no plugin owns `lang` |
+
+### `keybinding` + `toolbar-button` contributions
+
+`lib/shortcuts.ts` loads `plugin_keybindings()` per `installShortcuts` (re-fetched on workspace swap, **not** module-cached) and folds the chords into the `keydown` dispatcher as a **Global overlay**.
+The DTO's `chord` / `mode` serialize identically to the `outl-shortcuts` catalog, so the dispatcher reuses its `Chord` / `seqEq` machinery unchanged.
+**Native always wins:** a plugin chord fires only after the native catalog matched nothing (match *and* prefix) and no native binding owns that chord in *any* mode (`nativeOwnsChord`) — a plugin can't shadow `Cmd+B` / `Cmd+P`.
+`components/ChromeToggleBar.tsx` loads `plugin_toolbar()` on mount and renders one momentary button per entry in the native cluster (glyph = `icon`, tooltip = `title`, click = `plugin_run`).
+Both paths run a command like the palette does: status-line output, re-render from `reply.view`, `playPluginViews(reply.views)`.
+
+Op-hooks fire `pluginSyncHooks` at **two post-mutation points**: `OutlineView`'s `onCommit` (after an edit) and the `ToggleTodo` handler (`Cmd+T`).
+`sync_hooks` dispatches **every** op since the host's last sweep, so one call also catches up structural ops (indent / move / delete) — mirrors the TUI's once-per-tick sweep.
+Best-effort: a host with no op-hook plugins is a cheap no-op.
+
+### `ui-render` overlays (sandboxed iframe)
+
+A `ui-render` plugin emits HTML/JS via `ctx.ui.render(html)`.
+The core gates these on the capability and surfaces them on `PluginRun.views`, propagated as `PluginRunReply.views` / `PluginSyncHooksReply.views`.
+The desktop plays each as an **ephemeral, fully sandboxed `<iframe>` overlay**:
+
+- `lib/plugin-views.ts` owns a Solid signal queue (`playPluginViews` enqueues, `dismissPluginView` pops).
+- `components/PluginEffectLayer.tsx` (mounted once in `AppShell`) renders one iframe per entry: `position: fixed; inset: 0` fullscreen, transparent, `pointer-events: none` (click-through), `z-index: 9999`, auto-removed after 6s.
+  Multiple views stack.
+- **Security (load-bearing — never weaken):** the iframe is `sandbox="allow-scripts"` **without** `allow-same-origin`.
+  The plugin JS runs in a null origin — no app DOM, cookies, `localStorage`, or credentialed fetch.
+  HTML enters via `srcdoc`, never `innerHTML` on the host document.
+  This is untrusted third-party code; the isolation is the whole point.
+
+Played from three call sites: `PluginPalette` (after `pluginRun`), `OutlineView.onCommit`, and the `ToggleTodo` handler (after `pluginSyncHooks`).
+The confetti example (`examples/confetti`, `op-hook` + `ui-render`) rides this: mark a block DONE → op → `sync_hooks` → its `onOp` emits the confetti HTML → `views` → overlay.
+
+Frontend pieces: `src/lib/api.ts` (`pluginList` / `pluginRun` / `pluginSyncHooks` + `PluginRunReply` / `PluginSyncHooksReply`); `lib/plugin-views.ts` + `components/PluginEffectLayer.tsx` (overlay queue).
+The `⧉` button in `ChromeToggleBar` toggles `appState.pluginsOpen`; `components/PluginPalette.tsx` lists + runs commands.
+
+### Content transformers (inline code-fence rendering)
+
+A plugin can declare a transformer for a code-fence language (`mermaid`, …); matching fences render through it in `CodeFenceView` (`components/BlockRow.tsx`).
+`lib/transformers.ts` keeps `BlockRow` a renderer.
+It owns a `lang → {pluginId, kind}` registry (Solid signal, loaded once per workspace open via `loadTransformers` — `AppShell.onMount` + re-run on `workspace-ready`, since plugins load lazily and a boot fetch can be empty).
+It also owns a `(blockId, body)` result cache (`transformCached`) so the plugin JS re-runs only when the body changes.
+`kind: "text"` renders as plain whitespace-preserving text (no client-side markdown parse — a transformer wanting formatting emits `rich`).
+`kind: "rich"` renders the HTML in an **inline** `<iframe>` (`RichFenceFrame`), sized via an optional `parent.postMessage({outlHeight})` handshake.
+**Security (never weaken):** that iframe is `sandbox="allow-scripts"` **without** `allow-same-origin`, HTML via `srcdoc` — same isolation as the `ui-render` overlay, only inline + persistent instead of fullscreen + ephemeral.
+`content-transformer:text` / `:rich` are in `client_capabilities()` (the host gates transformers by capability before listing them).
+
+## Logging
+
+`run()` in `src-tauri/src/lib.rs` installs a `tracing_subscriber` fmt subscriber writing to **stderr** as its first step (before rustls / Tauri setup).
+The `EnvFilter` defaults to `info,outl_sync_iroh=debug,iroh=info` and honors `RUST_LOG`.
+Running `cargo tauri dev` from a terminal then shows the iroh P2P transport's `info!`/`warn!`/`debug!` lines (endpoint bound + node id, each connect attempt's target + outcome, "delta sync received N ops") so device↔device sync is debuggable.
+Init uses `.try_init()` so a double-init can't panic.
+See [`outl-sync-iroh/CLAUDE.md`](../outl-sync-iroh/CLAUDE.md) for what the transport logs.
+
 ## Settings
 
 Stored at `<app_config_dir>/settings.json`:
@@ -358,12 +445,69 @@ Schema (`crates/outl-desktop/src-tauri/src/settings.rs::Settings`):
   "last_workspace": "/Users/me/iCloud/outl",
   "vim_mode": false,
   "theme": "auto",       // "light" | "dark" | "auto"
-  "font_size": 15
+  "font_size": 15,
+  "sync_transport": "iroh"  // "iroh" (P2P, default) | "file" (iCloud/fs)
 }
 ```
 
+The Sync transport select in `SettingsModal` writes `sync_transport`.
+`settings.rs` maps it to/from `[sync] transport` and preserves `relay_url` on save; takes effect on next launch.
+
 The actor id (one per device) lives next to it as `actor` — a plain ULID.
 Switching workspaces does not rotate it.
+
+## Peers
+
+Paired devices live in `<workspace>/.outl/peers.json` (per-graph), owned by `outl_sync_iroh::PeersStore` (see [`outl-sync-iroh/CLAUDE.md`](../outl-sync-iroh/CLAUDE.md)).
+The desktop exposes two thin Tauri commands in `commands/peers.rs` — no business logic, they just load the store and project / mutate it:
+
+| Command | Returns | Behaviour |
+|---|---|---|
+| `outl_peer_list` | `Vec<PeerDto>` (`node_id`, `alias`, `added_at`) | Loads `peers.json` (or default if absent) and lists every paired peer |
+| `outl_peer_remove(id)` | `bool` | Removes peers whose `node_id` starts with `id` (prefix match); `true` if any were removed |
+
+The path is `<workspace>/.outl/peers.json` (resolved from `AppState::storage_root` via `outl_sync_iroh::workspace_peers_path`) — the same per-graph location the CLI and the iroh transport read, not `~/.outl/` or `<app_config_dir>`.
+Each command runs `migrate_global_peers_if_absent` first, so a user with a legacy global list keeps their peers on first open.
+Only `identity.key` stays global (`~/.outl/`).
+
+`commands/peers.rs` also exposes `outl_sync_now()` (reads `state.iroh_transport`, the `Arc<dyn SyncTransport>`, and calls the trait's `sync_now()`) — the force-sync trigger behind the Sync panel's Refresh.
+
+### Sync panel dot + refresh (iroh-driven)
+
+`components/SyncPanel.tsx` (the "Sync" section of `SettingsModal`) is the only place the desktop surfaces sync state; there is **no** always-on chrome dot (`StatusBar` / `ChromeToggleBar` carry none).
+The panel header shows a small status dot derived from the shared `peersOnline(statuses())` helper (`@outl/shared/peers`) — green when at least one iroh peer is reachable, orange when none are (no peers paired, or all unreachable).
+The **Refresh** button calls `forceSync()`: `syncNow()` (force a P2P pull) → `reloadWorkspace()` (re-render) → `refresh()` (re-read the device list + health for the dots).
+`syncNow` / `reloadWorkspace` failures land on `appState.lastError` but never block the status read.
+`syncNow()` + `peersOnline()` live in `@outl/shared` so desktop and mobile derive the dot + drive the refresh identically — see [`outl-sync-iroh/CLAUDE.md`](../outl-sync-iroh/CLAUDE.md) → "Force-sync trigger (`sync_now`)".
+
+## Deep links (`outl://`)
+
+The desktop registers the `outl://` scheme so external launchers (the Raycast extension, shared links) jump straight to a page or daily note (issue #98).
+The scheme contract and the shared parser live in `outl-actions` — see [`docs/clients.md` → Deep links](../../docs/clients.md#deep-links-outl) — so the desktop and mobile handlers can't drift.
+
+Wiring (all in `src-tauri/src/lib.rs`):
+
+- **Plugins.**
+  `tauri-plugin-single-instance` is registered **first**.
+  Its `deep-link` feature forwards an `outl://` URL opened while the app runs to the existing instance on Linux/Windows; the callback just focuses the `main` window.
+  `tauri-plugin-deep-link` follows.
+  The scheme is declared in `tauri.conf.json` under `plugins.deep-link.desktop.schemes` and granted via `deep-link:default` in `capabilities/default.json`.
+- **Warm path** (`dispatch_deep_link`, fired by `on_open_url`) parses the URL with `outl_actions::parse_deep_link` — the one owner, this crate adds no parsing.
+  It then **emits** `deep-link://navigate` with one of `{kind:"today"}` / `{kind:"daily",date}` / `{kind:"page",slug}` and focuses the window.
+  A malformed URL is logged at `warn` and ignored — never a crash, never a stray page.
+- **Cold path** (a URL that *launched* the app) can't emit — the frontend listener isn't mounted yet.
+  So `setup()` buffers the parsed payload in a managed `PendingDeepLink(Mutex<Option<Value>>)` instead, and the `take_pending_deep_link` command drains it once on mount.
+  Only the launch URL populates the buffer; the warm path never does, so a stale target can't replay on the next plain launch.
+- **Frontend.**
+  `AppShell` listens via `onDeepLinkNavigate` (`lib/events.ts`) for the warm path.
+  On mount it calls `takePendingDeepLink()` (`lib/api.ts`) for the cold path — if a target is buffered it navigates there instead of loading today's journal (which would otherwise race and overwrite it).
+  Both map onto the same `openTodayJournal` / `openJournalFor` / `openPageBySlug` commands the picker already calls, then `applyView`.
+  The backend, not the frontend, owns parsing + window focus.
+
+**Testing on macOS needs a bundled, installed app.**
+macOS registers URL schemes only via LaunchServices from the bundle's `CFBundleURLTypes` (written by `tauri-plugin-deep-link` at `cargo tauri build`), so `cargo tauri dev` does **not** register `outl://`.
+To test: `cargo tauri build`, copy the `.app` into `/Applications`, open it once so LaunchServices indexes it, then `open "outl://page/<slug>"`.
+Linux/Windows register at runtime (`register_all()` in `setup`), so dev mode works there.
 
 ## When you're done
 

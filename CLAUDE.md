@@ -29,7 +29,7 @@ Violating any one breaks user trust irreversibly.
 2. **Markdown stays 100% clean.**
    No `id::`, no UUID inline, no HTML comments, nothing.
    IDs live ONLY in the `.outl` sidecar (JSON file next to the `.md`, e.g. `pages/foo.outl`).
-   The sidecar is **not** a dotfile, because iCloud Documents drops dotted paths during cross-device sync and silently breaks multi-device workspaces.
+   The sidecar is **not** a dotfile, because iCloud Documents (when used as the file transport) drops dotted paths during cross-device sync and silently breaks multi-device workspaces.
    Same rule applies to `ops/`.
 
 3. **CRDT follows Kleppmann 2022 literally.**
@@ -49,7 +49,7 @@ Violating any one breaks user trust irreversibly.
 
 7. **Any state that must converge between devices goes through the op log.**
    If two users (or one user on two devices) can disagree about a value and you want them to reconcile, the state belongs in an `Op`, *never* in a shared file with last-write-wins semantics.
-   The op log gives each actor its own `ops-<actor>.jsonl`, lets iCloud / Syncthing / shared FS sync per-file (no merge conflicts), and replays through the CRDT with HLC ordering for deterministic convergence.
+   The op log gives each actor its own `ops-<actor>.jsonl`, lets iroh / iCloud / Syncthing / shared FS sync per-file (no merge conflicts), and replays through the CRDT with HLC ordering for deterministic convergence.
    Writing the state into the sidecar (or any single shared file) bypasses all of that and loses concurrent writes silently.
    **Default position: model it as an Op.**
    `Op::SetCollapsed` for the fold flag is the canonical example.
@@ -151,12 +151,12 @@ Don't unilaterally pivot.
 | `uhlc` for time | HLC with actor tiebreak is total order without coordination |
 | Yrs for block text | Battle-tested CRDT for strings, lets us focus on the tree |
 | `comrak` for markdown | CommonMark-compliant, fast, customizable |
-| `iroh` for P2P (phase 2) | QUIC + hole punching, no central server |
-| iCloud Drive as v0 transport (mobile + TUI today) | Zero infra, ships now, replaceable behind the same `outl-actions::SyncEngine` when iroh lands |
+| `iroh` as the default sync transport | QUIC + hole punching + relay, no central server for data; iroh is `[sync] transport` default |
+| `file` transport as the explicit opt-out | `transport = "file"` for iCloud Drive / shared FS users; folder is user-chosen — iCloud is one option, not a dependency |
 | Tauri 2 for mobile (replaces earlier uniffi plan) | Single Rust surface across TUI + mobile via `outl-actions`, Solid + Tailwind frontend, ObjC bridge only for iCloud watcher |
 | Tauri for desktop (shipping today) | Rust core reuse, smaller than Electron. macOS / Linux / Windows; Solid frontend shares `@outl/shared` with mobile |
 | `outl-shortcuts` is the single (chord → action) catalog | Two parallel implementations is the bug we paid to remove (TUI used to define bindings in `input/`, desktop wired its own `KeyboardEvent` handlers — `Cmd+P` and `Ctrl+P` drifted within a sprint). Adding a key on any client without going through `defaults.rs` puts that drift back. See `outl-shortcuts/CLAUDE.md` |
-| One `ops-<actor>.jsonl` per device, never shared | iCloud (and any file transport) is last-write-wins per file; per-actor files turn that into a non-issue |
+| One `ops-<actor>.jsonl` per device, never shared | Any file transport (iCloud, Syncthing, shared FS) is last-write-wins per file; per-actor files turn that into a non-issue; iroh ships ops directly |
 | MIT license | Simple, widely understood, no patent grant baggage |
 | `outl.app` domain owned | Use for docs/landing later |
 | Repo at `github.com/avelino/outl` | Personal profile, not org (small enough team) |
@@ -166,12 +166,11 @@ Don't unilaterally pivot.
 
 Don't add code for these unless explicitly asked:
 
-- P2P sync transport (`iroh`) — iCloud is the v0 transport; iroh replaces it later, behind the same `SyncEngine` interface.
 - Query DSL (`{{query: ...}}`)
 - Plugin system (`rhai`)
 - `ChronDbStorage` backend (issue #1, tracked publicly)
 - Android mobile build (only iOS today; Android needs an `NSMetadataQuery` equivalent)
-- Per-page op log shards ([`docs/sync.md` Part 2 — Phase A](docs/sync.md#phase-a--per-page-op-log-shards-for-10k-pages); only land it when the single-jsonl-per-device layout hits the 10k-page wall)
+- Per-page op log shards ([`docs/sync.md` Part 2 — Per-page op log shards](docs/sync.md#per-page-op-log-shards-for-10k-pages); only land it when the single-jsonl-per-device layout hits the 10k-page wall)
 - Character cursor inside the selected block in desktop Normal mode.
   TUI-only today.
   The desktop's vim mode has only a selected block id, so the char-level vim ops `x`/`X`/`D`/`C`/`s`/`r`/`f`/`F`/`~`/`e` surface a status-line nudge instead of firing.

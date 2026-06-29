@@ -1,6 +1,6 @@
 //! Translate a new outline AST + match result into a minimal `Op` sequence.
 //!
-//! The diff is intentionally simple in phase 1: produce one `Create` per
+//! The diff is intentionally simple for now: produce one `Create` per
 //! new block (matching pass yielded `MatchLevel::Low`), one `Move` per
 //! preserved block whose parent or position differs from the current
 //! tree, and one `Move` to `TRASH_ROOT` per orphan id.
