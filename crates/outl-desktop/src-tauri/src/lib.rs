@@ -181,17 +181,17 @@ pub fn run() {
             let settings = settings::load(&app_config_dir);
             let last_workspace = settings.last_workspace.clone();
 
-            // The flat desktop `Settings` deliberately drops the
-            // `[sync]` section (see `settings.rs`), so read the
-            // transport choice straight from `outl_config` here. Default
-            // (`File`) leaves iroh off and the `notify` watcher handles
-            // detection on its own.
-            // Resolve the journal/clock timezone once, before any
-            // workspace opens and renders today's journal (#107). No
-            // `[calendar] timezone` → OS local, as before.
-            outl_actions::clock::init(outl_config::load().calendar.timezone.as_deref());
-
-            let sync_transport_kind = outl_config::load().sync.transport;
+            // The flat desktop `Settings` drops `[sync]` (see `settings.rs`)
+            // and doesn't carry `[calendar]`, so read both straight from
+            // `outl_config` here, in one load. Default transport (`File`)
+            // leaves iroh off and the `notify` watcher handles detection on
+            // its own.
+            let global_cfg = outl_config::load();
+            // Resolve the journal/clock timezone once, before any workspace
+            // opens and renders today's journal (#107). No `[calendar]
+            // timezone` → OS local, as before.
+            outl_actions::clock::init(global_cfg.calendar.timezone.as_deref());
+            let sync_transport_kind = global_cfg.sync.transport;
 
             let workspace: Arc<Mutex<Option<Workspace>>> = Arc::new(Mutex::new(None));
             let storage_root: Arc<Mutex<Option<PathBuf>>> = Arc::new(Mutex::new(None));
