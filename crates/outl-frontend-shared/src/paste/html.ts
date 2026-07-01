@@ -39,6 +39,11 @@ import TurndownService from "turndown";
  * inline weights (`700`) into `**` while treating `normal` / `400` (the
  * Docs wrapper) as plain.
  */
+/** The element's inline `font-weight` (`""` when unset or not an element). */
+function inlineFontWeight(node: unknown): string {
+  return (node as HTMLElement).style?.fontWeight ?? "";
+}
+
 function isBoldWeight(weight: string): boolean {
   const w = weight.toLowerCase().trim();
   if (w === "bold" || w === "bolder") return true;
@@ -66,18 +71,19 @@ function buildService(): TurndownService {
   // (Slack, GitHub) still fall through to Turndown's built-in strong rule.
   service.addRule("inlineFontWeight", {
     filter: (node) => {
-      const weight = (node as unknown as HTMLElement).style?.fontWeight;
+      const weight = inlineFontWeight(node);
       if (!weight) return false;
       const tag = node.nodeName.toLowerCase();
       // A weighted span, or a <b>/<strong> whose inline weight overrides
       // the tag's implicit bold (the Docs wrapper we must NOT bold).
       return isBoldWeight(weight) || tag === "b" || tag === "strong";
     },
-    replacement: (content, node) => {
-      if (!content) return "";
-      const weight = (node as unknown as HTMLElement).style.fontWeight;
-      return isBoldWeight(weight) ? `**${content}**` : content;
-    },
+    replacement: (content, node) =>
+      !content
+        ? ""
+        : isBoldWeight(inlineFontWeight(node))
+          ? `**${content}**`
+          : content,
   });
 
   // Slack / GitHub strikethrough — Turndown ships no default rule.

@@ -95,16 +95,12 @@ impl App {
     /// The block whose rendered rows cover `visual_line`: the entry with
     /// the greatest start line not past it. `block_starts` is ascending
     /// by start line (DFS order, every block emits at least its bullet
-    /// row), so the answer is the last `start <= visual_line`.
+    /// row), so binary-search for the last `start <= visual_line`. A drag
+    /// fires an event per pixel-row, so this stays O(log n) per event.
     fn block_at_visual_line(&self, visual_line: usize) -> Option<usize> {
-        let mut hit = None;
-        for &(start, flat) in &self.block_starts {
-            if start <= visual_line {
-                hit = Some(flat);
-            } else {
-                break;
-            }
-        }
-        hit
+        let idx = self
+            .block_starts
+            .partition_point(|&(start, _)| start <= visual_line);
+        idx.checked_sub(1).map(|i| self.block_starts[i].1)
     }
 }

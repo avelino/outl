@@ -98,7 +98,7 @@ export function nextVisibleId(
   return ids[Math.min(idx + 1, ids.length - 1)];
 }
 
-/** Previous visible id; clamps at the top. */
+/** Previous visible id; returns `null` at the top (no clamp — see below). */
 export function previousVisibleId(
   current: string | null,
   blocks: BlockNode[],

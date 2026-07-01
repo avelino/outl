@@ -177,17 +177,7 @@ pub fn paste_markdown(
                     children: Vec::new(),
                 })
                 .collect();
-            return match anchor {
-                PasteAnchor::AsLastChildOf(parent) => {
-                    anchors::paste_as_children(workspace, hlc, parent, &blocks)
-                }
-                PasteAnchor::AfterBlock(after) => {
-                    anchors::paste_after(workspace, hlc, after, &blocks)
-                }
-                PasteAnchor::AtCaret { block, caret } => {
-                    anchors::paste_at_caret(workspace, hlc, block, caret, &blocks)
-                }
-            };
+            return anchors::paste_nodes(workspace, hlc, anchor, &blocks);
         }
         return anchors::paste_plain_text(workspace, hlc, anchor, raw);
     }
@@ -203,17 +193,7 @@ pub fn paste_markdown(
         return anchors::paste_plain_text(workspace, hlc, anchor, raw);
     }
 
-    match anchor {
-        PasteAnchor::AsLastChildOf(parent) => {
-            anchors::paste_as_children(workspace, hlc, parent, &parsed.blocks)
-        }
-        PasteAnchor::AfterBlock(after) => {
-            anchors::paste_after(workspace, hlc, after, &parsed.blocks)
-        }
-        PasteAnchor::AtCaret { block, caret } => {
-            anchors::paste_at_caret(workspace, hlc, block, caret, &parsed.blocks)
-        }
-    }
+    anchors::paste_nodes(workspace, hlc, anchor, &parsed.blocks)
 }
 
 /// Paste `raw` as **plain text** — no outline detection, no external

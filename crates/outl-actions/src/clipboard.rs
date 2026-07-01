@@ -19,13 +19,11 @@
 use std::collections::HashSet;
 
 use outl_core::id::NodeId;
-use outl_core::property::PropValue;
 use outl_core::workspace::Workspace;
 use outl_md::parse::{OutlineNode, ParsedPage};
 use outl_md::render::render;
 
-use crate::page::{KIND_KEY, SLUG_KEY};
-use crate::tree::children_of;
+use crate::tree::{children_of, text_properties_of};
 
 /// Serialize `roots` — and their full subtrees — to clean outl markdown
 /// suitable for the OS clipboard.
@@ -40,11 +38,11 @@ use crate::tree::children_of;
 /// document order (a single yank, a visual range top-to-bottom). An empty
 /// slice yields an empty string.
 ///
-/// Only textual properties survive: `PageRef` / `Tag` / `List` shapes
-/// have no `.md` render syntax and are dropped silently, matching
-/// [`crate::journal::render_page_md`]. The internal `page-slug` /
-/// `page-kind` book-keeping keys are skipped too, so copying a page node
-/// never leaks them.
+/// Only textual block properties survive: `PageRef` / `Tag` / `List`
+/// shapes are dropped silently (`tree::text_properties_of` is the shared
+/// owner of this rule). The internal `page-slug` / `page-kind`
+/// book-keeping keys are skipped too, so copying a page node never leaks
+/// them.
 pub fn copy_markdown(workspace: &Workspace, roots: &[NodeId]) -> String {
     // Drop any id whose ancestor is also in the selection: a parent
     // already carries that descendant inside its subtree, so keeping the
@@ -99,20 +97,9 @@ pub fn copy_markdown_nodes(nodes: &[OutlineNode]) -> String {
 /// the page render carries only page-level props), this keeps per-block
 /// properties so the copied markdown round-trips back to the same tree.
 fn build_node(workspace: &Workspace, id: NodeId) -> OutlineNode {
-    let mut properties: Vec<(String, String)> = workspace
-        .tree()
-        .properties_of(id)
-        .filter(|(k, _)| *k != SLUG_KEY && *k != KIND_KEY)
-        .filter_map(|(k, v)| match v {
-            PropValue::Text(s) => Some((k.to_string(), s.clone())),
-            _ => None,
-        })
-        .collect();
-    properties.sort_by(|a, b| a.0.cmp(&b.0));
-
     OutlineNode {
         text: workspace.block_text(id).unwrap_or_default(),
-        properties,
+        properties: text_properties_of(workspace, id),
         children: children_of(workspace, id)
             .into_iter()
             .map(|(child, _)| build_node(workspace, child))

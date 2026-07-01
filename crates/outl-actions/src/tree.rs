@@ -2,7 +2,33 @@
 
 use outl_core::fractional::Fractional;
 use outl_core::id::NodeId;
+use outl_core::property::PropValue;
 use outl_core::workspace::Workspace;
+
+use crate::page::{KIND_KEY, SLUG_KEY};
+
+/// Textual properties of `node`, minus the internal `page-slug` /
+/// `page-kind` book-keeping keys, alphabetically sorted by key so the
+/// output is stable across runs.
+///
+/// Only `PropValue::Text` survives — `PageRef` / `Tag` / `List` shapes
+/// have no `.md` render syntax and are dropped silently. The single
+/// owner of the "which block properties round-trip through the `.md`
+/// dialect" rule; `clipboard::build_node` and any other serializer share
+/// it instead of re-deriving the filter + sort.
+pub(crate) fn text_properties_of(workspace: &Workspace, node: NodeId) -> Vec<(String, String)> {
+    let mut properties: Vec<(String, String)> = workspace
+        .tree()
+        .properties_of(node)
+        .filter(|(k, _)| *k != SLUG_KEY && *k != KIND_KEY)
+        .filter_map(|(k, v)| match v {
+            PropValue::Text(s) => Some((k.to_string(), s.clone())),
+            _ => None,
+        })
+        .collect();
+    properties.sort_by(|a, b| a.0.cmp(&b.0));
+    properties
+}
 
 /// Children of `parent` sorted ascending by their fractional position.
 pub fn children_of(workspace: &Workspace, parent: NodeId) -> Vec<(NodeId, Fractional)> {

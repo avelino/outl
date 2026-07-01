@@ -18,6 +18,25 @@ use crate::block::{
 use crate::error::ActionError;
 use crate::page::set_property;
 
+/// Graft a set of parsed nodes at `anchor`, picking the anchor-specific
+/// operation. Both the outline path and the plain-multi-paragraph path in
+/// [`super::paste_markdown`] funnel through here so the anchor `match`
+/// lives once.
+pub(super) fn paste_nodes(
+    workspace: &mut Workspace,
+    hlc: &HlcGenerator,
+    anchor: PasteAnchor,
+    blocks: &[ParsedNode],
+) -> Result<PasteOutcome, ActionError> {
+    match anchor {
+        PasteAnchor::AsLastChildOf(parent) => paste_as_children(workspace, hlc, parent, blocks),
+        PasteAnchor::AfterBlock(after) => paste_after(workspace, hlc, after, blocks),
+        PasteAnchor::AtCaret { block, caret } => {
+            paste_at_caret(workspace, hlc, block, caret, blocks)
+        }
+    }
+}
+
 /// Append every parsed block as a new last child of `parent`.
 pub(super) fn paste_as_children(
     workspace: &mut Workspace,
