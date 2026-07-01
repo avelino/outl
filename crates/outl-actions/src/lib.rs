@@ -69,9 +69,9 @@ pub mod tree;
 
 pub use backlinks::{backlinks_for_page, backlinks_for_target, extract_refs, Backlink};
 pub use block::{
-    append_block, append_forest, append_tree, create_after, create_under, delete, edit_text,
-    indent, move_down, move_up, outdent, toggle_quote, toggle_todo, BlockTreeOutcome,
-    BlockTreeSpec,
+    append_block, append_forest, append_tree, create_after, create_before, create_under, delete,
+    edit_text, indent, move_after, move_down, move_under, move_up, outdent, toggle_quote,
+    toggle_todo, BlockTreeOutcome, BlockTreeSpec,
 };
 pub use collapsed::{set_block_collapsed, toggle_block_collapsed};
 pub use deeplink::{parse_deep_link, DeepLinkError, DeepLinkTarget, DEEP_LINK_SCHEME};
@@ -80,7 +80,7 @@ pub use exec::{run_code_block, ExecOutputDto, RunCodeBlockOutcome};
 pub use history::{restore_page_md, HistoryStacks, DEFAULT_HISTORY_CAP};
 pub use journal::{
     apply_all_pages_md, apply_page_md, apply_page_md_with_sidecar, journals_dir, mutate_page_md,
-    page_md_path, pages_dir, render_page_md, write_md_atomic,
+    page_md_path, pages_dir, render_block_md, render_page_md, write_md_atomic,
 };
 pub use outl_md::parse::{ParseWarning, ParseWarningKind};
 pub use outline::{

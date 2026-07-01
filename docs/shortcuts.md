@@ -31,7 +31,7 @@ If a row below disagrees with what you observe in the app, **the code is right a
 | Quick switcher (fuzzy pages + journals) | `Ctrl+P` | `Cmd/Ctrl+P` | tap toolbar |
 | Open today's **j**ournal | `t` / `Home` | `Cmd/Ctrl+J` | toolbar |
 | Toggle TODO / DONE on focused or selected block (T for **t**ask) | `Ctrl+T` / `Ctrl+Enter` | `Cmd/Ctrl+T` / `Cmd/Ctrl+Enter` | tap checkbox |
-| Run code block under cursor / selected block (X for e**x**ecute) | `g x` chord / `:run` | `Cmd/Ctrl+Shift+X` (inside a textarea the Insert-mode strikethrough wins — commit first or use the Run button; plain `Cmd+X` is the OS cut) | tap "Run" button |
+| Run code block under cursor / selected block (X for e**x**ecute) | `g x` chord / `:run` | `Cmd/Ctrl+Shift+X` (inside a textarea the Insert-mode strikethrough wins — commit first or use the Run button; plain `Cmd+X` is the OS cut / block cut) | tap "Run" button |
 | Previous journal day | `[` | `Cmd/Ctrl+[` | swipe right |
 | Next journal day | `]` | `Cmd/Ctrl+]` | swipe left |
 | Toggle sidebar | `Ctrl+E` | `Cmd/Ctrl+Shift+E` | _(single pane)_ |
@@ -89,11 +89,15 @@ The desktop honours `Normal`/`Visual` only while `editor.vim_mode = true`. The T
 | Yank current block (`Y`, alias of `y y`) | `Y` | `Y` | — |
 | Open `[[ref]]` / `#tag` / `((blk-…))` under cursor | `Enter` | `Enter` | tap |
 | New block below + Insert | `o` | `o` / `Cmd/Ctrl+Shift+Enter` *(no vim needed)* | toolbar `+` |
-| New block above + Insert | `O` | `O` | — |
+| New block above + Insert (creates a sibling *before* the selected block) | `O` | `O` | — |
 | Indent block | `Tab` | `Tab` | drag right |
 | Outdent block | `Shift+Tab` | `Shift+Tab` | drag left |
-| Move block up | `K` | `K` | drag |
-| Move block down | `J` | `J` | drag |
+| Move block up among siblings | `K` | `Cmd/Ctrl+Shift+↑` | drag |
+| Move block down among siblings | `J` | `Cmd/Ctrl+Shift+↓` | drag |
+| Cut block + subtree (move-by-id; paste keeps `((blk-…))` refs) | — | `Cmd/Ctrl+X` | — |
+| Copy block + subtree (paste duplicates with fresh ids) | — | `Cmd/Ctrl+C` | — |
+| Paste block after the selection (cut → move, copy → duplicate) | — | `Cmd/Ctrl+V` | — |
+| Cancel a pending cut | — | `Esc` | — |
 | Delete block (chord) | `d d` | `d d` | swipe left |
 | Fold / unfold (toggle collapsed) | `c` | `c` | tap bullet |
 | Unfold all on the page (chord) | `z R` | `z R` | — |
@@ -112,6 +116,8 @@ The desktop honours `Normal`/`Visual` only while `editor.vim_mode = true`. The T
 | Open slash menu | `/` | `/` | `/` |
 
 > **About `a` / `*` / `#` on the desktop.** The desktop's Normal mode has only a selected block id — no character cursor inside the block. So `a` collapses to `i` (the textarea's own caret takes over), and `*` / `#` seed the picker with the first few words of the selected block's text instead of doing a word-under-cursor search. The catalog still ships these chords so muscle memory from the TUI carries over.
+
+> **`Cmd+X` / `Cmd+C` / `Cmd+V` are mode-aware on the desktop.** Inside a block editor (Insert mode, a `<textarea>` is focused) they are the OS-native text cut / copy / paste — the chords aren't in the catalog there, so the keystroke reaches the webview untouched. In **view mode** (Normal, nothing focused) they act on the whole selected block + its subtree: cut marks it to *move by id* (the paste emits a single `Op::Move`, so `((blk-…))` refs and backlinks survive — and the target may live on another page, moving the block across pages), copy snapshots it as markdown (the paste duplicates with fresh ids). This is also why **run code block** moved off `Cmd+X` to `Cmd+Shift+X` (view mode): a text-editing app has to let the OS-wide cut win.
 
 > **`Cmd/Ctrl+Shift+Enter` works without vim mode.**
 > Unlike `o`, the chord is not vim-gated: with no textarea focused the desktop falls into Normal dispatch regardless of the `vim_mode` setting, so every user can append a block from view mode.
@@ -143,7 +149,7 @@ The TUI ships it natively; the desktop has only a selected block id, so the char
 |---|---|---|---|
 | Commit + exit Insert | `Esc` | `Esc` / blur | blur |
 | Newline inside the block (multi-line text) | `Shift+Enter` | `Enter` | `Enter` |
-| Commit + new block below | `Enter` | `Cmd/Ctrl+Shift+Enter` | `Enter` |
+| Commit + new block (desktop is caret-aware: caret at col 0 → *before* the block / vim `O`; past col 0 → *below*) | `Enter` | `Cmd/Ctrl+Shift+Enter` | `Enter` |
 | Indent (stay in Insert) | `Tab` | `Tab` | drag |
 | Outdent (stay in Insert) | `Shift+Tab` | `Shift+Tab` | drag |
 | Delete block on empty | `Backspace` on empty | `Backspace` on empty | — |
@@ -153,8 +159,8 @@ The TUI ships it natively; the desktop has only a selected block id, so the char
 | Block ref autocomplete | `((` triggers picker | `((` triggers picker | — |
 | Slash command autocomplete | `/` | `/` | — |
 | Toggle TODO/DONE on current | `Ctrl+T` / `Ctrl+Enter` | `Cmd/Ctrl+T` / `Cmd/Ctrl+Enter` | tap checkbox / long-press menu |
-| Cut selection (native) | — | `Cmd/Ctrl+X` | OS selection menu |
-| Run code block | `g x` chord | commit first, then `Cmd/Ctrl+Shift+X` (or the Run button) | tap "Run" |
+| Cut / copy / paste **text** (native) | — | `Cmd/Ctrl+X` / `Cmd/Ctrl+C` / `Cmd/Ctrl+V` | native |
+| Run code block | `g x` chord | _(commit with `Esc`, then `Cmd/Ctrl+Shift+X`)_ | tap "Run" |
 
 ---
 

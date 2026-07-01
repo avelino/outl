@@ -252,6 +252,9 @@ export type Action =
   | { kind: "ToggleCollapsed" }
   | { kind: "ToggleTodo" }
   | { kind: "CopyBlockRef" }
+  | { kind: "CutBlock" }
+  | { kind: "CopyBlock" }
+  | { kind: "PasteBlock" }
   | { kind: "ExitInsert" }
   | { kind: "CommitAndContinue" }
   | { kind: "DeleteEmptyBlock" }

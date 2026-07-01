@@ -116,6 +116,23 @@ Both splits are pinned by tests (`cmd_shift_x_splits_between_insert_and_global`,
 - `Cmd/Ctrl+Z` (Undo) and `Cmd/Ctrl+Shift+Z` (Redo) are bound in **Normal**, not Global, so a focused textarea keeps the chord for its own native undo instead of having the dispatcher swallow it.
   They sit next to the vim spellings (`u` / `Ctrl+R`) in the catalog.
 
+**`Cmd+X` / `Cmd+C` / `Cmd+V` are the "OS-native vs. structural" example:**
+
+- `Insert` mode → **no binding**.
+  Inside a block editor the webview's native text cut / copy / paste must win, so the catalog stays silent and the dispatcher lets the keystroke through.
+  A text-editing app that swallowed `Cmd+X` would be hostile, revisiting the old "X for execute" decision.
+- `Normal` (view) mode → `CutBlock` / `CopyBlock` / `PasteBlock` — act on the whole selected block + subtree.
+  These are **`Normal`, not `Global`**: a `Global` binding would shadow the native text cut inside a textarea (the desktop's Insert→Global dispatch fallback).
+  Keep them out of `Global`.
+- The desktop reaches `Normal` via its DOM-detected "nothing focused" state, so these fire in view mode **whether or not `vim_mode` is on** — they're view-mode gestures, not vim gestures.
+- Each is **dual-spelled per OS**: `Cmd+X/C/V` (META) and `Ctrl+X/C/V` (CTRL), plus `Cmd/Ctrl+Shift+↑/↓` for the reorder.
+  Both spellings are bound in `Normal` because the desktop adapter never rewrites `Cmd`↔`Ctrl`.
+  Drop the CTRL row and the chord dead-keys on Linux / Windows, the same two-row pattern `Cmd/Ctrl+Z` uses.
+
+`RunCodeBlock` stays **`Global` `Cmd+Shift+X`**, off plain `Cmd+X` (now cut).
+It vacated `Cmd+X` so the native/structural cut owns it.
+On `Cmd+Shift+X` the `Insert` `WrapStrike` row wins inside a textarea and the `Global` row fires everywhere else, the `Cmd+Shift+X` split described above.
+
 ## Wire format (Tauri / JSON)
 
 The desktop ships the whole binding table to the frontend on boot via the `list_shortcut_bindings` Tauri command (`crates/outl-desktop/src-tauri/src/commands/shortcuts.rs`).

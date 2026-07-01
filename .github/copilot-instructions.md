@@ -234,7 +234,7 @@ Skim headings, then drill in.
 | Walk every node in the tree | `Tree::iter_nodes` / `node_count` | `crates/outl-core/src/tree/mod.rs` |
 | Children of a parent (in fractional order) | `outl_actions::tree::children_of` | `crates/outl-actions/src/tree.rs` |
 | Walk a subtree applying a closure | `outl_actions::tree::walk_subtree` | `crates/outl-actions/src/tree.rs` |
-| Sibling after a node + position helpers for inserts | `outl_actions::tree::next_sibling` / `position_after` / `position_for_new_last_child` | `crates/outl-actions/src/tree.rs` |
+| Sibling after a node + position helpers for inserts | `outl_actions::tree::next_sibling` / `position_after` / `position_before` / `position_for_new_last_child` | `crates/outl-actions/src/tree.rs` |
 | Which page does this node sit under? | `outl_actions::tree::enclosing_page_id` | `crates/outl-actions/src/tree.rs` |
 
 #### 3. Block mutations (outl-actions::block + collapsed + todo + quote)
@@ -244,18 +244,20 @@ Reject PRs that build a `LogOp` from a client and call `apply` directly.
 
 | Intent | Use this | File |
 |---|---|---|
-| Append a single block under a parent | `outl_actions::block::append_block` | `crates/outl-actions/src/block.rs` |
-| Append a tree / forest under a parent (uses `BlockTreeSpec` → `BlockTreeOutcome`) | `outl_actions::block::append_tree` / `append_forest` | `crates/outl-actions/src/block.rs` |
-| Create sibling after / child under a block | `outl_actions::block::create_after` / `create_under` | `crates/outl-actions/src/block.rs` |
-| Edit a block's text | `outl_actions::block::edit_text` | `crates/outl-actions/src/block.rs` |
-| Indent / outdent / move up / move down a block | `outl_actions::block::indent` / `outdent` / `move_up` / `move_down` | `crates/outl-actions/src/block.rs` |
-| Re-parent a block under an arbitrary page/block (cross-page move) | `outl_actions::block::move_under` | `crates/outl-actions/src/block.rs` |
-| Delete a block (`Move(node, TRASH_ROOT)`, **never** physical) | `outl_actions::block::delete` | `crates/outl-actions/src/block.rs` |
+| Append a single block under a parent | `outl_actions::block::append_block` | `crates/outl-actions/src/block/create.rs` |
+| Append a tree / forest under a parent (uses `BlockTreeSpec` → `BlockTreeOutcome`) | `outl_actions::block::append_tree` / `append_forest` | `crates/outl-actions/src/block/create.rs` |
+| Create sibling before a block (vim `O`; floor-slot swap when the anchor is first child) | `outl_actions::block::create_before` | `crates/outl-actions/src/block/create.rs` |
+| Create sibling after / child under a block | `outl_actions::block::create_after` / `create_under` | `crates/outl-actions/src/block/create.rs` |
+| Edit a block's text | `outl_actions::block::edit_text` | `crates/outl-actions/src/block/edit.rs` |
+| Indent / outdent / move up / move down a block | `outl_actions::block::indent` / `outdent` / `move_up` / `move_down` | `crates/outl-actions/src/block/moves.rs` |
+| Move a block to sit **after an arbitrary target** (cut-and-paste-block; crosses pages; emits one `Op::Move`, preserving id + refs; rejects self-subtree cycles) | `outl_actions::block::move_after` | `crates/outl-actions/src/block/moves.rs` |
+| Re-parent a block under an arbitrary page/block (cross-page move) | `outl_actions::block::move_under` | `crates/outl-actions/src/block/moves.rs` |
+| Delete a block (`Move(node, TRASH_ROOT)`, **never** physical) | `outl_actions::block::delete` | `crates/outl-actions/src/block/moves.rs` |
 | Toggle block collapsed (converges via `Op::SetCollapsed`) | `outl_actions::collapsed::toggle_block_collapsed` / `set_block_collapsed` | `crates/outl-actions/src/collapsed.rs` |
 | Cycle / split / read TODO/DONE state | `outl_actions::todo::cycle_todo` / `split_todo` / `TodoState` / `TODO_PREFIX` / `DONE_PREFIX` | `crates/outl-actions/src/todo.rs` |
-| Toggle TODO/DONE on a block in one call | `outl_actions::block::toggle_todo` | `crates/outl-actions/src/block.rs` |
+| Toggle TODO/DONE on a block in one call | `outl_actions::block::toggle_todo` | `crates/outl-actions/src/block/edit.rs` |
 | Read / toggle blockquote state (`"> "` text prefix, CommonMark-compatible) | `outl_actions::quote::is_quote` / `split_quote` / `toggle_quote` / `QUOTE_PREFIX` | `crates/outl-actions/src/quote.rs` |
-| Toggle blockquote on a block in one call | `outl_actions::block::toggle_quote` | `crates/outl-actions/src/block.rs` |
+| Toggle blockquote on a block in one call | `outl_actions::block::toggle_quote` | `crates/outl-actions/src/block/edit.rs` |
 
 #### 4. Pages and journals (outl-actions::page + journal)
 
@@ -278,6 +280,7 @@ Reject PRs that build a `LogOp` from a client and call `apply` directly.
 | Parse an `outl://` deep link into a navigation target (one parser, every GUI client routes the result — never reparse per client) | `outl_actions::parse_deep_link` / `DeepLinkTarget` / `DeepLinkError` | `crates/outl-actions/src/deeplink.rs` |
 | Filesystem paths | `outl_actions::journal::journals_dir` / `pages_dir` / `page_md_path` | `crates/outl-actions/src/journal.rs` |
 | Render a page out to `.md` | `outl_actions::journal::render_page_md` | `crates/outl-actions/src/journal.rs` |
+| Render a single block + subtree to `.md` (copy-block clipboard) | `outl_actions::journal::render_block_md` | `crates/outl-actions/src/journal.rs` |
 | Apply edited `.md` back into the workspace | `outl_actions::journal::apply_page_md` / `apply_page_md_with_sidecar` | `crates/outl-actions/src/journal.rs` |
 | Apply every page's `.md` to disk in one pass | `outl_actions::journal::apply_all_pages_md` | `crates/outl-actions/src/journal.rs` |
 | Read → modify → write a page's `.md` atomically | `outl_actions::journal::mutate_page_md` | `crates/outl-actions/src/journal.rs` |
@@ -566,7 +569,7 @@ Each finding follows this shape:
 Calling `apply_op` directly here bypasses the log append, so the
 mutation will not replay on a second device. Route through
 `Workspace::apply` instead; see the existing call at
-`crates/outl-actions/src/block.rs:73`.
+`crates/outl-actions/src/block/edit.rs`.
 ```
 
 End the review with one of these two closing lines:

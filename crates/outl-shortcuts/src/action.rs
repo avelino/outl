@@ -127,6 +127,25 @@ pub enum Action {
     /// Copy the current block's `((blk-…))` ref handle to clipboard.
     CopyBlockRef,
 
+    // ── block clipboard (view-mode cut / copy / paste of a block) ─
+    //
+    // These act on a whole block + its subtree while the user is in
+    // view (Normal) mode — distinct from the OS-native text cut /
+    // copy / paste that fires inside a block editor (Insert mode).
+    /// Cut the selected block + subtree to the block clipboard,
+    /// marked to **move by id** (desktop `Cmd+X` in view mode). The
+    /// matching paste emits a single `Op::Move`, so the block keeps
+    /// its identity and every `((blk-…))` ref / backlink stays valid.
+    CutBlock,
+    /// Copy the selected block + subtree to the block clipboard as
+    /// markdown (desktop `Cmd+C` in view mode). The matching paste
+    /// duplicates the subtree with fresh ids.
+    CopyBlock,
+    /// Paste the block clipboard as the sibling after the selected
+    /// block (desktop `Cmd+V` in view mode). A cut clipboard moves
+    /// the original node; a copy clipboard duplicates it.
+    PasteBlock,
+
     // ── insert-mode commits ──────────────────────────────────────
     /// Commit in-flight edit and leave Insert mode (`Esc`).
     ExitInsert,

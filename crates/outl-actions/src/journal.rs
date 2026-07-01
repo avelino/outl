@@ -114,6 +114,29 @@ pub fn render_page_md(workspace: &Workspace, page_root: NodeId) -> String {
     render(&page)
 }
 
+/// Render the block `node` and its subtree to clean outl markdown as
+/// a single top-level bullet (with its descendants nested under it).
+///
+/// This is the "copy block" projection: the desktop's `Cmd+C` in view
+/// mode hands the result to the clipboard, and the matching paste
+/// re-ingests it through the same `paste_markdown` pipeline external
+/// clipboard text uses — so a copy duplicates the subtree with fresh
+/// ids. Reuses the exact projection [`render_page_md`] writes to disk,
+/// so a copied block reads identically to how it lives in the `.md`.
+pub fn render_block_md(workspace: &Workspace, node: NodeId) -> String {
+    let block = OutlineNode {
+        text: workspace.block_text(node).unwrap_or_default(),
+        properties: Vec::new(),
+        children: build_outline(workspace, node),
+    };
+    let page = ParsedPage {
+        properties: Vec::new(),
+        blocks: vec![block],
+        warnings: Vec::new(),
+    };
+    render(&page)
+}
+
 /// Best-effort atomic write of `contents` to `path`, creating parents
 /// as needed.
 pub fn write_md_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
@@ -391,6 +414,32 @@ mod tests {
 
         let md = render_page_md(&ws, page);
         assert_eq!(md, "- first\n- second\n");
+    }
+
+    /// Copy (`Cmd+C` in view mode) snapshots a block via
+    /// `render_block_md`. It must capture the **whole** subtree — every
+    /// descendant at every depth — so a paste reproduces the block in
+    /// full. This pins the "are we grabbing all the sub-blocks?" review
+    /// concern: the renderer walks `build_outline` recursively, so a
+    /// four-level-deep subtree round-trips with its indentation intact.
+    #[test]
+    fn render_block_md_captures_the_full_deep_subtree() {
+        let actor = ActorId::new();
+        let hlc = HlcGenerator::new(actor);
+        let mut ws = Workspace::open_in_memory(actor).unwrap();
+        let page = open_or_create(&mut ws, &hlc, "ideas", "Ideas", PageKind::Page).unwrap();
+        let src = append_block(&mut ws, &hlc, Some(page), Some("src")).unwrap();
+        let c1 = append_block(&mut ws, &hlc, Some(src), Some("c1")).unwrap();
+        let c1a = append_block(&mut ws, &hlc, Some(c1), Some("c1a")).unwrap();
+        append_block(&mut ws, &hlc, Some(c1a), Some("c1a_i")).unwrap();
+        append_block(&mut ws, &hlc, Some(c1), Some("c1b")).unwrap();
+        append_block(&mut ws, &hlc, Some(src), Some("c2")).unwrap();
+
+        let md = render_block_md(&ws, src);
+        assert_eq!(
+            md,
+            "- src\n  - c1\n    - c1a\n      - c1a_i\n    - c1b\n  - c2\n"
+        );
     }
 
     #[test]

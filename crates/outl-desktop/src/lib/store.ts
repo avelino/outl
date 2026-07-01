@@ -102,6 +102,26 @@ export interface AppStateShape {
    */
   yankRegister: string[];
   /**
+   * Block clipboard for the view-mode cut / copy / paste gesture
+   * (`Cmd+X` / `Cmd+C` / `Cmd+V` in Normal mode). A *cut* holds the
+   * id of the block to move — the paste emits an `Op::Move`, so the
+   * block keeps its identity (`((blk-…))` refs and backlinks stay
+   * valid). A *copy* holds rendered markdown the paste re-ingests with
+   * fresh ids (duplicate, not move). `null` when the clipboard is empty.
+   *
+   * A cross-page paste re-renders the source page too, but the source
+   * page is **not** carried here: `move_block_after` derives it from
+   * the moved node via `enclosing_page_id`, so a `pageId` on the cut
+   * payload would just be a second, drift-prone copy of that fact.
+   *
+   * Distinct from [`yankRegister`], which is the vim `y` text
+   * register; this one moves / duplicates whole blocks structurally.
+   */
+  blockClipboard:
+    | { kind: "cut"; nodeId: string }
+    | { kind: "copy"; markdown: string }
+    | null;
+  /**
    * Sidebar (left pane) visibility. Toggled with `Cmd/Ctrl+Shift+E`
    * (mirrors VS Code's "Show Explorer" — see `outl-shortcuts`).
    *
@@ -179,6 +199,7 @@ const [state, setState] = createStore<AppStateShape>({
   visualAnchorId: null,
   lastVisualRange: null,
   yankRegister: [],
+  blockClipboard: null,
   sidebarOpen: false,
   backlinksOpen: true,
   caretIntent: null,

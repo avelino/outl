@@ -61,6 +61,33 @@ pub fn position_after(workspace: &Workspace, node: NodeId) -> Option<Fractional>
     None
 }
 
+/// A fractional position strictly between `node` and the sibling that
+/// precedes it, for the "insert before this node" flow (vim `O`,
+/// `Cmd/Ctrl+Shift+Enter` with the caret at column 0 on the desktop).
+///
+/// Returns `None` when no such slot is representable — either `node`
+/// is not in the tree, or it is the first child sitting at the
+/// fractional floor (`Fractional::first()`), below which the `[a-z]`
+/// index has no room. Callers handle the floor case by repositioning
+/// (see [`crate::block::create_before`]), exactly how `move_up` swaps
+/// rather than minting a sub-floor key.
+pub fn position_before(workspace: &Workspace, node: NodeId) -> Option<Fractional> {
+    let node_pos = workspace.tree().position(node)?.clone();
+    match previous_sibling(workspace, node) {
+        Some(prev) => {
+            let prev_pos = workspace.tree().position(prev)?.clone();
+            Some(Fractional::between(Some(&prev_pos), Some(&node_pos)))
+        }
+        None => {
+            // No predecessor: we need a slot below `node`. `between`
+            // floors at `Fractional::first()`, so the result is only
+            // valid when it actually sorts before `node`.
+            let candidate = Fractional::between(None, Some(&node_pos));
+            (candidate < node_pos).then_some(candidate)
+        }
+    }
+}
+
 /// Fractional position for a new last child appended under `parent`.
 ///
 /// Promoted to `pub` for the CLI's `outl block move --parent=…` flow.

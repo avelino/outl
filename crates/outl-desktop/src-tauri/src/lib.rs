@@ -54,11 +54,12 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
 
 use crate::commands::{
-    create_block, current_workspace, date_title, delete_block, edit_block, get_settings, get_theme,
-    indent_block, list_all_pages, list_shortcut_bindings, list_themes, move_block_down,
-    move_block_up, next_day, open_journal_for, open_page_by_slug, open_ref, open_today_journal,
-    outdent_block, outl_emoji_search, outl_peer_list, outl_peer_pair_host, outl_peer_pair_join,
-    outl_peer_remove, outl_peer_status, outl_sync_now, paste_markdown_at, plugin_install_official,
+    copy_block_markdown, create_block, current_workspace, date_title, delete_block, edit_block,
+    get_settings, get_theme, indent_block, list_all_pages, list_shortcut_bindings, list_themes,
+    move_block_after, move_block_down, move_block_up, next_day, open_journal_for,
+    open_page_by_slug, open_ref, open_today_journal, outdent_block, outl_emoji_search,
+    outl_peer_list, outl_peer_pair_host, outl_peer_pair_join, outl_peer_remove, outl_peer_status,
+    outl_sync_now, paste_block_after, paste_markdown_at, plugin_install_official,
     plugin_keybindings, plugin_list, plugin_registry_list, plugin_run, plugin_set_enabled,
     plugin_sync_hooks, plugin_toolbar, plugin_transform, plugin_transformers, plugin_uninstall,
     previous_day, redo_page, reload_workspace, resolve_ref, run_code_block, search_pages,
@@ -311,6 +312,9 @@ pub fn run() {
             outdent_block,
             move_block_up,
             move_block_down,
+            move_block_after,
+            copy_block_markdown,
+            paste_block_after,
             set_block_collapsed,
             paste_markdown_at,
             // Undo / redo

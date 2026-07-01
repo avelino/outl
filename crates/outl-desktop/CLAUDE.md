@@ -189,35 +189,26 @@ Frontend suites today: `src/setup.test.ts` (scaffold smoke — `@outl/shared` al
 `src/lib/chord-format.test.ts`,
 `src/lib/markdown-wrap.test.ts`,
 `src/lib/outline-walk.test.ts`,
-and `src/lib/action-handlers.test.ts` (regression tests for the `OpenRefUnderCursor` handler — Normal-mode `Enter` enters Insert on the selected block even when it carries a `[[ref]]`,
-and only a backlink-row selection opens the source page; pins #70).
+and `src/lib/action-handlers.test.ts` — `OpenRefUnderCursor` regression (`Enter` edits the block; backlink rows open the source; pins #70).
+Same file smoke-tests the block clipboard (cut arms `blockClipboard`; paste routes cut → `moveBlockAfter`, copy → `pasteBlockAfter`).
 
 ## Shortcuts
 
 The full catalog lives in **`crates/outl-shortcuts`** (single source of truth, also consumed by the TUI).
 The desktop fetches it via the `list_shortcut_bindings` Tauri command on boot and wires every `Action` through `lib/action-handlers.ts`.
 
-Two of these chords also have **visible icon affordances** in a fixed bottom-left cluster (`components/ChromeToggleBar.tsx`, mounted by `AppShell`, VS Code activity-bar convention):
+Two of these chords also have **visible icon affordances** in a fixed bottom-left cluster (`components/ChromeToggleBar.tsx`, mounted by `AppShell`):
 the **sidebar toggle** (`◫`, mirrors `Cmd/Ctrl+Shift+E`) and the **shortcuts-help toggle** (`?`, mirrors `?` / `Cmd/Ctrl+/`).
-They carry no business logic — clicking flips the same `appState.sidebarOpen` / `appState.helpOpen` store signal the dispatcher flips, so button and keyboard stay in sync.
-The cluster floats over the main pane on an elevated, bordered surface (clear contrast against page content; active toggle inverts to the accent color), so the sidebar button stays reachable even after the left pane is hidden.
+They carry no business logic — clicking flips the same store signal the dispatcher flips, so button and keyboard stay in sync.
+The cluster floats over the main pane on an elevated, bordered surface (active toggle inverts to the accent color), so the sidebar button stays reachable even after the left pane is hidden.
 
 ### OS-standard chrome (Global mode — fire in any context)
 
-| Chord | Action |
-|---|---|
-| `Cmd/Ctrl+P` | Quick switcher (pages + journals, fuzzy) |
-| `Cmd/Ctrl+J` | Open today's **j**ournal |
-| `Cmd/Ctrl+T` | Toggle TODO / DONE on the focused / selected block (T for **t**ask) |
-| `Cmd/Ctrl+Enter` | Toggle TODO / DONE on the focused / selected block (alt) |
-| `Cmd/Ctrl+Shift+Enter` | New block below (Insert commits first via `CommitAndContinue`; view mode fires `NewBlockBelow` without `vim_mode`) |
-| `Cmd/Ctrl+Shift+X` | E**x**ecute the focused / selected code block (mirrors the TUI's `g x` chord). Inside a textarea the Insert-mode strikethrough binding wins (mode-specific beats Global) — commit first or use the per-block run button. |
-| `Cmd/Ctrl+[` / `]` | Previous / next journal day |
-| `Cmd/Ctrl+Shift+E` | Toggle sidebar (mirrors VS Code's explorer chord) |
-| `Cmd/Ctrl+Shift+B` | Toggle backlinks panel |
-| `Cmd/Ctrl+,` | Open settings |
+The full per-chord table is in [`docs/shortcuts.md`](../../docs/shortcuts.md) — the single source of truth, shared with the TUI.
+Two desktop-specific bits: `Cmd/Ctrl+Shift+X` runs the focused / selected code block (in a textarea the strikethrough binding wins; plain `Cmd/Ctrl+X` is OS cut / view-mode block cut).
+`Cmd/Ctrl+Shift+Enter` commits + creates a sibling below — caret-aware inside a textarea (see the note below).
 
-> **Chord rationale:** `Cmd+J` (not `Cmd+T`) is the journal because `T` is universally "task"; `Cmd+B` / `Cmd+\` are avoided (bold / 1Password autofill); run-code moved from `Cmd+X` to `Cmd+Shift+X` because the dispatcher `preventDefault`s Global chords even in Insert mode and `Cmd+X` shadowed OS cut (issue #80).
+> **Chord rationale:** `Cmd+J` (not `Cmd+T`) is the journal because `T` is universally "task"; `Cmd+B` / `Cmd+\` are avoided (bold / 1Password autofill); run-code moved off `Cmd+X` to `Cmd+Shift+X` so it stops shadowing OS cut (issue #80).
 
 ### Undo / redo (Normal mode — fire when no textarea is focused)
 
@@ -235,7 +226,6 @@ Fold toggles (`set_block_collapsed`) bypass `finish_in_page` and are not undoabl
 Invalidation is **surgical**: a workspace **switch** clears every stack,
 but a peer-driven **reload** (`peer-ops-changed` → `reload_workspace`) drops only the stacks of pages whose projection actually changed across the reload — restoring one of those would silently revert the peer's edits.
 Pages the peer didn't touch keep their full undo depth.
-(The first cut cleared everything on every reload, which capped `Cmd+Z` at one step whenever the TUI was open on the same workspace — every TUI write fires `peer-ops-changed`.)
 
 ### Inline markdown (Insert mode — fire when a textarea is focused)
 
@@ -297,7 +287,14 @@ This section captures only the **architectural decisions** a contributor needs t
   All 10 char-cursor catalog entries (`x` `X` `D` `C` `s` `r` `~` `e` `f` `F`) point at `charCursorNudge`.
   One source of truth means the message can't drift between catalog entries.
 
-- **`p` / `P` paste handlers are not wired yet.** `Y` / `YankRange` fill `appState.yankRegister`, but pasting N blocks has a design call (siblings? children? after / before?) that's deliberately deferred.
+- **`NewBlockAbove` (`O`) uses `beforeId`, not a post-creation move walk.**
+  `createBlock({ beforeId: anchor })` → `create_before` (floor-slot swap done in core); never reintroduce the old create-at-tail + `moveBlockDown`-loop (it always landed at the bottom).
+  `Cmd/Ctrl+Shift+Enter` is caret-aware in `BlockRow`'s keydown, not the catalog: col 0 → *before*, past col 0 → *below*.
+  `stopImmediatePropagation` there preempts the catalog's Normal-mode create-below binding.
+
+- **Block clipboard: view-mode cut/copy/paste of a whole block** (chords: [`docs/shortcuts.md`](../../docs/shortcuts.md)).
+  Bindings are **Normal**-mode only (a focused textarea keeps the native webview clipboard); `appState.blockClipboard` = `{ kind: "cut", nodeId } | { kind: "copy", markdown }`, no `pageId` (the backend resolves the page via `enclosing_page_id`).
+  Cut is one identity-preserving `Op::Move` (`block::move_after`, cross-page, self-subtree rejected); copy duplicates via `paste_block_after` with fresh ids.
 
 - **Path to enable char-cursor ops.**
   Add a visible Normal-mode caret painted by `<BlockRow />` (model change), then move the 10 blocked handlers to real implementations.

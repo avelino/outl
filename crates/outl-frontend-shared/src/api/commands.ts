@@ -140,21 +140,28 @@ export function workspaceStats(): Promise<WorkspaceSummary> {
 // ---------------------------------------------------------------------------
 
 /**
- * Insert a new block under `pageId`, either as a sibling after
- * `afterId` or as the last child of `parentId` (defaults to the page
- * itself when both are null). Returns the refreshed {@link PageView}
- * paired with `new_id` — the id of the freshly-inserted block —
- * so the caller can put it into edit mode without diffing the
- * outline. See {@link CreateBlockReply} for why the id is on the
- * wire.
+ * Insert a new block under `pageId`. Placement precedence:
+ * `beforeId` (sibling immediately before — vim `O`) wins over
+ * `afterId` (sibling immediately after — vim `o`), falling back to
+ * the last child of `parentId` (defaults to the page itself when all
+ * are null). Returns the refreshed {@link PageView} paired with
+ * `new_id` — the id of the freshly-inserted block — so the caller
+ * can put it into edit mode without diffing the outline. See
+ * {@link CreateBlockReply} for why the id is on the wire.
  */
 export function createBlock(
   pageId: string,
-  opts: { afterId?: string | null; parentId?: string | null; text?: string | null },
+  opts: {
+    afterId?: string | null;
+    beforeId?: string | null;
+    parentId?: string | null;
+    text?: string | null;
+  },
 ): Promise<CreateBlockReply> {
   return invoke<CreateBlockReply>("create_block", {
     pageId,
     afterId: opts.afterId ?? null,
+    beforeId: opts.beforeId ?? null,
     parentId: opts.parentId ?? null,
     text: opts.text ?? null,
   });
@@ -196,6 +203,42 @@ export function moveBlockUp(pageId: string, id: string): Promise<PageView> {
 
 export function moveBlockDown(pageId: string, id: string): Promise<PageView> {
   return invoke<PageView>("move_block_down", { pageId, id });
+}
+
+/**
+ * Move block `id` to sit immediately after `afterId`, re-parenting it
+ * under the target's parent. Backs the cut-and-paste-block gesture
+ * (`Cmd+X` then `Cmd+V` in view mode): the block keeps its identity,
+ * so `((blk-…))` refs and backlinks survive — and `afterId` may live
+ * on another page, which moves the block across pages.
+ */
+export function moveBlockAfter(
+  pageId: string,
+  id: string,
+  afterId: string,
+): Promise<PageView> {
+  return invoke<PageView>("move_block_after", { pageId, id, afterId });
+}
+
+/**
+ * Render block `id` and its subtree to clean outl markdown for the
+ * block clipboard (`Cmd+C` in view mode). The paste re-ingests it and
+ * mints fresh ids, so a copy duplicates rather than moves.
+ */
+export function copyBlockMarkdown(id: string): Promise<string> {
+  return invoke<string>("copy_block_markdown", { id });
+}
+
+/**
+ * Paste clipboard `text` (clean outl markdown) as the sibling(s)
+ * immediately after `afterId` — the `Cmd+V` of a copied block.
+ */
+export function pasteBlockAfter(
+  pageId: string,
+  afterId: string,
+  text: string,
+): Promise<PageView> {
+  return invoke<PageView>("paste_block_after", { pageId, afterId, text });
 }
 
 export function reloadWorkspace(): Promise<void> {

@@ -19,10 +19,12 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import {
+  copyBlockMarkdown,
   createBlock,
   deleteBlock,
   editBlock,
   indentBlock,
+  moveBlockAfter,
   moveBlockDown,
   moveBlockUp,
   nextDay,
@@ -30,6 +32,7 @@ import {
   openRef,
   openTodayJournal,
   outdentBlock,
+  pasteBlockAfter,
   previousDay,
   setBlockCollapsed,
   todaySlug,
@@ -374,6 +377,54 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
       if (!block) return;
       setAppState("yankRegister", [block.text]);
     },
+    // ── block clipboard (view-mode Cmd+X / Cmd+C / Cmd+V) ────────
+    //
+    // These fire only in Normal mode — inside a block editor the same
+    // chords aren't in the catalog, so the textarea gets the OS-native
+    // text cut / copy / paste instead.
+    //
+    // Cut marks the selected block to **move by id**: the paste emits
+    // an `Op::Move`, so the block keeps its identity (refs / backlinks
+    // survive). Copy snapshots the subtree as markdown; its paste
+    // duplicates with fresh ids.
+    CutBlock: () => {
+      const id = appState.selectedBlockId;
+      if (!id) return;
+      setAppState("blockClipboard", { kind: "cut", nodeId: id });
+    },
+    CopyBlock: async () => {
+      const id = appState.selectedBlockId;
+      if (!id) return;
+      const markdown = await safeCall(copyBlockMarkdown(id));
+      if (markdown === undefined) return;
+      setAppState("blockClipboard", { kind: "copy", markdown });
+    },
+    PasteBlock: async () => {
+      const pageId = appState.page?.id;
+      const after = appState.selectedBlockId;
+      const clip = appState.blockClipboard;
+      if (!pageId || !after || !clip) return;
+      if (clip.kind === "cut") {
+        // Pasting a block right where it already is — nothing to do.
+        if (clip.nodeId === after) return;
+        const view = await safeCall(moveBlockAfter(pageId, clip.nodeId, after));
+        // On failure (e.g. the move would create a cycle) the backend
+        // error is already surfaced; keep the cut armed so the user
+        // can paste somewhere valid.
+        if (!view) return;
+        deps.applyView(view);
+        // A cut is consumed by its paste; follow the moved block.
+        setAppState("blockClipboard", null);
+        setAppState("selectedBlockId", clip.nodeId);
+      } else {
+        const view = await safeCall(
+          pasteBlockAfter(pageId, after, clip.markdown),
+        );
+        // A copy persists so it can be pasted again.
+        if (!view) return;
+        deps.applyView(view);
+      }
+    },
     OpenRefUnderCursor: async () => {
       // Normal-mode `Enter`. Two branches in priority order:
       //
@@ -430,31 +481,19 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
       const pageId = appState.page?.id;
       const anchor = appState.selectedBlockId;
       if (!pageId) return;
+      // `beforeId` lands the new block as the sibling immediately
+      // before the selected one (vim `O`); with nothing selected it
+      // falls back to appending at the page root.
       const reply = await safeCall(
-        createBlock(pageId, {
-          afterId: null,
-          parentId: null,
-          text: "",
-        }),
+        createBlock(
+          pageId,
+          anchor ? { beforeId: anchor, text: "" } : { parentId: null, text: "" },
+        ),
       );
       if (!reply) return;
       deps.applyView(reply.view);
-      const newId = reply.new_id;
-      // Walk it up until it sits immediately before the anchor.
-      let cursorOutline = reply.view.outline;
-      while (anchor) {
-        const visible = flattenVisible(cursorOutline);
-        const newIdx = visible.indexOf(newId);
-        const anchorIdx = visible.indexOf(anchor);
-        if (newIdx < 0 || anchorIdx < 0) break;
-        if (newIdx + 1 >= anchorIdx) break;
-        const stepped = await safeCall(moveBlockDown(pageId, newId));
-        if (!stepped) break;
-        deps.applyView(stepped);
-        cursorOutline = stepped.outline;
-      }
-      setAppState("selectedBlockId", newId);
-      setAppState("editingBlockId", newId);
+      setAppState("selectedBlockId", reply.new_id);
+      setAppState("editingBlockId", reply.new_id);
     },
 
     // ── block structure ops on the selected block ────────────────
@@ -563,6 +602,13 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
       const el = document.activeElement;
       if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
         el.blur();
+        return;
+      }
+      // Normal-mode `Esc` with nothing focused: cancel a pending cut
+      // so the dimmed block snaps back. A copy stays on the clipboard
+      // (it's non-destructive and reusable, like the OS clipboard).
+      if (appState.blockClipboard?.kind === "cut") {
+        setAppState("blockClipboard", null);
       }
     },
 

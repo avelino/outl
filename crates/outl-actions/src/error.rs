@@ -33,6 +33,14 @@ pub enum ActionError {
     #[error("cannot outdent {0}: parent has no grandparent")]
     NoGrandparent(String),
 
+    /// A move (e.g. cut-and-paste of a block) would drop the node
+    /// inside its own subtree, creating a cycle. The CRDT treats such
+    /// a move as a deterministic no-op on the materialised tree, so
+    /// we reject it up front and let the client nudge the user
+    /// instead of emitting an op that does nothing visible.
+    #[error("cannot move {0}: target is inside the block's own subtree")]
+    WouldCreateCycle(String),
+
     /// The page slug failed validation (empty, too long, contains a
     /// path separator, `..`, or a control character). The slug ends
     /// up joined into a filesystem path, so we reject anything that

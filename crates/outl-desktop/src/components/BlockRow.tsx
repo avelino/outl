@@ -52,6 +52,11 @@ export interface BlockCallbacks {
   onCommit: (id: string, text: string) => Promise<void>;
   /** Enter pressed → commit + create a sibling below + focus it. */
   onEnter: (id: string, text: string) => Promise<void>;
+  /**
+   * `Cmd/Ctrl+Shift+Enter` with the caret at column 0 → commit + create
+   * a sibling *before* this one + focus it. The textarea mirror of vim `O`.
+   */
+  onCreateBefore: (id: string, text: string) => Promise<void>;
   /** Tab pressed inside the textarea. */
   onIndent: (id: string) => Promise<void>;
   /** Shift-Tab pressed inside the textarea. */
@@ -556,13 +561,29 @@ export function BlockRow(props: {
       await commit();
       return;
     }
-    // `Cmd+Enter` / `Cmd+Shift+Enter` / `Cmd+T` are all owned by the
-    // global shortcut catalog (`outl-shortcuts::defaults`). We
-    // deliberately do NOT intercept Enter+modifier here — otherwise
-    // we'd race the catalog dispatcher and fire two actions at once
-    // (commit-and-continue AND toggle-todo, the "Cmd+Shift+Enter
-    // breaks the line" bug). Plain `Enter` still passes through to
-    // the textarea so it inserts a real `\n` (multi-line blocks).
+    // `Cmd/Ctrl+Shift+Enter` is caret-position aware, handled here (not
+    // via the global catalog) because only the textarea knows the caret:
+    //   - caret at column 0  → create a sibling *before* this block
+    //     (vim `O`).
+    //   - caret anywhere past column 0 → commit + create a sibling
+    //     *below* (`onEnter`).
+    // `stopImmediatePropagation` is load-bearing: it stops the webview's
+    // default Enter (a literal `\n`) *and* keeps the global `window`
+    // shortcut dispatcher from also firing the catalog's
+    // commit-and-continue on the same keystroke (the old "Cmd+Shift+Enter
+    // breaks the line" double-fire bug). `Cmd+Enter` / `Cmd+T` are still
+    // owned by the catalog; plain `Enter` still passes through to the
+    // textarea so it inserts a real `\n` (multi-line blocks).
+    if (e.key === "Enter" && e.shiftKey && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const atStart =
+        (textareaRef?.selectionStart ?? -1) === 0 &&
+        (textareaRef?.selectionEnd ?? -1) === 0;
+      if (atStart) await props.cb.onCreateBefore(props.block.id, draft());
+      else await props.cb.onEnter(props.block.id, draft());
+      return;
+    }
     if (e.key === "Tab") {
       e.preventDefault();
       await commit();
@@ -672,6 +693,12 @@ export function BlockRow(props: {
    *  Visual style so the user sees the contiguous band, not a single
    *  bright row at the cursor. */
   const isInVisual = () => props.visualSet?.has(props.block.id) ?? false;
+  /** This block is armed for a cut (`Cmd+X` in view mode), waiting
+   *  for the paste that will move it. Dim it so the user sees what's
+   *  on the block clipboard until they paste or cancel with `Esc`. */
+  const isPendingCut = () =>
+    appState.blockClipboard?.kind === "cut" &&
+    appState.blockClipboard.nodeId === props.block.id;
   const isInteractive = () => isEditing() || props.block.todo !== null;
 
   /** Outer row click — select without entering Insert. Lets the
@@ -691,6 +718,8 @@ export function BlockRow(props: {
     <div>
       <div
         class={`outl-row group relative flex items-start rounded-sm py-[3px] pr-2 ${
+          isPendingCut() ? "opacity-50 " : ""
+        }${
           isInVisual()
             ? "bg-(--color-outl-accent)/[0.18]"
             : isSelected()
