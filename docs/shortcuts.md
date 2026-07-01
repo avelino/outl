@@ -88,7 +88,7 @@ The desktop honours `Normal`/`Visual` only while `editor.vim_mode = true`. The T
 | Substitute char under cursor (= `xi`) | `s` | — *(char cursor only)* | — |
 | Yank current block (`Y`, alias of `y y`) | `Y` | `Y` | — |
 | Open `[[ref]]` / `#tag` / `((blk-…))` under cursor | `Enter` | `Enter` | tap |
-| New block below + Insert | `o` | `o` / `Cmd/Ctrl+Shift+Enter` | toolbar `+` |
+| New block below + Insert | `o` | `o` / `Cmd/Ctrl+Shift+Enter` *(no vim needed)* | toolbar `+` |
 | New block above + Insert | `O` | `O` | — |
 | Indent block | `Tab` | `Tab` | drag right |
 | Outdent block | `Shift+Tab` | `Shift+Tab` | drag left |
