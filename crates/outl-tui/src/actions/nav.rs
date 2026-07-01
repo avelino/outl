@@ -9,8 +9,8 @@
 use crate::outline_ops::{node_at_path, path_for_index};
 use crate::state::{App, Focus, Mode, View};
 use anyhow::Result;
-use chrono::{Duration, Local};
-use outl_actions::flatten_subtree_paths;
+use chrono::Duration;
+use outl_actions::{clock, flatten_subtree_paths};
 use outl_md::inline::{ref_at_cursor, RefTarget};
 use outl_md::reconcile::reconcile_md;
 use std::fs;
@@ -162,7 +162,7 @@ impl App {
     }
 
     pub(crate) fn go_today(&mut self) -> Result<()> {
-        self.view = View::Journal(Local::now().date_naive());
+        self.view = View::Journal(clock::today());
         self.selected = 0;
         self.cursor_col = 0;
         self.ensure_view_file_exists()?;
@@ -173,7 +173,7 @@ impl App {
     pub(crate) fn shift_journal(&mut self, days: i64) -> Result<()> {
         let new_date = match self.view {
             View::Journal(d) => d + Duration::days(days),
-            _ => Local::now().date_naive() + Duration::days(days),
+            _ => clock::today() + Duration::days(days),
         };
         self.view = View::Journal(new_date);
         self.selected = 0;

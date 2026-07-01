@@ -96,6 +96,9 @@ parking_lot = "0.12"
 sha2 = "0.11"
 hex = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+# IANA timezone database — resolves a configured zone name ("Europe/London")
+# to the correct UTC offset per date (DST-aware), for `outl_actions::clock`.
+chrono-tz = "0.10"
 dirs = "6"
 
 # Tauri clients (desktop + mobile src-tauri)

@@ -20,7 +20,7 @@ use crate::commands::CommandRegistry;
 use crate::state::{App, Focus, Mode, View};
 use crate::theme::Theme;
 use anyhow::Result;
-use chrono::Local;
+use outl_actions::clock;
 use outl_core::hlc::HlcGenerator;
 use outl_core::id::ActorId;
 use outl_core::workspace::Workspace;
@@ -54,7 +54,7 @@ impl App {
             workspace_root,
             workspace,
             orphans_log,
-            view: View::Journal(Local::now().date_naive()),
+            view: View::Journal(clock::today()),
             page: ParsedPage::default(),
             selected: 0,
             flat_len: 0,

@@ -193,4 +193,46 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn cmd_shift_enter_splits_between_insert_and_normal() {
+        // `Cmd+Shift+Enter` is dual-bound (issue #92): in Insert it
+        // commits the in-flight edit and starts the next block
+        // (`CommitAndContinue`); in view mode (Normal — the desktop's
+        // fallback whenever no textarea is focused) there's nothing to
+        // commit, so it creates a sibling below via `NewBlockBelow`.
+        // The two rows live in different modes, so `lookup`'s
+        // mode-specific resolution must keep them apart. No Global row
+        // backs this chord, so the remaining modes resolve to nothing.
+        //
+        // The chord is also dual-spelled per OS: `Cmd+Shift+Enter`
+        // (META) on macOS and `Ctrl+Shift+Enter` (CTRL) on Windows /
+        // Linux. Both spellings must resolve identically in each mode —
+        // the desktop adapter never rewrites `Cmd`↔`Ctrl`, so a missing
+        // CTRL row would silently drop the chord off Windows / Linux.
+        let shift_meta_enter =
+            ChordSequence::chord(Chord::new(Modifiers::META | Modifiers::SHIFT, Key::Enter));
+        let shift_ctrl_enter =
+            ChordSequence::chord(Chord::new(Modifiers::CTRL | Modifiers::SHIFT, Key::Enter));
+
+        for chord in [&shift_meta_enter, &shift_ctrl_enter] {
+            assert_eq!(
+                lookup(Mode::Insert, chord),
+                Some(Action::CommitAndContinue),
+                "Shift+Enter chord in Insert must commit + start the next block",
+            );
+            assert_eq!(
+                lookup(Mode::Normal, chord),
+                Some(Action::NewBlockBelow),
+                "Shift+Enter chord in Normal (view mode) must create a block below",
+            );
+            for mode in [Mode::Visual, Mode::Overlay, Mode::Global] {
+                assert_eq!(
+                    lookup(mode, chord),
+                    None,
+                    "Shift+Enter chord has no binding in {mode:?}",
+                );
+            }
+        }
+    }
 }

@@ -46,6 +46,13 @@ vim_mode = true
 # terminal font).
 font_size = 15
 
+[calendar]
+# Optional IANA timezone name for the journal date + status-line clock.
+# Omit (the default) to use the operating system's local timezone.
+# Set it when the OS clock runs in the wrong zone — containers and
+# Chrome OS Crostini report UTC regardless of where you are (issue #107).
+timezone = "Europe/London"
+
 [sync]
 # Which transport moves the per-actor op log between devices.
 #   "iroh" (default) — direct P2P over QUIC (hole punching + relay).

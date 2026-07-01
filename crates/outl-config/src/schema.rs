@@ -25,6 +25,7 @@ pub struct Config {
     pub workspace: WorkspaceCfg,
     pub theme: ThemeCfg,
     pub editor: EditorCfg,
+    pub calendar: CalendarCfg,
     pub sync: SyncConfig,
 }
 
@@ -82,6 +83,27 @@ impl Default for EditorCfg {
     }
 }
 
+/// Calendar / time section — controls how outl renders "now" and
+/// "today".
+///
+/// `timezone` is an optional IANA name (`"Europe/London"`,
+/// `"America/Sao_Paulo"`). When unset, outl uses the operating
+/// system's local timezone — the right default on a normally
+/// configured machine. Set it explicitly when the OS clock lies about
+/// the zone: containers and Chrome OS **Crostini** run in UTC even
+/// though the user's real timezone isn't, which pushes the journal
+/// date and the status-line clock an hour (or more) off. See issue
+/// #107.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CalendarCfg {
+    /// IANA timezone name, e.g. `"Europe/London"`. `None` (the
+    /// default) means "use the OS local timezone". An unknown or
+    /// unparseable name is ignored when the clock initializes (logged)
+    /// and also falls back to local.
+    pub timezone: Option<String>,
+}
+
 /// Which sync transport a client wires up at boot.
 ///
 /// `lowercase` serde so the TOML reads `transport = "file"` /
@@ -134,8 +156,22 @@ mod tests {
         assert!(c.editor.vim_mode);
         assert_eq!(c.editor.font_size, 15);
         assert!(c.workspace.last.is_none());
+        assert!(c.calendar.timezone.is_none());
         assert_eq!(c.sync.transport, SyncTransportKind::Iroh);
         assert!(c.sync.relay_url.is_none());
+    }
+
+    #[test]
+    fn calendar_section_parses_timezone() {
+        let c: Config = toml::from_str("[calendar]\ntimezone = \"Europe/London\"\n").unwrap();
+        assert_eq!(c.calendar.timezone.as_deref(), Some("Europe/London"));
+    }
+
+    #[test]
+    fn missing_calendar_section_leaves_timezone_unset() {
+        // No [calendar] → timezone None → clock uses OS local (previous behaviour).
+        let c: Config = toml::from_str("[theme]\npreset = \"nord\"\n").unwrap();
+        assert!(c.calendar.timezone.is_none());
     }
 
     #[test]

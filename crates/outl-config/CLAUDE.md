@@ -50,12 +50,17 @@ preset = "outl"                   # name from outl_theme::PRESETS
 vim_mode = true                   # default true
 font_size = 15                    # pixels, desktop-only
 
+[calendar]
+timezone = "Europe/London"        # optional IANA name; omit = OS local timezone
+
 [sync]
 transport = "iroh"                # "iroh" (P2P, default) | "file" (iCloud/fs opt-out)
 relay_url = ""                    # optional; empty = use iroh n0 default relays
 ```
 
-Four sections, each modelled as its own struct ([`WorkspaceCfg`], [`ThemeCfg`], [`EditorCfg`], [`SyncConfig`]).
+Five sections, each modelled as its own struct ([`WorkspaceCfg`], [`ThemeCfg`], [`EditorCfg`], [`CalendarCfg`], [`SyncConfig`]).
+`CalendarCfg::timezone` is an optional IANA name resolved at boot by `outl_actions::clock::init`; missing/empty/unknown falls back to the OS local timezone (the previous behaviour).
+It exists for environments where the OS clock lies about the zone — containers and Chrome OS **Crostini** run in UTC regardless of the user's real timezone (issue #107).
 `SyncConfig::transport` is a [`SyncTransportKind`] enum (`File` | `Iroh`, serde `lowercase`); missing `[sync]` falls back to `Iroh` (P2P is outl's primary sync), and `transport = "file"` is the explicit iCloud/filesystem opt-out.
 `SyncConfig::relay_url()` treats an empty string as `None` (use iroh's default relays).
 `#[serde(default)]` everywhere — a missing field falls back to the type's `Default`, so an older binary reading a newer config doesn't choke and a newer binary reading an older config doesn't blow up.
@@ -94,6 +99,7 @@ If the field **must converge between devices**, it doesn't belong in TOML at all
 | `theme.preset` | TUI palette resolver; desktop settings | `crates/outl-tui/src/runtime.rs::resolve_theme`, `crates/outl-desktop/src-tauri/src/commands/theme.rs` |
 | `editor.vim_mode` | Desktop only (TUI ignores) | `crates/outl-desktop/src-tauri/src/settings.rs` |
 | `editor.font_size` | Desktop only | `crates/outl-desktop/src-tauri/src/settings.rs` |
+| `calendar.timezone` | Every client at boot, via `outl_actions::clock::init` (resolves the IANA name once into the process-wide clock) | `crates/outl-tui/src/runtime.rs`, `crates/outl-cli/src/main.rs`, `crates/outl-desktop/src-tauri/src/lib.rs`, `crates/outl-mobile/src-tauri/src/lib.rs` |
 | `sync.transport` / `sync.relay_url` | TUI peer-sync wiring | `crates/outl-tui/src/actions/lifecycle/peer_sync.rs::wire_sync_transport` (config-driven; replaces the `OUTL_IROH=1` env gate) |
 
 Update this table whenever a new reader appears.

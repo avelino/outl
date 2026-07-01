@@ -77,10 +77,7 @@ impl App {
 
         // Always include today even if no file exists yet — typing
         // "today" always lands somewhere.
-        let today_str = chrono::Local::now()
-            .date_naive()
-            .format("%Y-%m-%d")
-            .to_string();
+        let today_str = outl_actions::clock::today().format("%Y-%m-%d").to_string();
         if !out
             .iter()
             .any(|c| c.kind == SwitchKind::Journal && c.key == today_str)

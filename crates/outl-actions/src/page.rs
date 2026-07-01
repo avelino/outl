@@ -13,7 +13,7 @@
 //! delete / re-parent semantics for free, and the wire format stays
 //! one Op log. Pages are just nodes with a marker property.
 
-use chrono::{Duration, Local, NaiveDate};
+use chrono::{Duration, NaiveDate};
 use outl_core::hlc::HlcGenerator;
 use outl_core::id::NodeId;
 use outl_core::op::{LogOp, Op};
@@ -505,9 +505,11 @@ pub fn journal_title(date: NaiveDate) -> String {
     date.format("%Y-%m-%d").to_string()
 }
 
-/// Today's date in the user's local timezone.
+/// Today's date in the user's configured timezone (falling back to the
+/// OS local timezone). Delegates to [`crate::clock`] so the journal's
+/// "today" honours `[calendar] timezone` — see issue #107.
 pub fn today() -> NaiveDate {
-    Local::now().date_naive()
+    crate::clock::today()
 }
 
 /// Open today's journal page, creating it if needed.

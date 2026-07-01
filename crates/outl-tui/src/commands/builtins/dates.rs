@@ -8,7 +8,8 @@
 //! from a single macro.
 
 use anyhow::Result;
-use chrono::{Datelike, Duration, Local, Months, NaiveDate, Weekday};
+use chrono::{Datelike, Duration, Months, NaiveDate, Weekday};
+use outl_actions::clock;
 
 use super::super::SlashCommand;
 use crate::state::{App, Mode};
@@ -30,18 +31,18 @@ fn insert_or_warn(app: &mut App, command_name: &str, text: &str) {
 /// past, positive are future. Extracted so the date-shifting logic is
 /// unit-testable without standing up a full `App`.
 fn journal_link_offset(days_offset: i64) -> String {
-    let d = Local::now().date_naive() + Duration::days(days_offset);
+    let d = clock::today() + Duration::days(days_offset);
     format!("[[{}]]", d.format("%Y-%m-%d"))
 }
 
 /// `HH:MM` for the current local time. Plain text — not a journal ref.
 fn time_text() -> String {
-    Local::now().format("%H:%M").to_string()
+    clock::now_local().format("%H:%M").to_string()
 }
 
 /// `[[YYYY-MM-DD]] HH:MM` — the "stamp this moment" combo.
 fn datetime_text() -> String {
-    let now = Local::now();
+    let now = clock::now_local();
     format!(
         "[[{}]] {}",
         now.date_naive().format("%Y-%m-%d"),
@@ -52,7 +53,7 @@ fn datetime_text() -> String {
 /// Plain `YYYY-MM-DD` (no brackets) for property values like
 /// `due:: 2026-05-26`. ISO 8601 short date.
 fn iso_date_offset(days_offset: i64) -> String {
-    let d = Local::now().date_naive() + Duration::days(days_offset);
+    let d = clock::today() + Duration::days(days_offset);
     d.format("%Y-%m-%d").to_string()
 }
 
@@ -289,7 +290,7 @@ macro_rules! next_weekday_command {
                 true
             }
             fn execute(&self, app: &mut App, _args: &str) -> Result<bool> {
-                let today = Local::now().date_naive();
+                let today = clock::today();
                 let days = days_until_next_weekday(today, $weekday);
                 insert_or_warn(app, $name, &journal_link_offset(days));
                 Ok(false)
@@ -365,7 +366,7 @@ impl SlashCommand for DateCommand {
         true
     }
     fn execute(&self, app: &mut App, args: &str) -> Result<bool> {
-        let today = Local::now().date_naive();
+        let today = clock::today();
         match parse_date_arg(args, today) {
             Some(d) => {
                 let s = format!("[[{}]]", d.format("%Y-%m-%d"));
@@ -461,7 +462,7 @@ impl SlashCommand for WeekNumCommand {
         true
     }
     fn execute(&self, app: &mut App, _args: &str) -> Result<bool> {
-        let s = week_tag(Local::now().date_naive());
+        let s = week_tag(clock::today());
         insert_or_warn(app, "week-num", &s);
         Ok(false)
     }

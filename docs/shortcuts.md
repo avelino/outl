@@ -88,7 +88,7 @@ The desktop honours `Normal`/`Visual` only while `editor.vim_mode = true`. The T
 | Substitute char under cursor (= `xi`) | `s` | — *(char cursor only)* | — |
 | Yank current block (`Y`, alias of `y y`) | `Y` | `Y` | — |
 | Open `[[ref]]` / `#tag` / `((blk-…))` under cursor | `Enter` | `Enter` | tap |
-| New block below + Insert | `o` | `o` | toolbar `+` |
+| New block below + Insert | `o` | `o` / `Cmd/Ctrl+Shift+Enter` | toolbar `+` |
 | New block above + Insert (creates a sibling *before* the selected block) | `O` | `O` | — |
 | Indent block | `Tab` | `Tab` | drag right |
 | Outdent block | `Shift+Tab` | `Shift+Tab` | drag left |
@@ -118,6 +118,11 @@ The desktop honours `Normal`/`Visual` only while `editor.vim_mode = true`. The T
 > **About `a` / `*` / `#` on the desktop.** The desktop's Normal mode has only a selected block id — no character cursor inside the block. So `a` collapses to `i` (the textarea's own caret takes over), and `*` / `#` seed the picker with the first few words of the selected block's text instead of doing a word-under-cursor search. The catalog still ships these chords so muscle memory from the TUI carries over.
 
 > **`Cmd+X` / `Cmd+C` / `Cmd+V` are mode-aware on the desktop.** Inside a block editor (Insert mode, a `<textarea>` is focused) they are the OS-native text cut / copy / paste — the chords aren't in the catalog there, so the keystroke reaches the webview untouched. In **view mode** (Normal, nothing focused) they act on the whole selected block + its subtree: cut marks it to *move by id* (the paste emits a single `Op::Move`, so `((blk-…))` refs and backlinks survive — and the target may live on another page, moving the block across pages), copy snapshots it as markdown (the paste duplicates with fresh ids). This is also why **run code block** moved off `Cmd+X` to `Cmd+Shift+X` (view mode): a text-editing app has to let the OS-wide cut win.
+
+> **`Cmd/Ctrl+Shift+Enter` works without vim mode.**
+> Unlike `o`, the chord is not vim-gated: with no textarea focused the desktop falls into Normal dispatch regardless of the `vim_mode` setting, so every user can append a block from view mode.
+> Inside a block editor the same chord commits the current edit first (Insert-mode `CommitAndContinue`).
+> Both `Cmd+Shift+Enter` (macOS) and `Ctrl+Shift+Enter` (Windows / Linux) are bound in each mode.
 
 ### Cursor inside a block (Normal)
 

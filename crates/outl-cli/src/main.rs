@@ -239,6 +239,11 @@ fn main() -> Result<()> {
         init_tracing(cli.verbose);
     }
 
+    // Resolve the journal/clock timezone once, before any subcommand
+    // computes "today" (#107). Idempotent with the TUI's own init on the
+    // no-subcommand path. No `[calendar] timezone` → OS local, as before.
+    outl_actions::clock::init(outl_config::load().calendar.timezone.as_deref());
+
     match cli.command {
         None => {
             let p = resolve_path(cli.workspace.as_ref(), None)?;

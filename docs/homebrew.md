@@ -34,7 +34,7 @@ brew unlink outl-beta && brew install outl       # to GA
 brew unlink outl      && brew install outl-beta  # to beta
 ```
 
-## Install the desktop app
+## Install the desktop app (macOS)
 
 ```bash
 brew tap avelino/outl https://github.com/avelino/outl   # same tap as the CLI
@@ -44,6 +44,9 @@ brew install --cask outl-desktop-beta
 
 That drops `outl.app` into `/Applications` via the **universal** dmg the release workflow builds on a single arm64 runner (`--target universal-apple-darwin` → `lipo` merge of arm64 + x86_64 into one binary).
 Both Apple Silicon and Intel Macs install the same dmg.
+
+> **Linux desktop:** Homebrew has no GUI cask on Linux, so the app ships as AppImage / `.deb` / `.rpm` assets on each [GitHub release](https://github.com/avelino/outl/releases).
+> See [Getting started → Desktop app on Linux](getting-started.md#desktop-app-on-linux).
 The cask sits in [`/Casks/outl-desktop-beta.rb`](../Casks/outl-desktop-beta.rb) and is bumped automatically alongside the CLI formula on every push to `main`.
 
 The CLI formula (`outl-beta`) and the desktop cask coexist without conflicts — the formula installs `/usr/local/bin/outl`, the cask installs `/Applications/outl.app`.

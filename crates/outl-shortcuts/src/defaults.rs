@@ -45,6 +45,9 @@ fn shift_meta_key(k: Key) -> ChordSequence {
 fn ctrl_key(k: Key) -> ChordSequence {
     ChordSequence::chord(Chord::new(Modifiers::CTRL, k))
 }
+fn shift_ctrl_key(k: Key) -> ChordSequence {
+    ChordSequence::chord(Chord::new(Modifiers::CTRL | Modifiers::SHIFT, k))
+}
 fn pair(a: char, b: char) -> ChordSequence {
     ChordSequence::pair(Chord::ch(a), Chord::ch(b))
 }
@@ -371,6 +374,34 @@ pub fn default_bindings() -> Vec<Binding> {
             "Open ref / enter Insert",
         ),
         Binding::new(ch('o'), Normal, Action::NewBlockBelow, "New block below"),
+        // View-mode counterpart of the Insert-mode `Cmd+Shift+Enter`
+        // (`CommitAndContinue`): in Normal mode there's no in-flight
+        // edit to commit, so it just creates the sibling below and
+        // drops into Insert on it — same `NewBlockBelow` action as vim
+        // `o`, but reachable without `vim_mode` (the desktop falls into
+        // Normal dispatch whenever no textarea is focused). Distinct
+        // mode from the Insert binding, so `lookup`'s mode-specific
+        // resolution keeps both: Insert → `CommitAndContinue`, Normal →
+        // `NewBlockBelow`.
+        //
+        // Two physical chords for the same gesture: `Cmd+Shift+Enter`
+        // on macOS, `Ctrl+Shift+Enter` on Windows / Linux. The desktop
+        // adapter keeps META and CTRL as distinct bits (it never
+        // rewrites `Cmd`↔`Ctrl`), so each OS needs its own row — the
+        // same two-row pattern `Cmd/Ctrl+P` and `Cmd/Ctrl+Z` already
+        // use.
+        Binding::new(
+            shift_meta_key(Key::Enter),
+            Normal,
+            Action::NewBlockBelow,
+            "New block below (Cmd+Shift+Enter)",
+        ),
+        Binding::new(
+            shift_ctrl_key(Key::Enter),
+            Normal,
+            Action::NewBlockBelow,
+            "New block below (Ctrl+Shift+Enter)",
+        ),
         Binding::new(
             shift_ch('o'),
             Normal,
@@ -475,6 +506,12 @@ pub fn default_bindings() -> Vec<Binding> {
             Insert,
             Action::CommitAndContinue,
             "Commit + new block below",
+        ),
+        Binding::new(
+            shift_ctrl_key(Key::Enter),
+            Insert,
+            Action::CommitAndContinue,
+            "Commit + new block below (Ctrl+Shift+Enter)",
         ),
         // ── Visual mode ──────────────────────────────────────────
         Binding::new(key(Key::Esc), Visual, Action::ExitInsert, "Leave Visual"),

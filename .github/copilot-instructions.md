@@ -276,6 +276,7 @@ Reject PRs that build a `LogOp` from a client and call `apply` directly.
 | Migrate pre-page-model blocks under today's journal | `outl_actions::page::migrate_legacy_into_today` | `crates/outl-actions/src/page.rs` |
 | Open / create journal for a date or today | `outl_actions::page::open_journal` / `open_today` | `crates/outl-actions/src/page.rs` |
 | Journal date utilities | `outl_actions::page::today` / `journal_slug` / `journal_title` / `date_from_slug` / `previous_journal_date` / `next_journal_date` | `crates/outl-actions/src/page.rs` |
+| Current date / time in the user's configured timezone (`[calendar] timezone`, DST-aware; OS local when unset; `init` once at boot — use instead of `chrono::Local::now()`, #107) | `outl_actions::clock::init` / `now_local` / `today` | `crates/outl-actions/src/clock.rs` |
 | Parse an `outl://` deep link into a navigation target (one parser, every GUI client routes the result — never reparse per client) | `outl_actions::parse_deep_link` / `DeepLinkTarget` / `DeepLinkError` | `crates/outl-actions/src/deeplink.rs` |
 | Filesystem paths | `outl_actions::journal::journals_dir` / `pages_dir` / `page_md_path` | `crates/outl-actions/src/journal.rs` |
 | Render a page out to `.md` | `outl_actions::journal::render_page_md` | `crates/outl-actions/src/journal.rs` |

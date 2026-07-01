@@ -24,6 +24,27 @@ CLI and desktop coexist; they share the workspace on disk through the op log.
 
 See [Homebrew tap](homebrew.md) for the channel rules, how switching between GA and beta works, and the Gatekeeper details for the desktop cask.
 
+### Desktop app on Linux
+
+Homebrew doesn't ship GUI casks on Linux, so the desktop app is published as direct download assets on every [GitHub release](https://github.com/avelino/outl/releases).
+Each release carries three formats for `x86_64`:
+
+| Asset | Use it when |
+|-------|-------------|
+| `outl-desktop-linux-x86_64.AppImage` | Any distro, no install — `chmod +x` and run. The portable default. |
+| `outl-desktop-linux-x86_64.deb` | Debian / Ubuntu (`sudo apt install ./outl-desktop-linux-x86_64.deb`). |
+| `outl-desktop-linux-x86_64.rpm` | Fedora / RHEL (`sudo dnf install ./outl-desktop-linux-x86_64.rpm`). |
+
+```bash
+# AppImage — portable, no install
+curl -LO https://github.com/avelino/outl/releases/latest/download/outl-desktop-linux-x86_64.AppImage
+chmod +x outl-desktop-linux-x86_64.AppImage
+./outl-desktop-linux-x86_64.AppImage
+```
+
+Every asset ships a matching `.sha256` sidecar.
+The CLI + TUI on Linux still install via Homebrew above.
+
 ### From source
 
 ```bash
@@ -138,7 +159,8 @@ vim_mode = true
 font_size = 15
 ```
 
-The path is the same on macOS, Linux and Windows — XDG-style — so a single file holds your personal defaults across every client. The desktop app's **Settings modal** writes here too; flipping the theme there updates the TUI on its next launch.
+The path is the same on macOS, Linux and Windows — XDG-style — so a single file holds your personal defaults across every client.
+The desktop app's **Settings modal** writes here too; flipping the theme there updates the TUI on its next launch.
 
 To pin a theme **only for one workspace**, edit its `.outl/config.toml`:
 

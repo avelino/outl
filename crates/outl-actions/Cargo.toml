@@ -26,6 +26,7 @@ outl-exec = { path = "../outl-exec", default-features = false }
 serde = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
 tracing = { workspace = true }
 yrs = { workspace = true }
 ulid = { workspace = true }
