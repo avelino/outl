@@ -22,6 +22,7 @@ import { playPluginViews } from "../lib/plugin-views";
 import { visualRangeSet } from "../lib/outline-walk";
 import { appState, setAppState } from "../lib/store";
 import { BlockRow, type BlockCallbacks } from "./BlockRow";
+import { GhostFirstBlock } from "./GhostFirstBlock";
 import { InlineBacklinks } from "./InlineBacklinks";
 
 /**
@@ -290,15 +291,6 @@ export function OutlineView() {
     onLinkClick: handleLinkClick,
   };
 
-  async function addFirstBlock() {
-    const pageId = appState.page?.id;
-    if (!pageId) return;
-    const reply = await handleError(
-      createBlock(pageId, { afterId: null, parentId: null, text: "" }),
-    );
-    if (reply) applyView(reply.view);
-  }
-
   /**
    * Journal day-of-week ("Thursday") — used in the breadcrumb
    * above the ISO title. Returns empty for non-journals or
@@ -376,13 +368,30 @@ export function OutlineView() {
           <Show
             when={appState.outline.length > 0}
             fallback={
-              <button
-                type="button"
-                onClick={addFirstBlock}
-                class="rounded px-3 py-2 text-sm opacity-60 hover:bg-(--color-outl-fg)/5 hover:opacity-100"
+              // Empty page: a ghost first block the user can type into
+              // right away. Nothing reaches the op log until non-empty
+              // text is committed, so merely opening a fresh journal
+              // day never appends an op (see GhostFirstBlock's doc).
+              <Show
+                when={appState.page}
+                fallback={
+                  <div class="px-3 py-2 text-sm opacity-60">Loading…</div>
+                }
+                keyed
               >
-                {appState.page ? "Click to add the first block" : "Loading…"}
-              </button>
+                {(page) => (
+                  <GhostFirstBlock
+                    pageId={page.id}
+                    applyView={applyView}
+                    onError={(e) =>
+                      setAppState(
+                        "lastError",
+                        e instanceof Error ? e.message : String(e),
+                      )
+                    }
+                  />
+                )}
+              </Show>
             }
           >
             <For each={appState.outline}>
