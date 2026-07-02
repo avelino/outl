@@ -82,8 +82,8 @@ export function SettingsModal() {
           if (e.target === e.currentTarget) close();
         }}
       >
-        <div class="mt-24 w-[480px] max-w-[90vw] overflow-hidden rounded-lg border border-(--color-outl-fg)/15 bg-(--color-outl-bg-elev)/95 shadow-2xl">
-          <header class="border-b border-(--color-outl-fg)/10 px-5 py-3">
+        <div class="mt-24 flex max-h-[calc(100vh-7rem)] w-[480px] max-w-[90vw] flex-col overflow-hidden rounded-lg border border-(--color-outl-fg)/15 bg-(--color-outl-bg-elev)/95 shadow-2xl">
+          <header class="shrink-0 border-b border-(--color-outl-fg)/10 px-5 py-3">
             <h2 class="text-lg font-semibold">Settings</h2>
           </header>
 
@@ -91,7 +91,7 @@ export function SettingsModal() {
             when={draft()}
             fallback={<div class="px-5 py-6 opacity-60">Loading…</div>}
           >
-            <div class="space-y-4 px-5 py-4">
+            <div class="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
               <label class="flex items-center justify-between gap-4">
                 <div>
                   <div class="text-sm font-medium">Vim mode</div>
@@ -181,7 +181,7 @@ export function SettingsModal() {
             </div>
           </Show>
 
-          <footer class="flex justify-end gap-2 border-t border-(--color-outl-fg)/10 px-5 py-3">
+          <footer class="flex shrink-0 justify-end gap-2 border-t border-(--color-outl-fg)/10 px-5 py-3">
             <button
               type="button"
               onClick={close}
