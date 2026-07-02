@@ -336,7 +336,13 @@ impl App {
     /// the menu (one extra keystroke, full discoverability and
     /// future plugin commands appear here automatically).
     pub(crate) fn open_slash(&mut self) {
-        let candidates = self.slash_candidates();
+        use crate::view::overlays::category_order_for;
+        let mut candidates = self.slash_candidates();
+        candidates.sort_by(|a, b| {
+            category_order_for(&a.name)
+                .cmp(&category_order_for(&b.name))
+                .then(a.name.cmp(&b.name))
+        });
         self.overlay = Some(Overlay::Slash(SlashState {
             query: String::new(),
             candidates,
@@ -421,7 +427,25 @@ impl App {
                 }
             })
             .collect();
-        filtered.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.name.cmp(&b.1.name)));
+        // When the query is empty, group by the canonical category order
+        // so the visual layout matches what the renderer produces after
+        // bucketing. When filtering, keep fuzzy score as the primary key
+        // (most relevant result first) but break ties by category order
+        // then name so grouping within a score band is stable.
+        use crate::view::overlays::category_order_for;
+        if query.is_empty() {
+            filtered.sort_by(|a, b| {
+                category_order_for(&a.1.name)
+                    .cmp(&category_order_for(&b.1.name))
+                    .then(a.1.name.cmp(&b.1.name))
+            });
+        } else {
+            filtered.sort_by(|a, b| {
+                b.0.cmp(&a.0)
+                    .then(category_order_for(&a.1.name).cmp(&category_order_for(&b.1.name)))
+                    .then(a.1.name.cmp(&b.1.name))
+            });
+        }
         if let Some(Overlay::Slash(ref mut s)) = self.overlay {
             s.candidates = filtered.into_iter().map(|(_, c)| c).collect();
             s.selected = s.selected.min(s.candidates.len().saturating_sub(1));

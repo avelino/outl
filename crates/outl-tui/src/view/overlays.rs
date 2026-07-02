@@ -400,10 +400,12 @@ pub(crate) fn render_slash_overlay(
     f.render_widget(input, outer[0]);
 
     // Group candidates by category, then render section headers
-    // inline. We need the original index (into `s.candidates`) to
-    // keep the highlight in sync with the selection, so we walk the
-    // list once and stash `(original_index, command, category)`
-    // tuples bucketed by category.
+    // inline. `s.candidates` arrives in registration / fuzzy-score
+    // order, which interleaves categories, so we can't just watch for
+    // the category changing between adjacent rows — that would emit the
+    // same header several times. Instead bucket first, preserving each
+    // command's original index (into `s.candidates`) so the highlight
+    // stays in sync with `s.selected` and arrow navigation.
     let mut buckets: Vec<(&str, Vec<(usize, &crate::state::SlashCommand)>)> = Vec::new();
     for (i, c) in s.candidates.iter().enumerate() {
         let cat = category_for(&c.name);
@@ -513,6 +515,13 @@ fn category_order(cat: &str) -> u8 {
         "Dates & time" => 4,
         _ => 5,
     }
+}
+
+/// Public entry point used by the overlay action (`actions/overlay.rs`)
+/// to sort `s.candidates` into the same order the renderer uses, so
+/// visual row position and `s.selected` index always agree.
+pub(crate) fn category_order_for(name: &str) -> u8 {
+    category_order(category_for(name))
 }
 
 fn category_icon(cat: &str) -> &'static str {
