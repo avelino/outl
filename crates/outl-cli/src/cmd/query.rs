@@ -10,7 +10,7 @@ use chrono::{Duration, NaiveDate};
 use clap::Args;
 use serde_json::{json, Value};
 
-use outl_actions::{today, walk_subtree, PageMeta};
+use outl_actions::{today, PageMeta};
 use outl_core::id::NodeId;
 use outl_core::property::PropValue;
 
@@ -89,7 +89,7 @@ pub fn handler(ctx: &WsCtx, args: &QueryArgs) -> Result<Value, ApiError> {
         };
 
         if let Some(tag) = &args.tag {
-            if !subtree_contains(&ctx.workspace, id, &format!("#{tag}")) {
+            if !super::page::page_has_tag(&ctx.workspace, id, tag) {
                 continue;
             }
         }
@@ -181,22 +181,4 @@ fn page_property_matches(
         }),
         None => false,
     }
-}
-
-fn subtree_contains(
-    workspace: &outl_core::workspace::Workspace,
-    parent: NodeId,
-    needle: &str,
-) -> bool {
-    let mut found = false;
-    walk_subtree(workspace, parent, |id| {
-        if let Some(text) = workspace.block_text(id) {
-            if text.contains(needle) {
-                found = true;
-                return false;
-            }
-        }
-        true
-    });
-    found
 }
