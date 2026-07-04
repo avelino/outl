@@ -60,11 +60,12 @@ Each crate has its own `CLAUDE.md` — read it before editing.
 | [`outl-core`](../crates/outl-core/CLAUDE.md) | Tree CRDT, op log, HLC, `Storage` trait. **Never** imports UI or CLI. |
 | [`outl-md`](../crates/outl-md/CLAUDE.md) | Markdown parse / render, sidecar (`.outl`), 3-level matching, inline tokens, workspace index. |
 | [`outl-actions`](../crates/outl-actions/CLAUDE.md) | UI-agnostic workspace operations. Every client calls into here. |
-| [`outl-exec`](../crates/outl-exec/CLAUDE.md) | Code-block runtime (desktop). |
+| [`outl-exec`](../crates/outl-exec/CLAUDE.md) | Code-block runtime (desktop + mobile; mobile opts out of `lang-rust`). |
+| [`outl-tauri-shared`](../crates/outl-tauri-shared/CLAUDE.md) | Shared Tauri backend — command bodies, wire DTOs, plugin thread, `AppHost` / `StorageRootProvider` traits. Both `outl-desktop` and `outl-mobile` are thin wrappers over this; a new command body always goes here first. |
 | [`outl-cli`](../crates/outl-cli/CLAUDE.md) | The `outl` binary (subcommands + JSON envelope). |
 | [`outl-tui`](../crates/outl-tui/CLAUDE.md) | The `outl-tui` binary (terminal editor). |
-| [`outl-mobile`](../crates/outl-mobile/CLAUDE.md) | Tauri 2 mobile (iOS today). |
-| [`outl-desktop`](../crates/outl-desktop/CLAUDE.md) | Tauri 2 desktop (macOS/Linux/Windows). |
+| [`outl-mobile`](../crates/outl-mobile/CLAUDE.md) | Tauri 2 mobile (iOS today) — thin `#[tauri::command]` wrappers, iOS-native bridges (`NSMetadataQuery`, `BGTaskScheduler`), Solid frontend. |
+| [`outl-desktop`](../crates/outl-desktop/CLAUDE.md) | Tauri 2 desktop (macOS/Linux/Windows) — thin `#[tauri::command]` wrappers, FS watcher, settings IO, Solid frontend. |
 | [`outl-frontend-shared`](../crates/outl-frontend-shared/CLAUDE.md) | `@outl/shared` — Solid + TS lib mobile + desktop both consume. |
 | `outl-config`, `outl-theme`, `outl-shortcuts` | Shared config / palette / chord catalog across TUI + desktop. |
 
@@ -141,10 +142,17 @@ What it does **not** give you is direct access to the iOS platform APIs that out
 
 The native code is split into **two tiers** with different test contracts:
 
-- **`crates/outl-mobile/swift/OutlKit/`** — pure Swift package (SPM). Logic that's testable in isolation: brand color, autocomplete chip parsing, toolbar action enum + MFU ordering, peer-file predicates, JS string escaping. **Has unit tests** under `swift/OutlKit/Tests/OutlKitTests/`. Run with `swift test` from `swift/OutlKit/` or via `mobile.yml` in CI.
-- **`crates/outl-mobile/src-tauri/gen/apple/Sources/outl-mobile/`** — Tauri-generated iOS shell + outl-specific UIKit / Foundation bridges (`main.mm`, `OutlOpsWatcher.swift`, `OutlBackgroundRefresh.swift`, `OutlToolbar.swift`, `OutlSuggestOverlay.swift`, `OutlSuggestView.swift`, `OutlSwizzle.swift`, `OutlBrandChrome.swift`). **No unit tests** — observed via `NSLog` probes printed on app boot. Run on a real device or simulator to exercise.
+- **`crates/outl-mobile/swift/OutlKit/`** — pure Swift package (SPM).
+  Logic that's testable in isolation: brand color, autocomplete chip parsing, toolbar action enum + MFU ordering, peer-file predicates, JS string escaping.
+  **Has unit tests** under `swift/OutlKit/Tests/OutlKitTests/`.
+  Run with `swift test` from `swift/OutlKit/` or via `mobile.yml` in CI.
+- **`crates/outl-mobile/src-tauri/gen/apple/Sources/outl-mobile/`** — Tauri-generated iOS shell + outl-specific UIKit / Foundation bridges.
+  Files: `main.mm`, `OutlOpsWatcher.swift`, `OutlBackgroundRefresh.swift`, `OutlToolbar.swift`, `OutlSuggestOverlay.swift`, `OutlSuggestView.swift`, `OutlSwizzle.swift`, `OutlBrandChrome.swift`.
+  **No unit tests** — observed via `NSLog` probes printed on app boot.
+  Run on a real device or simulator to exercise.
 
-**Rule of thumb:** if the helper can be tested in a vacuum, it goes in `OutlKit`. If it has to bind to a UIKit / Foundation API that needs the iOS runtime, it goes in `gen/apple/.../*.swift` and ships with diagnostic logs instead of tests.
+**Rule of thumb:** if the helper can be tested in a vacuum, it goes in `OutlKit`.
+If it has to bind to a UIKit / Foundation API that needs the iOS runtime, it goes in `gen/apple/.../*.swift` and ships with diagnostic logs instead of tests.
 
 ### Desktop (Tauri 2)
 
@@ -299,7 +307,8 @@ A bug fix without a regression test is a blocker in review.
 - **Real `JsonlStorage`** when the test is about persistence, sync, or anything an `ops-*.jsonl` would touch.
   Use `tempfile::TempDir` for the workspace root.
 - **`MemoryStorage`** when the test is about the algorithm and the storage is incidental noise.
-- **No mocks for the Tree CRDT.** Always replay through the real `do_op` / `undo_op`.
+- **No mocks for the Tree CRDT.**
+  Always replay through the real `do_op` / `undo_op`.
   Mocking those is how you ship a sync bug.
 - **HLC**: prefer the real generator with a known actor id (`ActorId::from_u128(1)`).
   Hard-coded timestamps creep into test assertions and break when you change the encoding.
@@ -377,10 +386,15 @@ The rule from the root `CLAUDE.md` is: any operation more than one client needs 
 
 Decide **which tier** before opening the file:
 
-1. **Can the logic be tested without UIKit?** (string parsing, predicate, MFU ordering, color math, escape) → goes in `crates/outl-mobile/swift/OutlKit/Sources/OutlKit/<Module>/`. Add a unit test alongside in `swift/OutlKit/Tests/OutlKitTests/`. Run `swift test` from `swift/OutlKit/`.
-2. **Does it need a UIKit / Foundation runtime?** (`UIView`, `BGTaskScheduler`, `NSMetadataQuery`, `NSFileCoordinator`, method swizzle) → goes in `crates/outl-mobile/src-tauri/gen/apple/Sources/outl-mobile/`. **Add `NSLog` probes** on entry / exit / error so the behavior is observable on the device console. No unit test today.
+1. **Can the logic be tested without UIKit?** (string parsing, predicate, MFU ordering, color math, escape) → goes in `crates/outl-mobile/swift/OutlKit/Sources/OutlKit/<Module>/`.
+   Add a unit test alongside in `swift/OutlKit/Tests/OutlKitTests/`.
+   Run `swift test` from `swift/OutlKit/`.
+2. **Does it need a UIKit / Foundation runtime?** (`UIView`, `BGTaskScheduler`, `NSMetadataQuery`, `NSFileCoordinator`, method swizzle) → goes in `crates/outl-mobile/src-tauri/gen/apple/Sources/outl-mobile/`.
+   **Add `NSLog` probes** on entry / exit / error so the behavior is observable on the device console.
+   No unit test today.
 
-If you find yourself writing UIKit-shaped code inside `OutlKit`, **stop** — extract the pure part into `OutlKit` and keep the UIKit binding in `gen/apple/`. The iCloud peer-file watcher is the canonical pattern: predicate logic lives in `OutlKit/Watcher/OpsFilePredicate.swift` (tested), the `NSMetadataQuery` driver lives in `gen/apple/.../OutlOpsWatcher.swift` (boot-time logged).
+If you find yourself writing UIKit-shaped code inside `OutlKit`, **stop** — extract the pure part into `OutlKit` and keep the UIKit binding in `gen/apple/`.
+The iCloud peer-file watcher is the canonical pattern: predicate logic lives in `OutlKit/Watcher/OpsFilePredicate.swift` (tested), the `NSMetadataQuery` driver lives in `gen/apple/.../OutlOpsWatcher.swift` (boot-time logged).
 
 Always re-read `crates/outl-mobile/CLAUDE.md` § "Peer-file materialisation" before touching `main.mm` or the watcher — that section spells out the iCloud race that two lines of code prevent.
 
@@ -540,7 +554,8 @@ The `tags: ["v*"]` trigger in `release.yml` picks it up.
 `testflight.yml` runs after `mobile.yml` completes, downloads the IPA artifact, uploads to App Store Connect.
 
 **Release notes** ("What to Test") come from `conventional-changelog-cli` (preset `conventionalcommits`) reading the commit log since the last tag.
-**Use Conventional Commits.** A commit without a `feat:` / `fix:` / `chore:` prefix lands under a generic "Other changes" bucket — the user loses context.
+**Use Conventional Commits.**
+A commit without a `feat:` / `fix:` / `chore:` prefix lands under a generic "Other changes" bucket — the user loses context.
 
 ### Homebrew
 
@@ -556,7 +571,8 @@ The cask carries a `caveats` block with the `xattr -dr com.apple.quarantine` wor
 
 - **Bugs**: GitHub issues with the [bug report template](../.github/ISSUE_TEMPLATE/bug_report.md).
 - **Feature requests**: GitHub issues with the feature template.
-- **Security**: [SECURITY.md](../SECURITY.md). Do not open a public issue.
+- **Security**: [SECURITY.md](../SECURITY.md).
+  Do not open a public issue.
 - **Design discussion**: open an issue with the `discussion` label, or a draft PR labeled `RFC`.
 - **Direct contact**: the project maintainer is [@avelino](https://github.com/avelino).
 

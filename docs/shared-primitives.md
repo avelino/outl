@@ -77,14 +77,17 @@ Every entry here routes through `Workspace::apply` — never build a `LogOp` fro
 | Validate a slug for filesystem safety (`..`, `/`, `\`, control chars) | `outl_actions::page::is_valid_slug` | `crates/outl-actions/src/page.rs` |
 | Derive a **deterministic page id** from slug (so two peers converge) | `outl_actions::page::page_id_from_slug` | `crates/outl-actions/src/page.rs` |
 | Find / list / create-if-missing pages | `outl_actions::page::find_by_slug` / `list_all` / `open_or_create` | `crates/outl-actions/src/page.rs` |
-| Open-or-create a page from a **human-typed name** (slugifies + keeps original as title, used when a `[[ref]]` / `#tag` / picker query may not be a valid slug) | `outl_actions::page::open_or_create_by_name` | `crates/outl-actions/src/page.rs` |
-| Open-or-create whatever a **user-typed ref target** points at (date → journal, else literal/slugified/title match → existing page, else create) — handles `@`-prefixed mentions by stripping the `@` and marking new pages as `type:: person`; the one decision tree so frontend regex and backend parser cannot drift on `[[2026-13-01]]` or `[[@avelino]]` | `outl_actions::page::open_or_create_by_ref` | `crates/outl-actions/src/page.rs` |
-| Search pages typed `type:: person`, fuzzy-ranked by query (powers the `@` mention autocomplete in every client) | `outl_actions::page::search_persons` | `crates/outl-actions/src/page.rs` |
+| Open-or-create a page from a **human-typed name** (slugifies + keeps original as title, used when a `[[ref]]` / `#tag` / picker query may not be a valid slug) | `outl_actions::resolve::open_or_create_by_name` | `crates/outl-actions/src/resolve.rs` |
+| Open-or-create whatever a **user-typed ref target** points at (date → journal, else literal/slugified/title match → existing page, else create) — handles `@`-prefixed mentions by stripping the `@` and marking new pages as `type:: person`; the one decision tree so frontend regex and backend parser cannot drift on `[[2026-13-01]]` or `[[@avelino]]` | `outl_actions::resolve::open_or_create_by_ref` | `crates/outl-actions/src/resolve.rs` |
+| Search pages typed `type:: person`, fuzzy-ranked by query (powers the `@` mention autocomplete in every client) | `outl_actions::person::search_persons` | `crates/outl-actions/src/person.rs` |
 | Read / write a property on a page (or any node) | `outl_actions::page::read_text_prop` / `set_property` | `crates/outl-actions/src/page.rs` |
 | Migrate pre-page-model blocks under today's journal (run on boot) | `outl_actions::page::migrate_legacy_into_today` | `crates/outl-actions/src/page.rs` |
 | Open / create the journal for a specific date or today | `outl_actions::page::open_journal` / `open_today` | `crates/outl-actions/src/page.rs` |
-| Journal date utilities (today, slug ↔ date, prev/next day) | `outl_actions::page::today` / `journal_slug` / `journal_title` / `date_from_slug` / `previous_journal_date` / `next_journal_date` | `crates/outl-actions/src/page.rs` |
+| Journal date labels & day arithmetic (slug ↔ date, title, `[[YYYY-MM-DD]]` ref, prev/next day) | `outl_actions::dates::journal_slug` / `journal_title` / `journal_ref` / `date_from_slug` / `previous_journal_date` / `next_journal_date` | `crates/outl-actions/src/dates.rs` |
+| Today's journal date in the configured timezone (delegates to `clock`) | `outl_actions::page::today` | `crates/outl-actions/src/page.rs` |
+| Week arithmetic — ISO-week tag (`#2026-W22`, `%G`-correct at year boundaries) and "days until next `<weekday>`" (same weekday → 7, never 0) | `outl_actions::dates::week_tag` / `days_until_next_weekday` | `crates/outl-actions/src/dates.rs` |
 | Current date / time in the user's configured timezone (`[calendar] timezone`, DST-aware via chrono-tz; OS local when unset). Call `init` once per client at boot; `page::today` delegates here, so use `now_local` / `today` instead of `chrono::Local::now()` (issue #107) | `outl_actions::clock::init` / `now_local` / `today` | `crates/outl-actions/src/clock.rs` |
+| Parse a **human-typed date** in any supported spelling (`2026-04-22`, `2026/04/22`, `22/04/2026`, Roam's `April 22nd, 2026`, `Sept 3rd, 2025`, `22 April 2026`) into a `NaiveDate`, or into the ISO label outl uses for journal slugs / `[[date]]` refs — the one owner of the ordinal-stripping logic that used to be copied in four places (paste normalization, `outl daily`, `outl import`, Obsidian frontmatter). `parse_date_arg` layers **relative offsets** (`+3d`, `-2w`, `+1m`, bare `5d`) on top for slash-command / CLI arguments | `outl_actions::dates::parse_flexible_date` / `parse_date_label` / `parse_date_arg` | `crates/outl-actions/src/dates.rs` |
 | Parse an `outl://` deep link URL into a navigation target (one parser, every GUI client routes the result to its own `open_*` command — never reparse per client) | `outl_actions::parse_deep_link` / `DeepLinkTarget` / `DeepLinkError` / `DEEP_LINK_SCHEME` | `crates/outl-actions/src/deeplink.rs` |
 | Filesystem paths for journals / pages / a specific page | `outl_actions::journal::journals_dir` / `pages_dir` / `page_md_path` | `crates/outl-actions/src/journal.rs` |
 | Render a page node out to `.md` | `outl_actions::journal::render_page_md` | `crates/outl-actions/src/journal.rs` |
@@ -105,12 +108,18 @@ Every entry here routes through `Workspace::apply` — never build a `LogOp` fro
 | Flatten an `OutlineNode` subtree to DFS paths (for selection / navigation) | `outl_actions::outline::flatten_subtree_paths` | `crates/outl-actions/src/outline.rs` |
 | Read a page from disk + project to outline view in one call | `outl_actions::outline::read_page_view` / `read_page_view_with_workspace` | `crates/outl-actions/src/outline.rs` |
 | Read a page **and** surface parser warnings (banner, doctor, status line) | `outl_actions::outline::read_page_outline` / `read_page_outline_with_workspace` → `PageOutline { nodes, warnings }` | `crates/outl-actions/src/outline.rs` |
+| Slugify a user-visible page name into a filesystem-safe slug (lowercase, folds Latin diacritics `á` → `a`, non-alphanumerics collapse to `-`; empty input → `UNTITLED_SLUG`) — never hand-roll an ASCII-only copy | `outl_md::slug::slugify` / `UNTITLED_SLUG` | `crates/outl-md/src/slug.rs` |
 
-## 6. External markdown coercion & ingest (outl-actions::paste + ingest)
+## 6. External markdown coercion & ingest (outl-md::frontmatter + wikilink, outl-actions::paste + ingest)
 
 | Intent | Use this | File |
 |---|---|---|
 | Coerce **external markdown** (line endings, indent unit 4→2, Roam/GitHub/Logseq tokens, long-form dates → ISO, strip `id::` with Crockford validation, strip unknown `{{…}}` / `^^…^^`) | `outl_actions::paste::normalize_external_syntax` | `crates/outl-actions/src/paste/normalize.rs` |
+| Split a leading `---` YAML frontmatter fence off a `.md` body (CRLF-safe, honours `...` end marker, no-fence → verbatim body) | `outl_md::frontmatter::split_frontmatter` | `crates/outl-md/src/frontmatter.rs` |
+| Parse a YAML frontmatter block into flat `key:: value` properties (`title` lifted, `tags` normalized to `#name`, caller-supplied drop-list; values verbatim — date normalization stays with the caller) | `outl_md::frontmatter::parse_frontmatter` → `Frontmatter` | `crates/outl-md/src/frontmatter.rs` |
+| Lift a leading `# H1` line into a page title (first non-blank line only) | `outl_md::frontmatter::extract_leading_h1` | `crates/outl-md/src/frontmatter.rs` |
+| Collapse external wiki-link variants (`[[Note\|alias]]`, `[[Note#h]]`, `[[Note^blk]]`, `[[folder/Note]]`) to canonical `[[Note]]` | `outl_md::wikilink::rewrite_wikilinks` (whole text) / `clean_wikilink_target` (one target) | `crates/outl-md/src/wikilink.rs` |
+| Convert image wiki-links / embeds (`![[img.png]]`, `[[a/b.jpeg\|cap]]`) into CommonMark links, folder path preserved | `outl_md::wikilink::convert_image_links` (+ `is_image_target` predicate) | `crates/outl-md/src/wikilink.rs` |
 | "Does this clipboard look like an outline?" classifier | `outl_actions::paste::looks_like_outline` | `crates/outl-actions/src/paste/mod.rs` |
 | Convert clipboard markdown into outl ops grafted at a position | `outl_actions::paste::paste_markdown` → `PasteOutcome` (anchor described by `PasteAnchor`) | `crates/outl-actions/src/paste/mod.rs` |
 | Paste raw text as a single block with no normalisation or outline parsing (the "without formatting" path) | `outl_actions::paste::paste_plain(workspace, hlc, anchor, raw)` → `PasteOutcome` | `crates/outl-actions/src/paste/mod.rs` |
@@ -124,6 +133,7 @@ Every entry here routes through `Workspace::apply` — never build a `LogOp` fro
 |---|---|---|
 | Reconcile an existing `.md` against its sidecar (3-level matching → diff → min ops) | `outl_md::reconcile::reconcile_md` (no sidecar = fresh random id) / `reconcile_md_with_page_id` (pin id for first ingest) | `crates/outl-md/src/reconcile.rs` |
 | Reconcile every `.md` in a directory | `outl_md::reconcile::reconcile_dir` | `crates/outl-md/src/reconcile.rs` |
+| Materialise a page root in the tree (`Op::Create` at root + `page-slug` / `page-kind` `SetProp`s, idempotent) without running the full reconcile pipeline | `outl_md::reconcile::ensure_page_root_in_tree` | `crates/outl-md/src/reconcile.rs` |
 | Reconcile error / report types | `outl_md::ReconcileError` / `ReconcileReport` | `crates/outl-md/src/reconcile.rs` |
 | 3-level matching algorithm (hash → similarity → orphan log) | `outl_md::matching::match_blocks` → `Match` / `MatchLevel` | `crates/outl-md/src/matching.rs` |
 | Diff old AST + new AST + old sidecar → minimum sequence of `Op`s | `outl_md::diff::diff_to_ops` → `DiffPlan` | `crates/outl-md/src/diff.rs` |
@@ -176,6 +186,7 @@ UI-agnostic; both TUI and mobile consume them.
 | Tokenize inline markdown into an **owned, Serde-friendly** form for wire / DTO payloads (mobile renders these straight; no parallel TS tokenizer) | `outl_md::inline::tokenize_owned` → `InlineToken` | `crates/outl-md/src/inline.rs` |
 | Reconstruct the source markdown from a `Vec<InlineTok>` (Bold / Italic / Strike now carry recursively-tokenized inners; use this when a surface wants the whole inner span as one styled string instead of dispatching per-variant) | `outl_md::inline::inline_to_source` | `crates/outl-md/src/inline.rs` |
 | Resolve the ref under a caret position (`Page` / `Journal` / `Tag` / `Block`) | `outl_md::inline::ref_at_cursor` → `RefTarget` | `crates/outl-md/src/inline.rs` |
+| Does a text mention `#tag` as a whole tag token? Boundary-correct via the tokenizer (`#tag-longer` / `#tagged` never match `tag`; `#tag` inside a code span is not a tag) — never use `text.contains("#tag")` | `outl_md::tag::text_contains_tag` | `crates/outl-md/src/tag.rs` |
 | Validate a `((blk-XXXXXX))` handle string | `outl_md::inline::is_valid_block_handle` | `crates/outl-md/src/inline.rs` |
 | Byte offset for a char index (UTF-8 safe) | `outl_md::inline::byte_index_for_char` | `crates/outl-md/src/inline.rs` |
 | Canonicalize a fence info-string (`rs` → `rust`, `js`/`javascript`/`node` → `js`, …) — single source of truth for both `outl-exec`'s runtime dispatch and the frontend syntax highlighter | `outl_md::lang::canonical`, `outl_md::lang::KNOWN_ALIASES` | `crates/outl-md/src/lang.rs` |
@@ -219,6 +230,8 @@ The runtime catalog (which languages are available) is selected by the **binary*
 | Re-project a page's `.md` + sidecar to disk / reload + reproject in one call | `SyncEngine::reproject_page` / `refresh_page` | `crates/outl-actions/src/sync.rs` |
 | Snapshot every / peer-only `ops-*.jsonl` (size + mtime) for change detection | `SyncEngine::snapshot` / `snapshot_peers` (`OpsFileSnapshot`) | `crates/outl-actions/src/sync.rs` |
 | Scan `journals/` + `pages/` for orphan `.md` (no sidecar / stale hash) | `SyncEngine::scan_for_orphans` | `crates/outl-actions/src/sync.rs` |
+| Detect projections that ran **ahead of the op log** (sidecar hash-in-sync but referencing ids no op log ever created — e.g. app killed after writing `.md`+sidecar but before the ops append) | `outl_actions::scan_for_desynced_projections(ws, root)` / `SyncEngine::scan_for_desynced_projections(ws)` | `crates/outl-actions/src/desync.rs` |
+| Recover a desynced projection: re-emit `Create`/`Edit`/`SetProp` ops for the sidecar ids the tree has never seen (ids preserved, strictly additive — never resurrects a trashed block, never touches existing ones), then re-project the merged page | `outl_actions::recover_desynced_projection(ws, hlc, root, md_path)` | `crates/outl-actions/src/desync.rs` |
 | Transport abstraction (iroh QUIC default; file/iCloud polling opt-in) | `outl_actions::SyncTransport` (trait) | `crates/outl-actions/src/sync.rs` |
 | Filesystem / iCloud opt-in transport (polls `ops/` every 2 s, delivery is no-op) | `outl_actions::FileSyncTransport` | `crates/outl-actions/src/sync.rs` |
 | Per-peer reachability snapshot from the running transport's own dials (GUI status; never bind a probe endpoint) | `SyncTransport::peer_health` → `outl_actions::PeerHealthSnapshot` | `crates/outl-actions/src/sync.rs` |

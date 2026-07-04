@@ -79,6 +79,7 @@ outl/
     ├── outl-tui/              # `outl-tui` binary
     ├── outl-mobile/           # Tauri 2 mobile app (iOS first)
     ├── outl-desktop/          # Tauri 2 desktop app (macOS/Linux/Windows)
+    ├── outl-tauri-shared/     # shared Tauri backend (command bodies, DTOs, plugin thread) for desktop + mobile
     └── outl-frontend-shared/  # TS+Solid lib (@outl/shared) consumed by mobile + desktop
 ```
 
