@@ -55,6 +55,18 @@ Treat matching with the same paranoia as the CRDT.
   `*` is not subject to this restriction — it works mid-word.
   Enforced in `try_italic_under` / `try_bold_under` via the `closing_underscore` helper.
   **`inline.rs` is over 900 lines** — known refactor debt; invoke `refactor-architect` before adding further features to this file.
+- **External frontmatter** (`frontmatter.rs`) — metadata extraction for markdown authored by other tools.
+  `split_frontmatter` splits the leading `---` fence off a `.md` body (CRLF-safe, honours the `...` end marker; no closing fence → whole file stays body).
+  `parse_frontmatter(yaml, drop_keys) → Frontmatter { title, props, dropped }` flattens the YAML into `key:: value` properties: `title` lifted, `tags` normalized to `#name`, caller-supplied drop-list, values verbatim.
+  Date normalization is caller policy because the flexible date parser lives in `outl-actions`, which depends on this crate.
+  `extract_leading_h1` lifts a leading `# H1` line into a title (first non-blank line only).
+  Consumed by the CLI importers (Obsidian today); source-specific key policy stays with the caller.
+- **External wiki-link rewriting** (`wikilink.rs`) — `rewrite_wikilinks` / `clean_wikilink_target` collapse `[[Note|alias]]` / `[[Note#heading]]` / `[[Note^block-id]]` / `[[folder/Note]]` to canonical `[[Note]]`;
+  `convert_image_links` / `is_image_target` turn image wiki-links and embeds (`![[img.png]]`, `[[a/b.jpeg|cap]]`) into standard CommonMark links with the folder path preserved.
+  Pure text → text; no vault layout or routing policy.
+- **Tag predicate** (`tag.rs`) — `text_contains_tag(text, tag)`: boundary-correct "does this text mention `#tag`?" built on the tokenizer.
+  `#tag-longer` / `#tagged` never match `tag`; a `#tag` inside a `` `code` `` span is not a tag.
+  Consumers must use this instead of `text.contains("#tag")` (the substring form is the false-positive bug this module deleted from the CLI).
 - **Block index** (`block_index.rs`) — `NodeId → BlockEntry`, `ref_handle → NodeId`, `NodeId → [BlockReference]` (reverse refs), `(slug, dfs_path) → NodeId` for location lookup.
   Population is two-pass (`collect_page_blocks` then `collect_page_refs`) so reverse edges survive arbitrary page-load order during the initial build.
   Lookups are O(1).
@@ -176,11 +188,14 @@ src/
 ├── diff.rs         # AST diff → Op sequence (takes old_blocks to preserve ref_handle)
 ├── inline.rs       # InlineTok (Plain/Bold/.../BlockRef/Embed/Emoji), RefTarget, ref_at_cursor
 ├── emoji.rs        # shortcode_to_unicode, search, is_valid_shortcode, EmojiHit
+├── frontmatter.rs  # split_frontmatter, parse_frontmatter, extract_leading_h1 (external md metadata)
+├── wikilink.rs     # rewrite_wikilinks, clean_wikilink_target, convert_image_links, is_image_target
 ├── lang.rs         # canonical(fence) — alias table shared by outl-exec + frontend syntax highlighter
 ├── index.rs        # WorkspaceIndex — page-level + block-level facade
 ├── block_index.rs  # BlockEntry, BlockReference, BlockIndex (id ↔ handle ↔ reverse refs)
 ├── reconcile.rs    # high-level reconcile_md (parse → match → diff → apply)
 ├── slug.rs         # slugify page names
+├── tag.rs          # text_contains_tag — boundary-correct #tag predicate over the tokenizer
 ├── view.rs         # render helpers consumed by UIs
 └── atomic.rs       # crash-safe write_atomic
 

@@ -17,6 +17,7 @@ path = "src/lib.rs"
 outl-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 comrak = { workspace = true }
