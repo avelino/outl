@@ -36,7 +36,10 @@
 //! - `#[[Tag Name]]` becomes `[[Tag Name]]` (outl uses `#tag` only for
 //!   single-token tags).
 
-use super::{parse_journal_date, write_page_md, ImportReport, ResolvedUid, UidIndex};
+use super::common::{
+    parse_journal_date, resolve_uid_ref, truncate, write_page_md, ResolvedUid, UidIndex,
+};
+use super::ImportReport;
 use crate::workspace_layout::Paths;
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -85,7 +88,7 @@ pub fn import(src: &Path, paths: &Paths) -> Result<ImportReport> {
         emit_page(page, &uid_index, paths, &mut report)?;
     }
 
-    super::seed_sidecars(paths)?;
+    super::common::seed_sidecars(paths)?;
     Ok(report)
 }
 
@@ -102,15 +105,6 @@ fn register_uids(page_title: &str, block: &RoamBlock, uid_index: &mut UidIndex) 
     for child in &block.children {
         register_uids(page_title, child, uid_index);
     }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    let mut out: String = s.chars().take(max - 1).collect();
-    out.push('…');
-    out
 }
 
 fn emit_page(
@@ -190,13 +184,7 @@ fn rewrite_inline(
         if c == '(' && text[i..].starts_with("((") {
             if let Some(close_rel) = text[i + 2..].find("))") {
                 let uid = &text[i + 2..i + 2 + close_rel];
-                if let Some(resolved) = uid_index.get(uid) {
-                    out.push_str(&format!("[[{}]]", resolved.page_name));
-                    *artifacts += 1;
-                } else {
-                    out.push_str(&format!("((unresolved:{uid}))"));
-                    *unresolved += 1;
-                }
+                out.push_str(&resolve_uid_ref(uid, uid_index, artifacts, unresolved));
                 for _ in 0..(2 + close_rel + 2 - 1) {
                     chars.next();
                 }
