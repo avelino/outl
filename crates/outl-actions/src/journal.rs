@@ -192,6 +192,33 @@ pub fn apply_page_md_with_sidecar(
     Ok(path)
 }
 
+/// Like [`apply_page_md_with_sidecar`], but **skips the write when the
+/// `.md` file already exists on disk**.
+///
+/// Use this on read paths (e.g. `open_page_by_slug`) where the goal is
+/// to lazily materialise a page that a peer synced into the CRDT tree
+/// but never projected to disk on this device.
+/// Calling the unconditional variant on every page open would rewrite
+/// the `.outl` sidecar on every navigation because `build_sidecar`
+/// stamps `last_synced_at: now()` — turning the hottest nav path into
+/// constant sync churn even when nothing changed.
+///
+/// Returns `Some(path)` when the file was absent and was written, or
+/// `None` when the file already existed and no I/O was performed.
+pub fn apply_page_md_with_sidecar_if_absent(
+    workspace: &Workspace,
+    root: &Path,
+    page_root: NodeId,
+) -> Result<Option<PathBuf>, ActionError> {
+    let meta = page_meta(workspace, page_root)
+        .ok_or_else(|| ActionError::NotInTree(page_root.to_string()))?;
+    let path = page_md_path(root, &meta);
+    if path.exists() {
+        return Ok(None);
+    }
+    apply_page_md_with_sidecar(workspace, root, page_root).map(Some)
+}
+
 /// Construct a sidecar that lines up with the `.md` we just rendered
 /// from the workspace. Walks the page subtree in DFS preorder — the
 /// same order [`render_page_md`] emits — so every block's index in
@@ -533,5 +560,95 @@ mod tests {
         assert_eq!(written.len(), 1);
         let body = std::fs::read_to_string(&written[0]).unwrap();
         assert_eq!(body, "- first idea\n");
+    }
+
+    /// Regression for https://github.com/avelino/outl/issues/120 —
+    /// a page synced from a peer exists in the CRDT tree but has no
+    /// `.md` on this device's disk. `open_page_by_slug` calls
+    /// `apply_page_md_with_sidecar_if_absent`; without the projection
+    /// `read_page_outline` returns an empty outline and the page opens
+    /// blank. This test models that scenario: page in workspace, no
+    /// file on disk → helper writes the projection → outline is populated.
+    #[test]
+    fn apply_if_absent_projects_when_md_is_missing() {
+        let actor = ActorId::new();
+        let hlc = HlcGenerator::new(actor);
+        let mut ws = Workspace::open_in_memory(actor).unwrap();
+        let tmp = TempDir::new().unwrap();
+
+        // Simulate a synced page: exists in the CRDT tree, no .md on disk.
+        let page = open_or_create(&mut ws, &hlc, "synced", "Synced", PageKind::Page).unwrap();
+        append_block(&mut ws, &hlc, Some(page), Some("peer block")).unwrap();
+
+        // Pre-condition: no .md on disk yet.
+        let meta = page_meta(&ws, page).unwrap();
+        let path = page_md_path(tmp.path(), &meta);
+        assert!(!path.exists(), "test setup error: .md should not exist yet");
+
+        // Call the guarded helper — should project because the file is absent.
+        let result = apply_page_md_with_sidecar_if_absent(&ws, tmp.path(), page).unwrap();
+        assert!(
+            result.is_some(),
+            "expected Some(path) when .md was absent, got None"
+        );
+        assert!(path.exists(), ".md must be on disk after projection");
+
+        // The projected content must match the CRDT tree (not be empty).
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            body, "- peer block\n",
+            "projected .md must contain the peer's block, not be blank"
+        );
+
+        // `read_page_outline` (the path `open_page_by_slug` takes after
+        // the projection) must now return populated content.
+        let outline = crate::outline::read_page_outline(tmp.path(), &meta).unwrap();
+        assert_eq!(outline.nodes.len(), 1, "outline must have the peer's block");
+        assert_eq!(outline.nodes[0].text, "peer block");
+    }
+
+    /// Guard against sync churn: calling `apply_page_md_with_sidecar_if_absent`
+    /// on a page whose `.md` is already on disk must be a **no-op** — it must
+    /// not rewrite the `.outl` sidecar. `build_sidecar` stamps
+    /// `last_synced_at: now()`, so an unconditional call would rewrite
+    /// the sidecar bytes on every page open, generating noise for every
+    /// file-transport peer (iCloud / Syncthing) even when nothing changed.
+    #[test]
+    fn apply_if_absent_is_noop_when_md_already_exists() {
+        let actor = ActorId::new();
+        let hlc = HlcGenerator::new(actor);
+        let mut ws = Workspace::open_in_memory(actor).unwrap();
+        let tmp = TempDir::new().unwrap();
+
+        let page = open_or_create(&mut ws, &hlc, "notes", "Notes", PageKind::Page).unwrap();
+        append_block(&mut ws, &hlc, Some(page), Some("a block")).unwrap();
+
+        // First projection: write the .md and .outl to disk.
+        apply_page_md_with_sidecar(&ws, tmp.path(), page).unwrap();
+
+        let meta = page_meta(&ws, page).unwrap();
+        let md_path = page_md_path(tmp.path(), &meta);
+        let sidecar_path = outl_md::sidecar::sidecar_path_for(&md_path);
+
+        // Capture the sidecar bytes before the guarded call.
+        let sidecar_before = std::fs::read(&sidecar_path).unwrap();
+
+        // Give the clock a chance to tick so a second `now()` stamp
+        // would differ if the sidecar were rewritten.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+
+        // Guarded call — file exists, must be a no-op.
+        let result = apply_page_md_with_sidecar_if_absent(&ws, tmp.path(), page).unwrap();
+        assert!(
+            result.is_none(),
+            "expected None when .md already exists, got Some"
+        );
+
+        // Sidecar bytes must be unchanged (no `last_synced_at: now()` rewrite).
+        let sidecar_after = std::fs::read(&sidecar_path).unwrap();
+        assert_eq!(
+            sidecar_before, sidecar_after,
+            ".outl sidecar must not be rewritten when .md already existed"
+        );
     }
 }
