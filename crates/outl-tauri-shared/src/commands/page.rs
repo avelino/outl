@@ -98,6 +98,18 @@ pub fn open_journal_for<S: AppHost>(state: &S, slug: String) -> Result<PageView,
 /// for the disk path and keeps the original as the page title. That way
 /// clicking a ref to a page that doesn't exist still opens a fresh page
 /// in the same round-trip.
+///
+/// Before building the view, lazily project the page's `.md` + sidecar
+/// **only when the `.md` is absent from disk**. Without this, a page
+/// synced from a peer exists in the in-memory CRDT tree (so it shows up
+/// in search) but its `.md` was never written on this device;
+/// `read_page_outline` does `fs::read_to_string().unwrap_or_default()`,
+/// a missing file silently returns `""`, `parse("")` produces an empty
+/// outline, and the page opens blank (issue #120).
+/// The `_if_absent` guard avoids rewriting the `.outl` sidecar on every
+/// open: `build_sidecar` stamps `last_synced_at: now()`, so an
+/// unconditional projection would create constant sync churn on the
+/// hottest nav path even when nothing changed.
 pub fn open_page_by_slug<S: AppHost>(state: &S, slug: String) -> Result<PageView, String> {
     let root = state.storage_root()?;
     let existing = with_ws(state, |ws| Ok(find_by_slug(ws, &slug)))?;
@@ -108,6 +120,12 @@ pub fn open_page_by_slug<S: AppHost>(state: &S, slug: String) -> Result<PageView
                 .map_err(|e| e.to_string())
         })?,
     };
+    with_ws_mut(state, |ws| {
+        if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_absent(ws, &root, id) {
+            tracing::warn!("open_page_by_slug: apply_page_md_with_sidecar failed for {slug}: {e}");
+        }
+        Ok(())
+    })?;
     with_ws(state, |ws| {
         build_page_view(ws, &root, id).map_err(|e| e.to_string())
     })
