@@ -143,16 +143,12 @@ fn snapshot_and_delta_match_full_replay() {
     );
     drop(ws);
 
-    // 3. Apply delta: create a brand-new node + edit it. We avoid
-    //    re-editing a node that already had an `Edit` pre-snapshot —
-    //    `materialize` (used by both boot paths) re-derives a node's
-    //    text from its full Edit history on a fresh Doc, and a known
-    //    Yrs quirk with sequential same-actor `replace_text` updates
-    //    can concatenate rather than replace when re-applied out of
-    //    the original Doc's state-vector context. That bug is
-    //    independent of the snapshot path; both `from_snapshot` and
-    //    `from_full` would diverge from the live state the same way.
-    //    Tracked separately.
+    // 3. Apply delta: create a brand-new node + edit it, AND re-edit n1
+    //    (which was already edited pre-snapshot). The re-edit path used
+    //    to concatenate instead of replace because the in-memory log
+    //    after snapshot boot only carried delta ops, so the Doc rebuild
+    //    missed the pre-snapshot Edit (#129). With the fix, the full
+    //    Edit history is loaded from storage and the Doc is correct.
     let mut ws2 = Workspace::open_with_storage(
         actor,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
@@ -180,9 +176,20 @@ fn snapshot_and_delta_match_full_replay() {
     ))
     .unwrap();
 
+    // Re-edit n1 — the exact scenario from #129. Both boot paths must
+    // see "hello world edited" (not "hello worldhello world edited").
+    let reedit = ws2.build_text_replace_update(n1, "hello world edited");
+    ws2.apply(logop(
+        &g,
+        Op::Edit {
+            node: n1,
+            text_op: reedit,
+        },
+    ))
+    .unwrap();
+
     // A structural op on a pre-existing node (no Edit conflict) —
-    // exercises the post-snapshot Move path without triggering the
-    // multi-Edit-per-node Yrs quirk.
+    // exercises the post-snapshot Move path.
     ws2.apply(logop(
         &g,
         Op::Move {
