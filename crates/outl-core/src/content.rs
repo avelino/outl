@@ -225,9 +225,22 @@ impl ContentStore {
     }
 
     /// Whether `node`'s `Doc` is currently resident in the cache.
-    #[cfg(test)]
     pub(crate) fn is_cached(&self, node: NodeId) -> bool {
         self.cache.contains(node)
+    }
+
+    /// Build and cache a `Doc` from the given updates, also refreshing
+    /// the materialized text. Used when the in-memory log is incomplete
+    /// (snapshot boot) and the full `Edit` history must be loaded from
+    /// storage to rebuild a correct Doc (#129).
+    pub(crate) fn cache_doc<'a>(&mut self, node: NodeId, updates: impl Iterator<Item = &'a [u8]>) {
+        if self.cache.contains(node) {
+            return;
+        }
+        let doc = build_doc(updates);
+        let s = doc_string(&doc);
+        self.text.insert(node, s);
+        self.cache.insert(node, doc);
     }
 
     /// Borrow the materialized text map. The snapshot path serializes it

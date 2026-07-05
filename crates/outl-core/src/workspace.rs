@@ -69,6 +69,13 @@ pub struct Workspace {
     /// `0` disables the in-band trigger (the CLI sets this — it's
     /// ephemeral and shouldn't churn the snapshots dir).
     snapshot_threshold: u32,
+    /// Whether `self.log` carries every op ever persisted (`true` after
+    /// full replay) or only the delta posted after a snapshot cutoff
+    /// (`false` after snapshot boot). When `false`, `Doc` rebuilds that
+    /// need the full `Edit` history for a node load it from storage via
+    /// [`Self::ensure_doc_for_edit`] — the in-memory log alone would
+    /// miss pre-snapshot edits and produce a wrong Doc state (#129).
+    log_complete: bool,
 }
 
 impl Workspace {
@@ -106,6 +113,7 @@ impl Workspace {
             snapshot_workers: Vec::new(),
             ops_since_snapshot: 0,
             snapshot_threshold: Workspace::DEFAULT_SNAPSHOT_THRESHOLD,
+            log_complete: true,
         };
 
         let booted_from_snapshot = match ws.boot_from_snapshot() {
@@ -117,7 +125,11 @@ impl Workspace {
             }
         };
 
-        if !booted_from_snapshot {
+        if booted_from_snapshot {
+            // The in-memory log only has delta ops; `Doc` rebuilds that
+            // need the full `Edit` history load it from storage (#129).
+            ws.log_complete = false;
+        } else {
             ws.boot_from_full_replay()?;
         }
 
@@ -170,31 +182,31 @@ impl Workspace {
         }
 
         // Re-materialize only the nodes whose text changed after the
-        // snapshot. Their `Edit` ops are replayed from the *full* log
-        // (Yrs is a CRDT, so re-applying the snapshot-era edits is
-        // idempotent) to keep a single text-derivation path.
+        // snapshot. The in-memory log only has delta ops (pre-snapshot
+        // ops are in storage), so we load the FULL `Edit` history for
+        // each edited node from storage. Replaying everything through a
+        // fresh `Doc` — pre-snapshot edits included — is what makes the
+        // resulting text match the full-replay path (#129).
         let rematerialized_count = edited_in_delta.len();
-        for node in edited_in_delta {
-            let indices: Vec<usize> = self
-                .log
+        for node in &edited_in_delta {
+            let ops = match self.storage.ops_for_node(*node) {
+                Ok(o) => o,
+                Err(e) => {
+                    warn!("skipping re-materialize for {node}: {e}");
+                    continue;
+                }
+            };
+            let updates: Vec<&[u8]> = ops
                 .iter()
-                .enumerate()
-                .filter_map(|(i, l)| match &l.op {
-                    Op::Edit { node: n, .. } if *n == node => Some(i),
+                .filter_map(|l| match &l.op {
+                    Op::Edit {
+                        node: n, text_op, ..
+                    } if n == node => Some(text_op.as_slice()),
                     _ => None,
                 })
                 .collect();
-            if !indices.is_empty() {
-                self.content.materialize(
-                    node,
-                    indices.iter().filter_map(|&i| match self.log.get(i) {
-                        Some(LogOp {
-                            op: Op::Edit { text_op, .. },
-                            ..
-                        }) => Some(text_op.as_slice()),
-                        _ => None,
-                    }),
-                );
+            if !updates.is_empty() {
+                self.content.materialize(*node, updates.into_iter());
             }
         }
 
@@ -252,6 +264,42 @@ impl Workspace {
         Ok(())
     }
 
+    /// Ensure the Yrs `Doc` for `node` is in the content cache with the
+    /// FULL `Edit` history applied.
+    ///
+    /// After snapshot boot, `self.log` only carries delta ops (the
+    /// pre-snapshot ops live in storage). Rebuilding a `Doc` from the
+    /// incomplete log would miss those edits, producing a wrong state
+    /// vector and, in turn, updates that concatenate instead of replace
+    /// on full replay (#129). When `log_complete` is `false`, we load
+    /// the node's entire `Edit` history from storage before the
+    /// `ContentStore`'s internal `ensure_doc` kicks in.
+    fn ensure_doc_for_edit(&mut self, node: NodeId) {
+        if self.content.is_cached(node) {
+            return;
+        }
+        if self.log_complete {
+            return; // ContentStore::ensure_doc rebuilds from the full log.
+        }
+        let ops = match self.storage.ops_for_node(node) {
+            Ok(o) => o,
+            Err(e) => {
+                warn!("could not load ops for {node} from storage: {e}");
+                return;
+            }
+        };
+        let updates: Vec<&[u8]> = ops
+            .iter()
+            .filter_map(|l| match &l.op {
+                Op::Edit {
+                    node: n, text_op, ..
+                } if *n == node => Some(text_op.as_slice()),
+                _ => None,
+            })
+            .collect();
+        self.content.cache_doc(node, updates.into_iter());
+    }
+
     /// Apply an op locally and persist it.
     ///
     /// The op is appended to the in-memory log, dispatched to the Yrs
@@ -263,6 +311,7 @@ impl Workspace {
             // Merge the update into the block's text. The Doc is rebuilt
             // from the log here, before this op is appended below, so the
             // merge sees the prior state.
+            self.ensure_doc_for_edit(*node);
             self.content.merge_update(*node, &self.log, text_op);
         }
         self.tree.apply_op(&mut self.log, op.clone());
@@ -451,6 +500,7 @@ impl Workspace {
         if current == new_text {
             return Vec::new();
         }
+        self.ensure_doc_for_edit(node);
         self.content.replace_text(node, &self.log, new_text)
     }
 }
