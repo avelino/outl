@@ -587,6 +587,27 @@ export function BlockRow(props: {
       await commit();
       return;
     }
+    // Plain `Enter` (no modifiers) → commit + create a sibling below.
+    // TUI parity: `outl-tui/src/input/mod.rs` — "Plain Enter commits the
+    // block and creates a sibling below." `Shift+Enter` (no Cmd/Ctrl) is
+    // the soft break: it falls through to the textarea default and inserts
+    // a literal `\n` for a multi-line block (issue #119).
+    // No `stopImmediatePropagation` here (unlike `Cmd/Ctrl+Shift+Enter`
+    // below): with a textarea focused the dispatcher is in Insert mode,
+    // and the catalog has no Insert binding for a bare `Enter` (its only
+    // `Enter` row is Normal → `OpenRefUnderCursor`), so the window
+    // dispatcher no-ops — there is no double-fire to guard against.
+    if (
+      e.key === "Enter" &&
+      !e.shiftKey &&
+      !e.metaKey &&
+      !e.ctrlKey &&
+      !e.altKey
+    ) {
+      e.preventDefault();
+      await props.cb.onEnter(props.block.id, draft());
+      return;
+    }
     // `Cmd/Ctrl+Shift+Enter` is caret-position aware, handled here (not
     // via the global catalog) because only the textarea knows the caret:
     //   - caret at column 0  → create a sibling *before* this block
@@ -598,8 +619,7 @@ export function BlockRow(props: {
     // shortcut dispatcher from also firing the catalog's
     // commit-and-continue on the same keystroke (the old "Cmd+Shift+Enter
     // breaks the line" double-fire bug). `Cmd+Enter` / `Cmd+T` are still
-    // owned by the catalog; plain `Enter` still passes through to the
-    // textarea so it inserts a real `\n` (multi-line blocks).
+    // owned by the catalog.
     if (e.key === "Enter" && e.shiftKey && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       e.stopImmediatePropagation();

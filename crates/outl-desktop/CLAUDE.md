@@ -203,7 +203,7 @@ The cluster floats over the main pane on an elevated, bordered surface (active t
 ### OS-standard chrome and undo / redo
 
 The full per-chord table is in [`docs/shortcuts.md`](../../docs/shortcuts.md) — the single source of truth, shared with the TUI.
-Desktop-specific: `Cmd/Ctrl+Shift+X` runs the focused / selected code block (plain `Cmd/Ctrl+X` is OS cut / view-mode block cut); `Cmd/Ctrl+Shift+Enter` commits + creates a sibling below, caret-aware inside a textarea (see the Vim parity note).
+Desktop-specific: `Cmd/Ctrl+Shift+X` runs the focused / selected code block (plain `Cmd/Ctrl+X` is OS cut / view-mode block cut).
 
 ### Undo / redo (Normal mode — fire when no textarea is focused)
 
@@ -236,6 +236,8 @@ User-facing behaviour lives in [`docs/paste.md`](../../docs/paste.md).
 The user-facing chord table lives in [`docs/shortcuts.md`](../../docs/shortcuts.md).
 Load-bearing notes a contributor needs:
 
+- **Plain `Enter` → commit + new sibling below** (`onEnter`, TUI parity).
+  `Shift+Enter` → literal `\n` soft break (issue #119), handled in `BlockRow`'s `handleKeydown` (not the catalog; see the code comment).
 - `Cmd/Ctrl+X` (cut) and `Cmd/Ctrl+Z` (undo) deliberately fall through to the webview — no catalog binding matches inside a textarea.
   Native per-keystroke undo is still broken: the controlled `value={draft()}` binding resets the textarea's undo stack on every keystroke (issue #80).
 - Bracket auto-pairing (`[[`/`((` auto-close, `(`/`[`/`{` auto-pair with caret between, closer step-over, empty-pair collapse on `Backspace`) all live in `@outl/shared/autocomplete` (`autoPairBracket` / `autoDeletePair`, TUI parity).

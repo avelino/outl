@@ -156,8 +156,9 @@ The TUI ships it natively; the desktop has only a selected block id, so the char
 | Action | TUI | Desktop | Mobile |
 |---|---|---|---|
 | Commit + exit Insert | `Esc` | `Esc` / blur | blur |
-| Newline inside the block (multi-line text) | `Shift+Enter` | `Enter` | `Enter` |
-| Commit + new block (desktop is caret-aware: caret at col 0 → *before* the block / vim `O`; past col 0 → *below*) | `Enter` | `Cmd/Ctrl+Shift+Enter` | `Enter` |
+| Newline inside the block (multi-line text) | `Shift+Enter` | `Shift+Enter` | `Enter` |
+| Commit + new block below | `Enter` | `Enter` | `Enter` |
+| Commit + new block, caret-aware (caret at col 0 → *before* the block / vim `O`; past col 0 → *below*) | — | `Cmd/Ctrl+Shift+Enter` | — |
 | Indent (stay in Insert) | `Tab` | `Tab` | drag |
 | Outdent (stay in Insert) | `Shift+Tab` | `Shift+Tab` | drag |
 | Delete block on empty | `Backspace` on empty | `Backspace` on empty | — |
