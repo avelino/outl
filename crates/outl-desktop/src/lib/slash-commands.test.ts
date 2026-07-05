@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { rankSlashCommands } from "./slash-commands";
-import type { PluginCommand } from "./api";
+import type { PluginCommand } from "@outl/shared/api/types";
 
 const cmd = (command_id: string, title: string): PluginCommand => ({
   plugin_id: `app.outl.examples.${command_id}`,

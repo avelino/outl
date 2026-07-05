@@ -1,23 +1,24 @@
-//! Workspace open / reconcile / boot opener primitives.
+//! Desktop boot opener + background reconcile.
 //!
-//! Shared between two callers:
+//! The open / actor-id / orphan-reconcile primitives live in
+//! `outl_tauri_shared::workspace_open` (re-exported below). This module
+//! keeps the two desktop-specific orchestrations:
 //!
-//! - [`crate::commands::workspace::set_workspace`] — synchronous when
-//!   the user picks a directory via the dialog.
 //! - [`spawn_workspace_opener`] — background thread, run at boot when
 //!   `settings.last_workspace` is already set, so the WebView starts
-//!   painting before we touch the filesystem.
+//!   painting before we touch the filesystem. Starts the FS watcher and
+//!   wires the iroh transport into the swap-capable `AppState` slots.
+//! - [`spawn_background_reconcile`] — the orphan-md pass on a worker
+//!   thread, lock released between pages, so the first paint is never
+//!   blocked (mobile runs the same pass inline instead).
 
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 
-use outl_actions::{migrate_legacy_into_today, open_today, SyncTransport};
+use outl_actions::SyncTransport;
 use outl_config::SyncTransportKind;
 use outl_core::hlc::HlcGenerator;
-use outl_core::id::ActorId;
-use outl_core::storage::JsonlStorage;
 use outl_core::workspace::Workspace;
 use parking_lot::Mutex;
 use tauri::Emitter;
@@ -25,40 +26,7 @@ use tracing::{info, warn};
 
 use crate::fs_watcher::{self, WatcherHandle};
 
-/// Open (or create) the workspace rooted at `path`.
-///
-/// Idempotent: the `ops/`, `journals/`, `pages/` directories are
-/// created if missing, and `migrate_legacy_into_today` reshuffles any
-/// pre-page-model blocks under today's journal (also idempotent).
-///
-/// **Does NOT run the orphan-md reconcile pass** — that work scales
-/// with the number of pages in the workspace and used to block the
-/// app's first paint by tens of seconds on real graphs. The reconcile
-/// now runs on a separate background thread via
-/// [`spawn_background_reconcile`], so today's journal opens
-/// immediately and the user can start editing while legacy pages are
-/// materialised behind the scenes.
-pub(crate) fn open_workspace_at(
-    actor: ActorId,
-    hlc: &HlcGenerator,
-    path: &Path,
-) -> anyhow::Result<Workspace> {
-    std::fs::create_dir_all(path.join("ops"))?;
-    std::fs::create_dir_all(path.join("journals"))?;
-    std::fs::create_dir_all(path.join("pages"))?;
-
-    let storage = JsonlStorage::open(path.join("ops"), actor)?;
-    let mut workspace =
-        Workspace::open_with_storage(actor, Box::new(storage), Some(path.to_path_buf()))?;
-
-    if let Err(e) = migrate_legacy_into_today(&mut workspace, hlc) {
-        warn!("legacy migration: {e}");
-    }
-    if let Err(e) = open_today(&mut workspace, hlc) {
-        warn!("could not pre-open today: {e}");
-    }
-    Ok(workspace)
-}
+pub(crate) use outl_tauri_shared::workspace_open::{load_or_create_actor, open_workspace_at};
 
 /// Background reconcile pass for pages whose `.md` is ahead of the
 /// op log: pages authored via vim, pulled from peers without a
@@ -114,28 +82,6 @@ pub(crate) fn spawn_background_reconcile(
             warn!("emit workspace-reconciled: {e}");
         }
     });
-}
-
-/// Load (or generate-and-persist) the device's actor id.
-///
-/// The actor identifies the device, not the workspace — it's reused
-/// across whatever directory the user picks. Lives at
-/// `<app_config_dir>/actor` as a plain ULID string.
-pub(crate) fn load_or_create_actor(local_dir: &Path) -> std::io::Result<ActorId> {
-    let path = local_dir.join("actor");
-    if path.exists() {
-        let raw = std::fs::read_to_string(&path)?;
-        let raw = raw.trim();
-        if let Ok(ulid) = ulid::Ulid::from_str(raw) {
-            info!("loaded existing actor id {ulid}");
-            return Ok(ActorId(ulid));
-        }
-        warn!("invalid actor id in {}, regenerating", path.display());
-    }
-    let actor = ActorId::new();
-    std::fs::write(&path, actor.to_string())?;
-    info!("generated fresh actor id {actor}");
-    Ok(actor)
 }
 
 /// Background opener used at boot when `settings.last_workspace` is

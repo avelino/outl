@@ -120,8 +120,9 @@ fn convert_line(line: &str) -> String {
 }
 
 /// Scan for `[[...]]` page refs and rewrite the inner text when it
-/// parses as a date. Unrecognised forms (plain page names, already
-/// ISO refs) pass through untouched.
+/// parses as a date (via [`crate::dates::parse_date_label`], the
+/// workspace-wide owner of flexible date parsing). Unrecognised forms
+/// (plain page names, already ISO refs) pass through untouched.
 fn rewrite_date_refs(s: &str) -> String {
     const OPEN: &str = "[[";
     const CLOSE: &str = "]]";
@@ -137,7 +138,8 @@ fn rewrite_date_refs(s: &str) -> String {
         if let Some(close_rel) = s[after_open..].find(CLOSE) {
             let close = after_open + close_rel;
             let inner = &s[after_open..close];
-            let rewritten = parse_date_label(inner).unwrap_or_else(|| inner.to_string());
+            let rewritten =
+                crate::dates::parse_date_label(inner).unwrap_or_else(|| inner.to_string());
             out.push_str(OPEN);
             out.push_str(&rewritten);
             out.push_str(CLOSE);
@@ -150,108 +152,6 @@ fn rewrite_date_refs(s: &str) -> String {
     }
     out.push_str(&s[cursor..]);
     out
-}
-
-/// Recognise common "free-form date" spellings and return the ISO
-/// `YYYY-MM-DD` form outl uses for journal slugs. `None` when the
-/// input doesn't look like a date — callers must fall back to the
-/// original text in that case.
-///
-/// Supported inputs:
-///
-/// - Roam long form: `April 22nd, 2026` / `January 1st, 2025`
-/// - Short month long form: `Apr 22nd, 2026`
-/// - Roam alt: `2026/04/22` and `2026-04-22` pass through unchanged
-fn parse_date_label(raw: &str) -> Option<String> {
-    let s = raw.trim();
-    if s.is_empty() {
-        return None;
-    }
-    // Already ISO — keep it.
-    if is_iso_date(s) {
-        return Some(s.to_string());
-    }
-    // `2026/04/22` → `2026-04-22`
-    if let Some(iso) = normalise_slashed_iso(s) {
-        return Some(iso);
-    }
-    // Roam long form: "<Month> <day><ord>, <year>"
-    parse_long_form(s)
-}
-
-fn is_iso_date(s: &str) -> bool {
-    s.len() == 10
-        && s.as_bytes()[4] == b'-'
-        && s.as_bytes()[7] == b'-'
-        && s.bytes().enumerate().all(|(i, b)| {
-            if i == 4 || i == 7 {
-                b == b'-'
-            } else {
-                b.is_ascii_digit()
-            }
-        })
-}
-
-fn normalise_slashed_iso(s: &str) -> Option<String> {
-    if s.len() != 10 || s.as_bytes()[4] != b'/' || s.as_bytes()[7] != b'/' {
-        return None;
-    }
-    let ok = s.bytes().enumerate().all(|(i, b)| {
-        if i == 4 || i == 7 {
-            b == b'/'
-        } else {
-            b.is_ascii_digit()
-        }
-    });
-    if !ok {
-        return None;
-    }
-    Some(format!("{}-{}-{}", &s[..4], &s[5..7], &s[8..10]))
-}
-
-fn parse_long_form(s: &str) -> Option<String> {
-    let comma = s.rfind(", ")?;
-    let (left, year_str) = (&s[..comma], &s[comma + 2..]);
-    let year: i32 = year_str.parse().ok()?;
-    if !(1900..=2999).contains(&year) {
-        return None;
-    }
-    let space = left.find(' ')?;
-    let (month_name, day_part) = (&left[..space], &left[space + 1..]);
-    let month = month_number(month_name)?;
-    let day = strip_ordinal_suffix(day_part).parse::<u32>().ok()?;
-    if !(1..=31).contains(&day) {
-        return None;
-    }
-    Some(format!("{year:04}-{month:02}-{day:02}"))
-}
-
-fn month_number(name: &str) -> Option<u32> {
-    let n = name.to_ascii_lowercase();
-    Some(match n.as_str() {
-        "january" | "jan" => 1,
-        "february" | "feb" => 2,
-        "march" | "mar" => 3,
-        "april" | "apr" => 4,
-        "may" => 5,
-        "june" | "jun" => 6,
-        "july" | "jul" => 7,
-        "august" | "aug" => 8,
-        "september" | "sep" | "sept" => 9,
-        "october" | "oct" => 10,
-        "november" | "nov" => 11,
-        "december" | "dec" => 12,
-        _ => return None,
-    })
-}
-
-fn strip_ordinal_suffix(day: &str) -> &str {
-    for suffix in ["st", "nd", "rd", "th"] {
-        if let Some(rest) = day.strip_suffix(suffix) {
-            return rest;
-        }
-    }
-    day
 }
 
 /// Replace every occurrence of `{{embed: ((blk-XXXXXX))}}` with

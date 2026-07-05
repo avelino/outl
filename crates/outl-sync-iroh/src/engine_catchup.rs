@@ -8,6 +8,8 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use outl_core::id::ActorId;
@@ -185,6 +187,11 @@ pub(crate) async fn force_sync_all(
 /// request. Coalescing is fine: a burst of taps still ends in one converged
 /// state because each pass resolves the latest peers + vector clocks.
 ///
+/// After each pass returns, `passes_completed` is bumped (Release) so
+/// `IrohSyncTransport::completed_sync_passes` observers can detect "a full
+/// dial cycle finished after my request" and stop waiting early — the iOS
+/// background FFI polls exactly this instead of sleeping a fixed window.
+///
 /// Returns when the sender drops (transport shutdown).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn drain_sync_now(
@@ -198,6 +205,7 @@ pub(crate) async fn drain_sync_now(
     health: PeerHealthMap,
     append_lock: AppendLock,
     in_flight: InFlightPeers,
+    passes_completed: Arc<AtomicU64>,
 ) {
     while rx.recv().await.is_some() {
         info!("sync-now: forced sync pass requested");
@@ -213,6 +221,9 @@ pub(crate) async fn drain_sync_now(
             in_flight.clone(),
         )
         .await;
+        // The dial cycle over every peer finished (each dial succeeded or
+        // failed). Publish it for `completed_sync_passes()` pollers.
+        passes_completed.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -343,5 +354,67 @@ pub(crate) async fn run_catch_up<F>(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// Fix-3 guard (iOS background early-exit): every drained `sync_now`
+    /// request bumps the completed-pass counter exactly once when its dial
+    /// cycle returns — including the zero-peer cycle (empty `peers.json`),
+    /// which is the fastest possible pass. `completed_sync_passes()` pollers
+    /// (the background FFI) rely on this to stop waiting instead of sleeping
+    /// the full window.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn drain_sync_now_bumps_completed_pass_counter_per_request() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let identity = crate::IrohIdentity::load_or_generate(&tmp.path().join("identity.key"))
+            .expect("identity");
+        let endpoint = crate::test_support::bind_sync_endpoint(&identity)
+            .await
+            .expect("bind endpoint");
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+        let (ready_tx, _ready_rx) = std::sync::mpsc::channel::<()>();
+        let passes = Arc::new(AtomicU64::new(0));
+        let wid: SharedWorkspaceId =
+            Arc::new(std::sync::RwLock::new(outl_core::WorkspaceId::new()));
+
+        let drain = tokio::spawn(drain_sync_now(
+            rx,
+            endpoint,
+            // Absent peers.json → load_or_default yields an empty peer set,
+            // so each pass is a fast no-dial cycle.
+            tmp.path().join("peers.json"),
+            tmp.path().to_path_buf(),
+            wid,
+            ActorId::new(),
+            ready_tx,
+            PeerHealthMap::default(),
+            Arc::new(tokio::sync::Mutex::new(())),
+            Arc::new(std::sync::Mutex::new(HashSet::new())),
+            passes.clone(),
+        ));
+
+        tx.send(()).expect("queue first sync-now");
+        tx.send(()).expect("queue second sync-now");
+
+        // Bounded poll — mirrors what the FFI does with the live transport.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while passes.load(Ordering::Acquire) < 2 {
+            assert!(
+                Instant::now() < deadline,
+                "sync-now passes never reported completion"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(passes.load(Ordering::Acquire), 2);
+
+        // Dropping the sender ends the drain task cleanly.
+        drop(tx);
+        drain.await.expect("drain task join");
     }
 }

@@ -86,20 +86,19 @@ crates/outl-desktop/
         ├── main.rs            # binary entry
         ├── lib.rs             # mod decls + run() (registers all 25 commands)
         ├── settings.rs        # settings.json IO + tests
-        ├── state.rs           # AppState, PageView, WorkspaceSummary
-        ├── helpers.rs         # parse_node_id, with_ws*, finish_in_page
-        ├── workspace_open.rs  # open_workspace_at + spawn_workspace_opener
-        ├── plugin_service.rs  # PluginService + dedicated plugin thread (Boa is !Send)
-        ├── plugin_dto.rs      # wire shapes (PluginCommandDto / PluginKeybindingDto / ToolbarButtonDto / PluginRunDto) + From projections
+        ├── state.rs           # AppState + AppHost impl; wire DTOs re-exported from outl-tauri-shared
+        ├── helpers.rs         # re-exports of outl_tauri_shared::helpers + desktop-only undo invalidation
+        ├── workspace_open.rs  # open_workspace_at + spawn_workspace_opener (over shared primitives)
+        ├── plugin_service.rs  # desktop shim: CLIENT id + capability set over outl_tauri_shared::PluginService
         ├── fs_watcher.rs      # notify + debouncer → peer-ops-changed
-        └── commands/
+        └── commands/          # thin #[tauri::command] wrappers over outl_tauri_shared::commands
             ├── mod.rs
-            ├── workspace.rs   # set_workspace, current_workspace, reload, settings, stats
+            ├── workspace.rs   # set_workspace, current_workspace, reload, settings, stats (desktop-only)
             ├── page.rs        # list / search / open / journal nav / resolve_ref
-            ├── block.rs       # create / edit / todo / move / collapsed / paste_markdown_at / paste_plain_at / copy_markdown
-            ├── exec.rs        # run_code_block — thin Tauri adapter over outl_actions::exec::run_code_block (shared with mobile)
-            ├── peers.rs       # outl_peer_list / outl_peer_remove — read/edit <workspace>/.outl/peers.json via outl_sync_iroh::PeersStore
-            └── plugin.rs      # plugin_list / plugin_run / plugin_sync_hooks / plugin_keybindings / plugin_toolbar — thin shims over PluginService
+            ├── block.rs       # create / edit / todo / move / collapsed / paste_* / copy_markdown
+            ├── exec.rs        # run_code_block
+            ├── peers.rs       # outl_peer_list / outl_peer_remove / outl_sync_now
+            └── plugin.rs      # plugin_* shims (+ plugin_keybindings, desktop-only)
 ```
 
 ## First-run onboarding
@@ -188,7 +187,6 @@ The Vite dev server runs on **port 1421** so it can coexist with `outl-mobile` (
 Frontend suites today: `src/setup.test.ts` (scaffold smoke — `@outl/shared` alias resolves),
 `src/lib/chord-format.test.ts`,
 `src/lib/markdown-wrap.test.ts`,
-`src/lib/outline-walk.test.ts`,
 and `src/lib/action-handlers.test.ts` — `OpenRefUnderCursor` regression (`Enter` edits the block; backlink rows open the source; pins #70).
 Same file smoke-tests the block clipboard (cut arms `blockClipboard`; paste routes cut → `moveBlockAfter`, copy → `pasteBlockAfter`).
 
@@ -279,7 +277,7 @@ This section captures only the **architectural decisions** a contributor needs t
 
 - **Visual highlight uses a memoised `Set<id>` at the parent, not a per-row predicate.**
   `<OutlineView />` builds `visualSet = createMemo(() => visualRangeSet(...))` once per change; `<BlockRow />` answers `props.visualSet?.has(id) ?? false` in O(1).
-  The old per-row `isInVisualRange` (O(N²)/keystroke) survives in `lib/outline-walk.ts` for unit tests only — **no render path calls it**.
+  The old per-row `isInVisualRange` (O(N²)/keystroke) survives in `@outl/shared/outline` for unit tests only — **no render path calls it**.
 
 - **Char-cursor nudge is one shared handler.**
   All 10 char-cursor catalog entries (`x` `X` `D` `C` `s` `r` `~` `e` `f` `F`) point at `charCursorNudge`, so the message can't drift between them.
@@ -345,7 +343,7 @@ The host therefore runs on a **dedicated plugin thread** (`src-tauri/src/plugin_
 
 Design:
 
-- `PluginService::spawn(workspace, storage_root, hlc)` (called once in `lib.rs::setup`, after `open_today`/opener wiring) starts the thread.
+- `spawn_plugin_service(workspace, storage_root, hlc)` (the desktop shim over `outl_tauri_shared::PluginService::spawn`, called once in `lib.rs::setup` after `open_today`/opener wiring) starts the thread.
   It is handed **clones of the same `Arc<Mutex<Option<Workspace>>>` and `Arc<Mutex<Option<PathBuf>>>` every Tauri command locks**, plus the per-device `HlcGenerator`.
   The `Workspace` is `Send`; the Boa `Context` never crosses a thread boundary.
 - The thread owns the `PluginHost`.
@@ -402,15 +400,15 @@ The desktop plays each as an **ephemeral, fully sandboxed `<iframe>` overlay**:
 Played from three call sites: `PluginPalette` (after `pluginRun`), `OutlineView.onCommit`, and the `ToggleTodo` handler (after `pluginSyncHooks`).
 The confetti example (`examples/confetti`, `op-hook` + `ui-render`) rides this: mark a block DONE → op → `sync_hooks` → its `onOp` emits the confetti HTML → `views` → overlay.
 
-Frontend pieces: `src/lib/api.ts` (`pluginList` / `pluginRun` / `pluginSyncHooks` + `PluginRunReply` / `PluginSyncHooksReply`); `lib/plugin-views.ts` + `components/PluginEffectLayer.tsx` (overlay queue).
+Frontend pieces: plugin DTOs + wrappers from `@outl/shared/api` (`lib/api.ts` keeps only `pluginKeybindings`); `lib/plugin-views.ts` + `components/PluginEffectLayer.tsx` (overlay queue).
 The `⧉` button in `ChromeToggleBar` toggles `appState.pluginsOpen`; `components/PluginPalette.tsx` lists + runs commands.
 
 ### Content transformers (inline code-fence rendering)
 
 A plugin can declare a transformer for a code-fence language (`mermaid`, …); matching fences render through it in `CodeFenceView` (`components/BlockRow.tsx`).
-`lib/transformers.ts` keeps `BlockRow` a renderer.
-It owns a `lang → {pluginId, kind}` registry (Solid signal, loaded once per workspace open via `loadTransformers` — `AppShell.onMount` + re-run on `workspace-ready`, since plugins load lazily and a boot fetch can be empty).
-It also owns a `(blockId, body)` result cache (`transformCached`) so the plugin JS re-runs only when the body changes.
+Registry + cache glue: `@outl/shared/plugins/transformer-registry` (shared with mobile); keeps `BlockRow` a renderer.
+It owns a `lang → PluginTransformer` registry (Solid signal, loaded via `loadTransformers` — `AppShell.onMount` + re-run on `workspace-ready`; plugins load lazily, a boot fetch can be empty).
+A `(blockId, body)` result cache (`runTransform`) re-runs plugin JS only when the body changes.
 `kind: "text"` renders as plain whitespace-preserving text (no client-side markdown parse — a transformer wanting formatting emits `rich`).
 `kind: "rich"` renders the HTML in an **inline** `<iframe>` (`RichFenceFrame`), sized via an optional `parent.postMessage({outlHeight})` handshake.
 **Security (never weaken):** that iframe is `sandbox="allow-scripts"` **without** `allow-same-origin`, HTML via `srcdoc` — same isolation as the `ui-render` overlay, only inline + persistent instead of fullscreen + ephemeral.

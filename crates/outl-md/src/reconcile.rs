@@ -214,7 +214,12 @@ pub fn reconcile_md(
 /// to update together (the diff.rs's `PAGE_SLUG_KEY` skip-list and
 /// here). Keep these in sync with `outl_actions::page::{SLUG_KEY,
 /// KIND_KEY}`.
-fn ensure_page_root_in_tree(
+///
+/// Public because `outl-actions::desync` (the projection-ahead-of-log
+/// recovery) needs the exact same "materialise the page root" step
+/// without going through the full `reconcile_md` pipeline — a second
+/// implementation is how the two paths would drift.
+pub fn ensure_page_root_in_tree(
     ws: &mut Workspace,
     hlc: &HlcGenerator,
     page_id: NodeId,

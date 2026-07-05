@@ -371,6 +371,21 @@ impl SyncEngine {
         }
         out
     }
+
+    /// Find every `.md` whose sidecar is hash-in-sync with the file
+    /// but references ids the materialised tree has never seen — the
+    /// "projection ran ahead of the op log" state
+    /// [`Self::scan_for_orphans`] is structurally blind to (the hash
+    /// gate says "in sync" forever, so the blocks stay invisible to
+    /// the CRDT and to every peer).
+    ///
+    /// Needs the materialised tree, hence the `&Workspace` parameter
+    /// the hash-only scan doesn't take. Pages this flags go through
+    /// [`crate::desync::recover_desynced_projection`], not
+    /// `reconcile_md`.
+    pub fn scan_for_desynced_projections(&self, ws: &Workspace) -> Vec<PathBuf> {
+        crate::desync::scan_for_desynced_projections(ws, &self.workspace_root)
+    }
 }
 
 fn scan_dir(dir: &Path, out: &mut Vec<PathBuf>) {

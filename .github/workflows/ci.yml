@@ -75,12 +75,13 @@ jobs:
             ${{ runner.os }}-cargo-clippy-
             ${{ runner.os }}-cargo-
       - name: cargo clippy
-        # outl-mobile and outl-desktop pull Tauri deps (glib-sys,
-        # gobject-sys, webkit2gtk) that need system GTK libs we
-        # don't install here. Mobile is covered by `mobile.yml` on
-        # macOS; desktop has its own `desktop.yml` matrix (Linux runs
-        # with GTK installed there).
-        run: cargo clippy --workspace --exclude outl-mobile --exclude outl-desktop --all-targets -- -D warnings
+        # outl-mobile, outl-desktop and outl-tauri-shared pull Tauri
+        # deps (glib-sys, gobject-sys, webkit2gtk) that need system
+        # GTK libs we don't install here. Mobile is covered by
+        # `mobile.yml` on macOS; desktop + the shared crate build via
+        # the `desktop.yml` matrix (Linux runs with GTK installed
+        # there).
+        run: cargo clippy --workspace --exclude outl-mobile --exclude outl-desktop --exclude outl-tauri-shared --all-targets -- -D warnings
 
   test:
     name: test (${{ matrix.os }})
@@ -105,11 +106,12 @@ jobs:
             ${{ runner.os }}-cargo-test-
             ${{ runner.os }}-cargo-
       - name: cargo test
-        # outl-mobile and outl-desktop depend on Tauri's
-        # macOS/iOS-specific surface and on system GTK libs we don't
-        # install on Linux. Mobile is covered by `mobile.yml` on
-        # macOS; desktop has its own `desktop.yml` matrix.
-        run: cargo test --workspace --exclude outl-mobile --exclude outl-desktop --all-targets
+        # outl-mobile, outl-desktop and outl-tauri-shared depend on
+        # Tauri's macOS/iOS-specific surface and on system GTK libs we
+        # don't install on Linux. Mobile is covered by `mobile.yml` on
+        # macOS; desktop + the shared crate via the `desktop.yml`
+        # matrix.
+        run: cargo test --workspace --exclude outl-mobile --exclude outl-desktop --exclude outl-tauri-shared --all-targets
 
   docs:
     name: cargo doc
@@ -121,11 +123,11 @@ jobs:
       - name: cargo doc
         env:
           RUSTDOCFLAGS: "-D warnings"
-        # See clippy / test jobs above: outl-mobile and outl-desktop
-        # need system GTK libs we don't install on Linux. Mobile docs
-        # build via `mobile.yml` on macOS; desktop docs build via the
-        # `desktop.yml` matrix.
-        run: cargo doc --workspace --exclude outl-mobile --exclude outl-desktop --no-deps
+        # See clippy / test jobs above: outl-mobile, outl-desktop and
+        # outl-tauri-shared need system GTK libs we don't install on
+        # Linux. Mobile docs build via `mobile.yml` on macOS; desktop +
+        # shared-crate docs via the `desktop.yml` matrix.
+        run: cargo doc --workspace --exclude outl-mobile --exclude outl-desktop --exclude outl-tauri-shared --no-deps
 
   # Dedicated sync-convergence gate. The `test` job above already
   # compiles and runs `outl-core` + `outl-sync-iroh` (including their

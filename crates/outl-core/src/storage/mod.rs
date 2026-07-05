@@ -36,12 +36,17 @@ pub enum StorageError {
     MissingOp(String),
 }
 
-/// A snapshot of materialized state.
+/// An opaque on-disk snapshot of materialized workspace state.
 ///
-/// Step 2 defines the concrete shape; Step 1 ships a typed alias.
+/// Storage treats `bytes` as a black box — it does not know (or need to
+/// know) the layout. `Workspace` is the single owner of the format: it
+/// serializes the materialized tree + block text via bincode and hands
+/// the buffer to `Storage` for persistence. See `snapshot.rs` for the
+/// typed shape (`SnapshotBody`) and the boot contract.
 #[derive(Debug, Default, Clone)]
 pub struct Snapshot {
-    /// Serialized bytes; format owned by `Storage` implementations.
+    /// Serialized snapshot body; format owned by the caller of
+    /// `save_snapshot`, not by `Storage`.
     pub bytes: Vec<u8>,
 }
 
@@ -74,4 +79,14 @@ pub trait Storage: Send + Sync {
 
     /// Load the most recent snapshot, if any.
     fn load_snapshot(&self) -> Result<Option<Snapshot>, StorageError>;
+
+    /// HLC cutoff of the snapshot currently on disk, if any.
+    ///
+    /// Used by `Workspace` to decide whether the snapshot is worth
+    /// loading on boot and how many ops to replay after it
+    /// (`ops_since(cutoff)`). Default `None` covers in-memory backends
+    /// and any future backend that has no snapshot yet.
+    fn snapshot_cutoff(&self) -> Result<Option<Hlc>, StorageError> {
+        Ok(None)
+    }
 }

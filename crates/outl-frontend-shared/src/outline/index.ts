@@ -1,22 +1,71 @@
 /**
- * Outline traversal helpers — selection navigation. Pure functions
- * over `BlockNode[]` so they're cheap to call from action handlers
- * without any reactive setup.
+ * Outline helpers shared by every client — pure functions over
+ * `BlockNode[]` (no reactive setup, no invoke), so they're cheap to
+ * call from action handlers and render memos alike.
  *
- * `flattenVisible` honours each block's `collapsed` flag (folded
- * children are invisible to vim-style `j/k` movement; the user pops
- * them open with `c`/`Enter` first).
+ * Two flatten families coexist here on purpose:
  *
- * There used to be a `flattenAll` + `findNewId` pair here that
- * diff'd outline snapshots to recover the id of a freshly-created
- * block. They were removed once `createBlock` started returning
- * `{ view, new_id }` on the wire — the diff path mis-identified the
- * new block whenever the anchor had children (`flat[idx+1]` landed
- * on `children[0]` instead of the new sibling) and surfaced
- * `block <ULID> is not in the tree` toasts.
+ * - [`flattenNodes`] returns the **`BlockNode` objects** in DFS
+ *   preorder — use it when you need the blocks themselves (text,
+ *   todo state, children).
+ * - [`flattenAll`] / [`flattenVisible`] / [`flattenParents`] return
+ *   **ids only** — the selection-navigation walks (vim `j`/`k`,
+ *   `zR`/`zM`, Visual ranges) operate on id lists.
  */
+import type { BlockNode } from "../api/types";
 
-import type { BlockNode } from "@outl/shared/api/types";
+/**
+ * Reconstruct the wire-format text of a block (TODO/DONE prefix
+ * reattached). The API splits the TODO state out of `text` so the
+ * checkbox can render it separately, but the editor needs the user to
+ * see and be able to erase the prefix — otherwise dropping a TODO from
+ * the editor is impossible.
+ *
+ * Mirror of `outl_actions::split_todo` in reverse. Keep in sync with
+ * `outl_actions::TODO_PREFIX` / `DONE_PREFIX`.
+ */
+export function rawTextWithTodo(block: BlockNode): string {
+  if (!block.todo) return block.text;
+  return `${block.todo} ${block.text}`;
+}
+
+/** Locate a block by id anywhere in a (possibly nested) outline. */
+export function findBlock(blocks: BlockNode[], id: string): BlockNode | null {
+  for (const b of blocks) {
+    if (b.id === id) return b;
+    const child = findBlock(b.children, id);
+    if (child) return child;
+  }
+  return null;
+}
+
+/**
+ * Flatten an outline into a DFS-preorder list of **`BlockNode`s**
+ * (fold state ignored — every block is included).
+ *
+ * Complement of [`flattenAll`], which walks the same order but
+ * returns **ids**. Reach for this one when the caller needs block
+ * content, for that one when it only needs identity.
+ */
+export function flattenNodes(blocks: BlockNode[]): BlockNode[] {
+  const out: BlockNode[] = [];
+  for (const b of blocks) {
+    out.push(b);
+    out.push(...flattenNodes(b.children));
+  }
+  return out;
+}
+
+/** Total number of descendants under a block (recursive count of its
+ *  whole subtree, *excluding* the block itself). Used to warn the
+ *  user before a destructive delete. */
+export function countDescendants(block: BlockNode): number {
+  let n = 0;
+  for (const child of block.children) {
+    n += 1 + countDescendants(child);
+  }
+  return n;
+}
 
 /**
  * IDs of every block visible in the outline, in flat DFS order
@@ -45,6 +94,7 @@ export function flattenVisible(blocks: BlockNode[]): string[] {
  * Distinct from [`flattenVisible`] precisely because `zR` must
  * expand subtrees that are currently hidden — the visible-only walk
  * would silently no-op on every descendant of a collapsed parent.
+ * Id-returning complement of [`flattenNodes`].
  */
 export function flattenAll(blocks: BlockNode[]): string[] {
   const out: string[] = [];
@@ -177,11 +227,11 @@ export function visualRangeSet(
 }
 
 /**
- * Predicate variant of [`visualRangeIds`]. Kept for the `outline-walk`
- * test suite and any caller that needs an ad-hoc membership check
- * without paying for the Set allocation. **In React/Solid render
- * paths, prefer [`visualRangeSet`] hoisted to a parent `createMemo`** —
- * calling this per row is O(N²) by construction.
+ * Predicate variant of [`visualRangeIds`]. Kept for the outline test
+ * suite and any caller that needs an ad-hoc membership check without
+ * paying for the Set allocation. **In render paths, prefer
+ * [`visualRangeSet`] hoisted to a parent `createMemo`** — calling
+ * this per row is O(N²) by construction.
  */
 export function isInVisualRange(
   id: string,

@@ -95,9 +95,14 @@ pub fn open(path: &Path) -> Result<WsCtx, ApiError> {
     let ephemeral_actor = actor != config_actor;
 
     let storage = JsonlStorage::open(paths.ops.clone(), actor).map_err(ApiError::internal)?;
-    let workspace =
+    let mut workspace =
         Workspace::open_with_storage(actor, Box::new(storage), Some(paths.root.clone()))
             .map_err(ApiError::internal)?;
+    // CLI is ephemeral: every command opens, mutates, exits. Writing a
+    // snapshot here would race with the long-lived TUI/desktop/mobile
+    // that own the workspace, and snapshots already pay back at boot
+    // via `load_snapshot`. So opt out — read, don't write.
+    workspace.set_snapshot_policy(false, 0);
     let hlc = HlcGenerator::new(actor);
 
     Ok(WsCtx {

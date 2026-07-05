@@ -33,6 +33,10 @@
 //! [sync]
 //! transport = "iroh"   # "iroh" (P2P, default) | "file" (iCloud/fs opt-out)
 //! relay_url = ""        # optional; empty = use iroh n0 default relays
+//!
+//! [snapshot]
+//! enabled = true        # default; long-lived clients write a snapshot periodically
+//! op_threshold = 10000  # write after this many applied ops
 //! ```
 //!
 //! All fields are optional — missing values fall back to
@@ -55,7 +59,8 @@ mod schema;
 
 pub use paths::{config_dir, config_path};
 pub use schema::{
-    CalendarCfg, Config, EditorCfg, SyncConfig, SyncTransportKind, ThemeCfg, TuiCfg, WorkspaceCfg,
+    CalendarCfg, Config, EditorCfg, SnapshotCfg, SyncConfig, SyncTransportKind, ThemeCfg, TuiCfg,
+    WorkspaceCfg,
 };
 
 use std::fs;

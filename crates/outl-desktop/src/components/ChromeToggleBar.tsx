@@ -1,10 +1,7 @@
 import { For, createSignal, onMount, type JSX } from "solid-js";
 
-import {
-  pluginRun,
-  pluginToolbar,
-  type ToolbarButton as ToolbarButtonEntry,
-} from "../lib/api";
+import { pluginRun, pluginToolbar } from "@outl/shared/api/commands";
+import type { PluginToolbarButton as ToolbarButtonEntry } from "@outl/shared/api/types";
 import { playPluginViews } from "../lib/plugin-views";
 import { appState, setAppState } from "../lib/store";
 import { SyncIndicator } from "./SyncIndicator";

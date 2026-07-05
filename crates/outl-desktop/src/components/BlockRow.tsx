@@ -10,7 +10,13 @@ import {
   onCleanup,
 } from "solid-js";
 
-import type { BlockNode, PageMeta, TodoState } from "@outl/shared/api/types";
+import type {
+  BlockNode,
+  PageMeta,
+  PluginCommand,
+  PluginTransformResult,
+  TodoState,
+} from "@outl/shared/api/types";
 import {
   MarkdownInline,
   QuoteWrap,
@@ -27,25 +33,30 @@ import {
   detectEmojiContext,
   detectRefContext,
   detectSlashContext,
+  refReplacement,
   withCreateNewPersonCandidate,
 } from "@outl/shared/autocomplete";
 import {
   type EmojiHit,
   openRef,
+  pluginList,
   searchEmojis,
   searchPages,
   searchPersons,
 } from "@outl/shared/api/commands";
 import { HighlightedCode } from "@outl/shared/highlight";
+import { rawTextWithTodo } from "@outl/shared/outline";
 import {
   choosePasteRoute,
   utf16OffsetToCharOffset,
 } from "@outl/shared/paste";
+import {
+  runTransform,
+  transformerFor,
+} from "@outl/shared/plugins/transformer-registry";
 
 import { detectFence } from "@outl/shared/highlight";
 import { appState, setAppState } from "../lib/store";
-import { transformCached, transformerFor } from "../lib/transformers";
-import { pluginList, type PluginCommand, type PluginTransformResult } from "../lib/api";
 import { rankSlashCommands } from "../lib/slash-commands";
 
 export interface BlockCallbacks {
@@ -89,16 +100,6 @@ export interface BlockCallbacks {
    *  Optional: contexts that keep links inert simply omit it (the
    *  renderer then draws a plain, non-interactive span). */
   onLinkClick?: (href: string) => void;
-}
-
-/** Wire format the block was stored as — TODO/DONE prefix included.
- *  We hand this verbatim to the textarea on edit so the user can
- *  *erase* the prefix to drop the TODO state and *type* `TODO ` /
- *  `DONE ` to add it. Mirrors how TUI and mobile show the raw text
- *  in their editors. */
-function rawTextWithTodo(block: BlockNode): string {
-  if (!block.todo) return block.text;
-  return `${block.todo} ${block.text}`;
 }
 
 /**
@@ -165,13 +166,6 @@ export function BlockRow(props: {
   let searchToken = 0;
 
   let textareaRef: HTMLTextAreaElement | undefined;
-
-  /** The page name we splice into `[[…]]`. Journals are anchored on
-   *  their ISO slug (`2026-06-08`), regular pages on their title —
-   *  same choice mobile's native chip strip makes. */
-  function refReplacement(page: PageMeta): string {
-    return page.kind === "journal" ? page.slug : page.title;
-  }
 
   function closeSuggest() {
     lastQuery = null;
@@ -305,10 +299,12 @@ export function BlockRow(props: {
     if (!ctx || (ctx.kind !== "page" && ctx.kind !== "mention")) {
       return closeSuggest();
     }
-    // For mentions the page identity carries no `@` — pass the title
-    // verbatim; `applySuggestion` prepends `@` on the link side.
-    const replacement =
-      ctx.kind === "mention" ? page.title : refReplacement(page);
+    // For mentions the page identity carries no `@` — the shared
+    // `refReplacement` passes the title verbatim; `applySuggestion`
+    // prepends `@` on the link side.
+    const replacement = refReplacement(page, {
+      mention: ctx.kind === "mention",
+    });
     // Mention sugar: materialise the person page in the backend
     // (fire-and-forget) so the inserted `[[@title]]` link resolves
     // on subsequent loads — `open_or_create_by_ref` strips the `@`
@@ -1184,7 +1180,8 @@ function SlashCommandPopup(props: {
  *   affordance still drops into the raw fence editor.
  *
  * The transform runs the plugin's JS, so it is cached by `(blockId, body)`
- * (`transformCached`) and only re-runs when the body changes.
+ * (`runTransform`, `@outl/shared/plugins/transformer-registry`) and only
+ * re-runs when the body changes.
  */
 function CodeFenceView(props: {
   blockId: string;
@@ -1216,7 +1213,7 @@ function CodeFenceView(props: {
       const m = match();
       return m ? { m, body: props.body } : undefined;
     },
-    (k) => transformCached(props.blockId, k.m, props.language, k.body),
+    (k) => runTransform(props.blockId, k.m, k.body),
   );
 
   // Whether to show transformed output: a transformer matched AND it

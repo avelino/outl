@@ -19,6 +19,8 @@
  * Visual mode is engaged explicitly by `EnterVisual` (TUI parity).
  */
 
+import { pluginRun } from "@outl/shared/api/commands";
+
 import {
   type Action,
   type Binding,
@@ -32,7 +34,6 @@ import {
   MOD_SHIFT,
   listShortcutBindings,
   pluginKeybindings,
-  pluginRun,
 } from "./api";
 
 import { playPluginViews } from "./plugin-views";

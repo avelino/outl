@@ -8,7 +8,10 @@ import {
   onCleanup,
   onMount,
 } from "solid-js";
-import type { PageView } from "@outl/shared/api/types";
+import type {
+  PageView,
+  PluginToolbarButton,
+} from "@outl/shared/api/types";
 import {
   copyMarkdown,
   createBlock,
@@ -27,6 +30,9 @@ import {
   outdentBlock,
   pasteMarkdown,
   peerStatus,
+  pluginRun,
+  pluginSyncHooks,
+  pluginToolbar,
   previousDay,
   reloadWorkspace,
   runCodeBlock,
@@ -45,7 +51,7 @@ import {
   countDescendants,
   findBlock,
   rawTextWithTodo,
-} from "../lib/outline";
+} from "@outl/shared/outline";
 import {
   applyEmojiSuggestion,
   applySuggestion,
@@ -77,12 +83,6 @@ import {
   registerPickedCallback,
   setNativeSuggesterState,
 } from "../lib/native-suggester";
-import {
-  type PluginToolbarButton,
-  pluginRun,
-  pluginSyncHooks,
-  pluginToolbar,
-} from "../lib/api";
 import { Calendar } from "./Calendar";
 import { DevicesSheet } from "./DevicesSheet";
 import { PluginSheet } from "./PluginSheet";
@@ -92,7 +92,7 @@ import { PullToRefresh } from "./PullToRefresh";
 import { SyncDot } from "./SyncDot";
 import { BlockRow } from "./BlockRow";
 import { SkeletonOutline } from "./Skeleton";
-import { loadTransformers } from "../lib/transformers";
+import { loadTransformers } from "@outl/shared/plugins/transformer-registry";
 import { haptic } from "../lib/haptics";
 import { BacklinksSection } from "./BacklinksSection";
 import { BlockContextMenu, type BlockContextAction } from "./BlockContextMenu";

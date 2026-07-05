@@ -13,7 +13,7 @@ Implements `outl_actions::SyncTransport` using iroh QUIC + iroh-gossip.
   gossip-backed `announce_local_ops` hook (sync side → tokio task via an
   `mpsc` channel set up in `start()`) and the `peer_health()` reachability
   snapshot (see "One endpoint per identity" below)
-- Wire protocol — ALPN `b"outl-sync/1"`, vector-clock delta sync
+- Wire protocol — ALPN `b"outl-sync/2"`, vector-clock delta sync with per-actor `ActorClock { max, count }` gap detection (see "Sync invariants"; the v2 bump makes an old↔new dial fail cleanly, no compat shim)
 - Pairing (`pairing` module, ALPN `b"outl-sync/pair/1"`) — the two-sided handshake.
   The "ticket" is a base64 `EndpointAddr` (id + relay + direct addrs).
   Both sides exchange one pairing payload (carrying their **full** `EndpointAddr`) over a single bi stream and persist the remote to `peers.json`.
@@ -31,24 +31,20 @@ Implements `outl_actions::SyncTransport` using iroh QUIC + iroh-gossip.
 Devices live at different paths (desktop `~/outl-p2p`, mobile `…/app.outl.mobile-app/outl`); deriving identity from the path made every device compute a different gossip topic, so cross-device gossip never connected and membership never propagated.
 
 - **Home.**
-  The id is a ULID persisted at `<root>/.outl/workspace-id` (plaintext, one line), read-or-generated on first transport `start()` via `WorkspaceId::read_or_create`.
-  Migration: an existing workspace with no file gets one on first open, stable thereafter.
-  It sits in `.outl/` next to `config.toml`/`peers.toml`, so it never pollutes the clean markdown and never reaches a rendered page.
-  It is its **own** file, not a field in `.outl/config.toml`, because `config.toml` holds the **per-device** `actor_id` (must differ per device) whereas the workspace id must be **identical** across devices.
-  Keeping them separate lets pairing-adoption rewrite the id without touching the device's actor.
+  The id is a ULID persisted at `<root>/.outl/workspace-id` (plaintext, one line), read-or-generated on first transport `start()` via `WorkspaceId::read_or_create` (an existing workspace gets one on first open, stable thereafter).
+  It lives in `.outl/` (never pollutes the clean markdown) as its **own** file, not a `config.toml` field.
+  `config.toml` holds the **per-device** `actor_id` while the workspace id must be **identical** across devices; keeping them separate lets pairing-adoption rewrite the id without touching the actor.
 - **Gossip topic.**
   `workspace_topic_id` = `blake3(workspace_id)`, so two devices on the same workspace land on the same topic regardless of path.
 - **Sync request.**
   `SyncRequest.workspace_id` carries the id, and the serve side (`SyncProtocolHandler::serve`) **validates it against the local id and rejects a mismatch** (`workspace-mismatch` close).
   Genuinely-different workspaces never cross-merge op logs; legit same-workspace peers (now sharing an id) pass.
 - **Pairing makes the joiner adopt the host's id.**
-  The handshake `PairingPayload` carries each side's id.
-  The **host advertises and keeps** its id; the **joiner adopts** the host's *before* the immediate post-pair `delta_sync` fires.
-  Adoption is **persist-first**: `adopt_workspace_id` writes the host's id to `.outl/workspace-id` and only then flips the in-memory handle.
-  If the disk write fails it does NOT adopt — the pair just doesn't take and a retry is safe.
-  A half-adopted state (memory on the host's id, disk on the old one) would silently split the workspace if the process died before the next write, since the next start reads the stale id from disk.
-  Both sides then compute the same topic and validate as one workspace, and their op logs CRDT-merge (content from both converges — expected).
-  CLI `outl peer pair` neither advertises nor adopts (it edits the resolved workspace's `peers.json`, not the live in-memory workspace); adoption is a GUI concern, wired in `engine_pairing`.
+  The handshake `PairingPayload` carries each side's id; the **host keeps** its id and the **joiner adopts** it *before* the immediate post-pair `delta_sync` fires.
+  Adoption is **persist-first**: `adopt_workspace_id` writes the host's id to `.outl/workspace-id` and only then flips the in-memory handle; a failed disk write does NOT adopt (retry-safe).
+  A half-adopted state (memory new, disk old) would silently split the workspace on the next start, which reads the stale id from disk.
+  Both sides then compute the same topic, validate as one workspace, and their op logs CRDT-merge (content from both converges — expected).
+  CLI `outl peer pair` neither advertises nor adopts (it edits `peers.json`, not the live workspace); adoption is a GUI concern, wired in `engine_pairing`.
 - **Live handle.**
   The id lives behind a shared `RwLock` (`SharedWorkspaceId`) read at call time by `delta_sync` + serve, so an adopted id takes effect immediately for direct sync (boot connect, 8s catch-up, immediate post-pair dial — all carry the live id).
 - **Gossip re-subscribes on id change (no restart).**
@@ -56,9 +52,9 @@ Devices live at different paths (desktop `~/outl-p2p`, mobile `…/app.outl.mobi
   The gossip supervisor (`engine_gossip::run_gossip`) holds one receiver and, on the signal, **drops its old-topic subscription and re-subscribes to `blake3(new id)`** — same `Gossip`/`Endpoint`, no second endpoint, no `start()` restart.
   Before this, the boot-time subscription stayed on the *pre-adoption* topic, so the two devices sat on different gossip topics and no real-time announce ever crossed (the "post-pair, nothing syncs again" bug).
 - **Catch-up re-dials on id change.**
-  A second receiver on the **same** broadcast channel (`PairingHub::subscribe_wid_changed`) feeds the catch-up loop; on the signal it **clears its per-session `synced` dedup** so it re-dials every peer under the adopted id.
-  Without this, the single immediate post-pair `delta_sync` marked the peer synced and the loop never re-dialed it, so later host edits never pulled (gossip was the only live path, and it was dead per the point above).
-  The direct delta-sync paths still carry content even if a signal is dropped (the `RwLock` is the source of truth); the signal only fixes the *real-time* + *re-dial* gaps.
+  A second receiver on the **same** broadcast channel (`PairingHub::subscribe_wid_changed`) makes the catch-up loop **clear its per-session `synced` dedup** and re-dial every peer under the adopted id.
+  Without it, the post-pair `delta_sync` marked the peer synced forever and later host edits never pulled (gossip was the only live path, dead per the point above).
+  A dropped signal is safe — the `RwLock` is the source of truth; the signal only fixes the *real-time* + *re-dial* gaps.
 
 ## One endpoint per identity (load-bearing invariant)
 
@@ -68,17 +64,16 @@ A non-sync endpoint (status probe, a pairing-only endpoint) must NOT bind the de
 The nuance (verified against the iroh 1.0.0 source — `endpoint.rs::same_endpoint_id_relay` + `iroh-relay` `clients.rs`):
 
 - **Two endpoints with the same `node_id` that BOTH serve `SYNC_ALPN` coexist fine.**
-  The relay keeps one `node_id → endpoint` route; the last to register holds it (LIFO), the other loses *inbound* but keeps working via *outbound* dial (catch-up).
-  The loser does **not** reconnect-and-steal-back — the relay keeps its socket alive answering pings, so it never times out — so it's a **stable hijack, not a flap**.
-  When the holder leaves, the route returns to the other.
-  This is what lets the **GUI and the MCP server both bind the device identity at once** (see "Passive writers"): whichever holds the route serves inbound from the same `ops-*.jsonl` on disk, and the other still pushes/pulls on its own dials.
+  The relay keeps one `node_id → endpoint` route; the last to register holds it, the other loses *inbound* but keeps *outbound* dials (catch-up).
+  The loser never steals back (the holder's socket keeps answering pings) — a **stable hijack, not a flap** — and the route returns when the holder leaves.
+  This lets the **GUI and the MCP server both bind the device identity at once** (see "Passive writers"): whichever holds the route serves inbound from the same `ops-*.jsonl`, the other pushes/pulls on its own dials.
 - **An endpoint that does NOT serve `SYNC_ALPN` is the dangerous case.**
   If the newcomer can't accept `SYNC_ALPN`, a dialer routed to it gets `CONNECTION_REFUSED` — sync breaks for real (the original device↔device bug, detailed below).
 
-**Why the route is single at all:** when a second endpoint registers with the same secret key, the relay's `DashMap<EndpointId, ClientState>` *replaces* the active client (a single `node_id → endpoint` route).
-All inbound relay datagrams then route to the newcomer and the original endpoint silently stops receiving traffic (iroh ships `endpoint.rs::same_endpoint_id_relay` asserting this).
-If that newcomer doesn't accept `SYNC_ALPN`, the dialer's QUIC handshake is refused (`quinn` `CONNECTION_REFUSED`) — the "connection refused, nothing syncs" bug.
-A transient status-probe endpoint (or, pre-consolidation, the GUI's separate pairing endpoint) stole the route, observed in relay logs as "Another endpoint connected with the same endpoint id" until it closed.
+**Why the route is single:** a second endpoint registering the same secret key *replaces* the active client in the relay's `DashMap<EndpointId, ClientState>`.
+All inbound datagrams then route to the newcomer and the original silently stops receiving (`endpoint.rs::same_endpoint_id_relay` asserts this).
+If the newcomer doesn't accept `SYNC_ALPN`, the dialer gets `quinn` `CONNECTION_REFUSED` — the "connection refused, nothing syncs" bug.
+It was produced by a transient status-probe (or the GUI's old pairing endpoint) stealing the route ("Another endpoint connected with the same endpoint id" in relay logs).
 
 **Three call sites, three rules:**
 
@@ -93,7 +88,7 @@ A transient status-probe endpoint (or, pre-consolidation, the GUI's separate pai
 3. **Pairing** — two paths, never a second endpoint while the transport runs:
    - **GUI** (mobile / desktop, transport running) → `IrohSyncTransport::pair_host` / `pair_join` reuse the **live sync endpoint**.
      The host (accept) side is the `PAIRING_ALPN` router handler (`engine_pairing::PairingProtocolHandler`), armed by `pair_host` via a shared `PairingHub`; the join side dials out on the same endpoint.
-     After a successful pair the new peer is persisted to `peers.json` and an **immediate** `delta_sync` is fired against it (`engine_pairing::drain_pair_completions`), so it syncs without an app restart and without waiting for the 8s catch-up tick.
+     After a successful pair the new peer is persisted to `peers.json` and an **immediate** `delta_sync` is fired against it (`engine_pairing::drain_pair_completions`) — no app restart, no 8s catch-up wait.
    - **CLI** (`outl peer pair`, no running transport) → `pairing::host_pairing` / `join_pairing` bind a one-shot endpoint with the device identity, then **close it** (`endpoint.close().await`) before returning.
      There is no live endpoint to conflict with, so the one-shot bind is safe; the close keeps the overlap with any concurrent endpoint bounded.
      **The GUI never calls these.**
@@ -126,6 +121,10 @@ Rules:
 
 - `delta_sync` (initiator) and `SyncProtocolHandler::serve` (responder) both take/carry the **same** `AppendLock` clone and pass it to `ingest_received_ops`.
   Never add a new writer that appends to `ops-*.jsonl` without taking this lock.
+- **Cross-process flock (`ops/.append.lock`).**
+  The tokio mutex is per-process, but a device runs several transports at once (GUI + MCP server + `outl sync`), and their interleaved batches produced the timestamp retrocessions behind the watermark-gap bug.
+  `write_deduped_batch` therefore also takes a blocking advisory flock on `ops/.append.lock` (same mechanism as `outl-core`'s `ops/.lock-<actor>`), acquired AFTER the in-process lock and held across the whole batch, on a `spawn_blocking` thread.
+  The lockfile is ephemeral and recreated on demand, so a file transport dropping the dotfile is harmless (flock state is kernel-local and never syncs).
 - Write the whole per-actor batch in one `write_all`, then `flush()` + `sync_data()` **before releasing the lock**, so a concurrent reader (or `outl-core`'s `reload`) can never observe a partial line.
 - **In-flight guard (defense in depth).**
   A shared `InFlightPeers` set (`try_acquire_in_flight` → RAII `InFlightGuard`) stops boot + catch-up + gossip from launching a second `delta_sync` for a peer that already has one running.
@@ -142,10 +141,9 @@ It backs the mobile pull-to-refresh / refresh button and the desktop Sync panel'
 
 Wiring mirrors the `announce_tx` / pairing-hub pattern exactly:
 
-- `IrohSyncTransport` holds a `sync_now_tx: Arc<Mutex<Option<UnboundedSender<()>>>>`, populated in `start()` (and `None` before start / after shutdown — that `Option` is the "runtime down" guard).
-- `sync_now()` sends a unit on it; a send error means the runtime is down, so it's ignored (no-op), same contract as `announce_local_ops`.
-- `run_iroh` moves the receiver into a `drain_sync_now` task (`engine_catchup`).
-  Each signal runs `force_sync_all`, which dials **every** peer in the current `peers.json` (reusing the append lock + in-flight guard + health recording).
+- `IrohSyncTransport` holds `sync_now_tx: Arc<Mutex<Option<UnboundedSender<()>>>>`, populated in `start()` (`None` before start / after shutdown = the "runtime down" guard).
+- `sync_now()` sends a unit; a send error means the runtime is down, ignored (no-op), same contract as `announce_local_ops`.
+- `run_iroh` moves the receiver into a `drain_sync_now` task (`engine_catchup`); each signal runs `force_sync_all`, dialing **every** peer in `peers.json` (reusing the append lock + in-flight guard + health recording).
 
 **`force_sync_all` deliberately does NOT respect the catch-up loop's per-session `synced` `HashSet`** — the whole point of a manual sync is to re-dial even healthy peers the catch-up loop leaves to gossip.
 `delta_sync` is a cheap no-op on matching vector clocks, so a forced re-dial of an already-synced peer just confirms convergence.
@@ -153,6 +151,9 @@ It still honors `try_acquire_in_flight` (skip a peer already being dialed) and t
 
 The GUI commands are `outl_sync_now` in each client's `commands/peers.rs` (mobile reads `state.iroh`, desktop reads `state.iroh_transport` `Arc<dyn SyncTransport>`).
 The shared wrapper is `syncNow()` in `@outl/shared/api/commands`.
+
+**Observing completion:** `completed_sync_passes()` is a monotonic counter bumped after each finished pass (every peer dialed, succeeded *or* failed — no reachability promise).
+A waiter (the iOS `bg_sync.rs` FFI) snapshots it, fires `sync_now()`, and polls until it advances or a cap elapses; any pass after the snapshot counts.
 
 ## Module layout (delta-sync wire vs. orchestration)
 
@@ -180,14 +181,13 @@ A membership message carries a distinct first line — `MEMBERSHIP_TAG` (`"outl-
 The receive side checks `parse_membership` **first**; a non-membership message falls through to the existing announce parser, so the announce path is untouched.
 
 **Broadcast.**
-A periodic task (`MEMBERSHIP_INTERVAL`, 5s) reloads `peers.json` and broadcasts the current peer list over the **same** gossip topic.
-It reuses the **same** `GossipSender` (wrapped in `Arc`, shared with the announce-drain task — no second topic handle, no second endpoint).
-An empty peer list is not broadcast (nothing to share).
-The task lives inside the same `if !bootstrap_ids.is_empty()` subscribe block as the announce drain, so a device with zero peers neither subscribes nor gossips.
+A periodic task (`MEMBERSHIP_INTERVAL`, 5s) reloads `peers.json` and broadcasts the peer list (never an empty one) over the **same** gossip topic.
+It reuses the **same** `Arc`-wrapped `GossipSender` as the announce drain — no second topic handle or endpoint.
+It lives in the same `if !bootstrap_ids.is_empty()` block as the announce drain, so a zero-peer device neither subscribes nor gossips.
 
 **Merge / persist flow.**
 On receipt, `merge_membership` merges **unknown** peers into `peers.json` through `PeersStore::merge_unknown` (dedup by node_id, ADD-only — an existing entry's locally-captured addr, e.g. from direct pairing, is never clobbered).
-The existing catch-up loop reloads `peers.json` each tick and dials the freshly-merged peer; **no new dialing machinery** — membership only *adds reachability*, the append lock / in-flight guard / health map are all reused as-is.
+The catch-up loop reloads `peers.json` each tick and dials the freshly-merged peer — **no new dialing machinery**; the append lock / in-flight guard / health map are reused as-is.
 
 **Trust model (load-bearing assumption).**
 Every device subscribed to the workspace gossip topic is **already inside the trust domain**: the topic id is `blake3(workspace_id)` (`workspace_topic_id`), so only devices paired into this mesh by *someone* ever subscribe.
@@ -202,14 +202,13 @@ If membership ever needs to *gate* who can join (beyond "is on the topic"), that
 
 ## Regression suite (Pilar 2)
 
-Every bug hand-found during the sync saga has a NAMED, permanent test that fails red if it ever regresses.
-The test name IS the bug, so a failure is self-explanatory.
-Pure/deterministic guards live in `#[cfg(test)]` modules next to the code; over-the-wire (real QUIC, loopback) guards live in `tests/regression.rs`.
-The shared seed/read/wait helpers stay in `tests/common/mod.rs` (read-only); saga-specific helpers live inside `regression.rs` itself.
+Every bug hand-found during the sync saga has a NAMED, permanent test — the name IS the bug, so a failure is self-explanatory.
+Pure guards live in `#[cfg(test)]` next to the code; over-the-wire (real QUIC, loopback) guards in `tests/regression.rs`.
+Shared seed/read/wait helpers stay in `tests/common/mod.rs` (read-only); saga-specific helpers live inside `regression.rs`.
 
 | Saga bug | Guard test | Where |
 |----------|-----------|-------|
-| 1. Op-log corruption from concurrent appends (glued `…}}}{`) — append lock serializes inbound batches | `concurrent_appends_never_glue_ops_on_the_responder` (two initiators → one responder, shared `AppendLock`; asserts no `}{` on disk + every op parses) | `tests/regression.rs` |
+| 1. Op-log corruption from concurrent appends (glued `…}}}{`) — append lock serializes inbound batches | `concurrent_appends_never_glue_ops_on_the_responder` (asserts no `}{` on disk + every op parses) | `tests/regression.rs` |
 | 1. (parser-recovery half) a hand-crafted glued `}}}{` line still loads both ops | `recovers_glued_ops_on_one_line` (pre-existing, core-side) | `outl-core` `storage/jsonl.rs` |
 | 2. HLC far-future op skipped on ingest (±24h gate) | `far_future_hlc_op_is_skipped_on_ingest` (B sends a ~48h-ahead op + a valid op; only the valid one lands on A) | `tests/regression.rs` |
 | 3. Workspace identity = stable id, not path (topic) | `same_workspace_id_yields_same_topic_across_paths` (pre-existing) | `tests/integration.rs` |
@@ -217,10 +216,11 @@ The shared seed/read/wait helpers stay in `tests/common/mod.rs` (read-only); sag
 | 3. Mismatched ids are rejected | `delta_sync_rejects_mismatched_workspace_id` (pre-existing) | `tests/integration.rs` |
 | 4. Pairing adoption (joiner adopts host id, syncs as one) | `gui_pairing_over_live_sync_endpoint` (pre-existing; asserts adopted id persisted in both peers.json) | `tests/integration.rs` |
 | 5. Single endpoint per identity (pair AND sync over the live sync endpoint, no relay hijack) | `gui_pairing_over_live_sync_endpoint` (pre-existing; pairing rides the live sync endpoint, no second bind) | `tests/integration.rs` |
-| 6. Relay-only dial / reachability resolution order | `iroh_endpoint_addr_prefers_relay_only_and_drops_stale_direct_addrs`, `iroh_endpoint_addr_falls_back_to_stored_addrs_when_no_relay`, `iroh_endpoint_addr_falls_back_to_bare_node_id`, `iroh_endpoint_addr_recovers_from_corrupt_stored_addr` | `src/peers.rs` `#[cfg(test)]` |
+| 6. Relay-only dial / reachability resolution order | the four `iroh_endpoint_addr_*` tests (prefers relay-only + drops stale direct addrs, falls back to stored addrs, falls back to bare node id, recovers from corrupt stored addr) | `src/peers.rs` `#[cfg(test)]` |
 | 7. Bidirectional push materializes on BOTH sides AND fires BOTH reload signals | `bidirectional_sync_fires_reload_signal_on_both_sides` (set convergence + `peer_ready_tx` on initiator AND responder) | `tests/regression.rs` |
 | 7. (set-convergence half) both sides hold all ops | `bidirectional_delta_sync` (pre-existing) | `tests/integration.rs` |
-| 8. Membership merge is ADD-only (never clobber a local entry, drop self, drop undialable) | `merge_unknown_never_clobbers_a_known_entry` (`src/peers.rs`) + `merge_skips_self` / `merge_adds_unknown_and_dedups_known` / `merge_skips_unreachable_peer` (pre-existing) | `src/peers.rs`, `src/engine_membership.rs` `#[cfg(test)]` |
+| 8. Membership merge is ADD-only (never clobber a local entry, drop self, drop undialable) | `merge_unknown_never_clobbers_a_known_entry` + `merge_skips_self` / `merge_adds_unknown_and_dedups_known` / `merge_skips_unreachable_peer` | `src/peers.rs`, `src/engine_membership.rs` `#[cfg(test)]` |
+| 9. Watermark gap — ops below a receiver's max-HLC stayed permanently invisible after out-of-order ingest; the v2 `ActorClock` count detects the gap, the full-log fallback + ingest dedup converge without duplicating | `backlog_below_watermark_crosses_after_gap_detected` / `ingest_dedups_already_present_ops` / `full_actor_resend_converges_and_dedups` | `tests/regression.rs` |
 
 Names map 1:1 to the saga checklist; do NOT delete one without deleting the bug it guards.
 
@@ -232,15 +232,14 @@ Every test runs over real QUIC on loopback (no faking, no relay — direct `127.
 
 | Failure mode | Chaos test | What it asserts |
 |--------------|-----------|-----------------|
-| Concurrent writers corrupting the op log (the `…}}}{` glue) | `concurrent_writers_never_corrupt_op_log` | 8 initiators push ops authored by ONE shared actor at ONE responder; every inbound `serve()` writes the same `ops-<actor>.jsonl` under the responder's single shared `AppendLock`. After: raw bytes show every physical line is exactly one JSON value, AND the op set is the exact union (no loss, no dup blow-up). |
-| Reordered + duplicated delivery | `reordered_and_duplicated_delivery_converges` | 3 nodes (each both initiator + responder), 3 rounds of seeded-shuffled directed sync passes, ~half delivered twice. All three converge to the identical op set (dedup-by-id + HLC order holds under stress). |
+| Concurrent writers corrupting the op log (the `…}}}{` glue) | `concurrent_writers_never_corrupt_op_log` | 8 initiators push ops of ONE shared actor at ONE responder; every inbound `serve()` writes the same `ops-<actor>.jsonl` under the shared `AppendLock`. After: every physical line is one JSON value AND the op set is the exact union (no loss, no dup blow-up). |
+| Reordered + duplicated delivery | `reordered_and_duplicated_delivery_converges` | 3 nodes (each initiator + responder), 3 rounds of seeded-shuffled directed passes, ~half delivered twice. All three converge to the identical op set. |
 | Partition + heal under load | `partition_then_heal_under_load` | B is "offline" while A and C make many edits and reconcile; B comes back and converges to the full A+B+C state. No lost ops, no glued line on the healed node. |
-| Fan-out + redundant dials | `fan_out_to_many_peers_converges_without_double_dial` | 5 peers dial one hub, each launching its dial TWICE concurrently. Hub converges to the exact union; every op lands once despite the duplicate concurrent dials; no glued line on any actor file. |
-| Single-endpoint invariant under concurrency | `concurrent_inbound_dials_on_single_endpoint_stay_clean` | 6 inbound dials land on one hub endpoint WHILE that same endpoint initiates an outbound `delta_sync`. Models the "pair handshake racing a sync on the same endpoint" case (relay-less loopback can't drive the real gossip/pairing swarm). Hub converges across both directions; no corruption. |
+| Fan-out + redundant dials | `fan_out_to_many_peers_converges_without_double_dial` | 5 peers dial one hub, each dial launched TWICE concurrently. Hub converges to the exact union, every op lands once, no glued line on any actor file. |
+| Single-endpoint invariant under concurrency | `concurrent_inbound_dials_on_single_endpoint_stay_clean` | 6 inbound dials land on one hub endpoint WHILE it initiates an outbound `delta_sync` — the "pair handshake racing a sync" case (relay-less loopback can't drive the real gossip/pairing swarm). Hub converges across both directions; no corruption. |
 
 **Determinism (load-bearing — a flaky chaos test is worse than none).**
-All "randomness" is a *seeded* xorshift (`chaos_helpers::Rng`): shuffles + duplicate counts reproduce from the per-test seed.
-Network timing is the only true nondeterminism, and every wait goes through `common::STEP_TIMEOUT` (30s) + `wait_until` polling — never a fixed sleep we race.
+All "randomness" is a seeded xorshift (`chaos_helpers::Rng`); network timing is the only true nondeterminism, and every wait goes through `common::STEP_TIMEOUT` (30s) + `wait_until` polling, never a fixed sleep.
 Sizes are bounded (≤ 64 ops, ≤ 8 tasks) so the suite stays ~2.5s.
 
 **Why raw bytes, not `all_ops`.**
@@ -248,14 +247,17 @@ Sizes are bounded (≤ 64 ops, ≤ 8 tasks) so the suite stays ~2.5s.
 `chaos_helpers::assert_every_line_is_one_json_value` reads the `ops-<actor>.jsonl` bytes directly and asserts each physical line decodes to exactly one JSON value — only the raw bytes reveal whether the lock actually held.
 
 **Helpers.**
-Chaos-only helpers (the seeded `Rng`, the raw-bytes corruption assertion, the HLC-offset seeder) live in `tests/chaos_helpers/mod.rs` — a sibling module, NOT `tests/common/mod.rs` (which the integration/catchup suites own and stays read-only).
-`common/mod.rs` is loaded by exactly ONE module per test binary (clippy `duplicate_mod`); `all_node_ids_on_disk` wraps `common`, so it lives in `chaos.rs` while the common-free helpers live in `chaos_helpers`.
+Chaos-only helpers live in `tests/chaos_helpers/mod.rs`, NOT `tests/common/mod.rs` (integration/catchup own it, read-only; clippy `duplicate_mod` allows one `common` loader per test binary, so `common`-dependent helpers stay in `chaos.rs`).
 
 ## Sync invariants
 
 - The op log (`ops-<actor>.jsonl`) IS the offline buffer.
 - On reconnect: bidirectional vector-clock delta sync.
-  Both sides exchange `Storage::last_ts_per_actor()` and stream missing ops.
+  Both sides exchange a per-actor `ActorClock { max: Hlc, count: u64 }` — max + DISTINCT-op count, derived from `all_ops` in `engine_sync::local_vector_clock` (the `Storage` trait is untouched) — and stream missing ops.
+- **Gap detection (v2).**
+  A bare max-HLC watermark assumes gapless delivery; an op landing ahead of a pending backlog made everything below the watermark permanently invisible (the Mac↔iPhone non-convergence).
+  If the sender holds more distinct ops `<= max_r` than the receiver's `count`, it resends that actor's FULL log; the receiver's ingest dedup (present-set read under the append locks) absorbs the overlap and never appends an op twice.
+  Accepted limit: equal counts over different subsets are indistinguishable — convergence still lands via each op's origin device, which always holds its own actor's complete log.
 - Ops from actor C received via peer B are stored as `ops-<C>.jsonl` locally.
   A can get C's ops via A↔B sync even if A never connects to C directly.
 - HLC sanity gate: ops with timestamps more than 24h in the future are
@@ -282,15 +284,12 @@ So the new peer's op-log history is never pulled (only brand-new ops would trick
   connect is why the status dot showed offline).
   The boot-time connect loop and `probe_peers` (status dot) use the same builder.
 - **Maintenance re-sync (the convergence safety net)**: each peer's last clean sync is timestamped in a `HashMap<EndpointId, Instant>`.
-  A peer is (re)dialed when it's new this session, its last attempt failed (absent from the map), OR its last success is older than `MAINTENANCE_RESYNC` (10s).
-  `delta_sync` is a cheap no-op on matching vector clocks, and the in-flight guard collapses a slow re-dial into the previous one, so the short interval doesn't thunder.
-  **This is load-bearing**: it makes convergence independent of the real-time gossip path.
-  The announce may never cross (flaky cross-network iroh), or a writer may never call `announce_local_ops` at all (the ephemeral CLI, see "Passive writers" below).
-  Either way the loop re-pulls from every known peer within `MAINTENANCE_RESYNC` and converges.
-  The earlier design marked a peer "synced once, never re-dial" and trusted gossip for live updates.
-  When gossip was down (or the announce was missing), a later edit on the other device never pulled — the "paired, first sync worked, then nothing propagates" bug.
-  Regression: `catch_up_resyncs_peer_after_interval` (new ops land with NO gossip and NO id-change signal, purely via the periodic re-pull).
-  **The map is cleared when the workspace id changes** (pairing adoption fires the `wid_changed` broadcast — `run_catch_up` `select!`s on it), forcing an immediate re-dial of every peer under the adopted id.
+  A peer is (re)dialed when new this session, when its last attempt failed (absent from the map), or when its last success is older than `MAINTENANCE_RESYNC` (10s).
+  `delta_sync` is a cheap no-op on matching vector clocks and the in-flight guard collapses a slow re-dial into the previous one, so the short interval doesn't thunder.
+  **Load-bearing**: convergence must not depend on the real-time gossip path, since the announce may never cross (flaky cross-network iroh) or never be sent at all (the ephemeral CLI, see "Passive writers").
+  The loop re-pulls every known peer within `MAINTENANCE_RESYNC` regardless.
+  The earlier "synced once, never re-dial" design broke exactly there ("paired, first sync worked, then nothing propagates"); regression: `catch_up_resyncs_peer_after_interval`.
+  **The map is cleared when the workspace id changes** (`run_catch_up` `select!`s on the `wid_changed` broadcast), forcing an immediate re-dial of every peer under the adopted id.
 - `PeerEntry` carries the peer's **full** `EndpointAddr` in `endpoint_addr`
   (base64 JSON), captured at pairing time after the endpoint came online —
   see "Reachability: full `EndpointAddr`" below.
@@ -307,7 +306,7 @@ Since two sync-serving endpoints can share the device identity without breaking 
 
 - **The MCP server brings a real transport up.**
   `outl mcp serve` is long-lived (the whole Claude Desktop session), so it CAN hold an endpoint and push in real time.
-  On the first workspace open it spins up `IrohSyncTransport` with the shared `~/.outl/identity.key` + the workspace's `.outl/peers.json` **when the workspace has paired peers**.
+  On first workspace open it spins up `IrohSyncTransport` (shared `~/.outl/identity.key` + workspace `.outl/peers.json`) **when the workspace has paired peers**.
   It announces after every mutating tool, drains peer pushes (reopening the workspace so it serves fresh ops), and shuts down on stdin close.
   If a GUI is also running, the two share the identity — stable hijack, both serve.
   Wired in `outl-cli` `mcp/mod.rs` (`ServerCtx::ensure_transport` / `announce_after_mutation` / `shutdown_transport`).
@@ -332,11 +331,10 @@ The status dot showed offline and the first sync never pulled history.
 Two devices on the same WiFi can connect instantly via direct addresses — but only if those addresses were captured and stored.
 They weren't: the old `PeerEntry` stored `relay_url: null` and no addrs.
 
-**Capture (`pairing::ready_addr`):** `endpoint.addr()` right after `bind()` is typically empty (no relay handshake, no net report yet).
-Before generating the ticket (host) or sending the payload (joiner), both sides call `ready_addr`, which awaits `endpoint.online()` under a 5s timeout.
-`online` pends forever with no relay/WAN, so the timeout is mandatory.
-After that the addr carries the relay + the discovered LAN direct addrs.
-On timeout we proceed anyway — the local net report has usually already filled in the direct addrs, which is all two devices on the same WiFi need.
+**Capture (`pairing::ready_addr`):** `endpoint.addr()` right after `bind()` is typically empty.
+Before minting the ticket (host) or sending the payload (joiner), both sides call `ready_addr`, which awaits `endpoint.online()` under a mandatory 5s timeout (`online` pends forever with no relay/WAN).
+After that the addr carries the relay + discovered LAN direct addrs.
+On timeout we proceed anyway — the local net report has usually already filled in the direct addrs, all two same-WiFi devices need.
 
 **Exchange:** the host mints the ticket from its ready addr, so the joiner stores a reachable host; the joiner sends its own ready `EndpointAddr` in the pairing payload, so the host stores a reachable joiner.
 Each side persists the other's full addr.
@@ -358,19 +356,14 @@ The ticket codec and the `endpoint_addr` codec are the **same** function (`peers
 **All four endpoints bind IPv4-only.**
 This is a temporary workaround for an iroh 1.0.0 bug, owned by the `bind` module (`bind::n0_builder_ipv4_only`).
 
-**The bug:** iroh 1.0.0's QUIC-multipath stack opens paths to **all** of a peer's candidate addresses concurrently.
-Say a peer's `EndpointAddr` carries a global IPv6 direct addr that is "No route to host" on a LAN-only device.
-Multipath then stalls on that dead path (`PTO expired`, `failed closing path err=MultipathNotNegotiated`).
-The whole connect/accept times out (~30s) instead of converging on the working LAN-IPv4 or relay path.
-iroh 1.0.0 exposes **no** public knob to disable multipath.
-(`max_concurrent_multipath_paths` clamps to >= 9; `path_selector` is unstable + only picks among already-opened paths; no env var.)
-Downgrade is blocked too — `iroh-gossip 0.101.0` requires `iroh = "1"`.
+**The bug:** iroh 1.0.0's QUIC-multipath opens paths to **all** of a peer's candidate addresses concurrently.
+A dead global IPv6 direct addr ("No route to host" on a LAN-only device) then stalls the whole connect/accept (`PTO expired`, `MultipathNotNegotiated`, ~30s timeout) instead of converging on the working LAN-IPv4 or relay path.
+There is no public knob to disable multipath (`max_concurrent_multipath_paths` clamps to >= 9; `path_selector` is unstable and only picks among already-opened paths), and downgrade is blocked — `iroh-gossip 0.101.0` requires `iroh = "1"`.
 
 **The fix (Option A):** bind an **IPv4-only** UDP socket via `Endpoint::builder(presets::N0).clear_ip_transports().bind_addr("0.0.0.0:0")`.
 The endpoint then never discovers/advertises a global IPv6 direct addr, so neither the dial side nor the accept side ever opens a dead IPv6 path.
 `clear_ip_transports` only drops the IP transports; the `presets::N0` relay transport stays, so **LAN-IPv4 direct + n0 relay fallback are both preserved**.
-See iroh-1.0.0 `src/endpoint.rs`: `Builder::bind_addr` / `Builder::clear_ip_transports`.
-By default the builder pre-binds both `0.0.0.0` and `[::]`; `clear` + `bind_addr` re-adds IPv4 only.
+By default the builder pre-binds both `0.0.0.0` and `[::]`; `clear` + `bind_addr` re-adds IPv4 only (see iroh-1.0.0 `Builder::bind_addr` / `clear_ip_transports`).
 
 Every endpoint goes through `bind::n0_builder_ipv4_only` so the dial and accept sides stay consistent — `run_iroh` (engine), `bind_pairing_endpoint` (pairing), `probe_peers` (status), and `bind_sync_endpoint` (test_support).
 Dropping IPv6 on only one side would let the other still advertise a dead path.

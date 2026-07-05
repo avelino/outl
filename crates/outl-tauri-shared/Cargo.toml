@@ -1,0 +1,35 @@
+[package]
+name = "outl-tauri-shared"
+description = "Shared Tauri backend surface (state DTOs, helpers, command bodies, plugin service) for the outl desktop and mobile clients."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+outl-core = { workspace = true }
+outl-md = { workspace = true }
+outl-actions = { workspace = true }
+outl-config = { workspace = true }
+# Feature-less on purpose (same rule as outl-actions): the client binary
+# selects the language runtimes it ships; a default-features dep here would
+# smuggle wasmtime into the mobile IPA via Cargo feature unification.
+outl-exec = { path = "../outl-exec", default-features = false }
+outl-plugins = { workspace = true, features = ["registry"] }
+outl-shortcuts = { workspace = true }
+outl-sync-iroh = { workspace = true }
+
+tauri = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+parking_lot = { workspace = true }
+ulid = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

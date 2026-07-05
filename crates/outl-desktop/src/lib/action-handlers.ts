@@ -34,16 +34,14 @@ import {
   openTodayJournal,
   outdentBlock,
   pasteBlockAfter,
+  pluginSyncHooks,
   previousDay,
+  runCodeBlock,
   setBlockCollapsed,
   todaySlug,
   toggleTodo as toggleTodoCmd,
 } from "@outl/shared/api/commands";
 import type { BlockNode, PageView } from "@outl/shared/api/types";
-
-import { pluginSyncHooks, redoPage, runCodeBlock, undoPage } from "./api";
-import { playPluginViews } from "./plugin-views";
-import { insertLink, wrapSelection } from "./markdown-wrap";
 import {
   flattenAll,
   flattenParents,
@@ -51,7 +49,11 @@ import {
   nextVisibleId,
   previousVisibleId,
   visualRangeIds,
-} from "./outline-walk";
+} from "@outl/shared/outline";
+
+import { redoPage, undoPage } from "./api";
+import { playPluginViews } from "./plugin-views";
+import { insertLink, wrapSelection } from "./markdown-wrap";
 import { type ActionHandlers } from "./shortcuts";
 import { appState, setAppState } from "./store";
 

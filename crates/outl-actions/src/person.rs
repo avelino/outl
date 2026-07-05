@@ -13,9 +13,8 @@ use outl_core::property::PropValue;
 use outl_core::workspace::Workspace;
 
 use crate::error::ActionError;
-use crate::page::{
-    find_by_slug, list_all, open_or_create_by_name, set_property, PageKind, PageMeta,
-};
+use crate::page::{list_all, set_property, PageMeta};
+use crate::resolve::resolve_or_create_by_name;
 
 /// Page-level property key carrying the user-defined semantic type of
 /// the page (`type:: person`, `type:: project`, …). Read by the `@`
@@ -93,7 +92,11 @@ pub(crate) fn ensure_person_by_name(
     hlc: &HlcGenerator,
     name: &str,
 ) -> Result<NodeId, ActionError> {
-    let id = resolve_or_create_person(workspace, hlc, name)?;
+    // Resolution is `page`'s shared ladder (literal slug → slugified →
+    // case-insensitive title → create with `name` as the title). This
+    // module only layers the person policy on top — the ladder used to
+    // be duplicated here and drifted from `open_or_create_by_ref`'s.
+    let id = resolve_or_create_by_name(workspace, hlc, name)?;
     set_property(
         workspace,
         hlc,
@@ -104,45 +107,11 @@ pub(crate) fn ensure_person_by_name(
     Ok(id)
 }
 
-/// Lookup `name` against existing pages by slug → slugified-slug →
-/// case-insensitive title, falling back to creating a fresh page when
-/// nothing matches. Pure resolution: does **not** touch the `type::`
-/// property — caller ([`ensure_person_by_name`]) is in charge of that
-/// policy.
-fn resolve_or_create_person(
-    workspace: &mut Workspace,
-    hlc: &HlcGenerator,
-    name: &str,
-) -> Result<NodeId, ActionError> {
-    if let Some(id) = find_by_slug(workspace, name) {
-        return Ok(id);
-    }
-    let slug = outl_md::slug::slugify(name);
-    if let Some(id) = find_by_slug(workspace, &slug) {
-        return Ok(id);
-    }
-    // Title fallback so `[[@Thiago Avelino]]` matches a pre-existing
-    // page whose user-typed title was `Thiago Avelino` even before the
-    // slug got computed.
-    let name_lower = name.to_lowercase();
-    if let Some(existing) = list_all(workspace)
-        .into_iter()
-        .find(|p| p.title.to_lowercase() == name_lower)
-    {
-        use std::str::FromStr;
-        if let Ok(id) = ulid::Ulid::from_str(&existing.id) {
-            return Ok(NodeId(id));
-        }
-    }
-    // Not found: create with the human-typed `name` as the title
-    // (`open_or_create_by_name` slugifies internally).
-    open_or_create_by_name(workspace, hlc, name, PageKind::Page)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::page::{open_or_create, open_or_create_by_ref, page_meta, set_property, PageKind};
+    use crate::page::{open_or_create, page_meta, set_property, PageKind};
+    use crate::resolve::open_or_create_by_ref;
     use outl_core::id::ActorId;
 
     fn ws() -> (Workspace, HlcGenerator) {

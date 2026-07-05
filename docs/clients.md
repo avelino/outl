@@ -44,8 +44,10 @@ The TS+Solid frontends share `@outl/shared` (`crates/outl-frontend-shared`) for 
 | Committed-mutation undo / redo (snapshot stacks + `.md` restore via reconcile) | `outl-actions::history` |
 | Code-block execution (runtimes + orchestration) | `outl-exec`            |
 | Cross-client "run a fence" glue (`run_code_block`) | `outl-actions::exec` |
+| Tauri command bodies, wire DTOs, plugin thread (Boa `!Send`), `AppHost` / `StorageRootProvider` traits — shared by `outl-desktop` and `outl-mobile` src-tauri; both clients are thin wrappers | `outl-tauri-shared` |
 | TUI: keymaps, modes, overlays, in-flight AST manipulation | `outl-tui`         |
-| Mobile: local storage + iroh P2P (incl. iOS background sync), Tauri commands, Solid frontend | `outl-mobile` |
+| Desktop: FS watcher, settings IO, Solid frontend (3-pane, OS-standard shortcuts) | `outl-desktop` |
+| Mobile: iCloud container resolution, iOS-native bridges (`NSMetadataQuery`, `BGTaskScheduler`), Solid frontend | `outl-mobile` |
 | CLI subcommands                      | `outl-cli`                      |
 
 ## When to put logic in `outl-actions`
@@ -268,7 +270,7 @@ parser, and the user got an `invalid date slug` toast for what
 should have been a regular page.
 
 The canonical entry point is
-`outl_actions::page::open_or_create_by_ref(target)`.
+`outl_actions::resolve::open_or_create_by_ref(target)` (re-exported at the crate root).
 It runs the whole decision tree in one place:
 
 1. Date-shaped target → journal (semantic validator, not the regex
@@ -286,7 +288,8 @@ It runs the whole decision tree in one place:
 ### `@` mention autocomplete
 
 Every client surfaces a person picker on a word-initial `@`.
-The popup is filtered to pages where `type:: person` is set, ranked through the shared `outl_actions::page::search_persons(query)` helper (TUI calls it directly; desktop and mobile expose it as the `search_persons` Tauri command).
+The popup is filtered to pages where `type:: person` is set, ranked through the shared `outl_actions::search_persons(query)` helper owned by the `person` module.
+The TUI calls it directly; desktop and mobile expose it as the `search_persons` Tauri command.
 Accepting a candidate inserts `[[@<title>]]`, a regular wikilink whose target carries the `@` as a visual prefix only.
 Mentions ride every existing page-ref code path (render, roundtrip, navigation), so adding the trigger costs no new render/matching/reconcile branch.
 

@@ -54,7 +54,9 @@ pub mod block;
 pub mod clipboard;
 pub mod clock;
 pub mod collapsed;
+pub mod dates;
 pub mod deeplink;
+pub mod desync;
 pub mod error;
 pub mod exec;
 pub mod history;
@@ -64,6 +66,7 @@ pub mod page;
 pub mod paste;
 pub mod person;
 pub mod quote;
+pub mod resolve;
 pub mod sync;
 pub mod todo;
 pub mod tree;
@@ -76,7 +79,13 @@ pub use block::{
 };
 pub use clipboard::{copy_markdown, copy_markdown_nodes};
 pub use collapsed::{set_block_collapsed, toggle_block_collapsed};
+pub use dates::{
+    date_from_slug, days_until_next_weekday, journal_ref, journal_slug, journal_title,
+    next_journal_date, parse_date_arg, parse_date_label, parse_flexible_date,
+    previous_journal_date, week_tag,
+};
 pub use deeplink::{parse_deep_link, DeepLinkError, DeepLinkTarget, DEEP_LINK_SCHEME};
+pub use desync::{recover_desynced_projection, scan_for_desynced_projections};
 pub use error::ActionError;
 pub use exec::{run_code_block, ExecOutputDto, RunCodeBlockOutcome};
 pub use history::{restore_page_md, HistoryStacks, DEFAULT_HISTORY_CAP};
@@ -92,17 +101,16 @@ pub use outline::{
     read_page_view_with_workspace, OutlineNode, PageOutline,
 };
 pub use page::{
-    date_from_slug, find_by_slug, is_valid_slug, journal_slug, journal_title,
-    list_all as list_pages, migrate_legacy_into_today, next_journal_date, open_journal,
-    open_or_create as open_or_create_page, open_or_create_by_name, open_or_create_by_ref,
-    open_today, page_meta, previous_journal_date, read_text_prop, set_property, today, PageKind,
-    PageMeta,
+    find_by_slug, is_valid_slug, list_all as list_pages, migrate_legacy_into_today, open_journal,
+    open_or_create as open_or_create_page, open_today, page_meta, read_text_prop, set_property,
+    today, PageKind, PageMeta,
 };
 pub use paste::{
     looks_like_outline, normalize_external_syntax, paste_markdown, paste_plain, PasteAnchor,
     PasteOutcome,
 };
 pub use person::{search_persons, PERSON_TYPE, TYPE_KEY};
+pub use resolve::{open_or_create_by_name, open_or_create_by_ref};
 pub use sync::{FileSyncTransport, OpsFileSnapshot, PeerHealthSnapshot, SyncEngine, SyncTransport};
 pub use todo::{cycle_todo, split_todo, TodoState, DONE_PREFIX, TODO_PREFIX};
 pub use tree::{

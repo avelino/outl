@@ -1,54 +1,22 @@
-//! Plugin command surface.
+//! Plugin command surface — thin shims over the shared
+//! [`PluginService`] (the Boa `Context` lives on a dedicated thread,
+//! `!Send`, so these commands only talk to it through the request
+//! channel) and the shared reply builders in
+//! `outl_tauri_shared::commands::plugin`.
 //!
-//! Thin shims over [`crate::plugin_service::PluginService`] — the Boa
-//! `Context` lives on a dedicated thread (`!Send`), so these commands
-//! only talk to it through the request channel. No business logic here:
-//! listing, running, and re-projection all happen on the plugin thread
-//! against the shared `outl-actions` surface.
+//! `plugin_keybindings` is desktop-only: mobile has no chord surface, so
+//! it never registers the command (the shared service still answers it,
+//! filtered by the client capability set).
 
 use tauri::State;
 
-use crate::helpers::{build_page_view, parse_node_id, storage_root_or_err, with_ws};
-use crate::plugin_dto::{
+use crate::state::AppState;
+use outl_plugins::MarketplaceItem;
+use outl_tauri_shared::commands::plugin::{self as shared, PluginRunReply, PluginSyncHooksReply};
+use outl_tauri_shared::plugin_dto::{
     PluginCommandDto, PluginKeybindingDto, ToolbarButtonDto, TransformResultDto, TransformerDto,
 };
-use crate::plugin_service::PluginService;
-use crate::state::{AppState, PageView};
-use outl_plugins::MarketplaceItem;
-use serde::Serialize;
-
-/// Reply for [`plugin_run`]: the plugin's notifications / errors / applied
-/// count, plus the refreshed [`PageView`] of the page that was on screen
-/// when the command fired (so the frontend can re-render in one trip).
-///
-/// `view` is `None` when no page id was supplied (e.g. the palette fired
-/// before a page loaded) or the page no longer resolves — a plugin can
-/// move blocks off the current page, but the page node itself stays.
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct PluginRunReply {
-    pub applied: usize,
-    pub notifications: Vec<String>,
-    pub errors: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub view: Option<PageView>,
-    /// HTML documents the plugin emitted via `ctx.ui.render` (gated by
-    /// the `ui-render` capability). The frontend plays each as an
-    /// ephemeral sandboxed iframe overlay — untrusted plugin output.
-    pub views: Vec<String>,
-}
-
-/// Reply for [`plugin_sync_hooks`]: the refreshed [`PageView`] when an
-/// op-hook mutated the page on screen (`None` on the common no-op path),
-/// plus any `ui-render` views the hooks emitted. The views path is the
-/// confetti trigger: toggling a block DONE fires `onOp`, the plugin emits
-/// HTML, and the frontend plays it as a sandboxed iframe overlay — so it
-/// is populated even when no page re-render is needed.
-#[derive(Debug, Clone, Default, Serialize)]
-pub(crate) struct PluginSyncHooksReply {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub view: Option<PageView>,
-    pub views: Vec<String>,
-}
+use outl_tauri_shared::PluginService;
 
 /// List every command contributed by a loaded plugin whose
 /// `slash-command` capability the desktop honors. Empty until the
@@ -105,10 +73,8 @@ pub(crate) fn plugin_transform(
 }
 
 /// Run a plugin command. `page_id` is the page currently on screen; the
-/// reply carries its refreshed [`PageView`] so the frontend re-renders
-/// without a second round-trip. A plugin can mutate any page — the whole
-/// workspace was re-projected on the plugin thread before this returns —
-/// but the view we return is the one the user is looking at.
+/// reply carries its refreshed page view so the frontend re-renders
+/// without a second round-trip.
 #[tauri::command]
 pub(crate) fn plugin_run(
     plugin_id: String,
@@ -117,67 +83,24 @@ pub(crate) fn plugin_run(
     plugins: State<'_, PluginService>,
     state: State<'_, AppState>,
 ) -> Result<PluginRunReply, String> {
-    let run = plugins.run_command(plugin_id, command_id)?;
-
-    // Re-render the on-screen page from the now-mutated + re-projected
-    // workspace. Failure to resolve the page is non-fatal: the mutation
-    // already landed, the frontend can fall back to its own reload.
-    let view = match page_id {
-        Some(id) => {
-            let page = parse_node_id(&id)?;
-            let root = storage_root_or_err(&state)?;
-            with_ws(&state, |ws| Ok(build_page_view(ws, &root, page).ok())).unwrap_or(None)
-        }
-        None => None,
-    };
-
-    Ok(PluginRunReply {
-        applied: run.applied,
-        notifications: run.notifications,
-        errors: run.errors,
-        view,
-        views: run.views,
-    })
+    shared::run(
+        state.inner(),
+        plugins.inner(),
+        plugin_id,
+        command_id,
+        page_id,
+    )
 }
 
-/// Fire the plugins' `onOp` hook sweep after a user mutation. Best-effort
-/// op-hooks (root invariant 7's "any state that converges goes through the
-/// op log" applies to the *plugin's* writes too — they route through
-/// `outl-actions`).
-///
-/// The frontend calls this once after committing a block mutation. It must
-/// be called with **no** workspace lock held by the webview side; the
-/// plugin thread locks the workspace to run the hooks. Returns the
-/// refreshed [`PageView`] of `page_id` **only** when a hook actually
-/// mutated the workspace (so the caller skips a needless re-render on the
-/// common no-op path).
+/// Fire the plugins' `onOp` hook sweep after a user mutation — see the
+/// shared body for the re-render / views contract.
 #[tauri::command]
 pub(crate) fn plugin_sync_hooks(
     page_id: Option<String>,
     plugins: State<'_, PluginService>,
     state: State<'_, AppState>,
 ) -> Result<PluginSyncHooksReply, String> {
-    let outcome = plugins.sync_hooks();
-    // Views ride back even on the no-op-mutation path: a `ui-render`
-    // plugin (confetti) emits HTML from its `onOp` hook without
-    // necessarily mutating the workspace, so the overlay must still
-    // play. Only the page re-render is gated on `applied > 0`.
-    let view = if outcome.applied > 0 {
-        match page_id {
-            Some(id) => {
-                let page = parse_node_id(&id)?;
-                let root = storage_root_or_err(&state)?;
-                with_ws(&state, |ws| Ok(build_page_view(ws, &root, page).ok()))?
-            }
-            None => None,
-        }
-    } else {
-        None
-    };
-    Ok(PluginSyncHooksReply {
-        view,
-        views: outcome.views,
-    })
+    shared::sync_hooks(state.inner(), plugins.inner(), page_id)
 }
 
 /// Marketplace rows: the official registry (`plugins.outl.app`) crossed with

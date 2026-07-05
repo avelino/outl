@@ -12,11 +12,10 @@ use serde_json::{json, Value};
 
 use outl_actions::{
     append_block, append_forest, append_tree, apply_page_md_with_sidecar, children_of,
-    create_after, enclosing_page_id, page_meta, position_after, position_for_new_last_child,
-    project_outline, split_todo, BlockTreeSpec, PageMeta,
+    create_after, enclosing_page_id, page_meta, project_outline, split_todo, ActionError,
+    BlockTreeSpec, PageMeta,
 };
 use outl_core::id::NodeId;
-use outl_core::op::{LogOp, Op};
 
 use crate::human::{print_outline_node, todo_prefix};
 use crate::output::{codes, emit, ApiError};
@@ -388,19 +387,16 @@ pub fn move_block(
             format!("block `{id_str}` not in tree"),
         )
     })?;
-    let current_position = ctx
-        .workspace
-        .tree()
-        .position(id)
-        .cloned()
-        .ok_or_else(|| ApiError::new(codes::INTERNAL, "block has no position".to_string()))?;
 
     let new_parent = match parent {
         Some(p) => parse_id(p)?,
         None => current_parent,
     };
 
-    let new_position = match after {
+    // Validate `--after` up front: it must exist and share the target
+    // parent — that consistency rule is CLI surface, not workspace
+    // semantics, so it stays here.
+    let after_id = match after {
         Some(a) => {
             let after_id = parse_id(a)?;
             let after_parent = ctx.workspace.tree().parent(after_id).ok_or_else(|| {
@@ -415,11 +411,9 @@ pub fn move_block(
                     "--after block has a different parent than --parent".to_string(),
                 ));
             }
-            position_after(&ctx.workspace, after_id).ok_or_else(|| {
-                ApiError::new(codes::INTERNAL, "could not derive position".to_string())
-            })?
+            Some(after_id)
         }
-        None => position_for_new_last_child(&ctx.workspace, new_parent),
+        None => None,
     };
 
     // Reject cycles loudly. The CRDT also rejects on the materialised
@@ -432,20 +426,13 @@ pub fn move_block(
         ));
     }
 
-    let ts = ctx.hlc.next();
-    ctx.workspace
-        .apply(LogOp {
-            ts,
-            actor: ts.actor,
-            op: Op::Move {
-                node: id,
-                new_parent,
-                position: new_position,
-                old_parent: current_parent,
-                old_position: current_position,
-            },
-        })
-        .map_err(ApiError::internal)?;
+    // The actual mutation goes through `outl-actions` — clients never
+    // build `Op::Move` by hand (root CLAUDE.md, reuse-first).
+    match after_id {
+        Some(target) => outl_actions::move_after(&mut ctx.workspace, &ctx.hlc, id, target),
+        None => outl_actions::move_under(&mut ctx.workspace, &ctx.hlc, id, new_parent),
+    }
+    .map_err(map_move_error)?;
 
     write_enclosing_page(ctx, id)?;
     if new_parent != current_parent {
@@ -459,6 +446,25 @@ pub fn move_block(
         "id": id.to_string(),
         "parent": new_parent.to_string(),
     }))
+}
+
+/// Translate `outl-actions` move failures into the CLI's stable error
+/// codes. Error *translation* is the CLI's job; the mutation itself
+/// lives upstream.
+fn map_move_error(err: ActionError) -> ApiError {
+    match err {
+        ActionError::NotInTree(id) => {
+            ApiError::new(codes::BLOCK_NOT_FOUND, format!("block `{id}` not in tree"))
+        }
+        ActionError::WouldCreateCycle(id) => ApiError::new(
+            codes::CYCLE_REJECTED,
+            format!("move {id} would create a cycle (op recorded as no-op)"),
+        ),
+        ActionError::MissingPosition(_) => {
+            ApiError::new(codes::INTERNAL, "could not derive position".to_string())
+        }
+        other => ApiError::internal(other),
+    }
 }
 
 /// Delete a block — moves it to the trash.

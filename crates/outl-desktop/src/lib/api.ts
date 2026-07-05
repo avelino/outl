@@ -304,95 +304,24 @@ export type { ExecOutputDto, RunCodeBlockReply } from "@outl/shared/api/types";
 export { runCodeBlock } from "@outl/shared/api/commands";
 
 // ---------------------------------------------------------------------------
-// Plugins (desktop-only)
+// Plugins (desktop-only surface)
 // ---------------------------------------------------------------------------
 //
 // The plugin host (`outl_plugins::PluginHost`) embeds a Boa `Context` that is
 // `!Send`, so it runs on a dedicated thread behind `PluginService` (see
-// `src-tauri/src/plugin_service.rs`). These commands talk to that thread.
-
-/** A command a loaded plugin contributes — surfaced in the plugin palette. */
-export interface PluginCommand {
-  plugin_id: string;
-  command_id: string;
-  title: string;
-}
-
-/**
- * Outcome of running a plugin command. `view` is the refreshed `PageView`
- * of the page that was on screen when the command fired (so the caller
- * re-renders in one trip); absent when no page id was supplied or the page
- * no longer resolves.
- */
-export interface PluginRunReply {
-  applied: number;
-  notifications: string[];
-  errors: string[];
-  view?: PageView;
-  /**
-   * HTML documents the plugin emitted via `ctx.ui.render` (gated by the
-   * `ui-render` capability). Each is played as an ephemeral sandboxed
-   * iframe overlay — untrusted plugin output, never injected into the
-   * app DOM. See `playPluginViews` in `lib/plugin-views.ts`.
-   */
-  views: string[];
-}
-
-/**
- * Reply from {@link pluginSyncHooks}: a refreshed `PageView` **only**
- * when an op-hook mutated the on-screen page (`view` absent otherwise),
- * plus any `ui-render` views the hooks emitted. The `views` path is the
- * confetti trigger — present even when no page re-render is needed.
- */
-export interface PluginSyncHooksReply {
-  view?: PageView;
-  views: string[];
-}
-
-/**
- * List every command contributed by a loaded plugin. Empty until the
- * workspace opens and plugins load (best-effort — never throws on an empty
- * or failed host).
- */
-export function pluginList(): Promise<PluginCommand[]> {
-  return invoke<PluginCommand[]>("plugin_list");
-}
-
-/**
- * Run a plugin command. Pass the currently-open page id so the reply
- * carries its refreshed `PageView` — the plugin thread re-projects every
- * page's `.md` before returning (a plugin can move blocks across pages).
- */
-export function pluginRun(
-  pluginId: string,
-  commandId: string,
-  pageId: string | null,
-): Promise<PluginRunReply> {
-  return invoke<PluginRunReply>("plugin_run", {
-    pluginId,
-    commandId,
-    pageId,
-  });
-}
-
-/**
- * Fire the plugins' `onOp` hook sweep after a user mutation. The reply's
- * `view` is the refreshed `PageView` of `pageId` **only** when a hook
- * actually mutated the workspace (absent otherwise, so the caller skips a
- * needless render); `views` carries any `ui-render` HTML the hooks emitted
- * (the confetti path — present even when nothing was re-rendered).
- * Best-effort — a host with no op-hook plugins is a cheap no-op.
- */
-export function pluginSyncHooks(
-  pageId: string | null,
-): Promise<PluginSyncHooksReply> {
-  return invoke<PluginSyncHooksReply>("plugin_sync_hooks", { pageId });
-}
-
-// The plugin marketplace types + wrappers (`RegistryItem`,
-// `pluginRegistryList` / `pluginInstallOfficial` / `pluginSetEnabled` /
-// `pluginUninstall`, `filterRegistryItems`) live in `@outl/shared` — both
-// clients register identical commands, so the wrapper is client-agnostic.
+// `src-tauri/src/plugin_service.rs`).
+//
+// The client-agnostic plugin surface lives in `@outl/shared`: the DTOs
+// (`PluginCommand`, `PluginToolbarButton`, `PluginRunReply`,
+// `PluginSyncHooksReply`, `PluginTransformer`, `PluginTransformResult`) in
+// `@outl/shared/api/types`, the wrappers (`pluginList`, `pluginRun`,
+// `pluginSyncHooks`, `pluginToolbar`, `pluginTransformers`,
+// `pluginTransform`) in `@outl/shared/api/commands`, and the marketplace
+// (`RegistryItem`, `pluginRegistryList`, …, `filterRegistryItems`)
+// alongside them — both clients register identical commands.
+//
+// Only the **keybinding** contribution stays here: mobile has no chord
+// surface, so `plugin_keybindings` is a desktop-only command.
 
 /**
  * A keybinding a loaded plugin contributes for the desktop.
@@ -413,16 +342,6 @@ export interface PluginKeybinding {
   description: string;
 }
 
-/** A toolbar button a loaded plugin contributes for the desktop chrome. */
-export interface ToolbarButton {
-  plugin_id: string;
-  command_id: string;
-  /** Glyph / emoji rendered in the chrome button. */
-  icon: string;
-  /** Optional tooltip / accessible label. */
-  title?: string;
-}
-
 /**
  * List plugin-contributed desktop keybindings. The dispatcher folds these
  * into the chord pipeline as a Global overlay that only fires when **no**
@@ -431,65 +350,4 @@ export interface ToolbarButton {
  */
 export function pluginKeybindings(): Promise<PluginKeybinding[]> {
   return invoke<PluginKeybinding[]>("plugin_keybindings");
-}
-
-/**
- * List plugin-contributed desktop toolbar buttons — one chrome button per
- * entry (glyph = `icon`, tooltip = `title`, click = {@link pluginRun}).
- * Empty until plugins load (best-effort — never throws).
- */
-export function pluginToolbar(): Promise<ToolbarButton[]> {
-  return invoke<ToolbarButton[]>("plugin_toolbar");
-}
-
-/**
- * A content transformer a loaded plugin declared for a code-fence
- * language. The frontend loads the list once per workspace open and, when
- * a fence's language matches a `lang` here, calls {@link pluginTransform}
- * to render it.
- */
-export interface PluginTransformer {
-  plugin_id: string;
-  lang: string;
-  /** `"text"` (inline markdown) or `"rich"` (HTML for a sandboxed iframe). */
-  kind: "text" | "rich";
-}
-
-/**
- * The descriptor a content transformer produced for a fence body.
- * `kind: "text"` → `content` is markdown/text rendered inline;
- * `kind: "rich"` → `content` is HTML run in a sandboxed iframe (untrusted
- * plugin output, never injected into the app DOM — see `CodeFenceView`).
- */
-export interface PluginTransformResult {
-  kind: "text" | "rich";
-  content: string;
-}
-
-/**
- * List every content transformer a loaded plugin declared. Load once per
- * workspace open and match each code fence's language against the result.
- * Empty until plugins load (best-effort — never throws).
- */
-export function pluginTransformers(): Promise<PluginTransformer[]> {
-  return invoke<PluginTransformer[]>("plugin_transformers");
-}
-
-/**
- * Run a content transformer for `lang` against a fence `input` (its body).
- * Read-only: never mutates the workspace. Resolves to `null` when the
- * transformer declined or no plugin owns `lang`, otherwise the
- * `{ kind, content }` descriptor. Cache the result by `(blockId, body)` —
- * re-run only when the body changes.
- */
-export function pluginTransform(
-  pluginId: string,
-  lang: string,
-  input: string,
-): Promise<PluginTransformResult | null> {
-  return invoke<PluginTransformResult | null>("plugin_transform", {
-    pluginId,
-    lang,
-    input,
-  });
 }

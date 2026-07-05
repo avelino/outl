@@ -1,4 +1,8 @@
-//! Shared state and wire types held by Tauri.
+//! Desktop `AppState` + its [`AppHost`] projection.
+//!
+//! The wire types (`PageView`, `CreateBlockReply`, `WorkspaceSummary`,
+//! `ERR_LOADING`) live in `outl-tauri-shared` and are re-exported here so
+//! the rest of the crate keeps importing them from `crate::state`.
 //!
 //! `AppState` is created once at `setup` time and managed by Tauri so
 //! every command has access via `State<'_, AppState>`. The mutable
@@ -10,22 +14,18 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use outl_actions::{Backlink, HistoryStacks, OutlineNode, PageMeta, SyncTransport};
+use outl_actions::{HistoryStacks, SyncTransport};
 use outl_core::hlc::HlcGenerator;
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
 use outl_exec::RuntimeRegistry;
+use outl_tauri_shared::AppHost;
 use parking_lot::Mutex;
-use serde::Serialize;
 
 use crate::fs_watcher::WatcherHandle;
 use crate::settings::Settings;
 
-/// Sentinel error returned by workspace-touching commands while the
-/// workspace is still being opened (background thread) or while the
-/// user hasn't picked one yet. The frontend retries on a short
-/// interval — see `App.tsx::refresh`.
-pub(crate) const ERR_LOADING: &str = "workspace_loading";
+pub(crate) use outl_tauri_shared::{CreateBlockReply, PageView, WorkspaceSummary, ERR_LOADING};
 
 /// Shared mutable state held by Tauri.
 pub(crate) struct AppState {
@@ -80,43 +80,36 @@ pub(crate) struct AppState {
     pub history: Mutex<HashMap<NodeId, HistoryStacks<String>>>,
 }
 
-/// Returned by the `workspace_stats` command.
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct WorkspaceSummary {
-    pub blocks: usize,
-    pub ops: usize,
-    pub actor: String,
-    pub storage_root: String,
-    /// `true` when a workspace is loaded; `false` while the picker
-    /// is still up or the background opener is in flight.
-    pub ready: bool,
-}
+/// The desktop's projection onto the shared command surface. The one
+/// structural divergence from mobile — the swap-capable
+/// `Arc<Mutex<Option<PathBuf>>>` storage root — is absorbed by
+/// `storage_root()` returning the [`ERR_LOADING`] sentinel while no
+/// workspace is open.
+impl AppHost for AppState {
+    fn workspace(&self) -> &Mutex<Option<Workspace>> {
+        &self.workspace
+    }
 
-/// Reply shape for every "open page / open journal" command. Bundles
-/// the page meta with the outline so the frontend gets everything in
-/// one trip.
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct PageView {
-    pub page: PageMeta,
-    pub outline: Vec<OutlineNode>,
-    pub backlinks: Vec<Backlink>,
-    /// Parser recoveries for the page's `.md`. Mirrors the mobile
-    /// `PageView.warnings` exactly; `<ParseWarningsBanner />` from
-    /// `@outl/shared` consumes it. Empty (or absent) on a clean
-    /// file — `skip_serializing_if` keeps the JSON quiet.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub warnings: Vec<outl_md::ParseWarning>,
-}
+    fn hlc(&self) -> &HlcGenerator {
+        &self.hlc
+    }
 
-/// Reply for `create_block`. Pairs the refreshed [`PageView`] with the
-/// id of the freshly-inserted block so the frontend can focus / start
-/// editing it without re-discovering the id via a DFS diff (the diff
-/// path mis-identified the new block when the anchor had children
-/// — `flat[idx+1]` would land on `children[0]` instead of the new
-/// sibling, and the eventual `edit_block` would target a stale id and
-/// surface the `block <ULID> is not in the tree` toast).
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct CreateBlockReply {
-    pub view: PageView,
-    pub new_id: String,
+    fn storage_root(&self) -> Result<PathBuf, String> {
+        self.storage_root
+            .lock()
+            .clone()
+            .ok_or_else(|| ERR_LOADING.to_string())
+    }
+
+    fn sync_transport(&self) -> Option<Arc<dyn SyncTransport>> {
+        self.iroh_transport.lock().clone()
+    }
+
+    fn exec_registry(&self) -> Arc<RuntimeRegistry> {
+        self.registry.clone()
+    }
+
+    fn history(&self) -> Option<&Mutex<HashMap<NodeId, HistoryStacks<String>>>> {
+        Some(&self.history)
+    }
 }

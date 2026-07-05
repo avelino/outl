@@ -37,6 +37,10 @@ use crate::storage::{Snapshot, Storage, StorageError};
 pub struct JsonlStorage {
     /// Directory containing every per-actor ops file.
     ops_dir: PathBuf,
+    /// Directory holding one snapshot per actor (`snap-<actor>.bin`).
+    /// Sibling of `ops_dir` so the parent (typically `.outl/`) holds
+    /// both. Snapshots are local-only — never on the file-sync surface.
+    snapshots_dir: PathBuf,
     /// This device's actor id; we never write into another actor's file.
     actor: ActorId,
     /// In-memory mirror of the merged op log, sorted by HLC.
@@ -51,8 +55,19 @@ impl JsonlStorage {
         std::fs::create_dir_all(&ops_dir)
             .map_err(|e| StorageError::Backend(format!("create ops dir: {e}")))?;
 
+        // Snapshots sit next to `ops/` — `<root>/.outl/snapshots/` when
+        // callers pass the conventional `<root>/.outl/ops`. We fall back
+        // to `ops_dir/snapshots` if there's no parent, so the layout
+        // still works in tests that pass an isolated temp dir directly.
+        let snapshots_dir = ops_dir
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.join("snapshots"))
+            .unwrap_or_else(|| ops_dir.join("snapshots"));
+
         let mut storage = Self {
             ops_dir,
+            snapshots_dir,
             actor,
             cache: RwLock::new(Vec::new()),
         };
@@ -62,6 +77,15 @@ impl JsonlStorage {
 
     fn own_ops_path(&self) -> PathBuf {
         self.ops_dir.join(format!("ops-{}.jsonl", self.actor))
+    }
+
+    fn snapshot_path(&self) -> PathBuf {
+        self.snapshots_dir.join(format!("snap-{}.bin", self.actor))
+    }
+
+    /// Snapshot directory; useful for diagnostics and tests.
+    pub fn snapshots_dir(&self) -> &std::path::Path {
+        &self.snapshots_dir
     }
 
     /// Re-read every `ops-*.jsonl` from disk into the cache.
@@ -273,14 +297,34 @@ impl Storage for JsonlStorage {
         Ok(self.cache.read().clone())
     }
 
-    fn save_snapshot(&mut self, _snapshot: &Snapshot) -> Result<(), StorageError> {
-        // Snapshots are not used yet; keeping the file out of the synced
-        // directory avoids churning peers until we have a real format.
-        Ok(())
+    fn save_snapshot(&mut self, snapshot: &Snapshot) -> Result<(), StorageError> {
+        // Decode the opaque bytes back into the typed body (Storage
+        // doesn't own the format — `Workspace` does) and delegate to
+        // the standalone writer. The synchronous shutdown path and the
+        // background `Workspace::apply` thread share the same writer.
+        let body = crate::snapshot::SnapshotBody::decode(&snapshot.bytes)
+            .map_err(|e| StorageError::Backend(format!("snapshot decode before save: {e}")))?;
+        crate::snapshot::write_to_disk(&self.snapshots_dir, &body)
+            .map_err(|e| StorageError::Backend(format!("snapshot write: {e}")))
     }
 
     fn load_snapshot(&self) -> Result<Option<Snapshot>, StorageError> {
-        Ok(None)
+        let path = self.snapshot_path();
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                debug!(
+                    "snapshot loaded from {} ({} bytes)",
+                    path.display(),
+                    bytes.len()
+                );
+                Ok(Some(Snapshot { bytes }))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(StorageError::Backend(format!(
+                "read {}: {e}",
+                path.display()
+            ))),
+        }
     }
 }
 

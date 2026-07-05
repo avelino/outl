@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -73,9 +74,19 @@ pub struct IrohSyncTransport {
     /// Pairing coordinator, published by `run_iroh` once the live endpoint is
     /// bound. `pair_host` / `pair_join` reach the live endpoint + peer store
     /// through it, so GUI pairing reuses the one sync endpoint instead of
-    /// binding a second one with the same identity. `None` until the transport
-    /// has started (and again after shutdown). See `crate::engine_pairing`.
+    /// binding a second one with the same identity. See `crate::engine_pairing`.
+    /// `None` until the transport has started (and again after shutdown).
     pairing_hub: Arc<Mutex<Option<Arc<PairingHub>>>>,
+    /// Count of **completed forced sync passes** (each `sync_now` request that
+    /// finished its full dial cycle over every peer in `peers.json`).
+    ///
+    /// Incremented by the `drain_sync_now` task when `force_sync_all` returns —
+    /// i.e. every peer dial in that pass either succeeded or failed. Read via
+    /// [`Self::completed_sync_passes`] so a caller that fired `sync_now()` can
+    /// observe completion (snapshot before, poll until it advances) instead of
+    /// sleeping a fixed worst-case window. This is what lets the iOS background
+    /// FFI return early and hand the unused window back to the OS.
+    sync_passes: Arc<AtomicU64>,
 }
 
 /// Process-wide guard serializing every op-log append performed by the iroh
@@ -171,7 +182,22 @@ impl IrohSyncTransport {
             sync_now_tx: Arc::new(Mutex::new(None)),
             health: PeerHealthMap::default(),
             pairing_hub: Arc::new(Mutex::new(None)),
+            sync_passes: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// How many forced sync passes have **completed** since the transport was
+    /// created.
+    ///
+    /// A pass is one drained `sync_now` request: `force_sync_all` dialed every
+    /// peer currently in `peers.json` and every dial either succeeded or
+    /// failed (the dial *cycle* finished — it does not promise each peer was
+    /// reachable). Callers that need "my forced sync landed" snapshot this
+    /// before calling [`SyncTransport::sync_now`] and poll until the value
+    /// advances; any pass completing after the snapshot implies a full dial
+    /// cycle ran after the request. Monotonic; `0` before the first pass.
+    pub fn completed_sync_passes(&self) -> u64 {
+        self.sync_passes.load(Ordering::Acquire)
     }
 
     /// Host one pairing session over the **live sync endpoint** and return the
@@ -244,6 +270,7 @@ impl SyncTransport for IrohSyncTransport {
         let health = self.health.clone();
         let pairing_hub = self.pairing_hub.clone();
         let relay_url = self.relay_url.clone();
+        let sync_passes = self.sync_passes.clone();
 
         // Resolve the STABLE, SHARED workspace identity once, before binding.
         // Generated + persisted at `<root>/.outl/workspace-id` on first open
@@ -288,6 +315,7 @@ impl SyncTransport for IrohSyncTransport {
                         health,
                         pairing_hub,
                         relay_url,
+                        sync_passes,
                         runtime_handle,
                         workspace_root,
                         workspace_id,
@@ -382,6 +410,7 @@ async fn run_iroh(
     health: PeerHealthMap,
     pairing_hub_slot: Arc<Mutex<Option<Arc<PairingHub>>>>,
     relay_url: Option<String>,
+    sync_passes: Arc<AtomicU64>,
     runtime: tokio::runtime::Handle,
     workspace_root: PathBuf,
     workspace_id: WorkspaceId,
@@ -604,7 +633,10 @@ async fn run_iroh(
     // Forced-sync drain: service GUI "sync now" / pull-to-refresh requests by
     // running an immediate delta_sync pass over every peer (reuses the append
     // lock + in-flight guard + health map). Without this the user's only way to
-    // pull was to wait for the 8s catch-up tick. See `drain_sync_now`.
+    // pull was to wait for the 8s catch-up tick. Each completed pass bumps
+    // `sync_passes` so `completed_sync_passes()` observers (the iOS background
+    // FFI) can return early instead of sleeping a worst-case window. See
+    // `drain_sync_now`.
     let sync_now = tokio::spawn(drain_sync_now(
         sync_now_rx,
         endpoint.clone(),
@@ -616,6 +648,7 @@ async fn run_iroh(
         health.clone(),
         append_lock.clone(),
         in_flight.clone(),
+        sync_passes,
     ));
 
     // Incoming sync connections are handled by the Router above.

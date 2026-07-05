@@ -17,7 +17,7 @@ mod backlinks;
 mod chrome;
 mod inline;
 mod outline;
-mod overlays;
+pub(crate) mod overlays;
 mod sidebar;
 mod toasts;
 mod warnings_banner;

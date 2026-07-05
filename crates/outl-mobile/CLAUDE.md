@@ -12,31 +12,23 @@ outl-actions                 (workspace operations + SyncEngine, shared with TUI
    ↑
 outl-mobile (this crate)
    ├── src-tauri/src/
-   │   ├── lib.rs                  (mod decls + run())
-   │   ├── state.rs                (AppState, PageView, WorkspaceSummary, CreateBlockReply, ERR_LOADING)
-   │   ├── helpers.rs              (parse_node_id / parse_date / with_ws* / build_page_view / finish_in_page*)
-   │   ├── workspace_open.rs       (resolve_storage_root, spawn_workspace_opener, reconcile_orphan_md)
+   │   ├── lib.rs                  (mod decls + run() + invoke_handler)
+   │   ├── state.rs                (AppState + AppHost impl; wire DTOs re-exported from outl-tauri-shared)
+   │   ├── workspace_open.rs       (boot orchestration over outl_tauri_shared::workspace_open primitives)
    │   ├── workspace_picker.rs     (set_workspace — folder choice + persistence; native picker deferred)
    │   ├── iroh_sync.rs            (wire_iroh_transport — boot the P2P transport, register the bg-sync handle)
-   │   ├── bg_sync.rs             (outl_ios_background_sync FFI — drives a forced sync from the iOS BGProcessingTask)
-   │   ├── plugin_service.rs       (PluginService + dedicated plugin thread — Boa Context is !Send, so it can't live in AppState)
-   │   └── commands/               (Tauri command surface — split mirrors outl-desktop)
-   │       ├── mod.rs
-   │       ├── workspace.rs        (workspace_stats, reload_workspace)
-   │       ├── page.rs             (list_all_pages / search_pages / search_persons / outl_emoji_search / open_* / *_day / resolve_ref / legacy compat shims)
-   │       ├── block.rs            (create / edit / toggle_todo / toggle_quote / delete / indent / outdent / move_* / set_collapsed / paste_markdown_at / copy_markdown)
-   │       ├── peers.rs            (outl_peer_list / outl_peer_remove — read/edit <workspace>/.outl/peers.json, no workspace lock)
-   │       ├── plugin.rs           (plugin_list / plugin_run / plugin_sync_hooks — thin shims over PluginService)
-   │       └── exec.rs             (run_code_block — thin shim over outl_actions::exec::run_code_block)
+   │   ├── bg_sync.rs              (outl_ios_background_sync FFI — drives a forced sync from the iOS BGProcessingTask)
+   │   ├── plugin_service.rs       (mobile shim: CLIENT id + capability set over outl_tauri_shared::PluginService)
+   │   └── commands/               (thin #[tauri::command] wrappers over outl_tauri_shared::commands)
    ├── gen/apple/.../main.mm       (NSMetadataQuery + NSFileCoordinator iCloud watcher)
    └── (frontend in ../src)        (Solid components, Tailwind, Tauri bridge)
 ```
 
-The split mirrors **`crates/outl-desktop/src-tauri/`** 1:1 — `commands/{workspace,page,block,exec}.rs` + `helpers.rs` + `state.rs` + `workspace_open.rs` — so a contributor who knows one crate's layout immediately knows the other.
-The intentional divergences (mobile's `storage_root: PathBuf` instead of `Arc<Mutex<Option<PathBuf>>>`,
-the inline orphan reconcile in `spawn_workspace_opener`,
-no `settings.rs` / `fs_watcher.rs` / `commands/{shortcuts,theme}.rs`) live entirely inside `workspace_open.rs` + `state.rs`,
-so the command files read identically.
+The command bodies, wire DTOs, helpers, and the plugin thread live in **`crates/outl-tauri-shared/`** (see [its CLAUDE.md](../outl-tauri-shared/CLAUDE.md)).
+This crate keeps only thin `#[tauri::command]` wrappers plus what is genuinely mobile-specific (`bg_sync.rs`, `workspace_picker.rs`, the iOS glue).
+The one structural divergence — mobile's `storage_root: PathBuf` instead of desktop's `Arc<Mutex<Option<PathBuf>>>`, because a folder swap is a relaunch here — is absorbed by the shared `AppHost` / `StorageRootProvider` traits.
+The wrapper files therefore read identically to desktop's.
+A command both clients need gets its body in `outl-tauri-shared` and a wrapper + `invoke_handler!` entry in **both** clients — never in just one.
 
 The op log backend is the shared `outl_core::storage::JsonlStorage`;
 there is no `icloud_storage.rs` because the only iCloud-specific work is resolving the ubiquity container path (via `icloud_path.rs`) and forcing peer-file materialisation before reads (via `OutlOpsWatcher.swift`).
@@ -106,15 +98,19 @@ Removing it (watcher → no-op, strip the entitlements + plist keys) is a follow
 ## Background sync (iOS)
 
 iOS suspends the app's sockets the moment it backgrounds, so there is **no continuous background P2P**.
-The only sanctioned path is an opportunistic `BGProcessingTask`, wired across three pieces:
+The sanctioned paths are the two opportunistic `BGTaskScheduler` windows — **both** sync, wired across three pieces:
 
 1. **Info.plist** declares `UIBackgroundModes` (`fetch` + `processing`) and `BGTaskSchedulerPermittedIdentifiers` (`app.outl.mobile-app.refresh`, `app.outl.mobile-app.sync`).
    Without these the toggle never shows in Settings and `BGTaskScheduler.register`/`submit` fail silently.
-2. **`OutlBackgroundRefresh.swift`** registers both tasks (`+load` → `install`).
-   The `sync` (`BGProcessingTask`, `requiresNetworkConnectivity = true`) handler calls the Rust FFI on a background queue and reports completion exactly once (the work and the OS expiration handler race).
-3. **`bg_sync.rs`** owns the FFI `outl_ios_background_sync()` (C ABI, `@_silgen_name` on the Swift side).
-   `wire_iroh_transport` registers a `Clone` of the live `IrohSyncTransport` into a re-settable global.
-   The FFI fires `sync_now()` (a forced delta-sync against every peer, mobile side initiating, which is NAT-friendly) and blocks ~20s so the QUIC pull/push lands before Swift completes the task.
+2. **`OutlBackgroundRefresh.swift`** registers both tasks (`+load` → `install`) through one shared `handleTask` helper (reschedule first, FFI on a background queue, complete exactly once — the work and the OS expiration handler race).
+   The `refresh` (`BGAppRefreshTask`, ~30s windows) drives the short FFI; the `sync` (`BGProcessingTask`, `requiresNetworkConnectivity = true`) drives the long one.
+   **Scheduling is gated on having paired peers** (`outl_ios_peer_count() > 0`) so an unpaired device never boots the stack for nothing.
+   A `didEnterBackgroundNotification` observer re-submits on every backgrounding, which also arms the gate right after the first pairing.
+3. **`bg_sync.rs`** owns the three FFIs (C ABI, `@_silgen_name` on the Swift side).
+   They are `outl_ios_background_sync()` (cap 20s), `outl_ios_background_sync_short()` (cap 12s, refresh-window budget), and `outl_ios_peer_count()` (reads `<root>/.outl/peers.json` fresh from disk, so post-boot pairings count).
+   `wire_iroh_transport` registers a `Clone` of the live `IrohSyncTransport` **plus the workspace root** into a re-settable global.
+   The sync FFIs fire `sync_now()` (a forced delta-sync against every peer, mobile side initiating, which is NAT-friendly).
+   They then poll `completed_sync_passes()` every 250ms, returning as soon as the pass lands — the cap is a fallback, not a fixed sleep.
 
 The FFI + Swift handler can only be validated with a **device build**.
 The simulator has no `BGTaskScheduler` daemon, so `submit` always fails there and is swallowed; the Rust side is `cargo check`-clean on its own.
@@ -237,8 +233,8 @@ JS plugins (`outl_plugins::PluginHost`) run on mobile; the design is the desktop
 Read [`outl-desktop/CLAUDE.md` → Plugins](../outl-desktop/CLAUDE.md#plugins) for the shared rationale (`!Send` Boa host on a dedicated thread, `PluginService` in `AppState`, re-projection via `apply_all_pages_md`).
 Boa is pure-Rust (no JIT), so it ships under iOS's dynamic-code ban (same as `lang-js`).
 
-**The one divergence from desktop:** mobile's `storage_root` is an owned `PathBuf` (folder swap is a relaunch), so `PluginService::spawn` takes `PathBuf`, not `Arc<Mutex<Option<PathBuf>>>`.
-That drops the desktop's "re-load on root swap" branch: the host loads plugins once, lazily, from `<root>/.outl/plugins/` on the first request after the workspace opens (`ensure_loaded` + `mark_synced`).
+**The one divergence from desktop:** mobile's `storage_root` is an owned `PathBuf` (folder swap is a relaunch), absorbed by the shared `StorageRootProvider` trait — a fixed root never triggers the "re-load on root swap" branch.
+The host loads plugins once, lazily, from `<root>/.outl/plugins/` on the first request after the workspace opens (`ensure_loaded` + `mark_synced`).
 
 Capabilities honored: `slash-command` + `op-hook` + `ui-render` + `toolbar-button` + `content-transformer:text` + `content-transformer:rich` (no `keybinding` — no chord surface on mobile).
 Each must be declared in `client_capabilities()` (`plugin_service.rs`); the host gates contributions on the client∩plugin intersection.
@@ -249,7 +245,7 @@ Op-hooks fire at a single post-mutation point: `Journal.tsx`'s `commitEdit` call
 One call dispatches every op since the last sweep, so it also catches structural ops (indent / move / delete).
 The hook-driven `applyView` guards on `!editingId()` so it never resets the textarea.
 
-Frontend: `src/lib/api.ts` adds the mobile-only `pluginList` / `pluginToolbar` / `pluginRun` / `pluginSyncHooks` wrappers (client-wired, not `@outl/shared`).
+Frontend: the plugin DTOs + wrappers (`pluginList` / `pluginToolbar` / `pluginRun` / `pluginSyncHooks`, …) live in `@outl/shared/api`.
 The stacked-squares header glyph opens `components/PluginSheet.tsx` — a bottom sheet that lists + runs commands and pipes `notify` / errors to the toast.
 Toolbar buttons are inline header glyphs.
 `Journal.tsx` loads `pluginToolbar()` in `onMount` into a `toolbarButtons()` signal and renders one `<button>` per entry next to the sheet glyph.
@@ -274,12 +270,12 @@ The sandbox attrs + auto-removal are pinned by `PluginViewOverlay.test.ts` (Vite
 ### Content transformers (custom-language fences)
 
 A plugin transformer claims a code-fence language and turns the body into a render descriptor (`{kind, content}`).
-`Journal.tsx`'s `onMount` calls `loadTransformers()` (`src/lib/transformers.ts`) once when the workspace opens, filling a module signal keyed by `lang` (best-effort — failure leaves fences as plain code).
-`BlockRow`'s fence branch looks the language up via `transformerForLang(lang)`; a match renders `<PluginFence />`, falling back to plain `<HighlightedCode />` while loading or on decline.
+`Journal.tsx`'s `onMount` calls `loadTransformers()` (`@outl/shared/plugins/transformer-registry`) once when the workspace opens, filling a module signal keyed by `lang` (best-effort — failure leaves fences as plain code).
+`BlockRow`'s fence branch looks the language up via `transformerFor(lang)`; a match renders `<PluginFence />`, falling back to plain `<HighlightedCode />` while loading or on decline.
 `<PluginFence />` runs `pluginTransform(...)` through `runTransform`, **cached by `(block id, body)`** so it runs at most once per distinct body (editing invalidates; a `null` decline is cached too).
 Render by `kind`: `text` → inline preformatted text (no frontend markdown-string tokenizer — backend-only in `outl_md`).
 `rich` → HTML in a persistent **inline** sandboxed `<iframe>` (`allow-scripts`, never `allow-same-origin` — same posture as `<PluginViewOverlay />`).
-The registry + cache glue is mobile-only client lifecycle (`src/lib/transformers.ts`), not `@outl/shared`; only the DTO shapes + `invoke()` wrappers (`src/lib/api.ts`) would graduate if desktop needed identical behaviour.
+The registry + cache glue is shared with the desktop in `@outl/shared/plugins/transformer-registry`, alongside the DTO shapes + `invoke()` wrappers in `@outl/shared/api`.
 
 ## Peer / device management (`outl_peer_list` / `outl_peer_remove`)
 
@@ -492,7 +488,7 @@ Two layers cover the mobile crate:
 | Layer | Tool | What it covers |
 |-------|------|----------------|
 | Rust commands + storage | `cargo test -p outl-mobile` | `ICloudStorage`, command shims, page model glue |
-| Frontend pure logic | `bun run test` (Vitest + happy-dom) | `markdown.tokenize`, `outline.flatten/findBlock/findInsertedAfter`, future helpers |
+| Frontend pure logic | `bun run test` (Vitest + happy-dom) | textarea/native-suggester helpers, future helpers (outline walks are tested in `@outl/shared/outline`) |
 
 Every bug fixed in a pure helper (the tokenize duplicate, refs/tags extraction, fuzzy matching) must land with a unit test before merge so it never regresses.
 

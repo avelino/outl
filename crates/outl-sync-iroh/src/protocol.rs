@@ -1,6 +1,6 @@
 //! Wire protocol for the outl sync ALPN.
 //!
-//! ALPN: `b"outl-sync/1"`
+//! ALPN: `b"outl-sync/2"`
 //!
 //! ## Sync request (JSON, 4-byte length prefix)
 //!
@@ -9,7 +9,10 @@
 //! {
 //!   "workspace_id": "my-workspace",
 //!   "vector_clock": {
-//!     "<actor-ulid>": { "physical_ms": 1234567890123, "logical": 5, "actor": "<ulid>" }
+//!     "<actor-ulid>": {
+//!       "max": { "physical_ms": 1234567890123, "logical": 5, "actor": "<ulid>" },
+//!       "count": 347
+//!     }
 //!   }
 //! }
 //! ```
@@ -18,14 +21,7 @@
 //!
 //! Sent by the responder right after it decodes the request, carrying the
 //! responder's own vector clock so the initiator can compute the reverse
-//! delta:
-//! ```json
-//! {
-//!   "vector_clock": {
-//!     "<actor-ulid>": { "physical_ms": 1234567890123, "logical": 5, "actor": "<ulid>" }
-//!   }
-//! }
-//! ```
+//! delta. Same `{ actor → ActorClock }` shape as the request's `vector_clock`.
 //!
 //! ## Ops blob (JSONL, 4-byte length prefix)
 //!
@@ -37,9 +33,11 @@
 //!
 //! 1. initiator → responder: [`SyncRequest`] (vector clock A).
 //! 2. responder → initiator: [`SyncResponse`] (vector clock B).
-//! 3. responder → initiator: ops blob — ops where `op.ts > A[op.actor]`.
-//! 4. initiator → responder: ops blob — ops where `op.ts > B[op.actor]`,
-//!    then `finish()`.
+//! 3. responder → initiator: ops blob — ops missing under clock A (per-actor:
+//!    everything above `A[actor].max`, or the actor's FULL log when a gap
+//!    below `A[actor].max` is detected — see `engine_sync::ops_missing_for`).
+//! 4. initiator → responder: ops blob — same rule under clock B, then
+//!    `finish()`.
 //!
 //! Every step is length-prefixed, so both directions fully reconcile on one
 //! connection.
@@ -52,18 +50,43 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// ALPN for the op-sync protocol.
-pub const SYNC_ALPN: &[u8] = b"outl-sync/1";
+///
+/// v2 bumped the vector clock from a bare max-HLC per actor to
+/// `ActorClock` (max + count) so the sender can detect gaps below the
+/// receiver's watermark. v1 and v2 clocks are wire-incompatible; the ALPN
+/// bump makes an old↔new dial fail cleanly at connect instead of
+/// half-conversing.
+pub const SYNC_ALPN: &[u8] = b"outl-sync/2";
 
 /// ALPN for device pairing.
 pub const PAIRING_ALPN: &[u8] = b"outl-sync/pair/1";
+
+/// What one side knows about one actor's ops: the highest HLC it holds and
+/// how many DISTINCT ops (by HLC) it holds for that actor — all `<= max` by
+/// definition.
+///
+/// The `count` is what turns the max-HLC watermark into a gap detector: a
+/// bare max assumes in-order, gapless delivery, so an op landing AHEAD of a
+/// pending backlog permanently hid everything below the watermark (the
+/// sender assumed the receiver had it). With the count, the sender can tell
+/// "receiver holds fewer ops below its own max than I do" and fall back to a
+/// full-log resend for that actor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActorClock {
+    /// Highest HLC held for this actor.
+    pub max: Hlc,
+    /// Number of distinct ops (by HLC) held for this actor.
+    pub count: u64,
+}
 
 /// The body of a sync request.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncRequest {
     /// Workspace slug identifier.
     pub workspace_id: String,
-    /// Most recent HLC seen per actor. Missing actors imply HLC zero (never seen).
-    pub vector_clock: HashMap<ActorId, Hlc>,
+    /// Per-actor max-HLC + distinct-op count. Missing actors imply "never
+    /// seen" (HLC zero, zero ops).
+    pub vector_clock: HashMap<ActorId, ActorClock>,
 }
 
 /// Serialize a `SyncRequest` with a 4-byte big-endian length prefix.
@@ -90,9 +113,9 @@ pub fn decode_request(buf: &[u8]) -> Result<SyncRequest> {
 /// compute the reverse delta (the ops the responder is missing).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncResponse {
-    /// Most recent HLC the responder has seen per actor. Missing actors imply
-    /// HLC zero (never seen).
-    pub vector_clock: HashMap<ActorId, Hlc>,
+    /// Per-actor max-HLC + distinct-op count the responder holds. Missing
+    /// actors imply "never seen" (HLC zero, zero ops).
+    pub vector_clock: HashMap<ActorId, ActorClock>,
 }
 
 /// Serialize a `SyncResponse` with a 4-byte big-endian length prefix.
@@ -177,7 +200,13 @@ mod tests {
     fn request_roundtrips_through_length_prefix() {
         let mut vc = HashMap::new();
         let actor = ActorId::new();
-        vc.insert(actor, Hlc::new(42, 7, actor));
+        vc.insert(
+            actor,
+            ActorClock {
+                max: Hlc::new(42, 7, actor),
+                count: 12,
+            },
+        );
         let req = SyncRequest {
             workspace_id: "demo".into(),
             vector_clock: vc,
@@ -185,7 +214,9 @@ mod tests {
         let encoded = encode_request(&req).unwrap();
         let decoded = decode_request(&encoded).unwrap();
         assert_eq!(decoded.workspace_id, "demo");
-        assert_eq!(decoded.vector_clock.get(&actor).unwrap().physical_ms, 42);
+        let clock = decoded.vector_clock.get(&actor).unwrap();
+        assert_eq!(clock.max.physical_ms, 42);
+        assert_eq!(clock.count, 12);
     }
 
     #[test]
@@ -197,12 +228,20 @@ mod tests {
     fn response_roundtrips_through_length_prefix() {
         let mut vc = HashMap::new();
         let actor = ActorId::new();
-        vc.insert(actor, Hlc::new(99, 3, actor));
+        vc.insert(
+            actor,
+            ActorClock {
+                max: Hlc::new(99, 3, actor),
+                count: 2000,
+            },
+        );
         let resp = SyncResponse { vector_clock: vc };
         let encoded = encode_response(&resp).unwrap();
         let decoded = decode_response(&encoded).unwrap();
-        assert_eq!(decoded.vector_clock.get(&actor).unwrap().physical_ms, 99);
-        assert_eq!(decoded.vector_clock.get(&actor).unwrap().logical, 3);
+        let clock = decoded.vector_clock.get(&actor).unwrap();
+        assert_eq!(clock.max.physical_ms, 99);
+        assert_eq!(clock.max.logical, 3);
+        assert_eq!(clock.count, 2000);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import type { PluginCommand } from "./api";
+import type { PluginCommand } from "@outl/shared/api/types";
 
 /**
  * Rank plugin commands for the inline `/` slash menu against a query.

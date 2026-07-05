@@ -1,129 +1,43 @@
 //! Tauri commands for peer/device management.
+//!
+//! List / remove / status / force-sync are thin wrappers over
+//! `outl_tauri_shared::commands::peers`. The **pairing** commands stay
+//! desktop-local: they need the concrete `IrohSyncTransport` from
+//! `AppState::iroh_pairing` (pairing isn't a `SyncTransport` trait
+//! concern) and their reply shape (`PairedPeerDto` + the early
+//! `peer-pairing-ticket` event) is the desktop's wire contract — the
+//! mobile client resolves the raw ticket string instead.
 
-use std::collections::HashMap;
-
-use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::state::AppState;
-
-/// Resolve the active workspace's `peers.json` path
-/// (`<workspace>/.outl/peers.json`) and run the one-time global → workspace
-/// migration. The peer list is per-GRAPH; only the device identity stays in
-/// the global `~/.outl/`.
-///
-/// Errors with `ERR_LOADING` while the background opener hasn't published a
-/// workspace yet, so the frontend retries instead of touching a stale path.
-fn workspace_peers_path(state: &AppState) -> Result<std::path::PathBuf, String> {
-    let root = state
-        .storage_root
-        .lock()
-        .clone()
-        .ok_or_else(|| crate::state::ERR_LOADING.to_string())?;
-    outl_sync_iroh::migrate_global_peers_if_absent(&root);
-    Ok(outl_sync_iroh::workspace_peers_path(&root))
-}
-
-/// DTO for a paired peer.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PeerDto {
-    pub node_id: String,
-    pub alias: Option<String>,
-    pub added_at: String,
-}
+use outl_tauri_shared::commands::peers::{self as shared, PeerDto, PeerStatusDto};
 
 /// List all paired devices.
 #[tauri::command]
 pub fn outl_peer_list(state: State<'_, AppState>) -> Result<Vec<PeerDto>, String> {
-    let peers = outl_sync_iroh::PeersStore::load_or_default(&workspace_peers_path(&state)?)
-        .map_err(|e| e.to_string())?;
-    Ok(peers
-        .list()
-        .iter()
-        .map(|p| PeerDto {
-            node_id: p.node_id.clone(),
-            alias: p.alias.clone(),
-            added_at: p.added_at.clone(),
-        })
-        .collect())
+    shared::peer_list(state.inner())
 }
 
 /// Remove a peer by node_id prefix.
 #[tauri::command]
 pub fn outl_peer_remove(state: State<'_, AppState>, id: String) -> Result<bool, String> {
-    let mut peers = outl_sync_iroh::PeersStore::load_or_default(&workspace_peers_path(&state)?)
-        .map_err(|e| e.to_string())?;
-    peers.remove(&id).map_err(|e| e.to_string())
-}
-
-/// DTO for a peer's live reachability status.
-#[derive(serde::Serialize)]
-pub struct PeerStatusDto {
-    pub node_id: String,
-    pub alias: Option<String>,
-    pub online: bool,
-    pub rtt_ms: Option<u64>,
+    shared::peer_remove(state.inner(), id)
 }
 
 /// Reachability for each paired peer, read from the **running** iroh
-/// transport's own dial outcomes — never a fresh probe endpoint.
-///
-/// Binding a second endpoint with the device identity (the old probe path)
-/// hijacks the relay route from the long-lived sync endpoint, so inbound sync
-/// connections get refused. Status now reads the transport's
-/// `peer_health()` snapshot (boot connect / catch-up / gossip / serve fill it)
-/// and merges it onto the full peers.json list. A peer the transport hasn't
-/// dialed yet — or the case where no iroh transport is wired (file transport)
-/// — shows `online = false`.
+/// transport's own dial outcomes — see the shared body for why a fresh
+/// probe endpoint is never bound.
 #[tauri::command]
 pub fn outl_peer_status(state: State<'_, AppState>) -> Result<Vec<PeerStatusDto>, String> {
-    let peers = outl_sync_iroh::PeersStore::load_or_default(&workspace_peers_path(&state)?)
-        .map_err(|e| e.to_string())?;
-
-    // Snapshot the transport's per-peer health (empty when iroh isn't wired).
-    let health: HashMap<String, outl_actions::PeerHealthSnapshot> = state
-        .iroh_transport
-        .lock()
-        .as_ref()
-        .map(|t| {
-            t.peer_health()
-                .into_iter()
-                .map(|h| (h.node_id.clone(), h))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    Ok(peers
-        .list()
-        .iter()
-        .map(|p| {
-            let h = health.get(&p.node_id);
-            PeerStatusDto {
-                node_id: p.node_id.clone(),
-                alias: p.alias.clone(),
-                online: h.map(|h| h.reachable).unwrap_or(false),
-                rtt_ms: h.and_then(|h| h.last_rtt_ms),
-            }
-        })
-        .collect())
+    shared::peer_status(state.inner())
 }
 
-/// Force an immediate P2P sync pass against every paired peer.
-///
-/// Backs the GUI's "Refresh" / "sync now" affordance: instead of waiting for
-/// the iroh transport's 8s catch-up tick, the frontend calls this to dial every
-/// peer right now and pull the freshest state, then `reload_workspace` to
-/// re-render once the ops have landed.
-///
-/// Reads the stored `Arc<dyn SyncTransport>` and calls the trait's `sync_now`.
-/// No-op (returns `Ok`) when no iroh transport is wired (the file transport's
-/// default `sync_now` does nothing) or its runtime is down.
+/// Force an immediate P2P sync pass against every paired peer — the
+/// trigger behind the Sync panel's Refresh.
 #[tauri::command]
 pub fn outl_sync_now(state: State<'_, AppState>) -> Result<(), String> {
-    if let Some(t) = state.iroh_transport.lock().as_ref() {
-        t.sync_now();
-    }
-    Ok(())
+    shared::sync_now(state.inner())
 }
 
 /// Result of a completed pairing handshake — the peer that was added.

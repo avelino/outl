@@ -510,12 +510,18 @@ fn remove_or_warn(path: &std::path::Path, label: &str) {
     }
 }
 
-fn page_has_tag(workspace: &outl_core::workspace::Workspace, page: NodeId, tag: &str) -> bool {
-    let needle = format!("#{tag}");
+/// True when any block in `page`'s subtree mentions `#tag` as a whole
+/// tag token (boundary-correct: `#tag-longer` does not match `tag`).
+/// Shared by `page list --filter tag:` and `outl query --tag`.
+pub(crate) fn page_has_tag(
+    workspace: &outl_core::workspace::Workspace,
+    page: NodeId,
+    tag: &str,
+) -> bool {
     let mut found = false;
     walk_subtree(workspace, page, |id| {
         if let Some(text) = workspace.block_text(id) {
-            if text.contains(&needle) {
+            if outl_md::text_contains_tag(&text, tag) {
                 found = true;
                 return false; // early-stop
             }

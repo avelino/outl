@@ -10,6 +10,7 @@ members = [
     "crates/outl-plugins",
     "crates/outl-shortcuts",
     "crates/outl-theme",
+    "crates/outl-tauri-shared",
     "crates/outl-cli",
     "crates/outl-tui",
     "crates/outl-mobile/src-tauri",
@@ -38,6 +39,7 @@ outl-exec = { path = "crates/outl-exec", version = "0.7.0" }
 outl-plugins = { path = "crates/outl-plugins", version = "0.7.0" }
 outl-shortcuts = { path = "crates/outl-shortcuts", version = "0.7.0" }
 outl-theme = { path = "crates/outl-theme", version = "0.7.0" }
+outl-tauri-shared = { path = "crates/outl-tauri-shared", version = "0.7.0" }
 outl-tui = { path = "crates/outl-tui", version = "0.7.0" }
 
 # IDs and time
@@ -51,6 +53,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
 toml = "1.1"
+# Compact binary serialization for snapshots (see docs/storage.md → Snapshots).
+bincode = "1"
 
 # Errors
 thiserror = "2"

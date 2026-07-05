@@ -27,6 +27,7 @@ outl-config = { workspace = true }
 outl-exec = { workspace = true }
 outl-plugins = { workspace = true, features = ["registry"] }
 outl-shortcuts = { workspace = true }
+outl-tauri-shared = { workspace = true }
 outl-theme = { workspace = true }
 outl-sync-iroh = { workspace = true }
 dirs = { workspace = true }

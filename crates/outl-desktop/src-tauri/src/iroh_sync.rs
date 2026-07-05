@@ -1,25 +1,18 @@
 //! iroh P2P transport wiring for the desktop client.
 //!
-//! Gated on `[sync] transport = "iroh"` in the global
-//! `~/.config/outl/config.toml` (read via `outl_config::load()`). When
-//! the user opts in, [`wire_iroh_transport`] builds an
-//! [`outl_sync_iroh::IrohSyncTransport`] from the on-disk device
-//! identity (`~/.outl/identity.key`, per-device) and the per-workspace
-//! peer store (`<workspace>/.outl/peers.json`). Identity stays global
-//! (one node id per machine, same `~/.outl/` the CLI / TUI use); the peer
-//! list belongs to the graph, so it lives under the workspace root.
+//! The build + start + reload-bridge machinery lives in
+//! `outl_tauri_shared::iroh_sync`; this module keeps what is genuinely
+//! desktop:
 //!
-//! ## Relationship to the `notify` file watcher
-//!
-//! The cross-platform `notify` watcher (`fs_watcher.rs`) STAYS in every
-//! configuration. It is the universal "a peer's `ops-*.jsonl` landed on
-//! a shared folder" detector (iCloud Drive, Dropbox, Syncthing). iroh
-//! runs **alongside** it: iroh receives ops over QUIC and writes them to
-//! the same local `ops/` directory, so a peer write is observed by
-//! whichever path delivers it first. Both end up emitting the SAME
-//! `peer-ops-changed` event the frontend already listens for, so the
-//! reload path (`onPeerOpsChanged` → `reload_workspace`) is reused
-//! verbatim — no new frontend wiring.
+//! - **Where the identity lives.** `~/.outl/identity.key` — the same
+//!   per-device path the CLI / TUI use, so every client on the machine
+//!   advertises one node id.
+//! - **Which event signals a reload.** `peer-ops-changed` — the same
+//!   event the `notify` watcher (`fs_watcher.rs`) emits, so the frontend
+//!   reload path is reused verbatim whichever delivery path wins.
+//! - **Where the transport lands.** The swap-capable `AppState` slots:
+//!   one `dyn SyncTransport` clone (announce / shutdown / peer-health)
+//!   and one concrete clone for the pairing commands.
 //!
 //! ## Best-effort
 //!
@@ -29,14 +22,14 @@
 //! abort the boot path.
 
 use std::path::PathBuf;
-use std::sync::mpsc;
 use std::sync::Arc;
 
 use outl_actions::SyncTransport;
 use outl_config::SyncTransportKind;
 use outl_core::id::ActorId;
+use outl_tauri_shared::iroh_sync::{build_iroh_transport, start_with_reload_bridge};
 use parking_lot::Mutex;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use tracing::{info, warn};
 
 /// `~/.outl` — the shared device-state directory (identity + peers),
@@ -45,42 +38,16 @@ pub(crate) fn outl_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".outl"))
 }
 
-/// Build an [`outl_sync_iroh::IrohSyncTransport`] from the device's
-/// on-disk identity (global `~/.outl/identity.key`) and the per-workspace
-/// peer store (`<workspace_root>/.outl/peers.json`).
-///
-/// Returns the **concrete** transport (cheaply `Clone`, internally
-/// `Arc`-backed). The caller stores one clone as the concrete
-/// `iroh_pairing` slot (so the pairing commands can call `pair_host` /
-/// `pair_join`, which reuse the live sync endpoint) and one as the
-/// `dyn SyncTransport` slot (`announce` / `shutdown` / `peer_health`).
-fn build_iroh_transport(
-    workspace_root: &std::path::Path,
-) -> anyhow::Result<outl_sync_iroh::IrohSyncTransport> {
-    let dir = outl_dir().ok_or_else(|| anyhow::anyhow!("$HOME unset; cannot locate ~/.outl"))?;
-    std::fs::create_dir_all(&dir)?;
-    let identity = outl_sync_iroh::IrohIdentity::load_or_generate(&dir.join("identity.key"))?;
-    outl_sync_iroh::migrate_global_peers_if_absent(workspace_root);
-    let peers = outl_sync_iroh::PeersStore::load_or_default(
-        &outl_sync_iroh::workspace_peers_path(workspace_root),
-    )?;
-    // `[sync] relay_url` from the global config: `None` (or empty) keeps iroh's
-    // n0 default relay, `Some(url)` points the sync endpoint at a custom relay.
-    let relay_url = outl_config::load().sync.relay_url().map(str::to_string);
-    Ok(outl_sync_iroh::IrohSyncTransport::new(
-        identity, peers, relay_url,
-    ))
-}
-
 /// Wire the iroh transport into the running app when the config asks
-/// for it. Called from the boot opener once the workspace root is
-/// known (the transport needs the root to write peer ops into
-/// `<root>/ops/`).
+/// for it. Called from the boot opener (and from `set_workspace` on a
+/// swap) once the workspace root is known — the transport needs the
+/// root to write peer ops into `<root>/ops/`.
 ///
-/// On success, stores the transport in `slot` (so the pairing /
-/// announce / shutdown commands can reach it) and spawns the bridge
-/// thread that turns the transport's "peer ops landed" signal into the
-/// `peer-ops-changed` event.
+/// On success, stores the transport in `slot` (so the announce /
+/// shutdown / peer-health paths can reach it) and in `pairing_slot`
+/// (the concrete clone the pairing commands need), and spawns the
+/// bridge thread that turns the transport's "peer ops landed" signal
+/// into the `peer-ops-changed` event.
 ///
 /// Returns silently (a no-op) when `transport != Iroh` or any step
 /// fails — the filesystem watcher already covers detection.
@@ -95,7 +62,7 @@ pub(crate) fn wire_iroh_transport(
     if transport_kind != SyncTransportKind::Iroh {
         return;
     }
-    let transport = match build_iroh_transport(&workspace_root) {
+    let transport = match build_desktop_transport(&workspace_root) {
         Ok(t) => t,
         Err(e) => {
             warn!("iroh sync unavailable, using filesystem watcher: {e}");
@@ -103,26 +70,9 @@ pub(crate) fn wire_iroh_transport(
         }
     };
 
-    // The transport fires `()` on this channel whenever peer ops have
-    // been written to local `ops/`. Bridge it to the SAME event the
-    // `notify` watcher emits so the frontend reload path is reused.
-    let (peer_ready_tx, peer_ready_rx) = mpsc::channel::<()>();
-    transport.start(workspace_root, actor, peer_ready_tx);
-
-    std::thread::Builder::new()
-        .name("outl-iroh-bridge".into())
-        .spawn(move || {
-            // Recv blocks until the transport signals or the sender is
-            // dropped (transport shut down). Either way the loop ends
-            // cleanly when the channel disconnects.
-            while peer_ready_rx.recv().is_ok() {
-                if let Err(e) = app.emit("peer-ops-changed", ()) {
-                    warn!("emit peer-ops-changed (iroh): {e}");
-                }
-            }
-            info!("iroh peer-ready bridge ended");
-        })
-        .expect("spawning the iroh peer-ready bridge thread should not fail");
+    // Bridge the transport's "peer ops landed" signal to the SAME event
+    // the `notify` watcher emits so the frontend reload path is reused.
+    start_with_reload_bridge(&transport, workspace_root, actor, app, "peer-ops-changed");
 
     // Keep the concrete clone for pairing (reuses the live endpoint) and the
     // `dyn` clone for announce / shutdown / peer_health. `IrohSyncTransport`
@@ -131,4 +81,15 @@ pub(crate) fn wire_iroh_transport(
     *pairing_slot.lock() = Some(transport.clone());
     *slot.lock() = Some(Arc::new(transport) as Arc<dyn SyncTransport>);
     info!("iroh sync transport wired");
+}
+
+/// Resolve `~/.outl/identity.key` and build the transport against the
+/// per-workspace peer store — the desktop flavour of the shared
+/// `build_iroh_transport`.
+fn build_desktop_transport(
+    workspace_root: &std::path::Path,
+) -> anyhow::Result<outl_sync_iroh::IrohSyncTransport> {
+    let dir = outl_dir().ok_or_else(|| anyhow::anyhow!("$HOME unset; cannot locate ~/.outl"))?;
+    std::fs::create_dir_all(&dir)?;
+    build_iroh_transport(&dir.join("identity.key"), workspace_root)
 }

@@ -1,32 +1,130 @@
 import { describe, expect, it } from "vitest";
 
-import type { BlockNode } from "@outl/shared/api/types";
+import type { BlockNode } from "../api/types";
 
 import {
+  countDescendants,
+  findBlock,
   flattenAll,
+  flattenNodes,
   flattenParents,
   flattenVisible,
   isInVisualRange,
   nextVisibleId,
   previousVisibleId,
+  rawTextWithTodo,
   visualRangeIds,
   visualRangeSet,
-} from "./outline-walk";
+} from "./index";
 
 function block(
   id: string,
-  opts: { collapsed?: boolean; children?: BlockNode[] } = {},
+  opts: {
+    text?: string;
+    todo?: "TODO" | "DONE" | null;
+    collapsed?: boolean;
+    children?: BlockNode[];
+  } = {},
 ): BlockNode {
   return {
     id,
-    text: id,
-    todo: null,
+    text: opts.text ?? id,
+    todo: opts.todo ?? null,
     tokens: [],
     collapsed: opts.collapsed ?? false,
     properties: [],
     children: opts.children ?? [],
   };
 }
+
+describe("rawTextWithTodo", () => {
+  it("returns text verbatim when there is no TODO state", () => {
+    expect(rawTextWithTodo(block("a", { text: "ship it" }))).toBe("ship it");
+  });
+
+  it("reattaches TODO prefix", () => {
+    expect(rawTextWithTodo(block("x", { text: "ship it", todo: "TODO" }))).toBe(
+      "TODO ship it",
+    );
+  });
+
+  it("reattaches DONE prefix", () => {
+    expect(rawTextWithTodo(block("x", { text: "ship it", todo: "DONE" }))).toBe(
+      "DONE ship it",
+    );
+  });
+});
+
+describe("findBlock", () => {
+  it("finds a top-level block", () => {
+    const tree = [block("a"), block("b")];
+    expect(findBlock(tree, "b")?.id).toBe("b");
+  });
+
+  it("descends into children recursively", () => {
+    const tree = [
+      block("a", { children: [block("a1", { children: [block("a1a")] })] }),
+    ];
+    expect(findBlock(tree, "a1a")?.id).toBe("a1a");
+  });
+
+  it("returns null when the id is not present", () => {
+    expect(findBlock([block("a")], "missing")).toBeNull();
+  });
+});
+
+describe("flattenNodes", () => {
+  it("walks DFS preorder", () => {
+    const tree = [
+      block("a", { children: [block("a1"), block("a2")] }),
+      block("b", { children: [block("b1")] }),
+    ];
+    expect(flattenNodes(tree).map((b) => b.id)).toEqual([
+      "a",
+      "a1",
+      "a2",
+      "b",
+      "b1",
+    ]);
+  });
+
+  it("returns an empty list for an empty tree", () => {
+    expect(flattenNodes([])).toEqual([]);
+  });
+
+  it("includes children of collapsed nodes (fold state is ignored)", () => {
+    const tree = [
+      block("a", { collapsed: true, children: [block("a1")] }),
+    ];
+    expect(flattenNodes(tree).map((b) => b.id)).toEqual(["a", "a1"]);
+  });
+});
+
+describe("countDescendants", () => {
+  it("returns 0 for a leaf", () => {
+    expect(countDescendants(block("a"))).toBe(0);
+  });
+
+  it("counts direct children", () => {
+    const b = block("p", { children: [block("c1"), block("c2")] });
+    expect(countDescendants(b)).toBe(2);
+  });
+
+  it("counts nested descendants", () => {
+    const b = block("p", {
+      children: [
+        block("c1", { children: [block("c1a"), block("c1b")] }),
+        block("c2"),
+      ],
+    });
+    // c1 + c1a + c1b + c2 = 4
+    expect(countDescendants(b)).toBe(4);
+  });
+
+  it("does not count the block itself", () => {
+    expect(countDescendants(block("solo"))).toBe(0);
+  });
+});
 
 describe("flattenVisible", () => {
   it("walks parents before children, siblings in order", () => {
@@ -169,6 +267,14 @@ describe("flattenAll", () => {
   it("is empty for an empty outline", () => {
     expect(flattenAll([])).toEqual([]);
   });
+
+  it("walks the same DFS order as flattenNodes, ids instead of nodes", () => {
+    const tree: BlockNode[] = [
+      block("a", { children: [block("a1")] }),
+      block("b"),
+    ];
+    expect(flattenAll(tree)).toEqual(flattenNodes(tree).map((b) => b.id));
+  });
 });
 
 describe("flattenParents", () => {
@@ -185,7 +291,10 @@ describe("flattenParents", () => {
 
   it("descends into collapsed parents too", () => {
     const tree: BlockNode[] = [
-      block("a", { collapsed: true, children: [block("a1", { children: [block("a11")] })] }),
+      block("a", {
+        collapsed: true,
+        children: [block("a1", { children: [block("a11")] })],
+      }),
     ];
     expect(flattenParents(tree)).toEqual(["a", "a1"]);
   });

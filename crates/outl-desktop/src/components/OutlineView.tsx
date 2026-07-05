@@ -10,6 +10,9 @@ import {
   outdentBlock,
   pasteMarkdown,
   pastePlain,
+  pluginRun,
+  pluginSyncHooks,
+  runCodeBlock,
   setBlockCollapsed,
   toggleTodo,
 } from "@outl/shared/api/commands";
@@ -17,9 +20,9 @@ import {
 import type { PageView } from "@outl/shared/api/types";
 
 import { ParseWarningsBanner } from "@outl/shared/warnings";
-import { pluginRun, pluginSyncHooks, runCodeBlock } from "../lib/api";
+import { journalSlugToDate } from "@outl/shared/journal";
+import { visualRangeSet } from "@outl/shared/outline";
 import { playPluginViews } from "../lib/plugin-views";
-import { visualRangeSet } from "../lib/outline-walk";
 import { appState, setAppState } from "../lib/store";
 import { BlockRow, type BlockCallbacks } from "./BlockRow";
 import { InlineBacklinks } from "./InlineBacklinks";
@@ -307,13 +310,11 @@ export function OutlineView() {
   function journalWeekday(): string {
     const page = appState.page;
     if (!page || page.kind !== "journal") return "";
-    // Slug is `YYYY-MM-DD`. Parse parts so JS doesn't apply UTC
+    // `journalSlugToDate` parses parts so JS doesn't apply UTC
     // (`new Date("2026-06-02")` is midnight UTC, which renders the
     // previous day in negative-offset timezones).
-    const m = page.slug.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!m) return "";
-    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-    return d.toLocaleDateString(undefined, { weekday: "long" });
+    const d = journalSlugToDate(page.slug);
+    return d ? d.toLocaleDateString(undefined, { weekday: "long" }) : "";
   }
 
   return (

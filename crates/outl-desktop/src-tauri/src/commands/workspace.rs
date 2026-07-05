@@ -164,7 +164,7 @@ pub(crate) fn reload_workspace(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let root = storage_root_or_err(&state)?;
+    let root = storage_root_or_err(state.inner())?;
     let engine = outl_actions::SyncEngine::new(root.clone(), state.hlc.actor());
     let mut fresh = engine
         .reload_workspace()

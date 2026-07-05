@@ -336,11 +336,20 @@ impl App {
     /// the menu (one extra keystroke, full discoverability and
     /// future plugin commands appear here automatically).
     pub(crate) fn open_slash(&mut self) {
+        // Candidates stay in registry order; `visual_order` in the
+        // renderer (and `slash_select_*` in the nav) applies
+        // category-first grouping without duplicating sort logic here.
         let candidates = self.slash_candidates();
+        // Start the highlight on the first item in visual (paint) order
+        // so the initial selection matches what the user sees.
+        let first_visual = crate::view::overlays::visual_order(&candidates)
+            .into_iter()
+            .next()
+            .unwrap_or(0);
         self.overlay = Some(Overlay::Slash(SlashState {
             query: String::new(),
             candidates,
-            selected: 0,
+            selected: first_visual,
         }));
     }
 
@@ -405,6 +414,12 @@ impl App {
 
     /// Recompute the slash overlay's candidate list against the
     /// current query (fuzzy match on `name`).
+    ///
+    /// Query empty → registry order (no sort; `visual_order` handles
+    /// grouping at render/nav time).
+    /// Query non-empty → score desc, `name` as stable tiebreaker.
+    /// Category grouping is always the renderer's job via `visual_order`;
+    /// we never sort `candidates` by category here.
     pub(crate) fn refresh_slash(&mut self) {
         let Some(Overlay::Slash(ref state)) = self.overlay else {
             return;
@@ -421,10 +436,63 @@ impl App {
                 }
             })
             .collect();
-        filtered.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.name.cmp(&b.1.name)));
+        // With a filter: sort by score desc so the most relevant result
+        // leads within each category bucket. Name is the stable tiebreaker.
+        // Without a filter: preserve registry order (score is 0 for all,
+        // so sorting would be a no-op anyway — skip it).
+        if !query.is_empty() {
+            filtered.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.name.cmp(&b.1.name)));
+        }
         if let Some(Overlay::Slash(ref mut s)) = self.overlay {
             s.candidates = filtered.into_iter().map(|(_, c)| c).collect();
-            s.selected = s.selected.min(s.candidates.len().saturating_sub(1));
+            // Reset selection to the first item in visual order so the
+            // highlight is always on the first visible row after a filter
+            // change. (The old clamp kept the index if it was still in
+            // range, which diverged from visual order when categories
+            // shifted under the new filter.)
+            let first = crate::view::overlays::visual_order(&s.candidates)
+                .into_iter()
+                .next()
+                .unwrap_or(0);
+            s.selected = first;
+        }
+    }
+
+    /// Move the slash overlay selection one step **down** in visual order.
+    ///
+    /// Uses [`crate::view::overlays::visual_order`] as the authoritative
+    /// traversal sequence so navigation always matches the rendered layout,
+    /// regardless of how `s.candidates` happens to be sorted internally.
+    pub(crate) fn slash_select_next(&mut self) {
+        let Some(Overlay::Slash(ref mut s)) = self.overlay else {
+            return;
+        };
+        let order = crate::view::overlays::visual_order(&s.candidates);
+        if order.is_empty() {
+            return;
+        }
+        // Find where the current selection sits in the visual sequence,
+        // then advance to the next position (clamped at the end).
+        let pos = order.iter().position(|&i| i == s.selected).unwrap_or(0);
+        if pos + 1 < order.len() {
+            s.selected = order[pos + 1];
+        }
+    }
+
+    /// Move the slash overlay selection one step **up** in visual order.
+    ///
+    /// Mirror of [`Self::slash_select_next`].
+    pub(crate) fn slash_select_prev(&mut self) {
+        let Some(Overlay::Slash(ref mut s)) = self.overlay else {
+            return;
+        };
+        let order = crate::view::overlays::visual_order(&s.candidates);
+        if order.is_empty() {
+            return;
+        }
+        let pos = order.iter().position(|&i| i == s.selected).unwrap_or(0);
+        if pos > 0 {
+            s.selected = order[pos - 1];
         }
     }
 
@@ -615,4 +683,176 @@ mod tests {
 
     // `detect_trigger_mention_*` tests live in
     // `actions::autocomplete::tests` (same module as the function).
+
+    // ---------------------------------------------------------------
+    // Slash palette navigation — cross-category regression
+    // ---------------------------------------------------------------
+
+    /// Helper: open the slash palette, set the query, refresh, and
+    /// return the list of command names in visual (paint) order.
+    fn slash_visual_names(app: &mut App, query: &str) -> Vec<String> {
+        app.open_slash();
+        if !query.is_empty() {
+            if let Some(Overlay::Slash(ref mut s)) = app.overlay {
+                s.query = query.to_string();
+            }
+            app.refresh_slash();
+        }
+        let candidates = match &app.overlay {
+            Some(Overlay::Slash(s)) => s.candidates.clone(),
+            _ => unreachable!(),
+        };
+        let order = crate::view::overlays::visual_order(&candidates);
+        order
+            .into_iter()
+            .map(|i| candidates[i].name.clone())
+            .collect()
+    }
+
+    /// `slash_select_next` must walk items in the same order that the
+    /// renderer paints them (category-first), not in raw `s.candidates`
+    /// order. Repro: query `t` matches commands from at least three
+    /// categories (Actions, Settings, Dates & time); without the fix
+    /// the highlighted row jumped instead of moving to the next
+    /// visible item.
+    #[test]
+    fn slash_nav_follows_visual_order_under_filter() {
+        let (mut app, _dir) = test_app();
+        let visual = slash_visual_names(&mut app, "t");
+        // Must have matched something across categories — sanity check.
+        assert!(
+            visual.len() >= 2,
+            "expected multiple matches for 't', got {visual:?}"
+        );
+
+        // Re-open with the same query, then walk with slash_select_next
+        // and verify each step lands on the next item in visual order.
+        app.open_slash();
+        if let Some(Overlay::Slash(ref mut s)) = app.overlay {
+            s.query = "t".to_string();
+        }
+        app.refresh_slash();
+
+        // The initial selection must be the first item in visual order.
+        let initial_selected = match &app.overlay {
+            Some(Overlay::Slash(s)) => s.selected,
+            _ => unreachable!(),
+        };
+        let candidates = match &app.overlay {
+            Some(Overlay::Slash(s)) => s.candidates.clone(),
+            _ => unreachable!(),
+        };
+        let order = crate::view::overlays::visual_order(&candidates);
+        assert_eq!(
+            initial_selected, order[0],
+            "initial selection must be first in visual order"
+        );
+
+        // Walk forward through the whole list and confirm every step
+        // matches the next position in `visual_order`, never jumping.
+        let mut walked: Vec<String> = vec![candidates[initial_selected].name.clone()];
+        for _ in 1..order.len() {
+            app.slash_select_next();
+            let sel = match &app.overlay {
+                Some(Overlay::Slash(s)) => s.selected,
+                _ => unreachable!(),
+            };
+            let cands = match &app.overlay {
+                Some(Overlay::Slash(s)) => s.candidates.clone(),
+                _ => unreachable!(),
+            };
+            let cur_order = crate::view::overlays::visual_order(&cands);
+            let pos = cur_order
+                .iter()
+                .position(|&i| i == sel)
+                .expect("selected must be in visual_order");
+            assert_eq!(
+                walked.len(),
+                pos,
+                "after {} next-presses, selection should be at visual position {}, got {pos}",
+                walked.len(),
+                walked.len()
+            );
+            walked.push(cands[sel].name.clone());
+        }
+        // Walked names must equal the visual order computed upfront.
+        assert_eq!(walked, visual, "walked sequence must match visual order");
+    }
+
+    /// `slash_select_prev` mirrors `slash_select_next` and must never
+    /// jump past the first item in visual order.
+    #[test]
+    fn slash_nav_prev_clamps_at_first_visual_item() {
+        let (mut app, _dir) = test_app();
+        app.open_slash();
+        // No filter — full list.
+        let first_visual_idx = {
+            let candidates = match &app.overlay {
+                Some(Overlay::Slash(s)) => s.candidates.clone(),
+                _ => unreachable!(),
+            };
+            crate::view::overlays::visual_order(&candidates)[0]
+        };
+        // Start is already at first; pressing prev must stay there.
+        app.slash_select_prev();
+        let sel = match &app.overlay {
+            Some(Overlay::Slash(s)) => s.selected,
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            sel, first_visual_idx,
+            "prev at the first item must not move"
+        );
+    }
+
+    /// Query-empty palette: `open_slash` + `slash_select_next` walking
+    /// the whole list must cover every registered command exactly once,
+    /// in canonical category order (Actions → Navigation → Search →
+    /// Settings → Dates & time).
+    #[test]
+    fn slash_nav_empty_query_covers_all_commands_in_category_order() {
+        let (mut app, _dir) = test_app();
+        app.open_slash();
+        let candidates = match &app.overlay {
+            Some(Overlay::Slash(s)) => s.candidates.clone(),
+            _ => unreachable!(),
+        };
+        let order = crate::view::overlays::visual_order(&candidates);
+        // Walk every item.
+        let mut walked_names: Vec<String> = {
+            let sel = match &app.overlay {
+                Some(Overlay::Slash(s)) => s.selected,
+                _ => unreachable!(),
+            };
+            vec![candidates[sel].name.clone()]
+        };
+        for _ in 1..order.len() {
+            app.slash_select_next();
+            let sel = match &app.overlay {
+                Some(Overlay::Slash(s)) => s.selected,
+                _ => unreachable!(),
+            };
+            walked_names.push(candidates[sel].name.clone());
+        }
+        // Deduplicate to check all commands were visited.
+        let mut sorted_walked = walked_names.clone();
+        sorted_walked.sort();
+        sorted_walked.dedup();
+        let mut sorted_expected: Vec<String> = candidates.iter().map(|c| c.name.clone()).collect();
+        sorted_expected.sort();
+        assert_eq!(
+            sorted_walked, sorted_expected,
+            "walking the full list must visit every command exactly once"
+        );
+        // Category order must be non-decreasing.
+        let cat_orders: Vec<u8> = walked_names
+            .iter()
+            .map(|n| crate::view::overlays::category_order_for(n))
+            .collect();
+        let is_non_decreasing = cat_orders.windows(2).all(|w| w[0] <= w[1]);
+        assert!(
+            is_non_decreasing,
+            "category order must be non-decreasing while walking; got {cat_orders:?}"
+        );
+    }
 }

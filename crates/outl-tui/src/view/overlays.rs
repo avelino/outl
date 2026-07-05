@@ -399,53 +399,52 @@ pub(crate) fn render_slash_overlay(
     .style(app.theme.popup_style());
     f.render_widget(input, outer[0]);
 
-    // Group candidates by category, then render section headers
-    // inline. We need the original index (into `s.candidates`) to
-    // keep the highlight in sync with the selection, so we walk the
-    // list once and stash `(original_index, command, category)`
-    // tuples bucketed by category.
-    let mut buckets: Vec<(&str, Vec<(usize, &crate::state::SlashCommand)>)> = Vec::new();
-    for (i, c) in s.candidates.iter().enumerate() {
-        let cat = category_for(&c.name);
-        // Insert preserving the canonical category order rather than
-        // first-seen, so the palette layout is stable as the user
-        // types and the candidate set shifts.
-        if let Some(b) = buckets.iter_mut().find(|(k, _)| *k == cat) {
-            b.1.push((i, c));
-        } else {
-            buckets.push((cat, vec![(i, c)]));
-        }
-    }
-    buckets.sort_by_key(|(k, _)| category_order(k));
+    // Paint commands in the canonical visual order (category-first, buckets
+    // sorted by `category_order`, within each bucket the order that
+    // `s.candidates` already carries — score-desc under a filter, registry
+    // order when the query is empty).  `visual_order` is the single source
+    // of truth consumed by both this renderer and keyboard navigation, so
+    // the two can never disagree about "which row is highlighted".
+    let order = visual_order(&s.candidates);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     // Track which visual row the highlighted command landed on so
     // we can scroll the Paragraph to keep it in view when category
     // headers + blank rows push it past the visible height.
     let mut highlighted_row: Option<usize> = None;
-    for (cat, items) in &buckets {
-        lines.push(Line::from(Span::styled(
-            format!(" {} {} ", category_icon(cat), cat),
-            app.theme.help_title,
-        )));
-        for (orig_idx, c) in items {
-            if *orig_idx == s.selected {
-                highlighted_row = Some(lines.len());
+    let mut prev_cat: Option<&'static str> = None;
+    for orig_idx in &order {
+        let c = &s.candidates[*orig_idx];
+        let cat = category_for(&c.name);
+        // Emit a section header whenever the category changes.
+        if prev_cat != Some(cat) {
+            if prev_cat.is_some() {
+                lines.push(Line::raw(""));
             }
-            let style = if *orig_idx == s.selected {
-                app.theme.list_selected
-            } else {
-                Style::default()
-            };
-            let suffix = if c.needs_args { " …" } else { "" };
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("   {}  {}{suffix}  ", command_icon(&c.name), c.name),
-                    style,
-                ),
-                Span::styled(c.description.to_string(), app.theme.dim),
-            ]));
+            lines.push(Line::from(Span::styled(
+                format!(" {} {} ", category_icon(cat), cat),
+                app.theme.help_title,
+            )));
+            prev_cat = Some(cat);
         }
+        if *orig_idx == s.selected {
+            highlighted_row = Some(lines.len());
+        }
+        let style = if *orig_idx == s.selected {
+            app.theme.list_selected
+        } else {
+            Style::default()
+        };
+        let suffix = if c.needs_args { " …" } else { "" };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("   {}  {}{suffix}  ", command_icon(&c.name), c.name),
+                style,
+            ),
+            Span::styled(c.description.to_string(), app.theme.dim),
+        ]));
+    }
+    if prev_cat.is_some() {
         lines.push(Line::raw(""));
     }
 
@@ -513,6 +512,39 @@ fn category_order(cat: &str) -> u8 {
         "Dates & time" => 4,
         _ => 5,
     }
+}
+
+/// Return the canonical sort order for the category a command name
+/// belongs to. Used by tests to assert that navigation walks commands
+/// in non-decreasing category order.
+#[cfg(test)]
+pub(crate) fn category_order_for(name: &str) -> u8 {
+    category_order(category_for(name))
+}
+
+/// Flatten `candidates` into the exact visual order the palette paints:
+/// buckets grouped by category, buckets sorted by [`category_order`],
+/// the relative order of commands *within* each bucket preserved (callers
+/// are responsible for putting the highest-relevance commands first inside
+/// their bucket — `refresh_slash` does this via score-desc sort).
+///
+/// Returns indices into `candidates` in paint order.
+/// This is the **single source of truth** for "visual order": both the
+/// renderer and keyboard navigation consume it so they can never diverge.
+pub(crate) fn visual_order(candidates: &[crate::state::SlashCommand]) -> Vec<usize> {
+    // Collect (category, original_index) pairs, grouping by category while
+    // preserving within-category order.
+    let mut buckets: Vec<(&'static str, Vec<usize>)> = Vec::new();
+    for (i, c) in candidates.iter().enumerate() {
+        let cat = category_for(&c.name);
+        if let Some(b) = buckets.iter_mut().find(|(k, _)| *k == cat) {
+            b.1.push(i);
+        } else {
+            buckets.push((cat, vec![i]));
+        }
+    }
+    buckets.sort_by_key(|(k, _)| category_order(k));
+    buckets.into_iter().flat_map(|(_, idxs)| idxs).collect()
 }
 
 fn category_icon(cat: &str) -> &'static str {

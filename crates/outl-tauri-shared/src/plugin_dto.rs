@@ -1,10 +1,10 @@
 //! Wire shapes for the plugin surface.
 //!
 //! These are the `Serialize` DTOs the frontend receives from the
-//! [`crate::plugin_service::PluginService`] requests. They are kept in a
-//! sibling module so `plugin_service.rs` stays focused on the thread /
-//! channel machinery; each DTO carries the `From<…>` projection off the
-//! corresponding `outl-plugins` type.
+//! [`crate::plugin_service::PluginService`] requests. Each DTO carries
+//! the `From<…>` projection off the corresponding `outl-plugins` type.
+//! The keybinding DTO is consumed only by the desktop (mobile has no
+//! chord surface), but the shape is owned here so it can't fork.
 
 use outl_plugins::{
     CommandEntry, PluginBinding, PluginRun, ToolbarButtonEntry, TransformResult, TransformerEntry,
@@ -14,7 +14,7 @@ use serde::Serialize;
 
 /// One plugin command, projected to the wire shape the frontend lists.
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct PluginCommandDto {
+pub struct PluginCommandDto {
     pub plugin_id: String,
     pub command_id: String,
     pub title: String,
@@ -35,12 +35,13 @@ impl From<CommandEntry> for PluginCommandDto {
 ///
 /// `chord` and `mode` serialize identically to the `outl-shortcuts`
 /// catalog the frontend already parses (`ChordSequence` is
-/// `#[serde(transparent)]` over `Vec<Chord>`, `Mode` is lowercase), so the
-/// frontend reuses its existing `Chord` / `ShortcutMode` types and `seqEq`
-/// comparison — no parallel parser. Plugin chords are always `global`, but
-/// the field is carried explicitly so the frontend never has to assume it.
+/// `#[serde(transparent)]` over `Vec<Chord>`, `Mode` is lowercase), so
+/// the frontend reuses its existing `Chord` / `ShortcutMode` types and
+/// `seqEq` comparison — no parallel parser. Plugin chords are always
+/// `global`, but the field is carried explicitly so the frontend never
+/// has to assume it.
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct PluginKeybindingDto {
+pub struct PluginKeybindingDto {
     pub chord: ChordSequence,
     pub mode: Mode,
     pub plugin_id: String,
@@ -61,9 +62,10 @@ impl From<PluginBinding> for PluginKeybindingDto {
 }
 
 /// One plugin toolbar button, projected to the wire shape the chrome
-/// renders (one `<ChromeToggle>`-style button per entry).
+/// renders (one button per entry; `icon` is the glyph, activating it
+/// runs `command_id` via `plugin_run`).
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct ToolbarButtonDto {
+pub struct ToolbarButtonDto {
     pub plugin_id: String,
     pub command_id: String,
     pub icon: String,
@@ -85,12 +87,12 @@ impl From<ToolbarButtonEntry> for ToolbarButtonDto {
 /// One content transformer a plugin declares for a code-fence language,
 /// projected to the wire shape the frontend matches fences against.
 ///
-/// The frontend loads the list once per workspace open and, when a fence's
-/// language matches a `lang` here, calls `plugin_transform` to render it —
-/// `text` content goes through the normal markdown renderer, `rich` content
-/// runs in a sandboxed iframe (same isolation as `ui-render`).
+/// The frontend loads the list once per workspace open and, when a
+/// fence's language matches a `lang` here, calls `plugin_transform` to
+/// render it — `text` content goes through the normal renderer, `rich`
+/// content runs in a sandboxed iframe (same isolation as `ui-render`).
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct TransformerDto {
+pub struct TransformerDto {
     pub plugin_id: String,
     pub lang: String,
     /// `"text"` or `"rich"`.
@@ -109,11 +111,11 @@ impl From<TransformerEntry> for TransformerDto {
 
 /// The descriptor a content transformer produced for a fence body.
 ///
-/// `kind` is `"text"` (content is markdown/text the client renders inline)
-/// or `"rich"` (content is HTML the client runs in a sandboxed iframe —
-/// untrusted plugin output, never injected into the app DOM).
+/// `kind` is `"text"` (content is markdown/text the client renders
+/// inline) or `"rich"` (content is HTML the client runs in a sandboxed
+/// iframe — untrusted plugin output, never injected into the app DOM).
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct TransformResultDto {
+pub struct TransformResultDto {
     pub kind: String,
     pub content: String,
 }
@@ -129,12 +131,12 @@ impl From<TransformResult> for TransformResultDto {
 
 /// Outcome of running a plugin command, surfaced to the frontend.
 #[derive(Debug, Clone, Default, Serialize)]
-pub(crate) struct PluginRunDto {
+pub struct PluginRunDto {
     /// Number of intents the plugin applied to the workspace.
     pub applied: usize,
-    /// `ctx.ui.notify` messages — shown as info status lines.
+    /// `ctx.ui.notify` messages — shown as info status lines / toasts.
     pub notifications: Vec<String>,
-    /// Non-fatal plugin errors — shown as error status lines.
+    /// Non-fatal plugin errors — shown as error status lines / toasts.
     pub errors: Vec<String>,
     /// HTML/JS documents a plugin emitted via `ctx.ui.render(html)`
     /// (gated by the `ui-render` capability upstream). The frontend

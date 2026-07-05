@@ -475,6 +475,30 @@ export interface PageMetaLike {
   page_type?: string | null;
 }
 
+/**
+ * The page name spliced into `[[…]]` when a ref suggestion is
+ * accepted. Journals are anchored on their ISO slug (`2026-06-08`);
+ * every other page inserts its **title**, which renders verbatim
+ * inside `[[…]]` and still resolves through the slugified-match arm of
+ * `open_or_create_by_ref` (so `[[avelino/outl]]` finds the page stored
+ * as `avelino-outl`). Inserting the slug for regular pages was bug
+ * #88: the suggestion chip showed the title but the accept wrote the
+ * slug.
+ *
+ * `@` mentions (`opts.mention`) always insert the title — the page
+ * identity carries no `@`; {@link applySuggestion} wraps the title as
+ * `[[@<title>]]` on the link side.
+ *
+ * One owner for the rule: the desktop ref popup and the mobile native
+ * chip strip both call this, so the two accept paths can't drift.
+ */
+export function refReplacement(
+  page: Pick<PageMetaLike, "kind" | "slug" | "title">,
+  opts: { mention?: boolean } = {},
+): string {
+  return page.kind === "journal" && !opts.mention ? page.slug : page.title;
+}
+
 /** An active `/command` slash trigger inside a block's textarea. */
 export interface SlashContext {
   /** Text after the `/`, up to the caret — the command filter. */

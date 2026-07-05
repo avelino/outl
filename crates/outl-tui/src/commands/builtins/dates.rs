@@ -2,14 +2,19 @@
 //!
 //! Sixteen single-purpose commands that all share the same shape: in
 //! Insert mode they paste a formatted timestamp at the cursor; in
-//! Normal mode they refuse politely with a status hint. Grouped here
-//! because they share helpers (`insert_or_warn`, `journal_link_offset`,
-//! `time_text`, …) and the seven `date-next-<weekday>` siblings come
-//! from a single macro.
+//! Normal mode they refuse politely with a status hint. The seven
+//! `date-next-<weekday>` siblings come from a single macro.
+//!
+//! This module is **wiring only**: the date parsing / calendar
+//! arithmetic lives in `outl_actions::dates` (`parse_date_arg`,
+//! `week_tag`, `days_until_next_weekday`, `journal_ref`,
+//! `journal_slug`) and "what is today" comes from
+//! `outl_actions::clock`. The helpers below just anchor those pure
+//! functions to the current clock reading.
 
 use anyhow::Result;
-use chrono::{Datelike, Duration, Months, NaiveDate, Weekday};
-use outl_actions::clock;
+use chrono::{Duration, Weekday};
+use outl_actions::{clock, dates};
 
 use super::super::SlashCommand;
 use crate::state::{App, Mode};
@@ -28,11 +33,9 @@ fn insert_or_warn(app: &mut App, command_name: &str, text: &str) {
 }
 
 /// `[[YYYY-MM-DD]]` for today + `days_offset`. Negative offsets are
-/// past, positive are future. Extracted so the date-shifting logic is
-/// unit-testable without standing up a full `App`.
+/// past, positive are future.
 fn journal_link_offset(days_offset: i64) -> String {
-    let d = clock::today() + Duration::days(days_offset);
-    format!("[[{}]]", d.format("%Y-%m-%d"))
+    dates::journal_ref(clock::today() + Duration::days(days_offset))
 }
 
 /// `HH:MM` for the current local time. Plain text — not a journal ref.
@@ -44,8 +47,8 @@ fn time_text() -> String {
 fn datetime_text() -> String {
     let now = clock::now_local();
     format!(
-        "[[{}]] {}",
-        now.date_naive().format("%Y-%m-%d"),
+        "{} {}",
+        dates::journal_ref(now.date_naive()),
         now.format("%H:%M")
     )
 }
@@ -53,76 +56,7 @@ fn datetime_text() -> String {
 /// Plain `YYYY-MM-DD` (no brackets) for property values like
 /// `due:: 2026-05-26`. ISO 8601 short date.
 fn iso_date_offset(days_offset: i64) -> String {
-    let d = clock::today() + Duration::days(days_offset);
-    d.format("%Y-%m-%d").to_string()
-}
-
-/// `#YYYY-Www` tag for the ISO week of `date` (e.g. `#2026-W21`).
-/// Uses ISO 8601 week numbering — weeks start on Monday and `%G`
-/// is the ISO week-numbering year (which can differ from `%Y` for
-/// a handful of days near year boundaries).
-fn week_tag(date: NaiveDate) -> String {
-    format!("#{}", date.format("%G-W%V"))
-}
-
-/// Number of days from `today` to the next occurrence of `weekday`,
-/// strictly in the future. If today already is that weekday, returns
-/// 7 (next week's same day), not 0 — `/date-next-monday` on a Monday
-/// should mean "next Monday", not "today".
-fn days_until_next_weekday(today: NaiveDate, weekday: Weekday) -> i64 {
-    let today_n = today.weekday().num_days_from_monday() as i64;
-    let target_n = weekday.num_days_from_monday() as i64;
-    let diff = (target_n - today_n).rem_euclid(7);
-    if diff == 0 {
-        7
-    } else {
-        diff
-    }
-}
-
-/// Parse a date argument: ISO absolute (`2026-06-15`) or relative
-/// (`+3d`, `-2w`, `+1m`). Returns `None` on unrecognized input so
-/// the command can surface a usage hint.
-fn parse_date_arg(arg: &str, today: NaiveDate) -> Option<NaiveDate> {
-    let arg = arg.trim();
-    if arg.is_empty() {
-        return None;
-    }
-    // Absolute ISO date wins first — `2026-06-15` is unambiguous.
-    if let Ok(d) = NaiveDate::parse_from_str(arg, "%Y-%m-%d") {
-        return Some(d);
-    }
-    // Relative: `+Nd`, `-Nw`, `+Nm` (also bare `Nd` / `Nw` / `Nm`,
-    // treated as positive — nice when the user forgets the sign).
-    let (sign, rest) = if let Some(rest) = arg.strip_prefix('+') {
-        (1i64, rest)
-    } else if let Some(rest) = arg.strip_prefix('-') {
-        (-1i64, rest)
-    } else {
-        (1i64, arg)
-    };
-    let last = rest.chars().last()?;
-    if !"dwm".contains(last) {
-        return None;
-    }
-    let num_str = &rest[..rest.len() - last.len_utf8()];
-    let n: i64 = num_str.parse().ok()?;
-    let signed = sign * n;
-    match last {
-        'd' => Some(today + Duration::days(signed)),
-        'w' => Some(today + Duration::weeks(signed)),
-        'm' => {
-            // Months need calendar-aware arithmetic — `chrono::Months`
-            // clamps on overflow (Jan 31 + 1 month → Feb 28/29).
-            let months = u32::try_from(signed.unsigned_abs()).ok()?;
-            if signed >= 0 {
-                today.checked_add_months(Months::new(months))
-            } else {
-                today.checked_sub_months(Months::new(months))
-            }
-        }
-        _ => None,
-    }
+    dates::journal_slug(clock::today() + Duration::days(days_offset))
 }
 
 // ─── date-today / tomorrow / yesterday ────────────────────────────────
@@ -291,7 +225,7 @@ macro_rules! next_weekday_command {
             }
             fn execute(&self, app: &mut App, _args: &str) -> Result<bool> {
                 let today = clock::today();
-                let days = days_until_next_weekday(today, $weekday);
+                let days = dates::days_until_next_weekday(today, $weekday);
                 insert_or_warn(app, $name, &journal_link_offset(days));
                 Ok(false)
             }
@@ -367,10 +301,9 @@ impl SlashCommand for DateCommand {
     }
     fn execute(&self, app: &mut App, args: &str) -> Result<bool> {
         let today = clock::today();
-        match parse_date_arg(args, today) {
+        match dates::parse_date_arg(args, today) {
             Some(d) => {
-                let s = format!("[[{}]]", d.format("%Y-%m-%d"));
-                insert_or_warn(app, "date", &s);
+                insert_or_warn(app, "date", &dates::journal_ref(d));
             }
             None => {
                 app.status = "usage: date +Nd | -Nw | +Nm | YYYY-MM-DD".into();
@@ -462,13 +395,17 @@ impl SlashCommand for WeekNumCommand {
         true
     }
     fn execute(&self, app: &mut App, _args: &str) -> Result<bool> {
-        let s = week_tag(clock::today());
+        let s = dates::week_tag(clock::today());
         insert_or_warn(app, "week-num", &s);
         Ok(false)
     }
 }
 
 // ─── tests ────────────────────────────────────────────────────────────
+// Only wiring is tested here: the clock-anchored helpers and the
+// SlashCommand plumbing. The pure date logic (parse_date_arg, week_tag,
+// days_until_next_weekday, journal labels) is tested in
+// `outl_actions::dates`.
 
 #[cfg(test)]
 mod tests {
@@ -562,108 +499,12 @@ mod tests {
         assert_eq!(today - lw, Duration::days(7));
     }
 
-    // -- days_until_next_weekday ---------------------------------------------
-
-    #[test]
-    fn next_weekday_on_same_weekday_jumps_seven() {
-        // 2026-05-25 is a Monday.
-        let mon = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
-        assert_eq!(days_until_next_weekday(mon, Weekday::Mon), 7);
-    }
-
-    #[test]
-    fn next_weekday_in_same_week() {
-        // Monday → Friday is 4 days.
-        let mon = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
-        assert_eq!(days_until_next_weekday(mon, Weekday::Fri), 4);
-    }
-
-    #[test]
-    fn next_weekday_wraps_across_weekend() {
-        // Friday → Monday is 3 days.
-        let fri = NaiveDate::from_ymd_opt(2026, 5, 29).unwrap();
-        assert_eq!(days_until_next_weekday(fri, Weekday::Mon), 3);
-    }
-
-    #[test]
-    fn next_weekday_one_day_forward() {
-        // Tuesday → Wednesday is 1 day.
-        let tue = NaiveDate::from_ymd_opt(2026, 5, 26).unwrap();
-        assert_eq!(days_until_next_weekday(tue, Weekday::Wed), 1);
-    }
-
-    // -- parse_date_arg ------------------------------------------------------
-
-    #[test]
-    fn parse_absolute_iso_date() {
-        let today = NaiveDate::from_ymd_opt(2026, 5, 26).unwrap();
-        let d = parse_date_arg("2026-06-15", today).unwrap();
-        assert_eq!(d, NaiveDate::from_ymd_opt(2026, 6, 15).unwrap());
-    }
-
-    #[test]
-    fn parse_positive_days_offset() {
-        let today = NaiveDate::from_ymd_opt(2026, 5, 26).unwrap();
-        let d = parse_date_arg("+3d", today).unwrap();
-        assert_eq!(d, NaiveDate::from_ymd_opt(2026, 5, 29).unwrap());
-    }
-
-    #[test]
-    fn parse_negative_weeks_offset() {
-        let today = NaiveDate::from_ymd_opt(2026, 5, 26).unwrap();
-        let d = parse_date_arg("-2w", today).unwrap();
-        assert_eq!(d, NaiveDate::from_ymd_opt(2026, 5, 12).unwrap());
-    }
-
-    #[test]
-    fn parse_months_offset_clamps_in_short_months() {
-        // Jan 31 + 1 month → Feb 28 (or 29 in leap years). chrono::Months
-        // clamps to the last valid day, which is exactly what we want.
-        let today = NaiveDate::from_ymd_opt(2026, 1, 31).unwrap();
-        let d = parse_date_arg("+1m", today).unwrap();
-        assert_eq!(d, NaiveDate::from_ymd_opt(2026, 2, 28).unwrap());
-    }
-
-    #[test]
-    fn parse_bare_offset_is_positive() {
-        // No sign means `+` — a UX kindness.
-        let today = NaiveDate::from_ymd_opt(2026, 5, 26).unwrap();
-        let d = parse_date_arg("5d", today).unwrap();
-        assert_eq!(d, NaiveDate::from_ymd_opt(2026, 5, 31).unwrap());
-    }
-
-    #[test]
-    fn parse_rejects_garbage() {
-        let today = NaiveDate::from_ymd_opt(2026, 5, 26).unwrap();
-        assert!(parse_date_arg("nope", today).is_none());
-        assert!(parse_date_arg("+3x", today).is_none());
-        assert!(parse_date_arg("", today).is_none());
-        assert!(parse_date_arg("2026-13-99", today).is_none());
-    }
-
-    // -- iso_date / week_tag -------------------------------------------------
-
     #[test]
     fn iso_date_offset_has_no_brackets() {
         let s = iso_date_offset(0);
         assert_eq!(s.len(), 10, "expected YYYY-MM-DD, got {s:?}");
         assert!(!s.contains('['));
-        assert!(NaiveDate::parse_from_str(&s, "%Y-%m-%d").is_ok());
-    }
-
-    #[test]
-    fn week_tag_format_is_hash_year_w_week() {
-        // 2026-05-25 is Monday of ISO week 22 of year 2026.
-        let mon = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
-        assert_eq!(week_tag(mon), "#2026-W22");
-    }
-
-    #[test]
-    fn week_tag_uses_iso_week_year_at_boundary() {
-        // 2025-12-31 (Wed) is ISO week 1 of 2026 — `%G` (ISO year)
-        // differs from `%Y` (calendar year) here. Confirms we used %G.
-        let last_of_year = NaiveDate::from_ymd_opt(2025, 12, 31).unwrap();
-        assert_eq!(week_tag(last_of_year), "#2026-W01");
+        assert!(chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d").is_ok());
     }
 
     // -- non-date commands kept lean -----------------------------------------

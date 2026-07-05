@@ -6,12 +6,13 @@ import type { PageView } from "@outl/shared/api/types";
 import {
   filterRegistryItems,
   pluginInstallOfficial,
+  pluginList,
   pluginRegistryList,
+  pluginRun,
   pluginSetEnabled,
   pluginUninstall,
 } from "@outl/shared/api/commands";
-import type { RegistryItem } from "@outl/shared/api/types";
-import { pluginList, pluginRun, type PluginCommand } from "../lib/api";
+import type { PluginCommand, RegistryItem } from "@outl/shared/api/types";
 import { haptic } from "../lib/haptics";
 
 /**

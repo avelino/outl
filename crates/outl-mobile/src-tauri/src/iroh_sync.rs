@@ -1,45 +1,41 @@
 //! iroh P2P sync wiring for the mobile client.
 //!
-//! Owns three mobile-specific concerns the desktop/TUI keep elsewhere:
+//! The build + start + reload-bridge machinery lives in
+//! `outl_tauri_shared::iroh_sync`; this module keeps what is genuinely
+//! mobile:
 //!
-//! - **Where the device identity lives.** Unlike the TUI (which uses
-//!   `~/.outl/`), iOS has no meaningful home directory — the sandbox
-//!   `$HOME` is per-install and opaque. We resolve `identity.key` from
-//!   the Tauri **app local data dir** so it sits next to the persisted
-//!   `actor` ULID and survives across launches. [`iroh_dir`] is the
-//!   single source of that per-device path. The identity is per-DEVICE
-//!   (one node id per install), never per-graph.
+//! - **Where the device identity lives.** Unlike the desktop / TUI
+//!   (which use `~/.outl/`), iOS has no meaningful home directory — the
+//!   sandbox `$HOME` is per-install and opaque. We resolve
+//!   `identity.key` from the Tauri **app local data dir** so it sits
+//!   next to the persisted `actor` ULID and survives across launches.
+//!   [`iroh_dir`] is the single source of that per-device path. The
+//!   identity is per-DEVICE (one node id per install), never per-graph.
 //!
-//! - **Where the peer list lives.** The paired-peer list is per-GRAPH,
-//!   so it lives at `<workspace_root>/.outl/peers.json` (via
-//!   [`outl_sync_iroh::workspace_peers_path`]) — NOT next to the
-//!   identity. The running transport and the pairing commands both
-//!   resolve it from the workspace root, so a freshly paired device shows
-//!   up in `outl_peer_list` and syncs after the next launch.
+//! - **Which event signals a reload.** The transport's "peer ops landed"
+//!   signal bridges to `workspace-ready` — the same event the background
+//!   opener fires, which the frontend already listens for to reload the
+//!   current view (iroh has no native watcher, so it reuses the Tauri
+//!   event).
 //!
-//! - **Whether to wire iroh at all.** Driven by the `[sync]` section of
-//!   the global `outl-config`. iroh is the default transport on mobile
-//!   (P2P is the whole point of the companion app); the only opt-out is
-//!   the `transport = "file"` shared-filesystem mode.
+//! - **The iOS BGProcessingTask hook.** The live transport is registered
+//!   into the `bg_sync` global so a background window can drive a forced
+//!   sync pass.
 //!
 //! - **Resilience.** Any failure binding the identity / peer store logs
 //!   and returns `None`. The app keeps running without sync rather than
 //!   crashing startup; a later relaunch retries.
 
 use std::path::PathBuf;
-use std::sync::mpsc;
 
-use outl_actions::SyncTransport;
 use outl_config::SyncTransportKind;
 use outl_core::id::ActorId;
-use outl_sync_iroh::{
-    migrate_global_peers_if_absent, workspace_peers_path, IrohIdentity, IrohSyncTransport,
-    PeersStore,
-};
-use tauri::{Emitter, Manager};
+use outl_sync_iroh::IrohSyncTransport;
+use outl_tauri_shared::iroh_sync::{build_iroh_transport, start_with_reload_bridge};
+use tauri::Manager;
 use tracing::{info, warn};
 
-/// Directory holding the device's iroh identity + peer store.
+/// Directory holding the device's iroh identity.
 ///
 /// Lives under the Tauri app local data dir (the same place the `actor`
 /// ULID is persisted) — never the iCloud container. The device identity
@@ -57,15 +53,6 @@ pub(crate) fn identity_path(dir: &std::path::Path) -> PathBuf {
     dir.join("identity.key")
 }
 
-/// Per-GRAPH peers file: `<workspace_root>/.outl/peers.json`.
-///
-/// Takes the **workspace root** (not the per-device `iroh_dir`): the peer
-/// list belongs to the graph, so it moves with the workspace, while the
-/// device identity stays in `iroh_dir`.
-pub(crate) fn peers_path(workspace_root: &std::path::Path) -> PathBuf {
-    workspace_peers_path(workspace_root)
-}
-
 /// Build + start the iroh transport when the config asks for it.
 ///
 /// Returns the live [`IrohSyncTransport`] so the caller can stash it in
@@ -75,13 +62,6 @@ pub(crate) fn peers_path(workspace_root: &std::path::Path) -> PathBuf {
 /// - the config selects the file transport (`transport = "file"`), or
 /// - the app local data dir / identity / peer store can't be resolved
 ///   (logged, never fatal).
-///
-/// On success it spawns the transport (`transport.start`) and a small
-/// drain thread that turns the transport's "peer ops landed" signal into
-/// an `app.emit("workspace-ready", ())` — the same event the background
-/// opener fires, which the frontend already listens for to reload the
-/// current view. (The iCloud path uses the native `__outlOpsChanged`
-/// bridge; iroh has no native watcher, so it reuses the Tauri event.)
 pub(crate) fn wire_iroh_transport(
     app: &tauri::AppHandle,
     workspace_root: PathBuf,
@@ -105,55 +85,29 @@ pub(crate) fn wire_iroh_transport(
         return None;
     }
 
-    let identity = match IrohIdentity::load_or_generate(&identity_path(&dir)) {
-        Ok(id) => id,
+    let transport = match build_iroh_transport(&identity_path(&dir), &workspace_root) {
+        Ok(t) => t,
         Err(e) => {
-            warn!("iroh disabled: identity load: {e}");
-            return None;
-        }
-    };
-    // Peer list is per-GRAPH: read it from `<workspace_root>/.outl/peers.json`,
-    // migrating any legacy global list on first open. Identity above stays in
-    // the per-device `iroh_dir`.
-    migrate_global_peers_if_absent(&workspace_root);
-    let peers = match PeersStore::load_or_default(&peers_path(&workspace_root)) {
-        Ok(p) => p,
-        Err(e) => {
-            warn!("iroh disabled: peers load: {e}");
+            warn!("iroh disabled: {e}");
             return None;
         }
     };
 
-    // `[sync] relay_url` from the global config: `None` (or empty) keeps iroh's
-    // n0 default relay, `Some(url)` points the sync endpoint at a custom relay.
-    let relay_url = outl_config::load().sync.relay_url().map(str::to_string);
-    let transport = IrohSyncTransport::new(identity, peers, relay_url);
+    // Bridge each "peer ops landed" signal to the `workspace-ready`
+    // Tauri event so the frontend reloads.
+    start_with_reload_bridge(
+        &transport,
+        workspace_root.clone(),
+        actor,
+        app.clone(),
+        "workspace-ready",
+    );
 
-    // The transport fires `()` on this channel whenever peer ops land on
-    // disk. Bridge each signal to the `workspace-ready` Tauri event so the
-    // frontend reloads (iroh has no native watcher, so it reuses the same
-    // Tauri event the background opener fires).
-    let (tx, rx) = mpsc::channel::<()>();
-    transport.start(workspace_root, actor, tx);
-
-    // Expose the live transport to the iOS BGProcessingTask FFI so a
-    // background window can drive a forced sync pass (see `bg_sync`).
-    crate::bg_sync::register(&transport);
-
-    let app_for_drain = app.clone();
-    std::thread::Builder::new()
-        .name("outl-iroh-reload".into())
-        .spawn(move || {
-            // Blocks until the transport drops its sender (shutdown) or
-            // forever while the app runs. Each `recv` is a peer-op event.
-            while rx.recv().is_ok() {
-                if let Err(e) = app_for_drain.emit("workspace-ready", ()) {
-                    warn!("emit workspace-ready (iroh peer ops): {e}");
-                }
-            }
-            info!("iroh reload bridge thread exiting");
-        })
-        .expect("spawn outl-iroh-reload thread");
+    // Expose the live transport + workspace root to the iOS background-task
+    // FFIs: a background window drives a forced sync pass, and the peer-count
+    // gate reads `<root>/.outl/peers.json` to decide whether scheduling a
+    // window is worth it at all (see `bg_sync`).
+    crate::bg_sync::register(&transport, workspace_root);
 
     info!("iroh sync transport started");
     Some(transport)

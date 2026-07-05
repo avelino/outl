@@ -28,6 +28,7 @@ pub struct Config {
     pub calendar: CalendarCfg,
     pub sync: SyncConfig,
     pub tui: TuiCfg,
+    pub snapshot: SnapshotCfg,
 }
 
 /// TUI-only preferences (the desktop ignores this section).
@@ -164,6 +165,45 @@ impl SyncConfig {
     }
 }
 
+/// Snapshot section — controls when long-lived clients persist a
+/// materialized-state snapshot of the workspace to disk.
+///
+/// Snapshots are a boot cache: `Workspace::open_with_storage` loads
+/// one (if present and its `content_hash` matches) and replays only
+/// the ops posted after its cutoff, instead of walking the entire
+/// per-actor op log. This is the fix for issue #109 (CLI pays full
+/// replay on every invocation).
+///
+/// The CLI never writes snapshots — it's ephemeral — but reads any
+/// produced by a long-lived client (TUI / desktop / mobile) so it
+/// still gets the speedup.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SnapshotCfg {
+    /// Master switch. `false` makes `Workspace::apply` skip the
+    /// snapshot-trigger check entirely. The CLI sets this to `false`
+    /// in-memory regardless of the TOML.
+    pub enabled: bool,
+
+    /// How many ops a long-lived client applies between snapshot
+    /// writes. Lower values shrink the post-snapshot delta (faster
+    /// boot) at the cost of more writes; higher values write less
+    /// often but leave more ops to replay. The default of `10_000`
+    /// is roughly "once per long editing session" for an individual
+    /// user — rare enough not to stutter, frequent enough that the
+    /// boot delta stays in the hundreds of milliseconds.
+    pub op_threshold: u32,
+}
+
+impl Default for SnapshotCfg {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            op_threshold: 10_000,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,6 +218,8 @@ mod tests {
         assert!(c.calendar.timezone.is_none());
         assert_eq!(c.sync.transport, SyncTransportKind::Iroh);
         assert!(c.sync.relay_url.is_none());
+        assert!(c.snapshot.enabled);
+        assert_eq!(c.snapshot.op_threshold, 10_000);
     }
 
     #[test]
@@ -246,5 +288,33 @@ relay_url = "https://relay.example"
         )
         .unwrap();
         assert_eq!(c.sync.relay_url(), Some("https://relay.example"));
+    }
+
+    #[test]
+    fn missing_snapshot_section_uses_defaults() {
+        // No [snapshot] → enabled=true, op_threshold=10_000 (the
+        // long-lived clients' default). A user who never heard of
+        // snapshots still gets the boot speedup.
+        let c: Config = toml::from_str("").unwrap();
+        assert!(c.snapshot.enabled);
+        assert_eq!(c.snapshot.op_threshold, 10_000);
+    }
+
+    #[test]
+    fn snapshot_section_can_disable_writes() {
+        // The CLI overrides this in-memory regardless, but a user can
+        // also opt out globally by writing `enabled = false`.
+        let c: Config = toml::from_str("[snapshot]\nenabled = false\n").unwrap();
+        assert!(!c.snapshot.enabled);
+        // op_threshold keeps its default.
+        assert_eq!(c.snapshot.op_threshold, 10_000);
+    }
+
+    #[test]
+    fn snapshot_section_can_tune_threshold() {
+        let c: Config = toml::from_str("[snapshot]\nop_threshold = 1000\n").unwrap();
+        assert_eq!(c.snapshot.op_threshold, 1000);
+        // enabled keeps its default.
+        assert!(c.snapshot.enabled);
     }
 }

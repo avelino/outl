@@ -14,12 +14,16 @@
 //! - **`#+...`** directives: Logseq's per-file frontmatter style. We
 //!   strip these (outl reads `title::` etc.).
 //! - **Underscore-encoded names**: Logseq uses `___` and `%2F` for
-//!   `/` in filenames. We canonicalize via [`super::slugify`].
+//!   `/` in filenames. We canonicalize via [`outl_md::slug::slugify`].
 //!
 //! Journals in Logseq are filenames like `2026_05_25.md` (default) or
 //! `2026-05-25.md` (configurable). Both work.
 
-use super::{parse_journal_date, write_page_md, ImportReport, ResolvedUid, UidIndex};
+use super::common::{
+    md_files_shallow, parse_journal_date, rewrite_uid_refs, truncate, write_page_md, ResolvedUid,
+    UidIndex,
+};
+use super::ImportReport;
 use crate::workspace_layout::Paths;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -51,36 +55,18 @@ pub fn import(src: &Path, paths: &Paths) -> Result<ImportReport> {
 
     // Pass 2: convert.
     if pages_dir.is_dir() {
-        for entry in walkdir::WalkDir::new(&pages_dir).max_depth(1) {
-            let Ok(entry) = entry else {
-                continue;
-            };
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            if entry.path().extension().and_then(|x| x.to_str()) != Some("md") {
-                continue;
-            }
-            convert_file(entry.path(), false, &uid_index, paths, &mut report)?;
+        for p in md_files_shallow(&pages_dir) {
+            convert_file(&p, false, &uid_index, paths, &mut report)?;
         }
     }
     if journals_dir.is_dir() {
-        for entry in walkdir::WalkDir::new(&journals_dir).max_depth(1) {
-            let Ok(entry) = entry else {
-                continue;
-            };
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            if entry.path().extension().and_then(|x| x.to_str()) != Some("md") {
-                continue;
-            }
-            convert_file(entry.path(), true, &uid_index, paths, &mut report)?;
+        for p in md_files_shallow(&journals_dir) {
+            convert_file(&p, true, &uid_index, paths, &mut report)?;
         }
     }
 
     // Reconcile each imported file so sidecars get fresh IDs.
-    super::seed_sidecars(paths)?;
+    super::common::seed_sidecars(paths)?;
 
     Ok(report)
 }
@@ -88,19 +74,10 @@ pub fn import(src: &Path, paths: &Paths) -> Result<ImportReport> {
 /// Walk a directory and populate `uid_index` with every block's
 /// UID → page name mapping (so `((uid))` refs can be resolved).
 fn scan_uids(dir: &Path, is_journal: bool, uid_index: &mut UidIndex) -> Result<()> {
-    for entry in walkdir::WalkDir::new(dir).max_depth(1) {
-        let Ok(entry) = entry else {
-            continue;
-        };
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        if entry.path().extension().and_then(|x| x.to_str()) != Some("md") {
-            continue;
-        }
-        let text = fs::read_to_string(entry.path())
-            .with_context(|| format!("reading {}", entry.path().display()))?;
-        let page_name = logseq_page_name(entry.path(), is_journal);
+    for path in md_files_shallow(dir) {
+        let text =
+            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        let page_name = logseq_page_name(&path, is_journal);
 
         // For each `id:: <uid>` line, look back at the preceding block
         // content as the snippet. (Logseq writes id:: directly after
@@ -125,15 +102,6 @@ fn scan_uids(dir: &Path, is_journal: bool, uid_index: &mut UidIndex) -> Result<(
         }
     }
     Ok(())
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    let mut out: String = s.chars().take(max - 1).collect();
-    out.push('…');
-    out
 }
 
 /// Convert a single Logseq `.md` file into outl format and write it
@@ -168,31 +136,12 @@ fn convert_file(
         }
 
         // Resolve `((uid))` block refs in-place.
-        let mut converted = String::with_capacity(line.len());
-        let mut chars = line.char_indices().peekable();
-        while let Some((i, c)) = chars.next() {
-            if c == '(' && line[i..].starts_with("((") {
-                if let Some(close_rel) = line[i + 2..].find("))") {
-                    let uid = &line[i + 2..i + 2 + close_rel];
-                    if let Some(resolved) = uid_index.get(uid) {
-                        converted.push_str(&format!("[[{}]]", resolved.page_name));
-                        artifacts += 1;
-                    } else {
-                        // Leave the original `((uid))` so the user can
-                        // hunt it down post-import.
-                        converted.push_str(&format!("((unresolved:{uid}))"));
-                        unresolved += 1;
-                    }
-                    // Skip ahead past `))`.
-                    for _ in 0..(2 + close_rel + 2 - 1) {
-                        chars.next();
-                    }
-                    continue;
-                }
-            }
-            converted.push(c);
-        }
-        out_lines.push(converted);
+        out_lines.push(rewrite_uid_refs(
+            line,
+            uid_index,
+            &mut artifacts,
+            &mut unresolved,
+        ));
     }
 
     // Strip trailing blank lines so the file ends cleanly.

@@ -37,7 +37,6 @@ mod commands;
 mod fs_watcher;
 mod helpers;
 mod iroh_sync;
-mod plugin_dto;
 mod plugin_service;
 mod settings;
 mod state;
@@ -66,7 +65,7 @@ use crate::commands::{
     search_persons, set_block_collapsed, set_workspace, today_slug_cmd, toggle_quote, toggle_todo,
     undo_page, update_settings, workspace_stats,
 };
-use crate::plugin_service::PluginService;
+use crate::plugin_service::spawn_plugin_service;
 use crate::state::AppState;
 use crate::workspace_open::{load_or_create_actor, spawn_workspace_opener};
 
@@ -225,7 +224,7 @@ pub fn run() {
             // `<root>/.outl/plugins/` on its first request once the
             // workspace is open. See `plugin_service.rs`.
             let plugins =
-                PluginService::spawn(workspace.clone(), storage_root.clone(), hlc.clone());
+                spawn_plugin_service(workspace.clone(), storage_root.clone(), hlc.clone());
 
             app.manage(AppState {
                 workspace,

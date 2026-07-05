@@ -29,6 +29,7 @@ outl-actions = { workspace = true }
 # never in the `Send + Sync` `AppState`. See `plugin_service.rs`.
 outl-plugins = { workspace = true, features = ["registry"] }
 outl-sync-iroh = { workspace = true }
+outl-tauri-shared = { workspace = true }
 outl-config = { workspace = true }
 dirs = { workspace = true }
 # Pin the rustls crypto provider. iroh pulls rustls with default features off,

@@ -133,16 +133,10 @@ fn handle_slash_overlay_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         KeyCode::Esc => app.overlay = None,
         KeyCode::Enter => return app.accept_slash(),
         KeyCode::Up => {
-            if let Some(Overlay::Slash(ref mut s)) = app.overlay {
-                s.selected = s.selected.saturating_sub(1);
-            }
+            app.slash_select_prev();
         }
         KeyCode::Down => {
-            if let Some(Overlay::Slash(ref mut s)) = app.overlay {
-                if s.selected + 1 < s.candidates.len() {
-                    s.selected += 1;
-                }
-            }
+            app.slash_select_next();
         }
         KeyCode::Backspace => {
             if let Some(Overlay::Slash(ref mut s)) = app.overlay {

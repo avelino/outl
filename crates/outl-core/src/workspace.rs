@@ -18,10 +18,13 @@ use crate::content::ContentStore;
 use crate::id::{ActorId, NodeId};
 use crate::log::OpLog;
 use crate::op::{LogOp, Op};
+use crate::snapshot::{self, SnapshotBody};
 use crate::storage::{Storage, StorageError};
 use crate::tree::Tree;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::thread::JoinHandle;
+use tracing::{debug, warn};
 
 /// Errors a workspace may surface to its caller.
 #[derive(Debug, thiserror::Error)]
@@ -48,6 +51,24 @@ pub struct Workspace {
     content: ContentStore,
     /// Pluggable storage backend.
     storage: Box<dyn Storage>,
+    /// `<root>/.outl/snapshots` when `root` is set, `None` for
+    /// in-memory workspaces. Background snapshot writes go straight
+    /// here — they don't go through `storage` (the snapshot is a local
+    /// cache, not part of the source-of-truth op log).
+    snapshots_dir: Option<PathBuf>,
+    /// Background snapshot writers still in flight. `apply` drains
+    /// finished handles on every trigger (cheap, non-blocking) so the
+    /// list stays bounded; `wait_for_snapshots` joins the rest.
+    snapshot_workers: Vec<JoinHandle<()>>,
+    /// Number of ops applied since the last successful snapshot write.
+    /// `apply` increments this and spawns a snapshot worker once it
+    /// crosses `snapshot_threshold`. Reset to `0` on every spawn and
+    /// on policy change.
+    ops_since_snapshot: u32,
+    /// Trigger threshold for background snapshot writes inside `apply`.
+    /// `0` disables the in-band trigger (the CLI sets this — it's
+    /// ephemeral and shouldn't churn the snapshots dir).
+    snapshot_threshold: u32,
 }
 
 impl Workspace {
@@ -59,13 +80,21 @@ impl Workspace {
 
     /// Open a workspace backed by a given storage implementation.
     ///
-    /// Replays the full op log into the in-memory tree so the workspace
-    /// is ready to read from the moment this returns.
+    /// Tries to boot from a snapshot first (O(current state) + the ops
+    /// posted since the snapshot); on any failure — missing snapshot,
+    /// hash mismatch, future schema — falls back to a full replay of
+    /// the op log. Snapshot is purely a boot cache; the op log stays
+    /// the single source of truth.
+    ///
+    /// In both paths, block text is materialized so the workspace is
+    /// ready to read from the moment this returns.
     pub fn open_with_storage(
         actor: ActorId,
         storage: Box<dyn Storage>,
         root: Option<PathBuf>,
     ) -> Result<Self, WorkspaceError> {
+        let snapshots_dir = root.as_ref().map(|r| r.join(".outl").join("snapshots"));
+
         let mut ws = Self {
             root,
             actor,
@@ -73,29 +102,138 @@ impl Workspace {
             log: OpLog::new(),
             content: ContentStore::default(),
             storage,
+            snapshots_dir,
+            snapshot_workers: Vec::new(),
+            ops_since_snapshot: 0,
+            snapshot_threshold: Workspace::DEFAULT_SNAPSHOT_THRESHOLD,
         };
+
+        let booted_from_snapshot = match ws.boot_from_snapshot() {
+            Ok(true) => true,
+            Ok(false) => false,
+            Err(e) => {
+                warn!("snapshot boot failed, falling back to full replay: {e}");
+                false
+            }
+        };
+
+        if !booted_from_snapshot {
+            ws.boot_from_full_replay()?;
+        }
+
+        Ok(ws)
+    }
+
+    /// Default `apply`-count between in-band snapshot writes. Clients
+    /// override with [`Self::set_snapshot_policy`] from `[snapshot]`
+    /// in `outl.toml`. The CLI forces `0` to opt out.
+    const DEFAULT_SNAPSHOT_THRESHOLD: u32 = 10_000;
+
+    /// Try to hydrate the workspace from a snapshot + the ops posted
+    /// since its cutoff. Returns `Ok(false)` when there's nothing to
+    /// load (so the caller falls through to [`Self::boot_from_full_replay`]).
+    fn boot_from_snapshot(&mut self) -> Result<bool, WorkspaceError> {
+        let snap = match self.storage.load_snapshot()? {
+            Some(s) => s,
+            None => return Ok(false),
+        };
+        let body = match SnapshotBody::decode(&snap.bytes) {
+            Ok(b) => b,
+            Err(e) => {
+                warn!("snapshot unusable, falling back to full replay: {e}");
+                return Ok(false);
+            }
+        };
+
+        // Hydrate the materialized tree + block text directly from the
+        // snapshot body. No `Edit` ops are replayed for these nodes;
+        // `block_text` already carries their settled string. Convert
+        // BTreeMap → HashMap to match the runtime representation
+        // (ContentStore's hot path is a HashMap lookup).
+        self.tree = Tree::from_parts(
+            body.nodes.into_iter().collect(),
+            body.properties.into_iter().collect(),
+            body.collapsed.into_iter().collect(),
+        );
+        self.content = ContentStore::from_text_map(body.block_text.into_iter().collect());
+
+        // Replay only the ops the snapshot hasn't seen yet. `Edit` ops
+        // in this delta will be re-materialized in the loop below; the
+        // rest of the snapshot's text is still authoritative.
+        let delta = self.storage.ops_since(body.hlc_cutoff)?;
+        let mut edited_in_delta: HashSet<NodeId> = HashSet::new();
+        for op in delta {
+            if let Op::Edit { node, .. } = &op.op {
+                edited_in_delta.insert(*node);
+            }
+            self.tree.apply_op(&mut self.log, op);
+        }
+
+        // Re-materialize only the nodes whose text changed after the
+        // snapshot. Their `Edit` ops are replayed from the *full* log
+        // (Yrs is a CRDT, so re-applying the snapshot-era edits is
+        // idempotent) to keep a single text-derivation path.
+        let rematerialized_count = edited_in_delta.len();
+        for node in edited_in_delta {
+            let indices: Vec<usize> = self
+                .log
+                .iter()
+                .enumerate()
+                .filter_map(|(i, l)| match &l.op {
+                    Op::Edit { node: n, .. } if *n == node => Some(i),
+                    _ => None,
+                })
+                .collect();
+            if !indices.is_empty() {
+                self.content.materialize(
+                    node,
+                    indices.iter().filter_map(|&i| match self.log.get(i) {
+                        Some(LogOp {
+                            op: Op::Edit { text_op, .. },
+                            ..
+                        }) => Some(text_op.as_slice()),
+                        _ => None,
+                    }),
+                );
+            }
+        }
+
+        debug!(
+            "booted from snapshot (cutoff {}, {} nodes, {} delta ops, {rematerialized_count} \
+             nodes re-materialized)",
+            body.hlc_cutoff.physical_ms,
+            self.tree.node_count(),
+            self.log.len(),
+        );
+
+        Ok(true)
+    }
+
+    /// Boot by replaying every op in storage. The historical path; used
+    /// as the snapshot-miss fallback and by `open_in_memory`.
+    fn boot_from_full_replay(&mut self) -> Result<(), WorkspaceError> {
         // Pass 1: structural. Apply every op to the tree (`Edit` is a
         // no-op there) and the log. Text is materialized in pass 2 so the
         // open-time memory peak stays at a single live `Doc` instead of
         // one per block — that peak is what jetsam was killing on iOS.
-        let ops = ws.storage.all_ops()?;
+        let ops = self.storage.all_ops()?;
         for op in ops {
-            ws.tree.apply_op(&mut ws.log, op);
+            self.tree.apply_op(&mut self.log, op);
         }
 
         // Pass 2: text. Group `Edit` ops by node (indices only, no byte
         // copies), then rebuild one `Doc` at a time, materialize its
         // string, and drop it before moving on.
         let mut edits_by_node: HashMap<NodeId, Vec<usize>> = HashMap::new();
-        for (i, logged) in ws.log.iter().enumerate() {
+        for (i, logged) in self.log.iter().enumerate() {
             if let Op::Edit { node, .. } = &logged.op {
                 edits_by_node.entry(*node).or_default().push(i);
             }
         }
         for (node, indices) in edits_by_node {
-            ws.content.materialize(
+            self.content.materialize(
                 node,
-                indices.iter().filter_map(|&i| match ws.log.get(i) {
+                indices.iter().filter_map(|&i| match self.log.get(i) {
                     Some(LogOp {
                         op: Op::Edit { text_op, .. },
                         ..
@@ -104,7 +242,14 @@ impl Workspace {
                 }),
             );
         }
-        Ok(ws)
+
+        // Seed the snapshot counter so a long-lived workspace opened
+        // without a snapshot on disk doesn't have to wait a full
+        // `threshold` worth of new ops before producing one. If the log
+        // already crosses the threshold, the next `apply` snapshots.
+        self.ops_since_snapshot = (self.log.len() as u32).min(self.snapshot_threshold);
+
+        Ok(())
     }
 
     /// Apply an op locally and persist it.
@@ -122,6 +267,146 @@ impl Workspace {
         }
         self.tree.apply_op(&mut self.log, op.clone());
         self.storage.append_op(&op)?;
+
+        // Background snapshot trigger. `snapshot_threshold = 0` is the
+        // opt-out (CLI). When the threshold is crossed we build the
+        // `SnapshotBody` inline (cheap-ish: 3 HashMap clones + text map
+        // clone + one sha256; the *write* is what's expensive) and hand
+        // it off to a worker thread so the user never blocks on fsync.
+        // Failure inside the worker is logged and discarded — snapshot
+        // is a cache, not source of truth.
+        if self.snapshot_threshold > 0 && self.snapshots_dir.is_some() {
+            self.ops_since_snapshot = self.ops_since_snapshot.saturating_add(1);
+            if self.ops_since_snapshot >= self.snapshot_threshold {
+                // Drain finished workers (non-blocking) so the handle
+                // list doesn't grow unbounded over a long session.
+                self.snapshot_workers.retain(|h| !h.is_finished());
+                self.spawn_background_snapshot();
+                self.ops_since_snapshot = 0;
+            }
+        }
+        Ok(())
+    }
+
+    /// Build a `SnapshotBody` from the current materialized state and
+    /// hand it to a worker thread that runs [`snapshot::write_to_disk`].
+    /// Non-blocking: the encode + fsync + rename happen off the calling
+    /// thread. If the body can't be built (e.g. empty log) we no-op.
+    fn spawn_background_snapshot(&mut self) {
+        let cutoff = match self.log.last() {
+            Some(l) => l.ts,
+            None => return,
+        };
+        let snapshots_dir = match &self.snapshots_dir {
+            Some(p) => p.clone(),
+            None => return,
+        };
+        let (nodes, properties, collapsed) = self.tree.snapshot_parts();
+        // Convert to BTreeMap/BTreeSet for canonical (order-stable)
+        // serialization — see `snapshot::SnapshotBody` for why.
+        let body = SnapshotBody::from_parts(
+            self.actor,
+            cutoff,
+            nodes.iter().map(|(k, v)| (*k, v.clone())).collect(),
+            properties
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            collapsed.iter().copied().collect(),
+            self.content
+                .text_map()
+                .iter()
+                .map(|(k, v)| (*k, v.clone()))
+                .collect(),
+        );
+
+        let handle = std::thread::Builder::new()
+            .name(format!("outl-snapshot-{}", self.actor))
+            .spawn(move || {
+                if let Err(e) = snapshot::write_to_disk(&snapshots_dir, &body) {
+                    warn!("background snapshot write failed (non-fatal): {e}");
+                }
+            })
+            .expect("spawn snapshot worker");
+        self.snapshot_workers.push(handle);
+    }
+
+    /// Block until every background snapshot worker finishes.
+    ///
+    /// Call on graceful shutdown so a long-lived client doesn't exit
+    /// with a snapshot write still in flight (which would race the
+    /// process exit and could leave a stale `.tmp` behind). Errors
+    /// inside the workers are already logged; this just joins.
+    pub fn wait_for_snapshots(&mut self) {
+        let workers = std::mem::take(&mut self.snapshot_workers);
+        for h in workers {
+            if let Err(e) = h.join() {
+                warn!("snapshot worker panicked: {e:?}");
+            }
+        }
+    }
+
+    /// Configure when the workspace writes snapshots to disk during
+    /// `apply`. Pass `enabled = false` to opt out (the CLI does this
+    /// — it's ephemeral and shouldn't churn the snapshots dir). The
+    /// threshold is the number of `apply` calls between snapshot
+    /// writes; values smaller than 1 are clamped to 1 so we don't
+    /// snapshot on every single op.
+    ///
+    /// Reads `[snapshot]` from `outl.toml` via `outl-config` — clients
+    /// wire it up after loading config:
+    ///
+    /// ```ignore
+    /// ws.set_snapshot_policy(cfg.snapshot.enabled, cfg.snapshot.op_threshold);
+    /// ```
+    pub fn set_snapshot_policy(&mut self, enabled: bool, threshold: u32) {
+        self.snapshot_threshold = if enabled { threshold.max(1) } else { 0 };
+        self.ops_since_snapshot = 0;
+    }
+
+    /// Persist a snapshot of the materialized state under the current
+    /// actor, stamped with the latest applied HLC as its cutoff.
+    ///
+    /// Synchronous — used by clients on graceful shutdown (when they're
+    /// about to drop the workspace anyway and don't care that the write
+    /// blocks). For the in-band path, [`Self::apply`] spawns a worker
+    /// thread that calls the same writer without blocking the caller.
+    ///
+    /// A no-op (returns `Ok(())`) when the log is empty — there's
+    /// nothing worth snapshotting and a zero-cutoff snapshot would
+    /// force the next boot to re-replay everything anyway.
+    pub fn save_snapshot(&mut self) -> Result<(), WorkspaceError> {
+        let cutoff = match self.log.last() {
+            Some(l) => l.ts,
+            None => return Ok(()),
+        };
+        let (nodes, properties, collapsed) = self.tree.snapshot_parts();
+        let body = SnapshotBody::from_parts(
+            self.actor,
+            cutoff,
+            nodes.iter().map(|(k, v)| (*k, v.clone())).collect(),
+            properties
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            collapsed.iter().copied().collect(),
+            self.content
+                .text_map()
+                .iter()
+                .map(|(k, v)| (*k, v.clone()))
+                .collect(),
+        );
+        let bytes = body.encode().map_err(|e| {
+            WorkspaceError::Storage(StorageError::Backend(format!("snapshot encode: {e}")))
+        })?;
+        self.storage
+            .save_snapshot(&crate::storage::Snapshot { bytes })?;
+        debug!(
+            "snapshot saved at cutoff {} ({} nodes, {} properties)",
+            cutoff.physical_ms,
+            nodes.len(),
+            properties.len()
+        );
         Ok(())
     }
 

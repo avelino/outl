@@ -352,7 +352,8 @@ What it gives you:
 - **E2E encrypted by default.**
   Every iroh connection is QUIC + TLS 1.3 keyed to the peers' identities.
 - **Vector-clock delta sync, both directions.**
-  On connect, each side exchanges `Storage::last_ts_per_actor()` and streams only the ops the other hasn't seen.
+  On connect, each side exchanges a per-actor clock — max HLC plus a distinct-op count — and streams only the ops the other hasn't seen.
+  The count is a gap detector: a peer holding fewer ops below its own watermark than the sender (an op arrived ahead of a pending backlog) gets that actor's full log resent, and the receiver deduplicates on ingest so nothing is applied twice.
   This is the offline catch-up path: the op log (`ops-<actor>.jsonl`) *is* the buffer, so a device that was off for a week reconnects and pulls exactly the missing ops, no full resync.
 - **Transitive relay of ops.**
   Ops authored by actor C and received via peer B are stored locally as `ops-<C>.jsonl`.
@@ -481,8 +482,9 @@ Both call into `outl_md::reconcile::reconcile_md`, which uses 3-level matching t
 While the app is in the foreground, the iroh transport syncs continuously (catch-up loop + real-time gossip).
 The moment the app backgrounds, iOS suspends its network sockets, so **there is no continuous background P2P** — that's an OS limit, not an outl choice.
 
-What outl does instead is use iOS's sanctioned background mechanism: a `BGProcessingTask`.
-When the system grants a window (it decides when — typically a handful of times a day, on Wi-Fi, often while charging), outl wakes, runs **one forced sync pass** against every paired device, and suspends again.
+What outl does instead is use iOS's two sanctioned background mechanisms: a short `BGAppRefreshTask` (a handful of ~30s windows a day, scheduled around your usage pattern) and a longer `BGProcessingTask` (minutes, typically on Wi-Fi while idle).
+When the system grants either window (it decides when), outl wakes, runs **one forced sync pass** against every paired device, and suspends again — returning the window early as soon as the pass lands.
+A device with no paired peers schedules neither task, so an unpaired install never wakes in the background at all.
 The phone initiates the connection, which is what makes it work even when a peer (a Mac behind NAT) can't reach the phone directly.
 So edits made on another device while your phone was closed are usually already there when you reopen it, without you hitting refresh.
 

@@ -22,6 +22,7 @@
  */
 import type { EmojiHit } from "@outl/shared/api/commands";
 import type { PageMeta } from "@outl/shared/api/types";
+import { refReplacement } from "@outl/shared/autocomplete";
 
 interface WindowWithBridge extends Window {
   __outlSuggesterState?: SuggesterMessage | null;
@@ -57,16 +58,11 @@ export function buildShowMessage(
     action: "show",
     items: items.map((p) => ({
       // `slug` is the value handed back to JS on tap and spliced into
-      // the document. It must match desktop's `refReplacement`
-      // (BlockRow.tsx): journals insert their ISO slug; every other
-      // page inserts its **title**, which renders verbatim inside
-      // `[[…]]` and still resolves through the slugified-match arm of
-      // `open_or_create_by_ref` (so `[[avelino/outl]]` finds the page
-      // stored as `avelino-outl`). Inserting the slug here was the bug
-      // (#88): the chip showed the title but the tap wrote the slug.
-      // `@` mentions always insert the title — `applySuggestion` wraps
-      // it as `[[@<title>]]` and the page identity carries no `@`.
-      slug: p.kind === "journal" && !opts.mention ? p.slug : p.title,
+      // the document. The rule (journals → ISO slug, everything else /
+      // mentions → title; bug #88) lives in the shared `refReplacement`
+      // — the same function the desktop's ref popup calls, so the two
+      // accept paths can't drift.
+      slug: refReplacement(p, opts),
       // Journal pages render under a human-readable title server-side
       // ("Thursday, May 28, 2026"). The mobile UI is anchored on ISO
       // slugs (`2026-05-28`), so show the slug in the chip strip

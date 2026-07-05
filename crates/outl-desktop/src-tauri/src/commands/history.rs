@@ -37,9 +37,9 @@ fn step_history(
     page_id: &str,
     direction: Direction,
 ) -> Result<PageView, String> {
-    let root = storage_root_or_err(state)?;
+    let root = storage_root_or_err(state.inner())?;
     let page = parse_node_id(page_id)?;
-    with_ws_mut(state, |ws| {
+    with_ws_mut(state.inner(), |ws| {
         let current = render_page_md(ws, page);
         let snapshot = {
             let mut map = state.history.lock();

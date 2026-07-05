@@ -14,6 +14,7 @@ pub mod atomic;
 pub mod block_index;
 pub mod diff;
 pub mod emoji;
+pub mod frontmatter;
 pub mod index;
 pub mod inline;
 pub mod lang;
@@ -24,7 +25,9 @@ pub mod reconcile;
 pub mod render;
 pub mod sidecar;
 pub mod slug;
+pub mod tag;
 pub mod view;
+pub mod wikilink;
 
 pub use atomic::write_atomic;
 pub use block_index::{BlockEntry, BlockIndex, BlockReference};
@@ -42,4 +45,5 @@ pub use sidecar::{
     content_hash, file_hash, resolve_sidecar_path, sidecar_path_for, Sidecar, SidecarBlock,
 };
 pub use slug::{slugify, UNTITLED_SLUG};
+pub use tag::text_contains_tag;
 pub use view::{block_to_rows, char_to_line_col, BlockRow, BlockRowKind};

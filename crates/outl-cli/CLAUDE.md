@@ -150,7 +150,8 @@ src/
 │   ├── doctor.rs          # outl doctor
 │   ├── reconcile.rs       # outl reconcile
 │   ├── theme.rs           # outl theme
-│   ├── import.rs          # outl import
+│   ├── import.rs          # outl import (dispatcher; ImportReport re-export)
+│   ├── import/            # common.rs (shared helpers) + logseq.rs + roam.rs + obsidian.rs (+ obsidian/{stems,tests}.rs) — see import/CLAUDE.md
 │   ├── migrate_to_shared.rs
 │   ├── export.rs          # legacy `outl export --to fmt` placeholder
 │   ├── export_v2.rs       # outl export {hugo,md,json}

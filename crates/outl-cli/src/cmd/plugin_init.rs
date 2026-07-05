@@ -7,13 +7,18 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use outl_md::slug::{slugify, UNTITLED_SLUG};
 
 /// Scaffold a plugin named `name` (used for the directory + display name).
 /// `id` is the reverse-DNS plugin id (defaults to `com.example.<slug>`).
 /// `dir` overrides the output directory (defaults to `./<slug>`).
 pub fn run(name: &str, id: Option<&str>, dir: Option<&Path>) -> Result<()> {
+    // The canonical slugifier never returns empty — it falls back to
+    // `UNTITLED_SLUG`. A plugin scaffold named after the fallback is
+    // almost certainly a typo'd name, so keep the loud error unless the
+    // user literally asked for "untitled".
     let slug = slugify(name);
-    if slug.is_empty() {
+    if slug == UNTITLED_SLUG && !name.trim().eq_ignore_ascii_case(UNTITLED_SLUG) {
         bail!("`{name}` has no usable letters/digits for a directory name");
     }
     let id = id
@@ -54,22 +59,6 @@ pub fn run(name: &str, id: Option<&str>, dir: Option<&Path>) -> Result<()> {
 
 fn write(path: &Path, contents: &str) -> Result<()> {
     std::fs::write(path, contents).with_context(|| format!("writing {}", path.display()))
-}
-
-/// Lowercase, keep `[a-z0-9-]`, collapse the rest to single `-`.
-fn slugify(name: &str) -> String {
-    let mut s = String::new();
-    let mut prev_dash = false;
-    for ch in name.chars() {
-        if ch.is_ascii_alphanumeric() {
-            s.push(ch.to_ascii_lowercase());
-            prev_dash = false;
-        } else if !prev_dash && !s.is_empty() {
-            s.push('-');
-            prev_dash = true;
-        }
-    }
-    s.trim_matches('-').to_string()
 }
 
 fn plugin_json(id: &str, name: &str) -> String {
@@ -217,9 +206,30 @@ mod tests {
 
     #[test]
     fn slugify_handles_spaces_and_symbols() {
+        // Regression pins for the plugin-relevant inputs, now served by
+        // the canonical `outl_md::slug::slugify`.
         assert_eq!(slugify("My Cool Plugin!"), "my-cool-plugin");
         assert_eq!(slugify("  Trailing  "), "trailing");
         assert_eq!(slugify("a/b/c"), "a-b-c");
+        // The canonical slugifier folds diacritics instead of collapsing
+        // them to `-` like the deleted local copy did.
+        assert_eq!(slugify("Ação Rápida"), "acao-rapida");
+    }
+
+    #[test]
+    fn all_punctuation_name_is_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("p");
+        let err = run("!!!", None, Some(&dir)).unwrap_err();
+        assert!(err.to_string().contains("no usable letters/digits"));
+    }
+
+    #[test]
+    fn literal_untitled_name_is_allowed() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("untitled");
+        run("Untitled", None, Some(&dir)).unwrap();
+        assert!(dir.join("plugin.json").is_file());
     }
 
     #[test]

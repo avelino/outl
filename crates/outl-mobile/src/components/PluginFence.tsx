@@ -1,14 +1,14 @@
 import { Match, Show, Switch, createResource } from "solid-js";
 
-import type { PluginTransformer } from "../lib/api";
-import { runTransform } from "../lib/transformers";
+import type { PluginTransformer } from "@outl/shared/api/types";
+import { runTransform } from "@outl/shared/plugins/transformer-registry";
 
 /**
  * `<PluginFence />` — renders a fenced code block whose language a plugin
  * content-transformer claims.
  *
  * When a code fence's language matches a registered transformer (looked up in
- * `BlockRow` via {@link transformerForLang}), the body is handed here. We call
+ * `BlockRow` via `transformerFor`), the body is handed here. We call
  * the transformer (cached per `(block id, body)` so it runs at most once per
  * distinct body — `runTransform` owns the cache) and render its descriptor:
  *

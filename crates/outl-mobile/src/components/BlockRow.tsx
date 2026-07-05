@@ -21,10 +21,10 @@ import {
   choosePasteRoute,
   utf16OffsetToCharOffset,
 } from "@outl/shared/paste";
+import { rawTextWithTodo } from "@outl/shared/outline";
+import { transformerFor } from "@outl/shared/plugins/transformer-registry";
 import { haptic } from "../lib/haptics";
-import { rawTextWithTodo } from "../lib/outline";
 import { parkCaret } from "../lib/textarea";
-import { transformerForLang } from "../lib/transformers";
 import { PluginFence } from "./PluginFence";
 import { SwipeRow } from "./SwipeRow";
 
@@ -318,7 +318,7 @@ function BlockBody(props: {
                   // language: render its descriptor inline (text/markdown
                   // or a sandboxed iframe for `rich`), falling back to the
                   // plain highlighted code while it loads or if it declines.
-                  const transformer = transformerForLang(fence.language);
+                  const transformer = transformerFor(fence.language);
                   if (transformer) {
                     return (
                       <PluginFence

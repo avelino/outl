@@ -6010,6 +6010,7 @@ dependencies = [
 name = "outl-core"
 version = "0.7.0"
 dependencies = [
+ "bincode",
  "chrono",
  "fs2",
  "hex",
@@ -6042,6 +6043,7 @@ dependencies = [
  "outl-plugins",
  "outl-shortcuts",
  "outl-sync-iroh",
+ "outl-tauri-shared",
  "outl-theme",
  "parking_lot",
  "rustls",
@@ -6095,6 +6097,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.18",
@@ -6117,6 +6120,7 @@ dependencies = [
  "outl-md",
  "outl-plugins",
  "outl-sync-iroh",
+ "outl-tauri-shared",
  "parking_lot",
  "rustls",
  "serde",
@@ -6184,6 +6188,29 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "outl-tauri-shared"
+version = "0.7.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "outl-actions",
+ "outl-config",
+ "outl-core",
+ "outl-exec",
+ "outl-md",
+ "outl-plugins",
+ "outl-shortcuts",
+ "outl-sync-iroh",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tempfile",
+ "tracing",
+ "ulid",
 ]
 
 [[package]]

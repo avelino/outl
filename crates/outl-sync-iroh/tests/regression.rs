@@ -399,7 +399,220 @@ async fn concurrent_appends_never_glue_ops_on_the_responder() {
     );
 }
 
+/// Saga bug #9 — ops below a receiver's max-HLC watermark were permanently
+/// invisible after an out-of-order delivery (the v1 bare-max vector clock).
+///
+/// A holds ops 1..10 of actor X; B ingested ONLY op 10 (out of order — a
+/// newer op landed ahead of the pending backlog, exactly the production
+/// state: 4 timestamp retrocessions in the phone's file on the Mac). Under
+/// the v1 clock B's watermark said "I have everything ≤ ts10" and the sender
+/// never resent 1..9 — permanently invisible. The v2 `ActorClock` count lets
+/// A see `below(10) > count(1)` and fall back to the full actor log; B's
+/// ingest dedup absorbs the overlap, so B ends with exactly the 10 ops, no
+/// duplicates.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn backlog_below_watermark_crosses_after_gap_detected() {
+    let dir_a = tempfile::tempdir().expect("A tempdir");
+    let dir_b = tempfile::tempdir().expect("B tempdir");
+
+    let actor_a = ActorId::new();
+    let actor_b = ActorId::new();
+    let actor_x = ActorId::new();
+
+    let ops = build_ops(actor_x, 10);
+    append_ops(dir_a.path(), actor_x, &ops);
+    // B holds ONLY the newest op — its max watermark, with a 9-op gap below.
+    append_ops(dir_b.path(), actor_x, &ops[9..]);
+
+    sync_a_into_b(dir_a.path(), dir_b.path(), actor_a, actor_b).await;
+
+    let all_nodes = created_node_set(&ops);
+    assert!(
+        wait_until(STEP_TIMEOUT, || {
+            disk_has_all_nodes(dir_b.path(), actor_b, &all_nodes)
+        }),
+        "B must receive the 9-op backlog below its own watermark (gap detection)"
+    );
+    let (lines, distinct) = ops_file_census(dir_b.path(), actor_x);
+    assert_eq!(distinct, 10, "B holds all 10 distinct ops of actor X");
+    assert_eq!(
+        lines, 10,
+        "the full-log resend must not duplicate B's already-present op"
+    );
+}
+
+/// Saga bug #9 (ingest half) — the receiver drops ops already on disk AND
+/// duplicates within the same batch.
+///
+/// A's log for actor X carries a historic duplicated line (op3 twice — the
+/// residue of two pre-lock concurrent pulls) plus ops 1..2 that B already
+/// holds. The fast path ships op3 twice in one batch; B must apply it once.
+/// Neither side may grow duplicate lines out of the exchange.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ingest_dedups_already_present_ops() {
+    let dir_a = tempfile::tempdir().expect("A tempdir");
+    let dir_b = tempfile::tempdir().expect("B tempdir");
+
+    let actor_a = ActorId::new();
+    let actor_b = ActorId::new();
+    let actor_x = ActorId::new();
+
+    let ops = build_ops(actor_x, 3);
+    append_ops(dir_a.path(), actor_x, &ops);
+    // Historic duplicated append: op3 exists TWICE on A's disk.
+    append_ops(dir_a.path(), actor_x, &ops[2..]);
+    // B already holds ops 1..2.
+    append_ops(dir_b.path(), actor_x, &ops[..2]);
+
+    sync_a_into_b(dir_a.path(), dir_b.path(), actor_a, actor_b).await;
+
+    let all_nodes = created_node_set(&ops);
+    assert!(
+        wait_until(STEP_TIMEOUT, || {
+            disk_has_all_nodes(dir_b.path(), actor_b, &all_nodes)
+        }),
+        "B must receive the one op it was missing"
+    );
+    let (b_lines, b_distinct) = ops_file_census(dir_b.path(), actor_x);
+    assert_eq!(b_distinct, 3, "B holds all 3 distinct ops of actor X");
+    assert_eq!(
+        b_lines, 3,
+        "the in-batch duplicate of op3 must be applied exactly once"
+    );
+    // A's file is untouched: B had nothing A lacks, and the reverse pull must
+    // not re-append what A already holds (its historic dup stays as-is).
+    let (a_lines, a_distinct) = ops_file_census(dir_a.path(), actor_x);
+    assert_eq!(a_distinct, 3, "A still holds 3 distinct ops");
+    assert_eq!(
+        a_lines, 4,
+        "A's pre-existing historic dup line is untouched"
+    );
+}
+
+/// Saga bug #9 (fallback half) — the full-actor resend converges the receiver
+/// without duplicating the ops it already had.
+///
+/// A holds ops 1..10 of actor X; B holds only 5..10 (has the max, missing the
+/// 1..4 prefix). B's clock says `(max=ts10, count=6)`; A counts 10 distinct
+/// ops ≤ ts10 → gap → resends the FULL actor log. B's dedup keeps its 6 and
+/// appends exactly the missing 4: 10 lines total, never 16.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn full_actor_resend_converges_and_dedups() {
+    let dir_a = tempfile::tempdir().expect("A tempdir");
+    let dir_b = tempfile::tempdir().expect("B tempdir");
+
+    let actor_a = ActorId::new();
+    let actor_b = ActorId::new();
+    let actor_x = ActorId::new();
+
+    let ops = build_ops(actor_x, 10);
+    append_ops(dir_a.path(), actor_x, &ops);
+    // B holds the newest 6, missing the 4-op prefix below its watermark.
+    append_ops(dir_b.path(), actor_x, &ops[4..]);
+
+    sync_a_into_b(dir_a.path(), dir_b.path(), actor_a, actor_b).await;
+
+    let all_nodes = created_node_set(&ops);
+    assert!(
+        wait_until(STEP_TIMEOUT, || {
+            disk_has_all_nodes(dir_b.path(), actor_b, &all_nodes)
+        }),
+        "B must converge to the full 10-op actor log"
+    );
+    let (lines, distinct) = ops_file_census(dir_b.path(), actor_x);
+    assert_eq!(distinct, 10, "B holds all 10 distinct ops of actor X");
+    assert_eq!(
+        lines, 10,
+        "full-log fallback must dedup the 6 ops B already had (10 lines, not 16)"
+    );
+}
+
 // ── Saga-specific helpers (kept out of shared `common/` on purpose) ───────────
+
+/// Bind A + B endpoints, mount the production responder on B, and run one
+/// initiator `delta_sync` pass A → B. Shared driver for the gap-detection
+/// (saga bug #9) tests; each test only differs in how it seeds the two disks
+/// and what it asserts afterwards.
+async fn sync_a_into_b(dir_a: &Path, dir_b: &Path, actor_a: ActorId, actor_b: ActorId) {
+    let id_a = fresh_identity(dir_a, "a");
+    let id_b = fresh_identity(dir_b, "b");
+
+    let (b_ready_tx, _b_ready_rx) = mpsc::channel::<()>();
+    let ep_b = test_support::bind_sync_endpoint(&id_b)
+        .await
+        .expect("bind B endpoint");
+    let b_addr = ep_b.addr();
+    let _router_b =
+        test_support::spawn_responder(ep_b, dir_b.to_path_buf(), shared_wid(), actor_b, b_ready_tx);
+
+    let (a_ready_tx, _a_ready_rx) = mpsc::channel::<()>();
+    let ep_a = test_support::bind_sync_endpoint(&id_a)
+        .await
+        .expect("bind A endpoint");
+    tokio::time::timeout(
+        STEP_TIMEOUT,
+        test_support::run_delta_sync(&ep_a, b_addr, dir_a, &shared_wid(), actor_a, a_ready_tx),
+    )
+    .await
+    .expect("delta sync timed out")
+    .expect("delta sync failed");
+}
+
+/// Build `count` `Op::Create` ops authored by `actor` with monotonic HLCs
+/// anchored at the current wall clock (passes the ±24h ingest gate). Returned
+/// in ts order so a test can plant arbitrary subsets — a backlog, just the
+/// watermark op — on different disks.
+fn build_ops(actor: ActorId, count: u32) -> Vec<LogOp> {
+    let base_ms = common::now_ms();
+    (0..count)
+        .map(|i| LogOp {
+            ts: Hlc::new(base_ms + i as u64, i, actor),
+            actor,
+            op: Op::Create {
+                node: NodeId::new(),
+                parent: NodeId::root(),
+                position: Fractional::first(),
+            },
+        })
+        .collect()
+}
+
+/// Append pre-built ops verbatim into `<root>/ops/ops-<actor>.jsonl` via the
+/// production `JsonlStorage`. Appending the same op twice plants a historic
+/// duplicated line, exactly like a pre-lock concurrent pull did.
+fn append_ops(root: &Path, actor: ActorId, ops: &[LogOp]) {
+    let mut storage = JsonlStorage::open(root.join("ops"), actor).expect("open storage");
+    for op in ops {
+        storage.append_op(op).expect("append op");
+    }
+}
+
+/// Node-id set of the `Op::Create` ops in `ops` (for `disk_has_all_nodes`).
+fn created_node_set(ops: &[LogOp]) -> BTreeSet<String> {
+    ops.iter()
+        .map(|log| match log.op {
+            Op::Create { node, .. } => node.to_string(),
+            _ => unreachable!("build_ops only mints Create ops"),
+        })
+        .collect()
+}
+
+/// Raw census of `<root>/ops/ops-<actor>.jsonl`: `(physical line count,
+/// distinct HLC count)`. The PHYSICAL line count is the dedup assertion —
+/// reading through `all_ops` would mask a duplicated append, since the op log
+/// dedups by op id on apply.
+fn ops_file_census(root: &Path, actor: ActorId) -> (usize, usize) {
+    let path = root.join("ops").join(format!("ops-{actor}.jsonl"));
+    let text = std::fs::read_to_string(&path).expect("read ops file");
+    let mut lines = 0usize;
+    let mut distinct: BTreeSet<Hlc> = BTreeSet::new();
+    for line in text.lines().filter(|l| !l.is_empty()) {
+        lines += 1;
+        let op: LogOp = serde_json::from_str(line).expect("parse op line");
+        distinct.insert(op.ts);
+    }
+    (lines, distinct.len())
+}
 
 /// A wall-clock ms timestamp comfortably past the receiver's 24h sanity gate
 /// (~48h ahead) so the op is unambiguously "far future".

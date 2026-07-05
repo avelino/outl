@@ -1,4 +1,13 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
+import {
+  DAY_LABELS,
+  MONTH_NAMES,
+  daysInMonth,
+  formatJournalSlug,
+  nextMonth,
+  parseJournalSlug,
+  prevMonth,
+} from "@outl/shared/journal";
 import { createSheetDrag } from "../lib/sheet-drag";
 
 interface CalendarProps {
@@ -17,37 +26,6 @@ interface CalendarProps {
   onPick: (slug: string) => void;
 }
 
-const DAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
-const MONTH_NAMES = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
-
-function parseSlug(slug: string | null): { year: number; month: number } | null {
-  if (!slug) return null;
-  const m = slug.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return null;
-  const year = Number(m[1]);
-  const month = Number(m[2]) - 1;
-  if (Number.isNaN(year) || Number.isNaN(month)) return null;
-  return { year, month };
-}
-
-function formatSlug(year: number, month: number, day: number): string {
-  const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${year}-${pad(month + 1)}-${pad(day)}`;
-}
-
 /**
  * Bottom-sheet mini-calendar. Navigates month-by-month and emits a
  * `YYYY-MM-DD` slug on tap. Today and the currently-viewed day are
@@ -60,12 +38,13 @@ function formatSlug(year: number, month: number, day: number): string {
  * `PageSwitcher` sheet so the two sheets feel like one family.
  */
 export function Calendar(props: CalendarProps) {
-  const initial = parseSlug(props.selectedSlug) ?? parseSlug(props.todaySlug);
+  const initial =
+    parseJournalSlug(props.selectedSlug) ?? parseJournalSlug(props.todaySlug);
   const [year, setYear] = createSignal(
     initial?.year ?? new Date().getFullYear(),
   );
   const [month, setMonth] = createSignal(
-    initial?.month ?? new Date().getMonth(),
+    initial?.monthIndex ?? new Date().getMonth(),
   );
 
   // When the sheet reopens (e.g. user navigated via header chevron and
@@ -74,10 +53,12 @@ export function Calendar(props: CalendarProps) {
   let lastOpen = props.open;
   createMemo(() => {
     if (props.open && !lastOpen) {
-      const next = parseSlug(props.selectedSlug) ?? parseSlug(props.todaySlug);
+      const next =
+        parseJournalSlug(props.selectedSlug) ??
+        parseJournalSlug(props.todaySlug);
       if (next) {
         setYear(next.year);
-        setMonth(next.month);
+        setMonth(next.monthIndex);
       }
     }
     lastOpen = props.open;
@@ -86,33 +67,22 @@ export function Calendar(props: CalendarProps) {
   const days = createMemo(() => {
     const firstDay = new Date(year(), month(), 1);
     const firstWeekday = firstDay.getDay();
-    const daysInMonth = new Date(year(), month() + 1, 0).getDate();
+    const total = daysInMonth(year(), month());
     const cells: Array<{ day: number; slug: string } | null> = [];
     for (let i = 0; i < firstWeekday; i += 1) cells.push(null);
-    for (let d = 1; d <= daysInMonth; d += 1) {
-      cells.push({ day: d, slug: formatSlug(year(), month(), d) });
+    for (let d = 1; d <= total; d += 1) {
+      cells.push({ day: d, slug: formatJournalSlug(year(), month(), d) });
     }
     // Pad to whole weeks so the grid stays rectangular.
     while (cells.length % 7 !== 0) cells.push(null);
     return cells;
   });
 
-  function prevMonth() {
-    if (month() === 0) {
-      setYear((y) => y - 1);
-      setMonth(11);
-    } else {
-      setMonth((m) => m - 1);
-    }
-  }
-
-  function nextMonth() {
-    if (month() === 11) {
-      setYear((y) => y + 1);
-      setMonth(0);
-    } else {
-      setMonth((m) => m + 1);
-    }
+  function stepMonth(dir: -1 | 1) {
+    const next =
+      dir === -1 ? prevMonth(year(), month()) : nextMonth(year(), month());
+    setYear(next.year);
+    setMonth(next.monthIndex);
   }
 
   function jumpToTodayMonth() {
@@ -164,7 +134,7 @@ export function Calendar(props: CalendarProps) {
           <button
             type="button"
             aria-label="Previous month"
-            onClick={prevMonth}
+            onClick={() => stepMonth(-1)}
             class="rounded-full p-2 text-(--color-ios-accent) active:opacity-50 dark:text-(--color-iosd-accent)"
           >
             <svg
@@ -191,7 +161,7 @@ export function Calendar(props: CalendarProps) {
           <button
             type="button"
             aria-label="Next month"
-            onClick={nextMonth}
+            onClick={() => stepMonth(1)}
             class="rounded-full p-2 text-(--color-ios-accent) active:opacity-50 dark:text-(--color-iosd-accent)"
           >
             <svg

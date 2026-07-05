@@ -103,7 +103,7 @@ fn lists_dev_plugin_command() {
     let dir = TempDir::new().unwrap();
     write_dev_plugin(dir.path());
     let (ws, root, hlc) = slots(dir.path());
-    let svc = PluginService::spawn(ws, root, hlc);
+    let svc = spawn_plugin_service(ws, root, hlc);
 
     let cmds = svc.list_commands();
     assert!(
@@ -154,7 +154,7 @@ fn lists_installed_plugin_command() {
     )
     .unwrap();
 
-    let svc = PluginService::spawn(ws, root, hlc);
+    let svc = spawn_plugin_service(ws, root, hlc);
     let cmds = svc.list_commands();
     assert!(
         cmds.iter().any(|c| c.title == "Workspace statistics"),
@@ -167,7 +167,7 @@ fn lists_dev_plugin_keybinding() {
     let dir = TempDir::new().unwrap();
     write_dev_plugin(dir.path());
     let (ws, root, hlc) = slots(dir.path());
-    let svc = PluginService::spawn(ws, root, hlc);
+    let svc = spawn_plugin_service(ws, root, hlc);
 
     let binds = svc.list_keybindings();
     let kb = binds
@@ -193,7 +193,7 @@ fn lists_dev_plugin_toolbar_button() {
     let dir = TempDir::new().unwrap();
     write_dev_plugin(dir.path());
     let (ws, root, hlc) = slots(dir.path());
-    let svc = PluginService::spawn(ws, root, hlc);
+    let svc = spawn_plugin_service(ws, root, hlc);
 
     let buttons = svc.list_toolbar();
     let tb = buttons
@@ -210,7 +210,7 @@ fn run_command_surfaces_notification() {
     let dir = TempDir::new().unwrap();
     write_dev_plugin(dir.path());
     let (ws, root, hlc) = slots(dir.path());
-    let svc = PluginService::spawn(ws, root, hlc);
+    let svc = spawn_plugin_service(ws, root, hlc);
 
     let run = svc
         .run_command("run.avelino.hello".into(), "say-hi".into())
@@ -227,7 +227,7 @@ fn run_unknown_command_is_a_clean_error() {
     let dir = TempDir::new().unwrap();
     write_dev_plugin(dir.path());
     let (ws, root, hlc) = slots(dir.path());
-    let svc = PluginService::spawn(ws, root, hlc);
+    let svc = spawn_plugin_service(ws, root, hlc);
 
     let err = svc
         .run_command("run.avelino.hello".into(), "nope".into())
@@ -244,7 +244,7 @@ fn sync_hooks_never_panics_with_no_plugins() {
     let dir = TempDir::new().unwrap();
     // No plugin written — empty host.
     let (ws, root, hlc) = slots(dir.path());
-    let svc = PluginService::spawn(ws, root, hlc);
+    let svc = spawn_plugin_service(ws, root, hlc);
     svc.sync_hooks();
     // Thread is still alive afterwards.
     assert!(svc.list_commands().is_empty());
@@ -285,7 +285,7 @@ fn lists_dev_plugin_transformer() {
     let dir = TempDir::new().unwrap();
     write_transformer_plugin(dir.path());
     let (ws, root, hlc) = slots(dir.path());
-    let svc = PluginService::spawn(ws, root, hlc);
+    let svc = spawn_plugin_service(ws, root, hlc);
 
     let transformers = svc.list_transformers();
     let t = transformers
@@ -301,7 +301,7 @@ fn transform_block_runs_text_transformer() {
     let dir = TempDir::new().unwrap();
     write_transformer_plugin(dir.path());
     let (ws, root, hlc) = slots(dir.path());
-    let svc = PluginService::spawn(ws, root, hlc);
+    let svc = spawn_plugin_service(ws, root, hlc);
 
     let out = svc
         .transform_block("run.avelino.upper".into(), "upper".into(), "hello".into())
@@ -316,7 +316,7 @@ fn transform_block_unknown_lang_is_none() {
     let dir = TempDir::new().unwrap();
     write_transformer_plugin(dir.path());
     let (ws, root, hlc) = slots(dir.path());
-    let svc = PluginService::spawn(ws, root, hlc);
+    let svc = spawn_plugin_service(ws, root, hlc);
 
     // The plugin owns `upper`, not `mermaid` — declined → Ok(None).
     let out = svc

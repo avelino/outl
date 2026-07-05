@@ -13,7 +13,7 @@
 //! delete / re-parent semantics for free, and the wire format stays
 //! one Op log. Pages are just nodes with a marker property.
 
-use chrono::{Duration, NaiveDate};
+use chrono::NaiveDate;
 use outl_core::hlc::HlcGenerator;
 use outl_core::id::NodeId;
 use outl_core::op::{LogOp, Op};
@@ -23,6 +23,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::block::create_with_explicit_id;
+use crate::dates::{journal_slug, journal_title};
 use crate::error::ActionError;
 use crate::tree::{children_of, position_for_new_last_child};
 
@@ -320,107 +321,10 @@ pub fn open_or_create(
     Ok(node)
 }
 
-/// Open (or create) a page identified by a user-typed **name** —
-/// the kind of string that arrives from a `[[ref]]`, a `#tag`, or a
-/// page-picker text field.
-///
-/// The name flows through [`outl_md::slug::slugify`] before reaching
-/// [`open_or_create`], so anything filesystem-hostile (`/`, `\`,
-/// spaces, accented letters, control chars) is normalised into a
-/// safe single path component. The **original** `name` is kept as the
-/// page's `title` so the user-facing rendering stays verbatim
-/// (`[[avelino/outl]]` displays as `avelino/outl` even though the
-/// disk slug is `avelino-outl`).
-///
-/// Use this whenever the caller has a human-typed string and wants
-/// "open it or create it on the fly" semantics — the [`open_or_create`]
-/// path requires a pre-validated slug and rejects raw user input. The
-/// TUI's `Enter`-on-ref handler and the mobile's `open_page_by_slug`
-/// command are both fed by this function so the two clients can't
-/// drift on what counts as a valid ref target.
-pub fn open_or_create_by_name(
-    workspace: &mut Workspace,
-    hlc: &HlcGenerator,
-    name: &str,
-    kind: PageKind,
-) -> Result<NodeId, ActionError> {
-    let slug = outl_md::slug::slugify(name);
-    open_or_create(workspace, hlc, &slug, name, kind)
-}
-
-/// Open (or create) whatever page a user-typed **ref target** points
-/// at — `[[avelino/outl]]`, `[[2026-06-04]]`, `[[São Paulo]]`,
-/// `[[Q4 plan]]`, a `#tag` body, a picker query. Routes through one
-/// of:
-///
-/// 1. **Date-shaped target → journal**. `date_from_slug` is the
-///    semantic validator (not the regex-shape one the mobile
-///    frontend used to use), so `2026-13-01` and `2026-02-30` fall
-///    through instead of erroring out.
-/// 2. **Literal slug match → existing page**. Covers picker-style
-///    callers that already passed a clean slug.
-/// 3. **Slugified match → existing page**. So `[[avelino/outl]]`
-///    finds the page stored as `avelino-outl` even when the user
-///    typed the ref before the page existed.
-/// 4. **Case-insensitive title match → existing page**. Last
-///    existing-page chance before we create.
-/// 5. **Create a fresh page via [`open_or_create_by_name`]** with
-///    the typed string as the title. Always succeeds for any ref a
-///    user could plausibly type — the surface should never bubble
-///    `invalid …` back to a tap.
-///
-/// One canonical decision tree, used by every client, so the
-/// "Journal vs Page" discrimination cannot drift between frontend
-/// regex and backend parser the way it did in the
-/// `[[2026-13-01]] → invalid date slug` toast bug.
-pub fn open_or_create_by_ref(
-    workspace: &mut Workspace,
-    hlc: &HlcGenerator,
-    target: &str,
-) -> Result<NodeId, ActionError> {
-    if let Some(date) = date_from_slug(target) {
-        return open_journal(workspace, hlc, date);
-    }
-    // **Mention sugar — must run BEFORE the generic slug/title match.**
-    //
-    // `slugify("@avelino")` strips the `@`, returning `"avelino"`. If we
-    // ran the generic `find_by_slug(slugify(target))` branch first, a
-    // pre-existing `pages/avelino.md` (created before this feature, or
-    // by an external editor without `type:: person`) would resolve via
-    // the generic path and return early — never reaching the arm that
-    // marks it as a person. The autocomplete popup would then never
-    // surface that page on the next `@` keystroke, even though the
-    // user just resolved a mention against it. Keep this arm first.
-    if let Some(rest) = target.strip_prefix('@') {
-        if !rest.is_empty() {
-            return crate::person::ensure_person_by_name(workspace, hlc, rest);
-        }
-        // `[[@]]` — empty name. Fall through to the generic path,
-        // which will create an `untitled` page via slugifier. Not
-        // great UX but consistent with `[[]]`; refusing here would
-        // require an extra error path the callers don't model.
-    }
-    if let Some(id) = find_by_slug(workspace, target) {
-        return Ok(id);
-    }
-    let normalised = outl_md::slug::slugify(target);
-    if normalised != target {
-        if let Some(id) = find_by_slug(workspace, &normalised) {
-            return Ok(id);
-        }
-    }
-    let lower = target.to_lowercase();
-    if let Some(existing) = list_all(workspace)
-        .into_iter()
-        .find(|p| p.title.to_lowercase() == lower)
-    {
-        use std::str::FromStr;
-        if let Ok(id) = ulid::Ulid::from_str(&existing.id) {
-            return Ok(NodeId(id));
-        }
-    }
-    open_or_create_by_name(workspace, hlc, target, PageKind::Page)
-}
+// `open_or_create_by_name` / `open_or_create_by_ref` and the shared
+// resolution ladder live in the sibling `resolve` module; `person`
+// owns the `type:: person` policy. Both are re-exported at the crate
+// root via `lib.rs`.
 
 fn set_prop(
     workspace: &mut Workspace,
@@ -492,18 +396,10 @@ pub fn read_text_prop(workspace: &Workspace, node: NodeId, key: &str) -> Option<
 // ---------------------------------------------------------------------------
 // Journal helpers
 // ---------------------------------------------------------------------------
-
-/// Slug for `date` using the canonical `YYYY-MM-DD` shape.
-pub fn journal_slug(date: NaiveDate) -> String {
-    date.format("%Y-%m-%d").to_string()
-}
-
-/// Display title for `date`. We use ISO `YYYY-MM-DD` because it
-/// matches the slug 1:1, sorts naturally, and stays compact in
-/// constrained UI (mobile header).
-pub fn journal_title(date: NaiveDate) -> String {
-    date.format("%Y-%m-%d").to_string()
-}
+// The pure date labels (`journal_slug`, `journal_title`, `journal_ref`,
+// `date_from_slug`, `previous_journal_date`, `next_journal_date`) live
+// in `crate::dates` — this module keeps only the workspace-touching
+// journal operations.
 
 /// Today's date in the user's configured timezone (falling back to the
 /// OS local timezone). Delegates to [`crate::clock`] so the journal's
@@ -530,21 +426,6 @@ pub fn open_journal(
         &journal_title(date),
         PageKind::Journal,
     )
-}
-
-/// Parse a `YYYY-MM-DD` slug back into a `NaiveDate`.
-pub fn date_from_slug(slug: &str) -> Option<NaiveDate> {
-    NaiveDate::parse_from_str(slug, "%Y-%m-%d").ok()
-}
-
-/// Previous calendar day relative to `date`.
-pub fn previous_journal_date(date: NaiveDate) -> NaiveDate {
-    date - Duration::days(1)
-}
-
-/// Next calendar day relative to `date`.
-pub fn next_journal_date(date: NaiveDate) -> NaiveDate {
-    date + Duration::days(1)
 }
 
 /// Sweep any legacy children of [`NodeId::root`] that aren't pages
@@ -624,73 +505,9 @@ mod tests {
         assert_eq!(pages[0].kind, PageKind::Page);
     }
 
-    #[test]
-    fn open_or_create_by_ref_routes_valid_date_to_journal() {
-        // Use a fixed past date so the intent ("any valid YYYY-MM-DD
-        // → journal") is obvious. Today's date would compile and pass
-        // but suggests a system-clock coupling the function does not
-        // actually have.
-        let (mut w, hlc) = ws();
-        let id = open_or_create_by_ref(&mut w, &hlc, "2020-01-01").unwrap();
-        let meta = page_meta(&w, id).unwrap();
-        assert_eq!(meta.kind, PageKind::Journal);
-        assert_eq!(meta.slug, "2020-01-01");
-    }
-
-    #[test]
-    fn open_or_create_by_ref_falls_through_invalid_date_to_page() {
-        // Regression: the mobile frontend used to gate this with the
-        // shape regex `/^\d{4}-\d{2}-\d{2}$/`. `2026-13-01` (month 13)
-        // and `2026-02-30` (day 30 in Feb) passed the shape, then
-        // `parse_date` rejected them and the user saw an
-        // `invalid date slug` toast. The shared helper has the only
-        // discrimination path, so an invalid date becomes a regular
-        // page just like any other ref.
-        let (mut w, hlc) = ws();
-        let bogus = "2026-13-01";
-        let id = open_or_create_by_ref(&mut w, &hlc, bogus).unwrap();
-        let meta = page_meta(&w, id).unwrap();
-        assert_eq!(meta.kind, PageKind::Page);
-        assert_eq!(meta.title, bogus);
-        assert_eq!(meta.slug, "2026-13-01");
-    }
-
-    #[test]
-    fn open_or_create_by_ref_resolves_existing_via_slugified_form() {
-        let (mut w, hlc) = ws();
-        // Create with the human name first.
-        let created = open_or_create_by_name(&mut w, &hlc, "avelino/outl", PageKind::Page).unwrap();
-        // Subsequent tap of `[[avelino/outl]]` finds the same node
-        // (not a fresh ULID under a different slug).
-        let resolved = open_or_create_by_ref(&mut w, &hlc, "avelino/outl").unwrap();
-        assert_eq!(created, resolved);
-    }
-
-    #[test]
-    fn open_or_create_by_ref_matches_title_case_insensitively() {
-        let (mut w, hlc) = ws();
-        let created = open_or_create_by_name(&mut w, &hlc, "Ideas", PageKind::Page).unwrap();
-        let resolved = open_or_create_by_ref(&mut w, &hlc, "ideas").unwrap();
-        assert_eq!(created, resolved);
-    }
-
-    #[test]
-    fn open_or_create_by_name_slugifies_filesystem_hostile_input() {
-        // Regression: clicking `[[avelino/outl]]` on mobile used to
-        // bubble the `/` straight into `is_valid_slug` and surface
-        // `invalid page slug` as a toast. The helper must normalise
-        // the disk slug while keeping the typed name as the title so
-        // the ref renders verbatim everywhere.
-        let (mut w, hlc) = ws();
-        let id = open_or_create_by_name(&mut w, &hlc, "avelino/outl", PageKind::Page).unwrap();
-        let meta = page_meta(&w, id).unwrap();
-        assert_eq!(meta.slug, "avelino-outl");
-        assert_eq!(meta.title, "avelino/outl");
-        // Calling again with the same human-typed name must return the
-        // same node (idempotent on the slugified form, not the raw input).
-        let second = open_or_create_by_name(&mut w, &hlc, "avelino/outl", PageKind::Page).unwrap();
-        assert_eq!(id, second);
-    }
+    // Resolution of user-typed names / ref targets (`open_or_create_by_name`,
+    // `open_or_create_by_ref`, the shared ladder) is tested in
+    // `crate::resolve::tests`; the person-typed arm in `crate::person::tests`.
 
     #[test]
     fn page_meta_prefers_title_property_over_node_text() {

@@ -54,6 +54,16 @@ pub struct Tree {
     pub(super) collapsed: HashSet<NodeId>,
 }
 
+/// Borrowed view of the three interior maps, returned by
+/// [`Tree::snapshot_parts`]. Used by the snapshot path so it can
+/// serialize the materialized tree without reaching into private
+/// fields.
+pub(crate) type TreeParts<'a> = (
+    &'a HashMap<NodeId, (NodeId, Fractional)>,
+    &'a HashMap<(NodeId, String), PropValue>,
+    &'a HashSet<NodeId>,
+);
+
 impl Tree {
     /// Build an empty tree.
     ///
@@ -125,5 +135,29 @@ impl Tree {
     /// Total number of property bindings.
     pub fn property_count(&self) -> usize {
         self.properties.len()
+    }
+
+    /// Borrow the three interior maps as a tuple, in the order
+    /// `(nodes, properties, collapsed)`. Used by the snapshot path to
+    /// serialize the materialized tree without exposing the private
+    /// field names beyond this crate.
+    pub(crate) fn snapshot_parts(&self) -> TreeParts<'_> {
+        (&self.nodes, &self.properties, &self.collapsed)
+    }
+
+    /// Rebuild a `Tree` directly from its three interior maps. Used by
+    /// the snapshot path to hydrate the materialized state without
+    /// replaying the op log. The maps are trusted: callers must ensure
+    /// they came from a valid (validated-content-hash) snapshot.
+    pub(crate) fn from_parts(
+        nodes: HashMap<NodeId, (NodeId, Fractional)>,
+        properties: HashMap<(NodeId, String), PropValue>,
+        collapsed: HashSet<NodeId>,
+    ) -> Self {
+        Self {
+            nodes,
+            properties,
+            collapsed,
+        }
     }
 }

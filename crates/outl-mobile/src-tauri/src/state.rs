@@ -1,23 +1,21 @@
-//! Shared state held by Tauri across commands.
+//! Mobile `AppState` + its [`AppHost`] projection.
 //!
-//! Split out of `lib.rs` so the file-size guard stays happy and every
-//! `commands::*` module can `use crate::state::*` without dragging
-//! `lib.rs` into the import graph.
+//! The wire types (`PageView`, `CreateBlockReply`, `WorkspaceSummary`,
+//! `ERR_LOADING`) live in `outl-tauri-shared` and are re-exported here
+//! so the rest of the crate keeps importing them from `crate::state`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use outl_actions::{Backlink, OutlineNode, PageMeta};
+use outl_actions::SyncTransport;
 use outl_core::hlc::HlcGenerator;
 use outl_core::workspace::Workspace;
 use outl_exec::RuntimeRegistry;
 use outl_sync_iroh::IrohSyncTransport;
+use outl_tauri_shared::AppHost;
 use parking_lot::Mutex;
-use serde::Serialize;
 
-/// Sentinel error returned by every workspace-touching command while
-/// the workspace is still being opened on the background thread.
-pub(crate) const ERR_LOADING: &str = "workspace_loading";
+pub(crate) use outl_tauri_shared::{CreateBlockReply, PageView, WorkspaceSummary};
 
 /// Shared mutable state held by Tauri.
 ///
@@ -27,9 +25,10 @@ pub(crate) const ERR_LOADING: &str = "workspace_loading";
 /// previously chose (`WorkspaceCfg.last`), or the app-local default
 /// `<app-data-dir>/outl/` on a fresh install. Don't copy desktop's
 /// `Arc<Mutex<Option<PathBuf>>>` shape — the single-root divergence is
-/// deliberate. Switching folders at runtime is a `workspace-reopen-required`
-/// event + relaunch today (see `workspace_picker`); a live swap would be
-/// what flips this to the desktop shape.
+/// deliberate and absorbed by the shared `AppHost` trait. Switching
+/// folders at runtime is a `workspace-reopen-required` event + relaunch
+/// today (see `workspace_picker`); a live swap would be what flips this
+/// to the desktop shape.
 pub(crate) struct AppState {
     /// `None` until the background opener completes.
     pub(crate) workspace: Arc<Mutex<Option<Workspace>>>,
@@ -52,9 +51,9 @@ pub(crate) struct AppState {
     /// (the app then simply runs without P2P sync until a later relaunch
     /// retries).
     ///
-    /// Read by `commands::peers::outl_peer_status` (via `peer_health()`),
-    /// and parked for the eventual `announce_local_ops` post-commit hook and
-    /// a graceful `shutdown()` on app exit.
+    /// Read through `AppHost::sync_transport` by the shared peer-status /
+    /// force-sync / announce paths, cloned by the pairing commands, and
+    /// shut down gracefully in `Drop`.
     pub(crate) iroh: Option<IrohSyncTransport>,
 }
 
@@ -66,47 +65,36 @@ impl Drop for AppState {
         // for the OS to reap the socket — so another process on this device
         // reclaims the route immediately.
         if let Some(transport) = &self.iroh {
-            use outl_actions::SyncTransport;
             transport.shutdown();
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct WorkspaceSummary {
-    pub(crate) blocks: usize,
-    pub(crate) ops: usize,
-    pub(crate) actor: String,
-    pub(crate) storage_root: String,
-    pub(crate) ready: bool,
-}
+/// The mobile projection onto the shared command surface: the root is
+/// fixed for the process lifetime (`storage_root()` never errors), the
+/// concrete transport is wrapped as `Arc<dyn SyncTransport>` on demand,
+/// and there is no undo history (the `history()` default of `None`
+/// skips snapshot recording entirely).
+impl AppHost for AppState {
+    fn workspace(&self) -> &Mutex<Option<Workspace>> {
+        &self.workspace
+    }
 
-/// Reply shape for every "open page / open journal" command. Bundles
-/// the page meta with the outline so the frontend gets everything in
-/// one trip.
-///
-/// `warnings` is the verbatim `outl_md::ParseWarning` list surfaced
-/// by `outl_actions::read_page_outline_with_workspace`. The
-/// `<ParseWarningsBanner />` from `@outl/shared` reads it; clients
-/// don't have to touch the field directly.
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct PageView {
-    pub(crate) page: PageMeta,
-    pub(crate) outline: Vec<OutlineNode>,
-    pub(crate) backlinks: Vec<Backlink>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) warnings: Vec<outl_md::ParseWarning>,
-}
+    fn hlc(&self) -> &HlcGenerator {
+        &self.hlc
+    }
 
-/// Reply for `create_block`. Pairs the refreshed [`PageView`] with the
-/// id of the freshly-inserted block so the frontend can focus / start
-/// editing it without re-discovering the id via a DFS diff (the diff
-/// path mis-identified the new block when the anchor had children
-/// — `flat[idx+1]` would land on `children[0]` instead of the new
-/// sibling, and the eventual `edit_block` would target a stale id and
-/// surface the `block <ULID> is not in the tree` toast).
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct CreateBlockReply {
-    pub(crate) view: PageView,
-    pub(crate) new_id: String,
+    fn storage_root(&self) -> Result<PathBuf, String> {
+        Ok(self.storage_root.clone())
+    }
+
+    fn sync_transport(&self) -> Option<Arc<dyn SyncTransport>> {
+        self.iroh
+            .clone()
+            .map(|t| Arc::new(t) as Arc<dyn SyncTransport>)
+    }
+
+    fn exec_registry(&self) -> Arc<RuntimeRegistry> {
+        self.registry.clone()
+    }
 }

@@ -21,12 +21,12 @@ file text on disk
     Obsidian wiki-link variant collapse, …)
    │
    ▼
-2. super::write_page_md             ← persist to disk
+2. common::write_page_md            ← persist to disk
    (slug-based filename, prepends `title:: <name>\n\n`
    for non-journals, journals carry no `title::`)
    │
    ▼
-3. super::seed_sidecars             ← one pass at the end of `run`
+3. common::seed_sidecars            ← one pass at the end of `run`
    (acquires workspace + per-actor write locks,
     opens JsonlStorage, calls `outl_md::reconcile::reconcile_md`
     on every imported file so sidecars get stamped)
@@ -51,10 +51,14 @@ file text on disk
 
 | Step | Owner | What it does |
 |---|---|---|
-| write `.md` | [`super::write_page_md`](../import.rs) / [`super::write_page_md_with_stem`](../import.rs) | Slug-based filename, prepends `title:: <name>\n\n` for non-journals, journals carry no `title::`. `write_page_md_with_stem` takes an optional `stem_override` so importers that disambiguate collisions before writing can pass a unique stem; the user-visible `title::` still comes from `title`. **Callers must not include `title::` in `body`** — the helper always prepends it for non-journals. |
-| seed sidecars | [`super::seed_sidecars`](../import.rs) | Acquires `WorkspaceLock` + per-actor `ActorWriteLock`, opens `JsonlStorage`, calls `outl_md::reconcile::reconcile_md` on every imported file so the sidecar JSON is stamped. Idempotent. |
+| write `.md` | [`common::write_page_md`](common.rs) / [`common::write_page_md_with_stem`](common.rs) | Slug-based filename, prepends `title:: <name>\n\n` for non-journals, journals carry no `title::`. `write_page_md_with_stem` takes an optional `stem_override` so importers that disambiguate collisions before writing can pass a unique stem; the user-visible `title::` still comes from `title`. **Callers must not include `title::` in `body`** — the helper always prepends it for non-journals. |
+| seed sidecars | [`common::seed_sidecars`](common.rs) | Acquires `WorkspaceLock` + per-actor `ActorWriteLock`, opens `JsonlStorage`, calls `outl_md::reconcile::reconcile_md` on every imported file so the sidecar JSON is stamped. Idempotent. |
+| parse journal dates | [`common::parse_journal_date`](common.rs) | Thin wrapper over `outl_actions::parse_flexible_date` — the one owner of human-typed date parsing. |
+| resolve `((uid))` refs | [`common::resolve_uid_ref`](common.rs) / [`common::rewrite_uid_refs`](common.rs) (+ `UidIndex` / `ResolvedUid` / `truncate`) | Known UID → `[[Page Title]]` (artifact count); unknown → `((unresolved:uid))` (unresolved count). `rewrite_uid_refs` sweeps a whole text; Roam keeps its own scanner (it interleaves Roam-only tokens) and calls `resolve_uid_ref` per hit. |
+| shallow `.md` walk | [`common::md_files_shallow`](common.rs) | Depth-1 listing of the `.md` files in a directory (Logseq `pages/` + `journals/`, sidecar seeding). |
+| YAML frontmatter / wiki-link variants / image links | `outl_md::frontmatter` + `outl_md::wikilink` | Generic markdown parsing/rewriting lives in `outl-md` (see the [shared primitives catalog](../../../../../docs/shared-primitives.md) §6). Importers keep only source policy (e.g. Obsidian's dropped-keys list + date normalization in `obsidian.rs::parse_obsidian_frontmatter`). |
 
-## What an importer file (`logseq.rs`, `roam.rs`, `obsidian.rs`, future) **does** own
+## What an importer module (`logseq.rs`, `roam.rs`, `obsidian.rs` + `obsidian/{stems,tests}.rs`, future) **does** own
 
 Only the **source-specific transforms** that don't generalize:
 

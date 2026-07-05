@@ -1,12 +1,26 @@
 import BackgroundTasks
 import Foundation
+import UIKit
 
 /// Rust FFI, defined in `src/bg_sync.rs` and linked into the app's static
 /// library. Fires a forced iroh sync pass (`sync_now`) against every paired
-/// peer and blocks until it lands or a bounded window elapses; returns
-/// `false` when iroh isn't wired. Plain C ABI — no args, no pointers.
+/// peer and blocks until the pass completes or a bounded window (~20s)
+/// elapses — early-exiting the moment the pass lands; returns `false` when
+/// iroh isn't wired. Plain C ABI — no args, no pointers.
 @_silgen_name("outl_ios_background_sync")
 private func outlIosBackgroundSync() -> Bool
+
+/// Short-cap variant of the same forced pass (~12s ceiling), sized for the
+/// `BGAppRefreshTask`'s ~30s window so the handler can still report
+/// completion before iOS expires the task.
+@_silgen_name("outl_ios_background_sync_short")
+private func outlIosBackgroundSyncShort() -> Bool
+
+/// Number of paired peers, read fresh from `<workspace>/.outl/peers.json`.
+/// `0` when the Rust side hasn't registered the transport yet (early in
+/// launch, or iroh disabled). Gates BG-task submission below.
+@_silgen_name("outl_ios_peer_count")
+private func outlIosPeerCount() -> UInt32
 
 /// Background work for P2P sync.
 ///
@@ -16,8 +30,9 @@ private func outlIosBackgroundSync() -> Bool
 /// (`fetch` / `processing`) must be declared, or `register`/`submit` fail.
 ///
 /// - `app.outl.mobile-app.refresh` — a short `BGAppRefreshTask`. A handful
-///   of windows a day, ~30s each. A cheap "wake up so the iroh transport can
-///   catch up" nudge.
+///   of windows a day, ~30s each. Drives a short-capped forced sync pass
+///   (`outl_ios_background_sync_short`, ~12s ceiling) so even the cheap
+///   windows pull fresh ops instead of being wasted on a bare reschedule.
 /// - `app.outl.mobile-app.sync` — a longer `BGProcessingTask` that requires
 ///   network connectivity. iOS grants it when the device is on Wi-Fi (often
 ///   charging) and it can run for minutes — enough for an iroh pull/push to
@@ -31,12 +46,19 @@ private func outlIosBackgroundSync() -> Bool
 /// How the sync actually happens: when iOS launches/resumes the app for one
 /// of these tasks, the Tauri `setup` hook brings `IrohSyncTransport` up (the
 /// same path as a normal launch), and its catch-up loop runs a delta sync
-/// against every paired peer. The processing handler below keeps the task
-/// alive for a bounded window so that pass can finish, then reports
-/// completion so iOS keeps granting future windows.
+/// against every paired peer. The handlers below keep the task alive only
+/// until the forced pass reports completion (or a bounded ceiling), then
+/// report completion so iOS keeps granting future windows — returning unused
+/// window early is what keeps the grants coming.
 ///
-/// (Was previously a no-op that relied on iCloud Documents syncing the
-/// `ops-*.jsonl` files — that path is gone; iroh is the only sync now.)
+/// Scheduling is gated on having at least one paired peer
+/// (`outl_ios_peer_count() > 0`): with zero peers a background wake boots
+/// the whole app for nothing. The handlers are ALWAYS registered (mandatory
+/// before the end of launch); only the `submit` is conditional. Because the
+/// launch-time submit usually runs before the Rust side has registered the
+/// transport (peer count reads 0), the schedule is re-armed on every
+/// `didEnterBackground` — which also arms it right after the user pairs
+/// their first peer with the app open, no Rust→Swift bridge needed.
 @objc(OutlBackgroundRefresh)
 public final class OutlBackgroundRefresh: NSObject {
 
@@ -51,6 +73,20 @@ public final class OutlBackgroundRefresh: NSObject {
         guard #available(iOS 13.0, *) else { return }
         DispatchQueue.main.async {
             registerTasks()
+            // Re-arm on every backgrounding: at launch `registerTasks` runs
+            // BEFORE the Rust side registers the transport (peer count reads
+            // 0, so nothing is submitted), and pairing the first peer happens
+            // with the app open. Both cases arm here, the moment the app
+            // actually goes to background. Re-submitting an already-pending
+            // identifier just replaces the request, so this is idempotent.
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.didEnterBackgroundNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                scheduleRefresh()
+                scheduleSync()
+            }
         }
     }
 
@@ -60,16 +96,20 @@ public final class OutlBackgroundRefresh: NSObject {
             forTaskWithIdentifier: refreshIdentifier,
             using: nil
         ) { task in
-            // Reschedule first so a crash still leaves a window armed.
-            scheduleRefresh()
-            task.setTaskCompleted(success: true)
+            // The refresh window is ~30s: run the short-capped pass so the
+            // sync finishes (or bails) with headroom to report completion.
+            handleTask(task, reschedule: scheduleRefresh) {
+                outlIosBackgroundSyncShort()
+            }
         }
 
         let syncOk = BGTaskScheduler.shared.register(
             forTaskWithIdentifier: syncIdentifier,
             using: nil
         ) { task in
-            handleSync(task as! BGProcessingTask)
+            handleTask(task, reschedule: scheduleSync) {
+                outlIosBackgroundSync()
+            }
         }
 
         if refreshOk { scheduleRefresh() }
@@ -77,10 +117,19 @@ public final class OutlBackgroundRefresh: NSObject {
         NSLog("[outl] background tasks registered (refresh=\(refreshOk) sync=\(syncOk))")
     }
 
+    /// Shared BG-task driver: reschedule, run the sync FFI off-thread,
+    /// report completion exactly once.
     @available(iOS 13.0, *)
-    private static func handleSync(_ task: BGProcessingTask) {
+    private static func handleTask(
+        _ task: BGTask,
+        reschedule: () -> Void,
+        sync: @escaping () -> Bool
+    ) {
         // Reschedule first so a crash still leaves a future window armed.
-        scheduleSync()
+        // (The submit inside is peer-gated, so an unpaired device stops
+        // rescheduling itself here and re-arms on the next backgrounding
+        // after a pair.)
+        reschedule()
 
         // Report completion exactly once — the sync work and the OS
         // expiration handler race, and BGTaskScheduler rejects a double
@@ -96,11 +145,12 @@ public final class OutlBackgroundRefresh: NSObject {
         }
 
         // Drive the actual pull/push on a background queue: the FFI blocks
-        // (~20s) while iroh dials every peer and exchanges ops. The mobile
-        // side initiating is NAT-friendly, so this works even when the Mac
-        // can't reach the phone directly.
+        // while iroh dials every peer and exchanges ops, returning as soon
+        // as the forced pass completes (bounded by its cap). The mobile side
+        // initiating is NAT-friendly, so this works even when the Mac can't
+        // reach the phone directly.
         DispatchQueue.global(qos: .background).async {
-            let ok = outlIosBackgroundSync()
+            let ok = sync()
             complete(ok)
         }
         task.expirationHandler = {
@@ -110,8 +160,23 @@ public final class OutlBackgroundRefresh: NSObject {
         }
     }
 
+    /// Gate: with zero paired peers a background wake boots the whole app
+    /// for nothing, so submission is skipped. `outlIosPeerCount()` reads
+    /// `<workspace>/.outl/peers.json` through the transport registered by
+    /// the Rust side — it returns 0 until that registration happens (early
+    /// in launch); the `didEnterBackground` re-arm in `install()` covers
+    /// that window and the "first peer paired with the app open" case.
+    private static func peersArePaired() -> Bool {
+        let count = outlIosPeerCount()
+        if count == 0 {
+            NSLog("[outl] bg schedule skipped: no paired peers")
+        }
+        return count > 0
+    }
+
     @available(iOS 13.0, *)
     private static func scheduleRefresh() {
+        guard peersArePaired() else { return }
         let req = BGAppRefreshTaskRequest(identifier: refreshIdentifier)
         req.earliestBeginDate = Date(timeIntervalSinceNow: interval)
         submit(req)
@@ -119,6 +184,7 @@ public final class OutlBackgroundRefresh: NSObject {
 
     @available(iOS 13.0, *)
     private static func scheduleSync() {
+        guard peersArePaired() else { return }
         let req = BGProcessingTaskRequest(identifier: syncIdentifier)
         req.requiresNetworkConnectivity = true
         req.requiresExternalPower = false

@@ -1,4 +1,8 @@
-//! Workspace resolution + background opener.
+//! Mobile workspace resolution + background opener.
+//!
+//! The open / actor-id / orphan-reconcile primitives live in
+//! `outl_tauri_shared::workspace_open` (re-exported below). This module
+//! keeps what is genuinely mobile:
 //!
 //! ## Storage is a local folder, synced by iroh (no iCloud)
 //!
@@ -17,33 +21,29 @@
 //! `workspace_picker`); until that lands the default local root is the
 //! only path a fresh install ever opens.
 //!
-//! ## Change detection is the iroh signal
-//!
-//! The iroh transport signals reloads when it writes peer ops (see
-//! `iroh_sync::wire_iroh_transport`). There is no filesystem watcher: a
-//! single device needs none, and peer ops arrive through iroh, which pokes
-//! the reload itself.
-//!
 //! ## Other mobile divergences from desktop
 //!
 //! - Orphan `.md` reconcile runs **inline** in the boot path (desktop
 //!   spawns a background thread). Mobile workspaces are smaller and
 //!   the UI waits on `workspace-ready` anyway, so blocking the opener
 //!   keeps the first paint deterministic.
+//! - There is no filesystem watcher: a single device needs none, and
+//!   peer ops arrive through iroh, which pokes the reload itself (see
+//!   `iroh_sync::wire_iroh_transport`).
 
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 
-use outl_actions::{migrate_legacy_into_today, open_today};
 use outl_core::hlc::HlcGenerator;
-use outl_core::id::ActorId;
-use outl_core::storage::JsonlStorage;
 use outl_core::workspace::Workspace;
 use parking_lot::Mutex;
 use tauri::Emitter;
 use tracing::{info, warn};
+
+pub(crate) use outl_tauri_shared::workspace_open::{
+    load_or_create_actor, open_workspace_at, reconcile_orphan_md,
+};
 
 /// Folder name for the **local** default workspace, created under the
 /// app's data dir when the user hasn't picked anything yet.
@@ -51,32 +51,11 @@ use tracing::{info, warn};
 /// A fresh install lands here — iroh is the sync.
 const LOCAL_WORKSPACE_DIR: &str = "outl";
 
-fn ops_dir(workspace_root: &Path) -> PathBuf {
-    workspace_root.join("ops")
-}
-
 /// The app-local default workspace root: `<app-data-dir>/outl/`.
 ///
 /// This is what a fresh install uses — iroh syncs it P2P.
 pub(crate) fn local_default_root(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join(LOCAL_WORKSPACE_DIR)
-}
-
-pub(crate) fn load_or_create_actor(local_dir: &Path) -> std::io::Result<ActorId> {
-    let path = local_dir.join("actor");
-    if path.exists() {
-        let raw = std::fs::read_to_string(&path)?;
-        let raw = raw.trim();
-        if let Ok(ulid) = ulid::Ulid::from_str(raw) {
-            info!("loaded existing actor id {ulid}");
-            return Ok(ActorId(ulid));
-        }
-        warn!("invalid actor id in {}, regenerating", path.display());
-    }
-    let actor = ActorId::new();
-    std::fs::write(&path, actor.to_string())?;
-    info!("generated fresh actor id {actor}");
-    Ok(actor)
 }
 
 /// Resolve the workspace root to open on boot.
@@ -136,6 +115,11 @@ pub(crate) fn persist_workspace_path(path: &Path) {
 
 /// Background opener. Runs once per process; sets the inner
 /// `Option<Workspace>` and emits the `workspace-ready` event when done.
+///
+/// Unlike the desktop opener, the orphan-md reconcile runs **inline**
+/// here (before publishing the workspace) so the very first
+/// `build_page_view` call already sees imported / peer-written blocks —
+/// e.g. backlinks on today's journal include yesterday's imports.
 pub(crate) fn spawn_workspace_opener(
     workspace_slot: Arc<Mutex<Option<Workspace>>>,
     storage_root: PathBuf,
@@ -144,36 +128,17 @@ pub(crate) fn spawn_workspace_opener(
 ) {
     let actor = hlc.actor();
     thread::spawn(move || {
-        let storage = match JsonlStorage::open(ops_dir(&storage_root), actor) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("background open: storage failed: {e}");
-                return;
-            }
-        };
-        let mut workspace = match Workspace::open_with_storage(
-            actor,
-            Box::new(storage),
-            Some(storage_root.clone()),
-        ) {
+        let mut workspace = match open_workspace_at(actor, &hlc, &storage_root) {
             Ok(w) => w,
             Err(e) => {
-                warn!("background open: workspace failed: {e}");
+                warn!("background open failed for {}: {e}", storage_root.display());
                 return;
             }
         };
-        if let Err(e) = migrate_legacy_into_today(&mut workspace, &hlc) {
-            warn!("legacy migration: {e}");
-        }
-        if let Err(e) = open_today(&mut workspace, &hlc) {
-            warn!("could not pre-open today: {e}");
-        }
         // Reconcile any `.md` files the op log doesn't know about yet —
         // imported journals (Roam dump, Logseq move), peer-written `.md`
         // that arrived without its sidecar, or files edited externally
-        // in vim / VS Code. Running here means the very first
-        // `build_page_view` call already sees their blocks (so e.g.
-        // backlinks on today's journal include yesterday's imports).
+        // in vim / VS Code.
         reconcile_orphan_md(&mut workspace, &hlc, &storage_root);
         *workspace_slot.lock() = Some(workspace);
         if let Err(e) = app.emit("workspace-ready", ()) {
@@ -181,28 +146,4 @@ pub(crate) fn spawn_workspace_opener(
         }
         info!("background workspace opener complete");
     });
-}
-
-/// Scan `<root>/journals/` and `<root>/pages/` for `.md` files that
-/// are not represented in the op log yet — either no sidecar exists
-/// (file was just imported, dropped in by vim, or written by a peer
-/// that only shipped the projection) or the sidecar's
-/// `last_synced_hash` is stale (the file was edited externally since
-/// the last reconcile). Runs `reconcile_md` on each so the workspace,
-/// the sidecar, and `.md` converge.
-pub(crate) fn reconcile_orphan_md(
-    workspace: &mut Workspace,
-    hlc: &HlcGenerator,
-    storage_root: &Path,
-) {
-    let engine = outl_actions::SyncEngine::new(storage_root.to_path_buf(), hlc.actor());
-    let orphans = engine.scan_for_orphans();
-    if orphans.is_empty() {
-        return;
-    }
-    for path in &orphans {
-        if let Err(e) = outl_md::reconcile::reconcile_md(workspace, hlc, path, None) {
-            warn!("orphan reconcile failed for {}: {e}", path.display());
-        }
-    }
 }

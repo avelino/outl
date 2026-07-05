@@ -229,4 +229,21 @@ impl ContentStore {
     pub(crate) fn is_cached(&self, node: NodeId) -> bool {
         self.cache.contains(node)
     }
+
+    /// Borrow the materialized text map. The snapshot path serializes it
+    /// directly so a snapshot-opened workspace can serve reads without
+    /// replaying every `Edit` op.
+    pub(crate) fn text_map(&self) -> &HashMap<NodeId, String> {
+        &self.text
+    }
+
+    /// Rebuild a `ContentStore` from a pre-materialized text map. The
+    /// LRU `Doc` cache starts empty; cold blocks rebuild on demand from
+    /// the op log via `ensure_doc`. Used by the snapshot boot path.
+    pub(crate) fn from_text_map(text: HashMap<NodeId, String>) -> Self {
+        Self {
+            text,
+            cache: DocCache::new(DOC_CACHE_CAP),
+        }
+    }
 }

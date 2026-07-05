@@ -287,6 +287,7 @@ They skip the auto-commit step the other commands do, so your in-flight edit sta
 | `/date +1m` | today + 1 month (Jan 31 + 1m → Feb 28/29 — clamped to last day of month) |
 | `/date 5d` | bare `Nd`/`Nw`/`Nm` is treated as positive |
 | `/date 2026-06-15` | absolute ISO date |
+| `/date April 22nd, 2026` | any absolute spelling the shared date parser accepts (`2026/04/22`, `22/04/2026`, `Sept 3rd, 2025`, `22 April 2026`, …) |
 
 Garbage input (`/date nope`, `/date +3x`, invalid date) shows `usage: date +Nd | -Nw | +Nm | YYYY-MM-DD` on the status line.
 

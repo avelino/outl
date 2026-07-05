@@ -14,6 +14,13 @@ import {
   openPageBySlug,
 } from "@outl/shared/api/commands";
 import type { PageMeta, PageView } from "@outl/shared/api/types";
+import {
+  DAY_LABELS_MONDAY_FIRST,
+  daysInMonth,
+  formatJournalSlug,
+  journalSlugToDate,
+  mondayIndex,
+} from "@outl/shared/journal";
 
 import { appState, setAppState } from "../lib/store";
 
@@ -112,9 +119,7 @@ export function Sidebar(props: {
   const activeJournalDate = createMemo(() => {
     const page = appState.page;
     if (page?.kind !== "journal") return null;
-    const m = page.slug.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!m) return null;
-    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    return journalSlugToDate(page.slug);
   });
 
   const [viewedMonth, setViewedMonth] = createSignal<Date>(
@@ -144,26 +149,8 @@ export function Sidebar(props: {
     return s;
   });
 
-  function isoSlug(year: number, monthIdx: number, day: number): string {
-    const mm = String(monthIdx + 1).padStart(2, "0");
-    const dd = String(day).padStart(2, "0");
-    return `${year}-${mm}-${dd}`;
-  }
-
-  function daysInMonth(year: number, monthIdx: number): number {
-    return new Date(year, monthIdx + 1, 0).getDate();
-  }
-
-  /**
-   * 0 = Monday … 6 = Sunday — matches the TUI's Monday-first week
-   * (the `Mo Tu We Th Fr Sa Su` header).
-   */
-  function mondayIndex(jsDay: number): number {
-    return (jsDay + 6) % 7;
-  }
-
   async function openDay(year: number, monthIdx: number, day: number) {
-    const slug = isoSlug(year, monthIdx, day);
+    const slug = formatJournalSlug(year, monthIdx, day);
     try {
       const view = await openJournalFor(slug);
       props.onPickPage(view);
@@ -255,7 +242,7 @@ export function Sidebar(props: {
     const monthLabel = () =>
       month().toLocaleDateString(undefined, { month: "long", year: "numeric" });
     const today = new Date();
-    const todaySlug = isoSlug(
+    const todaySlug = formatJournalSlug(
       today.getFullYear(),
       today.getMonth(),
       today.getDate(),
@@ -275,7 +262,7 @@ export function Sidebar(props: {
       const out: Array<{ day: number; slug: string } | null> = [];
       for (let i = 0; i < lead; i++) out.push(null);
       for (let d = 1; d <= total; d++) {
-        out.push({ day: d, slug: isoSlug(year(), monthIdx(), d) });
+        out.push({ day: d, slug: formatJournalSlug(year(), monthIdx(), d) });
       }
       // Pad trailing to a multiple of 7 so the grid keeps its shape
       // when the last week is short.
@@ -313,7 +300,7 @@ export function Sidebar(props: {
         </div>
 
         <div class="grid grid-cols-7 gap-[2px] text-center text-[9.5px] uppercase tracking-wider text-(--color-outl-fg-dimmer)">
-          <For each={["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]}>
+          <For each={DAY_LABELS_MONDAY_FIRST}>
             {(d) => <div class="py-[2px]">{d}</div>}
           </For>
         </div>

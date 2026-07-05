@@ -280,6 +280,94 @@ export interface WorkspaceSummary {
   ready: boolean;
 }
 
+// ── Plugins ─────────────────────────────────────────────────────────
+// Wire shapes of the plugin host commands (`plugin_list` / `plugin_run`
+// / `plugin_sync_hooks` / `plugin_toolbar` / `plugin_transformers` /
+// `plugin_transform`). Both GUI clients register the identical Rust
+// commands (thin shims over `PluginService`), so the DTOs live here
+// once. The desktop-only `PluginKeybinding` (chord surface) stays in
+// `outl-desktop/src/lib/api.ts`.
+
+/** A command a loaded plugin contributes — surfaced in the plugin
+ *  palette (desktop) / plugin sheet (mobile). */
+export interface PluginCommand {
+  plugin_id: string;
+  command_id: string;
+  title: string;
+}
+
+/**
+ * A toolbar button a loaded plugin contributes to the client chrome.
+ * `icon` is the glyph painted inline; clicking / tapping it runs
+ * `command_id` via `pluginRun`. `title` is the accessible label /
+ * tooltip.
+ */
+export interface PluginToolbarButton {
+  plugin_id: string;
+  command_id: string;
+  icon: string;
+  title?: string;
+}
+
+/**
+ * Outcome of running a plugin command. `view` is the refreshed
+ * {@link PageView} of the page that was on screen when the command
+ * fired (so the caller re-renders in one trip); absent when no page id
+ * was supplied or the page no longer resolves.
+ *
+ * `views` carries HTML documents the plugin emitted via
+ * `ctx.ui.render` (gated by the `ui-render` capability). Each is
+ * played as an ephemeral sandboxed iframe overlay — untrusted plugin
+ * output, never injected into the app DOM.
+ */
+export interface PluginRunReply {
+  applied: number;
+  notifications: string[];
+  errors: string[];
+  view?: PageView;
+  views: string[];
+}
+
+/**
+ * Outcome of the plugins' `onOp` hook sweep: a refreshed
+ * {@link PageView} **only** when a hook actually mutated the on-screen
+ * page (`view` absent otherwise, so the caller skips a needless
+ * render), plus any `ui-render` payloads the hooks emitted (`views` —
+ * the confetti path, present even when no page re-render is needed).
+ */
+export interface PluginSyncHooksReply {
+  view?: PageView;
+  views: string[];
+}
+
+/**
+ * A content transformer a loaded plugin declared for a code-fence
+ * language. Clients load the list once per workspace open and, when a
+ * fence's language matches a `lang` here, call `pluginTransform` to
+ * render it.
+ *
+ * `kind` decides how the result renders inline in the block:
+ * - `"text"` → the `content` is markdown/plain text, rendered inline.
+ * - `"rich"` → the `content` is HTML, run in a sandboxed `<iframe>`.
+ */
+export interface PluginTransformer {
+  plugin_id: string;
+  lang: string;
+  kind: "text" | "rich";
+}
+
+/**
+ * The descriptor a content transformer produced for a fence body.
+ * `kind` mirrors the matching {@link PluginTransformer.kind};
+ * `content` is the rendered text (for `"text"`) or HTML run in a
+ * sandboxed iframe (for `"rich"` — untrusted plugin output, never
+ * injected into the app DOM).
+ */
+export interface PluginTransformResult {
+  kind: "text" | "rich";
+  content: string;
+}
+
 /**
  * One plugin marketplace row: a registry entry (plugins.outl.app) plus the
  * workspace's local state. Wire shape of `outl_plugins::MarketplaceItem`,

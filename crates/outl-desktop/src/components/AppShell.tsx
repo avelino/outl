@@ -7,9 +7,9 @@ import {
   reloadWorkspace,
 } from "@outl/shared/api/commands";
 import type { PageView } from "@outl/shared/api/types";
+import { flattenAll } from "@outl/shared/outline";
 
 import { appState, setAppState } from "../lib/store";
-import { flattenAll } from "../lib/outline-walk";
 import { takePendingDeepLink, workspaceStats } from "../lib/api";
 import {
   onDeepLinkNavigate,
@@ -18,7 +18,7 @@ import {
 } from "../lib/events";
 import type { DeepLinkNavigate } from "../lib/events";
 import { installShortcuts } from "../lib/shortcuts";
-import { loadTransformers } from "../lib/transformers";
+import { loadTransformers } from "@outl/shared/plugins/transformer-registry";
 import { buildHandlers } from "../lib/action-handlers";
 import { Sidebar } from "./Sidebar";
 import { OutlineView } from "./OutlineView";

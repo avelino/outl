@@ -96,6 +96,10 @@ impl From<Settings> for Config {
             // restores it from disk so a hand-set `mouse_capture` survives
             // a settings write (same pattern as `[calendar]`).
             tui: outl_config::TuiCfg::default(),
+            // `[snapshot]` is core-managed; the desktop doesn't model it.
+            // `save` restores it from disk so a hand-set policy survives a
+            // settings write (same pattern as `[calendar]` / `[tui]`).
+            snapshot: outl_config::SnapshotCfg::default(),
         }
     }
 }

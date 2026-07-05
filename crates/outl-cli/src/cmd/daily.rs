@@ -201,13 +201,12 @@ fn journal_payload(
 
 /// Parse the variety of date forms we accept.
 ///
-/// Order of attempts: ISO, then keyword shortcuts, then Roam-style
-/// ordinal long form (`April 22nd, 2026`).
+/// Keyword shortcuts (`today` / `yesterday` / `tomorrow`) are resolved
+/// here; every literal spelling (ISO, `2026/04/22`, Roam's
+/// `April 22nd, 2026`, …) is handled by the shared
+/// [`outl_actions::parse_flexible_date`].
 pub fn parse_date(s: &str) -> Result<NaiveDate, ApiError> {
     let trimmed = s.trim();
-    if let Ok(d) = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
-        return Ok(d);
-    }
     let lower = trimmed.to_lowercase();
     match lower.as_str() {
         "today" => return Ok(today()),
@@ -215,45 +214,13 @@ pub fn parse_date(s: &str) -> Result<NaiveDate, ApiError> {
         "tomorrow" => return Ok(today() + Duration::days(1)),
         _ => {}
     }
-    if let Some(d) = parse_roam_date(trimmed) {
+    if let Some(d) = outl_actions::parse_flexible_date(trimmed) {
         return Ok(d);
     }
     Err(ApiError::new(
         codes::INVALID_DATE,
         format!("could not parse date `{s}` — try YYYY-MM-DD"),
     ))
-}
-
-/// Parse Roam's `April 22nd, 2026` / `October 3rd, 2025` form. Returns
-/// `None` for anything that doesn't fit so the caller can fall through
-/// to other parsers.
-fn parse_roam_date(s: &str) -> Option<NaiveDate> {
-    // Strip ordinal suffix (st/nd/rd/th) from the day token, then defer
-    // to chrono's `%B %d, %Y` formatter.
-    //
-    // Example: "April 22nd, 2026" → "April 22, 2026".
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        out.push(c);
-        if c.is_ascii_digit() {
-            // Peek the next two chars; drop if they're a known ordinal pair.
-            let mut buf = String::new();
-            while let Some(next) = chars.peek() {
-                if next.is_alphabetic() && buf.len() < 2 {
-                    buf.push(*next);
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            let lower = buf.to_lowercase();
-            if !matches!(lower.as_str(), "st" | "nd" | "rd" | "th") {
-                out.push_str(&buf);
-            }
-        }
-    }
-    NaiveDate::parse_from_str(out.trim(), "%B %d, %Y").ok()
 }
 
 // ---------------------------------------------------------------------------
