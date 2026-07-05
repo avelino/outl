@@ -53,6 +53,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
 toml = "1.1"
+# Compact binary serialization for snapshots (see docs/storage.md → Snapshots).
+bincode = "1"
 
 # Errors
 thiserror = "2"

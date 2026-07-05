@@ -6010,6 +6010,7 @@ dependencies = [
 name = "outl-core"
 version = "0.7.0"
 dependencies = [
+ "bincode",
  "chrono",
  "fs2",
  "hex",
