@@ -189,13 +189,17 @@ impl Workspace {
         // resulting text match the full-replay path (#129).
         let rematerialized_count = edited_in_delta.len();
         for node in &edited_in_delta {
-            let ops = match self.storage.ops_for_node(*node) {
+            let mut ops = match self.storage.ops_for_node(*node) {
                 Ok(o) => o,
                 Err(e) => {
                     warn!("skipping re-materialize for {node}: {e}");
                     continue;
                 }
             };
+            // `ops_for_node`'s order is backend-dependent (JsonlStorage's
+            // in-memory cache can be unsorted after appends). Sort by HLC so
+            // the Doc is rebuilt in the same order as the full-replay path.
+            ops.sort_by_key(|l| l.ts);
             let updates: Vec<&[u8]> = ops
                 .iter()
                 .filter_map(|l| match &l.op {
@@ -281,13 +285,18 @@ impl Workspace {
         if self.log_complete {
             return; // ContentStore::ensure_doc rebuilds from the full log.
         }
-        let ops = match self.storage.ops_for_node(node) {
+        let mut ops = match self.storage.ops_for_node(node) {
             Ok(o) => o,
             Err(e) => {
                 warn!("could not load ops for {node} from storage: {e}");
                 return;
             }
         };
+        // Sort by HLC before replay: `ops_for_node`'s return order is
+        // backend-dependent, and rebuilding the Doc in the same order as the
+        // full-replay path keeps the state vector deterministic across
+        // backends and sessions.
+        ops.sort_by_key(|l| l.ts);
         let updates: Vec<&[u8]> = ops
             .iter()
             .filter_map(|l| match &l.op {

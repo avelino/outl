@@ -267,7 +267,9 @@ fn multi_actor_edit_converges_on_replay() {
         None,
     )
     .unwrap();
-    // Last-write-wins by HLC ordering; B's edit has a later timestamp.
+    // The two actors edit with independent HLC generators, so which write
+    // wins is not fixed here — the guarantee under test is that the reopen
+    // resolves to exactly one edit's text, never a concatenation of both.
     let text = ws.block_text(n);
     assert!(
         text.as_deref() == Some("from A") || text.as_deref() == Some("from B"),
