@@ -250,10 +250,9 @@ impl PeerEntry {
                         addr = addr.with_relay_url(url);
                     }
                     for sock in stored.ip_addrs() {
-                        if let SocketAddr::V4(v4) = sock {
-                            if is_reachable_lan_ipv4(*v4.ip(), ifaces) {
-                                addr = addr.with_ip_addr(*sock);
-                            }
+                        if matches!(sock, SocketAddr::V4(v4) if is_reachable_lan_ipv4(*v4.ip(), ifaces))
+                        {
+                            addr = addr.with_ip_addr(*sock);
                         }
                     }
                     return Ok(addr);
