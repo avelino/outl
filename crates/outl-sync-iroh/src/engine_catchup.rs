@@ -75,11 +75,16 @@ pub(crate) async fn catch_up_loop(
     // Default resolver: reload peers.json each tick and build a full
     // EndpointAddr (id + relay) for every known peer.
     let resolver = move || match PeersStore::load_or_default(&peers_path) {
-        Ok(store) => store
-            .list()
-            .iter()
-            .filter_map(|p| p.iroh_endpoint_addr().ok())
-            .collect::<Vec<_>>(),
+        Ok(store) => {
+            // Enumerate local interfaces once per tick, not once per peer:
+            // `iroh_endpoint_addr` would call `getifaddrs` for every entry.
+            let ifaces = crate::peers::local_v4_ifaces();
+            store
+                .list()
+                .iter()
+                .filter_map(|p| p.iroh_endpoint_addr_with_ifaces(&ifaces).ok())
+                .collect::<Vec<_>>()
+        }
         Err(e) => {
             debug!("catch-up: reload peers.json failed: {e}");
             Vec::new()
@@ -128,11 +133,14 @@ pub(crate) async fn force_sync_all(
     in_flight: InFlightPeers,
 ) {
     let addrs: Vec<iroh::EndpointAddr> = match PeersStore::load_or_default(&peers_path) {
-        Ok(store) => store
-            .list()
-            .iter()
-            .filter_map(|p| p.iroh_endpoint_addr().ok())
-            .collect(),
+        Ok(store) => {
+            let ifaces = crate::peers::local_v4_ifaces();
+            store
+                .list()
+                .iter()
+                .filter_map(|p| p.iroh_endpoint_addr_with_ifaces(&ifaces).ok())
+                .collect()
+        }
         Err(e) => {
             debug!("sync-now: reload peers.json failed: {e}");
             return;
