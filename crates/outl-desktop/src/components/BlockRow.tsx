@@ -177,8 +177,17 @@ export function BlockRow(props: {
   // `lastQuery` guard). `null` means "not in a ref right now".
   let lastQuery: string | null = null;
   let searchToken = 0;
+  // Debounce timer for `searchBlocks` only. Unlike page / person / emoji
+  // search (in-memory or a static catalog), the block search rebuilds the
+  // whole `WorkspaceIndex` from disk per call, so firing it on every
+  // keystroke inside `((…))` janks on large workspaces. Waiting for a
+  // short pause keeps the rebuild off the hot path.
+  const BLOCK_SEARCH_DEBOUNCE_MS = 150;
+  let blockSearchTimer: ReturnType<typeof setTimeout> | undefined;
 
   let textareaRef: HTMLTextAreaElement | undefined;
+
+  onCleanup(() => clearTimeout(blockSearchTimer));
 
   function closeSuggest() {
     lastQuery = null;
@@ -278,19 +287,27 @@ export function BlockRow(props: {
       const token = ++searchToken;
       if (suggestions().length > 0) setSuggestions([]);
       if (emojiSuggestions().length > 0) setEmojiSuggestions([]);
-      void searchBlocks(ctx.query)
-        .then((hits) => {
-          if (token !== searchToken) return;
-          // Stale-caret guard: the caret may have left the `((…)` while
-          // the search was in flight.
-          const cur = textareaRef
-            ? detectRefContext(textareaRef.value, textareaRef.selectionStart ?? 0)
-            : null;
-          if (!cur || cur.kind !== "block" || cur.query !== ctx.query) return;
-          setBlockSuggestions(hits);
-          setBlockIndex(0);
-        })
-        .catch(() => closeSuggest());
+      const query = ctx.query;
+      // Debounced: the backend rebuilds the workspace index from disk, so
+      // only fire after the user pauses typing. `searchToken` still guards
+      // staleness if a newer keystroke supersedes this one mid-flight.
+      clearTimeout(blockSearchTimer);
+      blockSearchTimer = setTimeout(() => {
+        if (token !== searchToken) return;
+        void searchBlocks(query)
+          .then((hits) => {
+            if (token !== searchToken) return;
+            // Stale-caret guard: the caret may have left the `((…)` while
+            // the search was in flight.
+            const cur = textareaRef
+              ? detectRefContext(textareaRef.value, textareaRef.selectionStart ?? 0)
+              : null;
+            if (!cur || cur.kind !== "block" || cur.query !== query) return;
+            setBlockSuggestions(hits);
+            setBlockIndex(0);
+          })
+          .catch(() => closeSuggest());
+      }, BLOCK_SEARCH_DEBOUNCE_MS);
       return;
     }
     // `page` → fuzzy over every page; `mention` → fuzzy over persons.

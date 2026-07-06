@@ -47,6 +47,13 @@ export function handlePopupNav<T>(e: NavKey, nav: PopupNav<T>): boolean {
   const len = nav.items.length;
   if (len === 0) return false;
 
+  // Clamp the highlight into range for this event. The list can shrink
+  // asynchronously (a slower search result lands with fewer hits) while
+  // the caller's `index` signal still holds the old, now out-of-bounds
+  // value; without this `items[index]` would be `undefined` and accept
+  // would insert nothing / crash.
+  const index = Math.min(Math.max(nav.index, 0), len - 1);
+
   const consume = () => {
     e.preventDefault();
     e.stopPropagation();
@@ -54,12 +61,12 @@ export function handlePopupNav<T>(e: NavKey, nav: PopupNav<T>): boolean {
 
   if (e.key === "ArrowDown") {
     consume();
-    nav.setIndex((nav.index + 1) % len);
+    nav.setIndex((index + 1) % len);
     return true;
   }
   if (e.key === "ArrowUp") {
     consume();
-    nav.setIndex((nav.index - 1 + len) % len);
+    nav.setIndex((index - 1 + len) % len);
     return true;
   }
   if (
@@ -70,7 +77,7 @@ export function handlePopupNav<T>(e: NavKey, nav: PopupNav<T>): boolean {
     !e.altKey
   ) {
     consume();
-    nav.onAccept(nav.items[nav.index]);
+    nav.onAccept(nav.items[index]);
     return true;
   }
   if (e.key === "Escape") {

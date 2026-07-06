@@ -315,19 +315,19 @@ On the desktop, **following a ref is the click on the token** (`onRefClick`); `E
 
 Inside an open `:shortcode` trigger, `BlockRow` shows `EmojiSuggestPopup`, reusing `detectEmojiContext` / `applyEmojiSuggestion` and the `searchEmojis` command (backed by `outl_md::emoji::search`).
 Accept inserts the canonical `:shortcode:` (the `.md` stores the literal, never the codepoint).
-It beats the ref popup at the same caret (`detectEmojiContext` only triggers on word-initial `:[a-z]`); no `outl-shortcuts` binding.
+It beats the ref popup at the same caret (`detectEmojiContext` only fires on word-initial `:[a-z]`).
 
 ### `[[page]]` ref autocomplete
 
-Inside an open `[[…]]`, `BlockRow` shows `RefSuggestPopup`, reusing the shared `detectRefContext` / `applySuggestion` helpers and the `search_pages` command the `Cmd+P` picker already calls — no parallel implementation.
+Inside an open `[[…]]`, `BlockRow` shows `RefSuggestPopup`, reusing the shared `detectRefContext` / `applySuggestion` helpers and the `search_pages` command the `Cmd+P` picker already calls.
 Accept inserts the page title (or ISO slug for journals).
 
 ### `((block ref))` autocomplete
 
-The `((` counterpart of `[[page]]` above (issue #116).
-Inside an open `((…))`, `BlockRow` shows `BlockSuggestPopup`, reusing `detectRefContext` (`kind: "block"`) / `applySuggestion` plus the new `search_blocks` command (`outl_md::WorkspaceIndex::search_block_text`).
-Rows show snippet + slug; the pick inserts the **ref handle** (`((blk-XXXXXX))`), never the text (refs resolve by handle); empty query lists the newest blocks.
-Mobile registers `search_blocks` for parity, popup unwired.
+The `((` counterpart of `[[page]]` (issue #116).
+Inside an open `((…))`, `BlockRow` shows `BlockSuggestPopup`, reusing `detectRefContext` (`kind: "block"`) / `applySuggestion` plus `search_blocks` (`outl_md::WorkspaceIndex::search_block_text`).
+Rows show snippet + slug; the pick inserts the **ref handle** (`((blk-XXXXXX))`), never the text; empty query lists the newest blocks; mobile registers the command for parity, popup unwired.
+`search_blocks` rebuilds the index from disk, so it's debounced ~150ms; caching it in `AppState` is a follow-up.
 
 ### Clicking external `[label](url)` links
 

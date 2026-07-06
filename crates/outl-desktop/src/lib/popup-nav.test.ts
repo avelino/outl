@@ -96,4 +96,18 @@ describe("handlePopupNav", () => {
     expect(handlePopupNav(e, n)).toBe(false);
     expect(e.preventDefault).not.toHaveBeenCalled();
   });
+
+  it("clamps a stale out-of-bounds index (list shrank) instead of accepting undefined", () => {
+    // index 9 but only 3 items — the search result shrank under a stale
+    // highlight. Accept must land on the last valid item, never undefined.
+    const n = { ...nav(9), onAccept: vi.fn<(item: string) => void>() };
+    expect(handlePopupNav(key("Enter"), n)).toBe(true);
+    expect(n.onAccept).toHaveBeenCalledWith("c");
+  });
+
+  it("clamps a stale index on ArrowDown so it wraps from the clamped position", () => {
+    const n = nav(9); // clamps to 2 (last), +1 wraps to 0
+    expect(handlePopupNav(key("ArrowDown"), n)).toBe(true);
+    expect(n.setIndex).toHaveBeenCalledWith(0);
+  });
 });

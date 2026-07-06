@@ -70,9 +70,12 @@ pub fn search_persons<S: AppHost>(state: &S, query: String) -> Result<Vec<PageMe
 /// a non-empty query delegates to `WorkspaceIndex::search_block_text`.
 ///
 /// The block index isn't held in `AppState`, so this rebuilds it from
-/// disk per call — the same pattern the CLI / MCP block search uses. The
-/// frontend de-dupes on the query (`lastQuery` guard), so this fires
-/// once per distinct query rather than once per keystroke.
+/// disk per call — reading and parsing every `.md` + sidecar, O(workspace).
+/// That's the same pattern the CLI / MCP block search uses, but here the
+/// caller types into `((…))`, so the frontend debounces `search_blocks`
+/// (see `BlockRow.refreshSuggest`) to keep the rebuild off the keystroke
+/// hot path. Caching the index in `AppState` (invalidated on reload /
+/// commit / peer ops) is the real fix and is tracked as a follow-up.
 pub fn search_blocks<S: AppHost>(state: &S, query: String) -> Result<Vec<BlockHit>, String> {
     let root = state.storage_root()?;
     let index = WorkspaceIndex::build(&root);
