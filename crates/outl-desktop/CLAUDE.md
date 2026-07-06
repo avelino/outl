@@ -241,6 +241,8 @@ Load-bearing notes a contributor needs:
 - `Cmd/Ctrl+X` (cut) and `Cmd/Ctrl+Z` (undo) deliberately fall through to the webview — no catalog binding matches inside a textarea.
   Native per-keystroke undo is still broken: the controlled `value={draft()}` binding resets the textarea's undo stack on every keystroke (issue #80).
 - Bracket auto-pairing (`[[`/`((` auto-close, `(`/`[`/`{` auto-pair with caret between, closer step-over, empty-pair collapse on `Backspace`) all live in `@outl/shared/autocomplete` (`autoPairBracket` / `autoDeletePair`, TUI parity).
+- The four inline autocomplete popups (slash / emoji / block-ref / page-ref) share one keyboard contract via `handlePopupNav` (`lib/popup-nav.ts`, unit-tested): arrows cycle, `Enter`/`Tab` with no modifiers accept, `Esc` closes.
+  `Shift+Tab` outdents on every popup now (the page-ref one used to accept it).
 
 ### Vim parity (Normal + Visual)
 
@@ -309,21 +311,23 @@ On the desktop, **following a ref is the click on the token** (`onRefClick`); `E
 
 ### `:shortcode:` emoji autocomplete
 
-Inside an open `:shortcode` trigger, `BlockRow` shows `EmojiSuggestPopup`, reusing `detectEmojiContext` / `applyEmojiSuggestion` and the `searchEmojis` command (`outl_emoji_search`, backed by `outl_md::emoji::search`).
-`↑`/`↓` highlight, `Enter`/`Tab` accept (inserting the canonical `:shortcode:` — the `.md` stores the literal, never the codepoint), `Esc` closes, click picks.
-The emoji popup beats the ref popup at the same caret (`detectEmojiContext` only triggers on word-initial `:[a-z]`); no `outl-shortcuts` binding — pure trigger-detection.
+### `:shortcode:` emoji autocomplete
+
+Inside an open `:shortcode` trigger, `BlockRow` shows `EmojiSuggestPopup`, reusing `detectEmojiContext` / `applyEmojiSuggestion` and the `searchEmojis` command (backed by `outl_md::emoji::search`).
+Accept inserts the canonical `:shortcode:` (the `.md` stores the literal, never the codepoint).
+It beats the ref popup at the same caret (`detectEmojiContext` only triggers on word-initial `:[a-z]`); no `outl-shortcuts` binding.
 
 ### `[[page]]` ref autocomplete
 
-Inside an open `[[…]]`, `BlockRow` shows a floating page popup (`RefSuggestPopup`), reusing the shared `detectRefContext` / `applySuggestion` helpers and the `search_pages` command the `Cmd+P` picker already calls — no parallel implementation.
-`↑`/`↓` highlight, `Enter`/`Tab` accept (page title, or ISO slug for journals), `Esc` closes (a second `Esc` commits the block), click picks (`onMouseDown` + `preventDefault` so blur-commit doesn't fire first).
+Inside an open `[[…]]`, `BlockRow` shows `RefSuggestPopup`, reusing the shared `detectRefContext` / `applySuggestion` helpers and the `search_pages` command the `Cmd+P` picker already calls — no parallel implementation.
+Accept inserts the page title (or ISO slug for journals).
 
 ### `((block ref))` autocomplete
 
 The `((` counterpart of `[[page]]` above (issue #116).
 Inside an open `((…))`, `BlockRow` shows `BlockSuggestPopup`, reusing `detectRefContext` (`kind: "block"`) / `applySuggestion` plus the new `search_blocks` command (`outl_md::WorkspaceIndex::search_block_text`).
 Rows show snippet + slug; the pick inserts the **ref handle** (`((blk-XXXXXX))`), never the text (refs resolve by handle); empty query lists the newest blocks.
-Keys mirror the page popup; mobile registers `search_blocks` for parity, popup unwired.
+Mobile registers `search_blocks` for parity, popup unwired.
 
 ### Clicking external `[label](url)` links
 

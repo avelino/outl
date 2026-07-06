@@ -59,6 +59,7 @@ import {
 
 import { detectFence } from "@outl/shared/highlight";
 import { appState, setAppState } from "../lib/store";
+import { handlePopupNav } from "../lib/popup-nav";
 import { rankSlashCommands } from "../lib/slash-commands";
 
 export interface BlockCallbacks {
@@ -524,155 +525,42 @@ export function BlockRow(props: {
       await props.cb.onPastePlain(props.block.id, caretChars, clip);
       return;
     }
-    // Slash menu owns the arrows / Enter / Tab / Esc while it's open.
-    // It never co-exists with the emoji / ref popups (block-initial `/`
-    // vs. `:` / `[[`), so checking it first is safe.
-    const slash = slashCommands();
-    if (slash.length > 0) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        e.stopPropagation();
-        setSlashIndex((i) => (i + 1) % slash.length);
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        e.stopPropagation();
-        setSlashIndex((i) => (i - 1 + slash.length) % slash.length);
-        return;
-      }
-      if (
-        (e.key === "Enter" || e.key === "Tab") &&
-        !e.metaKey &&
-        !e.ctrlKey &&
-        !e.shiftKey &&
-        !e.altKey
-      ) {
-        e.preventDefault();
-        e.stopPropagation();
-        acceptSlashCommand(slash[slashIndex()]);
-        return;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        closeSuggest();
-        return;
-      }
-    }
-    // Emoji popup takes precedence over the ref popup (they never
-    // co-exist, but checking first keeps the branching cheap).
-    const emoji = emojiSuggestions();
-    if (emoji.length > 0) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        e.stopPropagation();
-        setEmojiIndex((i) => (i + 1) % emoji.length);
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        e.stopPropagation();
-        setEmojiIndex((i) => (i - 1 + emoji.length) % emoji.length);
-        return;
-      }
-      if (
-        (e.key === "Enter" || e.key === "Tab") &&
-        !e.metaKey &&
-        !e.ctrlKey &&
-        !e.shiftKey &&
-        !e.altKey
-      ) {
-        e.preventDefault();
-        e.stopPropagation();
-        acceptEmojiSuggestion(emoji[emojiIndex()]);
-        return;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        closeSuggest();
-        return;
-      }
-    }
-    // Block-ref popup: same key contract as the page-ref popup below,
-    // but accepts a `BlockHit` (inserts `((<handle>))`). They never
-    // co-exist — one `detectRefContext` kind is active at a time.
-    const blocks = blockSuggestions();
-    if (blocks.length > 0) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        e.stopPropagation();
-        setBlockIndex((i) => (i + 1) % blocks.length);
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        e.stopPropagation();
-        setBlockIndex((i) => (i - 1 + blocks.length) % blocks.length);
-        return;
-      }
-      if (
-        (e.key === "Enter" || e.key === "Tab") &&
-        !e.metaKey &&
-        !e.ctrlKey &&
-        !e.shiftKey &&
-        !e.altKey
-      ) {
-        e.preventDefault();
-        e.stopPropagation();
-        acceptBlockSuggestion(blocks[blockIndex()]);
-        return;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        closeSuggest();
-        return;
-      }
-    }
-    // Ref-suggester navigation takes precedence while the popup is up:
-    // arrows move the highlight, Enter/Tab accept, Esc closes the popup
-    // (a *second* Esc then commits the block). stopPropagation keeps the
-    // global shortcut dispatcher from also acting on these keys.
-    const items = suggestions();
-    if (items.length > 0) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        e.stopPropagation();
-        setSuggestIndex((i) => (i + 1) % items.length);
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        e.stopPropagation();
-        setSuggestIndex((i) => (i - 1 + items.length) % items.length);
-        return;
-      }
-      if (
-        e.key === "Enter" &&
-        !e.metaKey &&
-        !e.ctrlKey &&
-        !e.shiftKey &&
-        !e.altKey
-      ) {
-        e.preventDefault();
-        e.stopPropagation();
-        acceptSuggestion(items[suggestIndex()]);
-        return;
-      }
-      if (e.key === "Tab") {
-        e.preventDefault();
-        e.stopPropagation();
-        acceptSuggestion(items[suggestIndex()]);
-        return;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        closeSuggest();
-        return;
-      }
+    // The four inline autocomplete popups share one keyboard contract
+    // (arrows cycle, Enter/Tab accept, Esc close) via `handlePopupNav`.
+    // They never co-exist — one trigger is active at a time — so the
+    // first non-empty one consumes the key. Checking slash first is safe
+    // (block-initial `/` vs. `:` / `((` / `[[`).
+    if (
+      handlePopupNav(e, {
+        items: slashCommands(),
+        index: slashIndex(),
+        setIndex: setSlashIndex,
+        onAccept: acceptSlashCommand,
+        onClose: closeSuggest,
+      }) ||
+      handlePopupNav(e, {
+        items: emojiSuggestions(),
+        index: emojiIndex(),
+        setIndex: setEmojiIndex,
+        onAccept: acceptEmojiSuggestion,
+        onClose: closeSuggest,
+      }) ||
+      handlePopupNav(e, {
+        items: blockSuggestions(),
+        index: blockIndex(),
+        setIndex: setBlockIndex,
+        onAccept: acceptBlockSuggestion,
+        onClose: closeSuggest,
+      }) ||
+      handlePopupNav(e, {
+        items: suggestions(),
+        index: suggestIndex(),
+        setIndex: setSuggestIndex,
+        onAccept: acceptSuggestion,
+        onClose: closeSuggest,
+      })
+    ) {
+      return;
     }
     if (e.key === "Escape") {
       e.preventDefault();
