@@ -42,6 +42,21 @@ pub struct PageView {
     pub warnings: Vec<outl_md::ParseWarning>,
 }
 
+/// One hit from `search_blocks` — the `((…))` block-ref autocomplete.
+///
+/// The frontend inserts `handle` wrapped in `((…))` (never the display
+/// `text`: block refs resolve by handle, not by content) and shows
+/// `text` + `source_slug` as the suggestion label.
+#[derive(Debug, Clone, Serialize)]
+pub struct BlockHit {
+    /// Ref handle to insert, e.g. `blk-r6s4a1`.
+    pub handle: String,
+    /// Block text (snippet) for the popup label.
+    pub text: String,
+    /// Slug of the page hosting the block, for context.
+    pub source_slug: String,
+}
+
 /// Reply for `create_block`. Pairs the refreshed [`PageView`] with the
 /// id of the freshly-inserted block so the frontend can focus / start
 /// editing it without re-discovering the id via a DFS diff (the diff

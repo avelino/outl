@@ -313,6 +313,17 @@ impl WorkspaceIndex {
         self.blocks.search_text(query, limit)
     }
 
+    /// Borrow the inner block-level index directly.
+    ///
+    /// Lets a consumer that already builds a `WorkspaceIndex` reuse the
+    /// `BlockIndex` primitives (`iter_blocks`, `search_text`) through one
+    /// value instead of the forwarding shims above — e.g. the desktop's
+    /// `((` block-ref autocomplete, whose selection logic is unit-tested
+    /// against a `BlockIndex` built in-memory.
+    pub fn block_index(&self) -> &BlockIndex {
+        &self.blocks
+    }
+
     /// Find the block at `(slug, dfs_path)` in O(1).
     ///
     /// Backs `yr` / `/refer` / `/refer-embed` so the TUI doesn't

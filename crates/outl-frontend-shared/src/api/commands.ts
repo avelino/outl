@@ -46,6 +46,20 @@ export interface EmojiHit {
   score: number;
 }
 
+/**
+ * One block match returned by {@link searchBlocks}. Mirrors
+ * `outl_tauri_shared::state::BlockHit`. `handle` is the ref handle
+ * (`blk-XXXXXX`) the caller inserts wrapped in `((…))`; block refs
+ * resolve by handle, never by the display `text`. `text` is a
+ * single-line snippet for the popup label and `source_slug` the page
+ * hosting the block, for context.
+ */
+export interface BlockHit {
+  handle: string;
+  text: string;
+  source_slug: string;
+}
+
 // ---------------------------------------------------------------------------
 // Page / journal navigation
 // ---------------------------------------------------------------------------
@@ -87,6 +101,18 @@ export function searchPersons(query: string): Promise<PageMeta[]> {
  */
 export function searchEmojis(query: string, limit = 8): Promise<EmojiHit[]> {
   return invoke<EmojiHit[]>("outl_emoji_search", { query, limit });
+}
+
+/**
+ * Fuzzy-search block text for the `((…))` block-ref autocomplete.
+ * Empty query returns the most recently created blocks; a non-empty
+ * query ranks case-insensitive substring matches (prefix first, shorter
+ * blocks winning ties). Backed by `outl_md::WorkspaceIndex::search_block_text`
+ * so every client ranks the same way. The caller inserts each hit's
+ * `handle` wrapped in `((…))` — never the display `text`.
+ */
+export function searchBlocks(query: string): Promise<BlockHit[]> {
+  return invoke<BlockHit[]>("search_blocks", { query });
 }
 
 export function openTodayJournal(): Promise<PageView> {

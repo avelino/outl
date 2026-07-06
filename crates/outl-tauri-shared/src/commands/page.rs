@@ -6,9 +6,12 @@ use outl_actions::{
     previous_journal_date, search_persons as action_search_persons, today, PageKind, PageMeta,
 };
 
+use outl_md::index::WorkspaceIndex;
+use outl_md::{BlockEntry, BlockIndex};
+
 use crate::helpers::{build_page_view, parse_date, with_ws, with_ws_mut};
 use crate::host::AppHost;
-use crate::state::PageView;
+use crate::state::{BlockHit, PageView};
 
 pub fn list_all_pages<S: AppHost>(state: &S) -> Result<Vec<PageMeta>, String> {
     with_ws(state, |ws| Ok(list_pages(ws)))
@@ -57,6 +60,76 @@ pub fn search_pages<S: AppHost>(state: &S, query: String) -> Result<Vec<PageMeta
 /// helper. Powers the `@` mention autocomplete.
 pub fn search_persons<S: AppHost>(state: &S, query: String) -> Result<Vec<PageMeta>, String> {
     with_ws(state, |ws| Ok(action_search_persons(ws, &query)))
+}
+
+/// Fuzzy-search block text for the `((…))` block-ref autocomplete.
+/// Returns each hit's ref handle + a text snippet + hosting slug; the
+/// frontend inserts `((<handle>))`, never the display text (block refs
+/// resolve by handle). Mirrors the TUI's `candidates_for_blockref`: an
+/// empty query returns the most recently created blocks (id descending),
+/// a non-empty query delegates to `WorkspaceIndex::search_block_text`.
+///
+/// The block index isn't held in `AppState`, so this rebuilds it from
+/// disk per call — the same pattern the CLI / MCP block search uses. The
+/// frontend de-dupes on the query (`lastQuery` guard), so this fires
+/// once per distinct query rather than once per keystroke.
+pub fn search_blocks<S: AppHost>(state: &S, query: String) -> Result<Vec<BlockHit>, String> {
+    let root = state.storage_root()?;
+    let index = WorkspaceIndex::build(&root);
+    Ok(collect_block_hits(
+        index.block_index(),
+        query.trim(),
+        BLOCK_HIT_LIMIT,
+    ))
+}
+
+/// Popup size shared by the empty-query and matched-query paths.
+const BLOCK_HIT_LIMIT: usize = 8;
+
+/// The selection + projection logic behind [`search_blocks`], split out
+/// so it can be unit-tested against a `BlockIndex` built in-memory
+/// (no on-disk workspace, no `AppHost`). `query` is assumed trimmed.
+///
+/// Empty query → the most recently created blocks (id descending, a
+/// fresh block being the likeliest ref target), matching the TUI's
+/// `candidates_for_blockref`. Non-empty → the ranked substring matches
+/// from the shared `BlockIndex::search_text`.
+fn collect_block_hits(index: &BlockIndex, query: &str, limit: usize) -> Vec<BlockHit> {
+    if query.is_empty() {
+        let mut entries: Vec<&BlockEntry> = index.iter_blocks().collect();
+        entries.sort_by_key(|b| std::cmp::Reverse(b.id));
+        entries.into_iter().take(limit).map(block_hit).collect()
+    } else {
+        index
+            .search_text(query, limit)
+            .into_iter()
+            .map(block_hit)
+            .collect()
+    }
+}
+
+/// Project a [`BlockEntry`] onto the wire [`BlockHit`], truncating the
+/// text to a single-line snippet so a long block doesn't bloat the popup.
+fn block_hit(b: &BlockEntry) -> BlockHit {
+    BlockHit {
+        handle: b.ref_handle.clone(),
+        text: block_snippet(&b.text),
+        source_slug: b.source_slug.clone(),
+    }
+}
+
+/// Collapse a block's text to one trimmed line, capped at 80 chars with
+/// an ellipsis. Matches the TUI's `truncate_for_snippet` shape.
+fn block_snippet(text: &str) -> String {
+    const MAX: usize = 80;
+    let one_line = text.replace('\n', " ");
+    let trimmed = one_line.trim();
+    if trimmed.chars().count() <= MAX {
+        return trimmed.to_string();
+    }
+    let mut out: String = trimmed.chars().take(MAX - 1).collect();
+    out.push('…');
+    out
 }
 
 /// Search the GitHub gemoji catalog for shortcodes matching `query`.
@@ -217,4 +290,147 @@ pub fn resolve_ref<S: AppHost>(state: &S, target: String) -> Result<Option<PageM
             .into_iter()
             .find(|p| p.title.to_lowercase() == lower))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{block_snippet, collect_block_hits};
+    use outl_core::id::NodeId;
+    use outl_md::parse::OutlineNode;
+    use outl_md::sidecar::{content_hash, derive_ref_handle, SidecarBlock};
+    use outl_md::BlockIndex;
+    use std::path::PathBuf;
+
+    /// Build an in-memory `BlockIndex` from `(slug, [block text])` pairs,
+    /// mirroring the on-disk `.md` + `.outl` shape the real
+    /// `WorkspaceIndex::build` reads — but without touching the disk.
+    /// Returns the index plus each block's derived ref handle, in insert
+    /// order, so tests can assert on the handle the picker would insert.
+    fn index_of(pages: &[(&str, &[&str])]) -> (BlockIndex, Vec<(String, String)>) {
+        let mut idx = BlockIndex::default();
+        let mut handles = Vec::new();
+        for (slug, texts) in pages {
+            let path = PathBuf::from(format!("pages/{slug}.md"));
+            let mut ast = Vec::new();
+            let mut sidecar = Vec::new();
+            for (line, text) in texts.iter().enumerate() {
+                let id = NodeId::new();
+                let handle = derive_ref_handle(id);
+                handles.push((handle.clone(), (*text).to_string()));
+                sidecar.push(SidecarBlock {
+                    id,
+                    line: line + 1,
+                    indent: 0,
+                    content_hash: content_hash(text),
+                    ref_handle: handle,
+                });
+                ast.push(OutlineNode {
+                    text: (*text).to_string(),
+                    properties: Vec::new(),
+                    children: Vec::new(),
+                });
+            }
+            idx.collect_page_blocks(slug, &path, &ast, &sidecar);
+        }
+        (idx, handles)
+    }
+
+    #[test]
+    fn query_returns_matching_block_handle_and_slug() {
+        let (idx, _) = index_of(&[
+            ("architecture", &["decide storage backend"]),
+            ("journal", &["buy milk"]),
+        ]);
+        let hits = collect_block_hits(&idx, "storage", 8);
+        assert_eq!(hits.len(), 1, "only the matching block should surface");
+        let hit = &hits[0];
+        assert_eq!(hit.text, "decide storage backend");
+        assert_eq!(hit.source_slug, "architecture");
+        // The inserted handle is the block's ref handle, never the text.
+        assert!(hit.handle.starts_with("blk-"), "got {}", hit.handle);
+    }
+
+    #[test]
+    fn query_is_case_insensitive() {
+        let (idx, _) = index_of(&[("p", &["Decide Storage Backend"])]);
+        assert_eq!(collect_block_hits(&idx, "STORAGE", 8).len(), 1);
+    }
+
+    #[test]
+    fn empty_query_lists_newest_blocks_first() {
+        // Explicit, strictly-increasing ULID values so "newest" is
+        // unambiguous — `NodeId::new()` within one millisecond has a
+        // random tail and is NOT monotonic, so we can't lean on call
+        // order. Higher id = newer; the empty-query popup sorts
+        // descending, so the largest id must come first.
+        let mut idx = BlockIndex::default();
+        let mut ast = Vec::new();
+        let mut sidecar = Vec::new();
+        for (n, text) in [(1u128, "oldest"), (2, "middle"), (3, "newest")] {
+            let id = NodeId(ulid::Ulid(n));
+            sidecar.push(SidecarBlock {
+                id,
+                line: n as usize,
+                indent: 0,
+                content_hash: content_hash(text),
+                ref_handle: derive_ref_handle(id),
+            });
+            ast.push(OutlineNode {
+                text: text.to_string(),
+                properties: Vec::new(),
+                children: Vec::new(),
+            });
+        }
+        idx.collect_page_blocks("p", &PathBuf::from("pages/p.md"), &ast, &sidecar);
+
+        let hits = collect_block_hits(&idx, "", 8);
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0].text, "newest");
+        assert_eq!(hits[1].text, "middle");
+        assert_eq!(hits[2].text, "oldest");
+        // Top hit inserts the newest block's handle, not its text.
+        assert_eq!(hits[0].handle, derive_ref_handle(NodeId(ulid::Ulid(3))));
+    }
+
+    #[test]
+    fn limit_caps_the_result_set() {
+        let texts: Vec<String> = (0..20).map(|i| format!("block {i}")).collect();
+        let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+        let (idx, _) = index_of(&[("p", &refs)]);
+        assert_eq!(collect_block_hits(&idx, "", 8).len(), 8);
+        assert_eq!(collect_block_hits(&idx, "block", 8).len(), 8);
+    }
+
+    #[test]
+    fn no_match_returns_empty() {
+        let (idx, _) = index_of(&[("p", &["hello world"])]);
+        assert!(collect_block_hits(&idx, "zzz", 8).is_empty());
+    }
+
+    #[test]
+    fn snippet_trims_and_keeps_short_text_verbatim() {
+        assert_eq!(block_snippet("  hello world  "), "hello world");
+    }
+
+    #[test]
+    fn snippet_collapses_newlines_to_spaces() {
+        assert_eq!(block_snippet("line one\nline two"), "line one line two");
+    }
+
+    #[test]
+    fn snippet_truncates_long_text_with_ellipsis() {
+        let long = "a".repeat(200);
+        let out = block_snippet(&long);
+        assert_eq!(out.chars().count(), 80);
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn snippet_is_utf8_safe_on_multibyte_boundary() {
+        // 100 accented chars — truncation must slice on char, not byte.
+        let long = "á".repeat(100);
+        let out = block_snippet(&long);
+        assert_eq!(out.chars().count(), 80);
+        assert!(out.ends_with('…'));
+    }
 }

@@ -7,7 +7,7 @@ Before this crate existed, both clients kept near-identical copies of the same n
 
 | Module | Owns |
 |---|---|
-| `state.rs` | Wire DTOs every command returns: `PageView`, `CreateBlockReply`, `WorkspaceSummary`, `ERR_LOADING` |
+| `state.rs` | Wire DTOs every command returns: `PageView`, `CreateBlockReply`, `WorkspaceSummary`, `BlockHit` (a `((…))` block-ref autocomplete hit — `handle` + `text` + `source_slug`), `ERR_LOADING` |
 | `host.rs` | `AppHost` + `StorageRootProvider` — the two traits that absorb the one real client divergence (desktop storage root is `Arc<Mutex<Option<PathBuf>>>`, mobile is a plain `PathBuf`) |
 | `helpers.rs` | `parse_node_id`, `parse_date`, `with_ws*`, `build_page_view`, `finish_in_page*`, `storage_root_or_err` |
 | `commands/` | The command *bodies* (`block`, `page`, `peers`, `plugin`, `exec`) — generic over `S: AppHost` |
