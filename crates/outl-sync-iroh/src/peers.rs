@@ -17,7 +17,7 @@ use tracing::{debug, warn};
 /// stored direct addr shares a subnet with this machine — i.e. is reachable over
 /// the LAN at all. See [`is_reachable_lan_ipv4`].
 #[derive(Debug, Clone, Copy)]
-struct LocalV4 {
+pub(crate) struct LocalV4 {
     ip: Ipv4Addr,
     mask: Ipv4Addr,
 }
@@ -27,7 +27,13 @@ struct LocalV4 {
 /// Returns an empty `Vec` on any enumeration error — callers treat "no known
 /// interfaces" as **fail-open** (keep every IPv4 direct addr, the pre-filter
 /// behaviour) rather than dropping reachability on a transient syscall failure.
-fn local_v4_ifaces() -> Vec<LocalV4> {
+///
+/// This walks the OS interface list (`getifaddrs`), so a caller resolving a
+/// **batch** of peers (the catch-up resolver, `force_sync_all`) should call it
+/// **once** and pass the result to each
+/// [`PeerEntry::iroh_endpoint_addr_with_ifaces`], instead of letting the
+/// per-peer [`PeerEntry::iroh_endpoint_addr`] re-enumerate on every entry.
+pub(crate) fn local_v4_ifaces() -> Vec<LocalV4> {
     match if_addrs::get_if_addrs() {
         Ok(ifaces) => ifaces
             .into_iter()
@@ -63,11 +69,14 @@ fn same_subnet_v4(peer: Ipv4Addr, local: &LocalV4) -> bool {
 /// (`MultipathNotNegotiated`, ~30s). Dropping it loses nothing and removes the
 /// stall.
 ///
+/// **Loopback (`127.0.0.0/8`) is always kept**, independent of the interface
+/// list, so loopback dials (tests, same-host peers) never drop even if the OS
+/// enumeration omits `lo0` or reports it with an odd netmask.
 /// **`ifaces` empty ⇒ keep everything** (fail-open — see [`local_v4_ifaces`]).
-/// Loopback (`127.0.0.1`) always matches the `lo0` interface, so loopback dials
-/// (tests, same-host peers) are never dropped.
 fn is_reachable_lan_ipv4(peer: Ipv4Addr, ifaces: &[LocalV4]) -> bool {
-    ifaces.is_empty() || ifaces.iter().any(|iface| same_subnet_v4(peer, iface))
+    peer.is_loopback()
+        || ifaces.is_empty()
+        || ifaces.iter().any(|iface| same_subnet_v4(peer, iface))
 }
 
 /// Build the per-workspace peers path: `<workspace_root>/.outl/peers.json`.
@@ -213,7 +222,14 @@ impl PeerEntry {
     /// [`iroh_endpoint_addr`](Self::iroh_endpoint_addr) with the local IPv4
     /// interface list injected, so the LAN-reachability filter is unit-testable
     /// without depending on the host's real network config.
-    fn iroh_endpoint_addr_with_ifaces(&self, ifaces: &[LocalV4]) -> Result<iroh::EndpointAddr> {
+    ///
+    /// Batch callers (the catch-up resolver, `force_sync_all`) call
+    /// [`local_v4_ifaces`] once and pass the result here for every peer, so the
+    /// interface list is enumerated once per pass instead of once per peer.
+    pub(crate) fn iroh_endpoint_addr_with_ifaces(
+        &self,
+        ifaces: &[LocalV4],
+    ) -> Result<iroh::EndpointAddr> {
         let id = self.iroh_node_id()?;
         // Dial the relay AND the IPv4 direct addrs. On the same LAN the direct
         // IPv4 path connects without touching the relay — which is what saves
@@ -428,6 +444,13 @@ mod tests {
         ));
         // Empty iface list ⇒ fail-open (keep everything).
         assert!(is_reachable_lan_ipv4("10.71.22.9".parse().unwrap(), &[]));
+        // Loopback is kept even when the iface list has NO loopback entry —
+        // the allow-list is explicit, not dependent on enumeration.
+        let wifi_only = vec![iface("192.168.1.50", "255.255.255.0")];
+        assert!(is_reachable_lan_ipv4(
+            "127.0.0.1".parse().unwrap(),
+            &wifi_only
+        ));
     }
 
     /// Bug #6 (reachability resolution, relay branch): with a relay present, the
