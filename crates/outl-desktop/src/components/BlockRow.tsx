@@ -17,6 +17,7 @@ import type {
   PluginTransformResult,
   TodoState,
 } from "@outl/shared/api/types";
+import type { BlockHit } from "@outl/shared/api/commands";
 import {
   MarkdownInline,
   QuoteWrap,
@@ -40,6 +41,7 @@ import {
   type EmojiHit,
   openRef,
   pluginList,
+  searchBlocks,
   searchEmojis,
   searchPages,
   searchPersons,
@@ -143,6 +145,16 @@ export function BlockRow(props: {
   // popup is active at a time.
   const [emojiSuggestions, setEmojiSuggestions] = createSignal<EmojiHit[]>([]);
   const [emojiIndex, setEmojiIndex] = createSignal(0);
+  // ── `((block ref))` autocomplete ─────────────────────────────────
+  // While the caret sits inside an open `((…))`, we offer a popup of
+  // matching blocks. Same detection (`detectRefContext` → `kind:
+  // "block"`) and insertion (`applySuggestion` wraps the pick in
+  // `((…))`) as the page-ref path; block lookup goes through the
+  // `search_blocks` command. Kept in its own signal because a block
+  // hit's cell shape (text snippet + page) differs from a page's
+  // (icon + title), and only one popup is ever open at a time.
+  const [blockSuggestions, setBlockSuggestions] = createSignal<BlockHit[]>([]);
+  const [blockIndex, setBlockIndex] = createSignal(0);
   // ── `/command` inline slash menu ─────────────────────────────────
   // Block-initial `/` opens a filterable list of plugin commands —
   // the desktop's inline equivalent of the TUI's `/` slash overlay
@@ -173,6 +185,8 @@ export function BlockRow(props: {
     setSuggestIndex(0);
     if (emojiSuggestions().length > 0) setEmojiSuggestions([]);
     setEmojiIndex(0);
+    if (blockSuggestions().length > 0) setBlockSuggestions([]);
+    setBlockIndex(0);
     if (slashCommands().length > 0) setSlashCommands([]);
     setSlashIndex(0);
   }
@@ -252,8 +266,33 @@ export function BlockRow(props: {
       return;
     }
     const ctx = detectRefContext(ta.value, cursor);
-    // `page` → fuzzy over every page; `mention` → fuzzy over persons
-    // only. Block-ref autocompletion is intentionally skipped here.
+    // `block` → fuzzy over every block's text, keyed on the `((…))`
+    // trigger. Handled on its own path because the hit shape (handle +
+    // snippet) and the accept (insert the handle, not the text) differ
+    // from the page/mention path below.
+    if (ctx && ctx.kind === "block") {
+      const key = `block:${ctx.query}`;
+      if (key === lastQuery) return;
+      lastQuery = key;
+      const token = ++searchToken;
+      if (suggestions().length > 0) setSuggestions([]);
+      if (emojiSuggestions().length > 0) setEmojiSuggestions([]);
+      void searchBlocks(ctx.query)
+        .then((hits) => {
+          if (token !== searchToken) return;
+          // Stale-caret guard: the caret may have left the `((…)` while
+          // the search was in flight.
+          const cur = textareaRef
+            ? detectRefContext(textareaRef.value, textareaRef.selectionStart ?? 0)
+            : null;
+          if (!cur || cur.kind !== "block" || cur.query !== ctx.query) return;
+          setBlockSuggestions(hits);
+          setBlockIndex(0);
+        })
+        .catch(() => closeSuggest());
+      return;
+    }
+    // `page` → fuzzy over every page; `mention` → fuzzy over persons.
     if (!ctx || (ctx.kind !== "page" && ctx.kind !== "mention")) {
       return closeSuggest();
     }
@@ -322,6 +361,23 @@ export function BlockRow(props: {
       });
     }
     const completion = applySuggestion(ta.value, ctx, replacement);
+    setDraft(completion.value);
+    ta.value = completion.value;
+    ta.setSelectionRange(completion.caret, completion.caret);
+    closeSuggest();
+    ta.focus();
+  }
+
+  /** Accept `hit`: replace the open `((…))` span with `((<handle>))`.
+   *  The replacement is the block's **ref handle**, never its display
+   *  text — block refs resolve by handle. `applySuggestion` wraps a
+   *  `block` context in `((…))`, so we pass the bare handle. */
+  function acceptBlockSuggestion(hit: BlockHit) {
+    const ta = textareaRef;
+    if (!ta) return;
+    const ctx = detectRefContext(ta.value, ta.selectionStart ?? 0);
+    if (!ctx || ctx.kind !== "block") return closeSuggest();
+    const completion = applySuggestion(ta.value, ctx, hit.handle);
     setDraft(completion.value);
     ta.value = completion.value;
     ta.setSelectionRange(completion.caret, completion.caret);
@@ -530,6 +586,42 @@ export function BlockRow(props: {
         e.preventDefault();
         e.stopPropagation();
         acceptEmojiSuggestion(emoji[emojiIndex()]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeSuggest();
+        return;
+      }
+    }
+    // Block-ref popup: same key contract as the page-ref popup below,
+    // but accepts a `BlockHit` (inserts `((<handle>))`). They never
+    // co-exist — one `detectRefContext` kind is active at a time.
+    const blocks = blockSuggestions();
+    if (blocks.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        e.stopPropagation();
+        setBlockIndex((i) => (i + 1) % blocks.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        e.stopPropagation();
+        setBlockIndex((i) => (i - 1 + blocks.length) % blocks.length);
+        return;
+      }
+      if (
+        (e.key === "Enter" || e.key === "Tab") &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.shiftKey &&
+        !e.altKey
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        acceptBlockSuggestion(blocks[blockIndex()]);
         return;
       }
       if (e.key === "Escape") {
@@ -977,6 +1069,12 @@ export function BlockRow(props: {
                         onHover={setSuggestIndex}
                         onPick={acceptSuggestion}
                       />
+                      <BlockSuggestPopup
+                        items={blockSuggestions()}
+                        activeIndex={blockIndex()}
+                        onHover={setBlockIndex}
+                        onPick={acceptBlockSuggestion}
+                      />
                       <EmojiSuggestPopup
                         items={emojiSuggestions()}
                         activeIndex={emojiIndex()}
@@ -1071,6 +1169,57 @@ function RefSuggestPopup(props: {
                 </span>
                 <span class="truncate">
                   {page.kind === "journal" ? page.slug : page.title}
+                </span>
+              </button>
+            </li>
+          )}
+        </For>
+      </ul>
+    </Show>
+  );
+}
+
+/**
+ * Floating block-suggestion list shown while the caret is inside an
+ * open `((…))`. Anchored just below the block's textarea — same pattern
+ * as `RefSuggestPopup`. Each row shows the block's text snippet with its
+ * hosting page slug dimmed on the right, so the user picks by content
+ * (the `blk-XXXXXX` handle it inserts is never shown — it's an internal
+ * id, not something the user reasons about).
+ */
+function BlockSuggestPopup(props: {
+  items: BlockHit[];
+  activeIndex: number;
+  onHover: (i: number) => void;
+  onPick: (hit: BlockHit) => void;
+}) {
+  return (
+    <Show when={props.items.length > 0}>
+      <ul
+        class="absolute top-full left-0 z-30 mt-1 max-h-56 w-96 overflow-y-auto rounded-md border border-(--color-outl-border) bg-(--color-outl-bg-elev) py-1 text-[13px] shadow-lg"
+        role="listbox"
+      >
+        <For each={props.items}>
+          {(hit, i) => (
+            <li role="option" aria-selected={i() === props.activeIndex}>
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  props.onPick(hit);
+                }}
+                onMouseEnter={() => props.onHover(i())}
+                class={`flex w-full items-center gap-2 px-2 py-1 text-left ${
+                  i() === props.activeIndex
+                    ? "bg-(--color-outl-accent) text-(--color-outl-bg)"
+                    : "hover:bg-(--color-outl-bg)/50"
+                }`}
+              >
+                <span class="min-w-0 flex-1 truncate">
+                  {hit.text || "(empty block)"}
+                </span>
+                <span class="shrink-0 truncate text-[11px] opacity-60">
+                  {hit.source_slug}
                 </span>
               </button>
             </li>

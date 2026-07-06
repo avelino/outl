@@ -72,6 +72,7 @@ Treat matching with the same paranoia as the CRDT.
   Lookups are O(1).
 - **Workspace index** (`index.rs`) — page-level (`slug → PageEntry`, backlinks) plus block-level (re-exports the `BlockIndex` API).
   Public surface includes `resolve_block_ref(handle)`, `block_by_id`, `block_at_location(slug, &[usize])`, `block_refs_to(id)`, `iter_blocks`, `block_count`, `search_block_text(query, limit)`.
+  `block_index()` borrows the inner `BlockIndex` so a consumer that already holds a `WorkspaceIndex` can reuse its primitives through one value.
   `block_at_location` is the O(1) replacement for scanning `iter_blocks()` to find the entry for a known `(page, dfs_path)`, e.g. when the TUI translates a keyboard chord onto a specific block.
   `PageEntry` carries the page-level metadata every UI surface reads (`slug`, `title`, `icon`, `is_journal`, `pinned`, **`page_type`**);
   `pages_by_type(t)` filters pages by their `type::` property (case-insensitive), powering the `@` mention autocomplete that lists `type:: person` pages.

@@ -58,8 +58,8 @@ use crate::commands::{
     paste_markdown_at, paste_plain_at, plugin_install_official, plugin_list, plugin_registry_list,
     plugin_run, plugin_set_enabled, plugin_sync_hooks, plugin_toolbar, plugin_transform,
     plugin_transformers, plugin_uninstall, previous_day, reload_workspace, resolve_ref,
-    search_pages, search_persons, set_block_collapsed, today_slug_cmd, toggle_quote, toggle_todo,
-    workspace_stats,
+    search_blocks, search_pages, search_persons, set_block_collapsed, today_slug_cmd, toggle_quote,
+    toggle_todo, workspace_stats,
 };
 use crate::plugin_service::spawn_plugin_service;
 use crate::state::AppState;
@@ -255,6 +255,7 @@ pub fn run() {
             list_all_pages,
             search_pages,
             search_persons,
+            search_blocks,
             outl_emoji_search,
             open_today_journal,
             open_journal_for,

@@ -295,7 +295,7 @@ This section captures only the **architectural decisions** a contributor needs t
   Cut is one identity-preserving `Op::Move` (`block::move_after`, cross-page, self-subtree rejected); copy duplicates via `paste_block_after` with fresh ids.
 
 - **Path to enable char-cursor ops.**
-  Add a visible Normal-mode caret painted by `<BlockRow />`, then move the 10 blocked handlers to real implementations (separate PR).
+  Add a visible Normal-mode caret in `<BlockRow />`, then move the 10 blocked handlers to real impls (separate PR).
 
 ### `Enter` outside a textarea (Normal mode)
 
@@ -309,23 +309,21 @@ On the desktop, **following a ref is the click on the token** (`onRefClick`); `E
 
 ### `:shortcode:` emoji autocomplete
 
-While the caret sits inside an open `:shortcode` trigger, `BlockRow` shows a floating popup (`EmojiSuggestPopup`, anchored under the textarea — same pattern as `RefSuggestPopup`).
-It reuses `detectEmojiContext` / `applyEmojiSuggestion` from `@outl/shared/autocomplete` and the `searchEmojis` command (`outl_emoji_search` Tauri side, backed by `outl_md::emoji::search`).
-`↑`/`↓` move the highlight,
-`Enter`/`Tab` accept (inserting the canonical `:shortcode:` form — the `.md` stores the literal, never the codepoint),
-`Esc` closes (a second `Esc` commits the block), clicking a row picks it (`onMouseDown` + `preventDefault`).
-The emoji popup beats the ref popup at the same caret (`detectEmojiContext` only triggers on word-initial `:[a-z]`).
-No `outl-shortcuts` binding — pure trigger-detection.
+Inside an open `:shortcode` trigger, `BlockRow` shows `EmojiSuggestPopup`, reusing `detectEmojiContext` / `applyEmojiSuggestion` and the `searchEmojis` command (`outl_emoji_search`, backed by `outl_md::emoji::search`).
+`↑`/`↓` highlight, `Enter`/`Tab` accept (inserting the canonical `:shortcode:` — the `.md` stores the literal, never the codepoint), `Esc` closes, click picks.
+The emoji popup beats the ref popup at the same caret (`detectEmojiContext` only triggers on word-initial `:[a-z]`); no `outl-shortcuts` binding — pure trigger-detection.
 
 ### `[[page]]` ref autocomplete
 
-While the caret sits inside an open `[[…]]`, `BlockRow` shows a floating page-suggestion popup (`RefSuggestPopup`, anchored under the textarea).
-It reuses the shared `detectRefContext` / `applySuggestion` helpers (`@outl/shared/autocomplete`) and the `search_pages` command the `Cmd+P` picker already calls — no parallel implementation.
-`↑`/`↓` move the highlight,
-`Enter`/`Tab` accept (inserting the page title, or the ISO slug for journals),
-`Esc` closes the popup (a second `Esc` then commits the block),
-and clicking a row picks it (via `onMouseDown` + `preventDefault` so the textarea's blur-commit doesn't fire first).
-Block refs (`((…))`) are intentionally not suggested yet — separate feature.
+Inside an open `[[…]]`, `BlockRow` shows a floating page popup (`RefSuggestPopup`), reusing the shared `detectRefContext` / `applySuggestion` helpers and the `search_pages` command the `Cmd+P` picker already calls — no parallel implementation.
+`↑`/`↓` highlight, `Enter`/`Tab` accept (page title, or ISO slug for journals), `Esc` closes (a second `Esc` commits the block), click picks (`onMouseDown` + `preventDefault` so blur-commit doesn't fire first).
+
+### `((block ref))` autocomplete
+
+The `((` counterpart of `[[page]]` above (issue #116).
+Inside an open `((…))`, `BlockRow` shows `BlockSuggestPopup`, reusing `detectRefContext` (`kind: "block"`) / `applySuggestion` plus the new `search_blocks` command (`outl_md::WorkspaceIndex::search_block_text`).
+Rows show snippet + slug; the pick inserts the **ref handle** (`((blk-XXXXXX))`), never the text (refs resolve by handle); empty query lists the newest blocks.
+Keys mirror the page popup; mobile registers `search_blocks` for parity, popup unwired.
 
 ### Clicking external `[label](url)` links
 

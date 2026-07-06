@@ -6,6 +6,7 @@ use tauri::State;
 
 use crate::state::{AppState, PageView};
 use outl_tauri_shared::commands::page as shared;
+use outl_tauri_shared::state::BlockHit;
 
 #[tauri::command]
 pub(crate) fn list_all_pages(state: State<'_, AppState>) -> Result<Vec<PageMeta>, String> {
@@ -28,6 +29,16 @@ pub(crate) fn search_persons(
     state: State<'_, AppState>,
 ) -> Result<Vec<PageMeta>, String> {
     shared::search_persons(state.inner(), query)
+}
+
+/// Fuzzy-search block text for the `((…))` block-ref autocomplete in
+/// the desktop's block editor. Returns each hit's ref handle + snippet.
+#[tauri::command]
+pub(crate) fn search_blocks(
+    query: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<BlockHit>, String> {
+    shared::search_blocks(state.inner(), query)
 }
 
 /// Search the GitHub gemoji catalog for shortcodes matching `query`.
