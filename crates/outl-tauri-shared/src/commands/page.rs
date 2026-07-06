@@ -230,7 +230,7 @@ pub fn open_ref<S: AppHost>(
         open_or_create_by_ref(ws, state.hlc(), &target).map_err(|e| e.to_string())
     })?;
     with_ws_mut(state, |ws| {
-        if let Err(e) = outl_actions::apply_page_md_with_sidecar(ws, &root, id) {
+        if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_absent(ws, &root, id) {
             // Non-fatal: the op log already has the mutation; the `.md`
             // projection will be retried on the next save / by the
             // orphan scanner on the next boot. Surface both to the local
