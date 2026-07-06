@@ -35,6 +35,13 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Fixed
 
+- **iroh sync survives restrictive networks — custom-CA proxies and post-VPN stale peer addrs (issue #133).**
+  Two blockers that stopped Mac ↔ iOS sync on corporate / VPN networks are fixed in code.
+  **Relay TLS with a custom root CA:** a network with a TLS-inspection proxy (its root CA installed in the OS keychain) had every relay handshake rejected with `invalid peer certificate: UnknownIssuer`, because iroh trusted only Mozilla's bundled roots — not the OS trust store that macOS / `curl` / Safari already honour.
+  outl now delegates relay-TLS validation to the OS keychain (iroh's `platform-verifier` + `CaTlsConfig::system()`, wired once in `bind::n0_builder_ipv4_only`), so a keychain-trusted proxy cert is accepted.
+  **Stale VPN/tunnel IPs after pairing:** a device paired while on a VPN captured its tunnel IPs (`10.x`, `100.x` CGNAT, a public WAN addr) into `peers.json` alongside the real LAN address, and iroh 1.0.0's multipath opened a path to each — stalling even same-WiFi direct sync on the dead paths (`MultipathNotNegotiated`) with the reachable `192.168.x` addr right there.
+  A dial now keeps only the direct IPv4 addresses that share a subnet with a local interface, dropping unreachable tunnel IPs before they can stall the connect (the relay still covers genuine cross-network peers).
+  A third failure mode — a proxy that blocks the relay's WebSocket `Upgrade` and returns `502` — is environmental (iroh 1.0.0 has no non-WebSocket relay transport); the workaround is a self-hosted `[sync] relay_url`, now documented under `docs/relay.md` → "Troubleshooting: restrictive networks".
 - **Underscores inside a word no longer render as italics.**
   The inline tokenizer paired any `_…_` as emphasis, so pasted identifiers like `chamados_chat`, `inc_lag1`, `prod.ml_atendimento`, or `databricks_2_train` rendered half-slanted.
   outl now follows CommonMark: `_` only opens or closes emphasis at a word boundary, never intra-word (`*` stays the intra-word marker).

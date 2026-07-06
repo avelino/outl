@@ -72,7 +72,16 @@ yrs = "0.27"
 # the n0 discovery stack behind the default feature set. Disabling it strips
 # TLS and the endpoint fails to bind. There is no `discovery-n0` feature in
 # 1.0.0 — discovery presets live in `iroh::endpoint::presets`.
-iroh = "1.0.0"
+#
+# `platform-verifier` pulls in `rustls-platform-verifier` so we can delegate
+# relay-TLS validation to the OS keychain via `CaTlsConfig::system()` (see
+# `outl-sync-iroh/src/bind.rs`). Without it iroh's default
+# `CaTlsConfig::EmbeddedWebPki` (Mozilla's bundled roots) rejects any relay cert
+# issued by a custom root CA installed in the OS keychain — e.g. a corporate
+# TLS-inspection proxy — with `invalid peer certificate: UnknownIssuer`, even
+# though macOS / curl / Safari trust it fine. Enabling the feature is NOT enough
+# on its own: `system()` must be passed explicitly (default stays EmbeddedWebPki).
+iroh = { version = "1.0.0", features = ["platform-verifier"] }
 iroh-gossip = "0.101.0"
 
 # Markdown

@@ -32,6 +32,11 @@ qrcode = "0.14"
 # `bytes` is the payload type `GossipSender::broadcast` takes.
 base64 = "0.22"
 bytes = "1"
+# `if-addrs` enumerates the local machine's interfaces (ip + netmask) so a dial
+# can drop a peer's stored direct addrs that are NOT on any local subnet — stale
+# VPN / tunnel IPs captured at pairing time that would otherwise stall iroh's
+# multipath (`MultipathNotNegotiated`). See `PeerEntry::iroh_endpoint_addr`.
+if-addrs = "0.15"
 
 [dev-dependencies]
 tempfile = "3"

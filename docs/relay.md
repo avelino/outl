@@ -174,6 +174,29 @@ For completeness, the shape of standing one up — this is the future-us checkli
 
 ---
 
+## Troubleshooting: restrictive networks (VPN, TLS-inspection proxy)
+
+Corporate / deep-inspection networks and VPNs break relay connectivity in three distinct ways.
+The first is fixed in code; the other two are environmental and need a config or pairing change.
+
+**TLS handshake fails with `UnknownIssuer` (fixed).**
+A network with a custom root CA in the OS keychain (a TLS-inspection proxy) used to have every relay handshake rejected.
+iroh trusted only Mozilla's bundled roots, not your OS trust store, even though macOS / `curl` / Safari accepted the same cert.
+outl now delegates relay-TLS trust to the OS keychain (`rustls-platform-verifier`, wired in `bind::n0_builder_ipv4_only`), so a keychain-trusted proxy cert is accepted.
+No action needed.
+
+**Relay WebSocket upgrade returns `502` (self-host the workaround).**
+Some proxies allow plain HTTPS but block or rewrite the HTTP `Upgrade: websocket` the relay needs, so the connection fails with `expected HTTP 101 Switching Protocols, got status code 502`.
+iroh 1.0.0 has no non-WebSocket relay transport to fall back to, so there is no code fix.
+Point `[sync] relay_url` at a relay on a domain/port the proxy doesn't intercept (see "It's already a config flip" above) — a self-hosted `iroh-relay` on your own domain sidesteps the interception.
+
+**Direct LAN sync stalls after pairing on a VPN (`MultipathNotNegotiated`).**
+If you pair two devices while one is on a VPN, the captured peer address in `peers.json` picks up the VPN's tunnel IPs (`10.x`, `100.x` CGNAT, a public WAN addr) alongside the real `192.168.x` LAN address.
+outl now drops direct addresses that aren't on any local subnet before dialing, so stale tunnel IPs no longer stall the connect.
+If you still hit it on an old `peers.json`, **re-pair with the VPN off** for the cleanest capture, or manually strip the non-LAN `"Ip"` entries (keep only `192.168.x` and the `Relay` entry).
+
+---
+
 ## See also
 
 - [Sync, done right](sync.md) — the transport layer, the op log, the CRDT, and how the iroh transport plugs into `outl-actions::SyncTransport`.

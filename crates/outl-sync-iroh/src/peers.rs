@@ -8,9 +8,67 @@
 use anyhow::{Context, Result};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use tracing::{debug, warn};
+
+/// One local IPv4 interface (address + netmask), used to decide whether a peer's
+/// stored direct addr shares a subnet with this machine — i.e. is reachable over
+/// the LAN at all. See [`is_reachable_lan_ipv4`].
+#[derive(Debug, Clone, Copy)]
+struct LocalV4 {
+    ip: Ipv4Addr,
+    mask: Ipv4Addr,
+}
+
+/// Enumerate this machine's IPv4 interfaces (address + netmask).
+///
+/// Returns an empty `Vec` on any enumeration error — callers treat "no known
+/// interfaces" as **fail-open** (keep every IPv4 direct addr, the pre-filter
+/// behaviour) rather than dropping reachability on a transient syscall failure.
+fn local_v4_ifaces() -> Vec<LocalV4> {
+    match if_addrs::get_if_addrs() {
+        Ok(ifaces) => ifaces
+            .into_iter()
+            .filter_map(|iface| match iface.addr {
+                if_addrs::IfAddr::V4(v4) => Some(LocalV4 {
+                    ip: v4.ip,
+                    mask: v4.netmask,
+                }),
+                if_addrs::IfAddr::V6(_) => None,
+            })
+            .collect(),
+        Err(e) => {
+            warn!("could not enumerate local interfaces ({e}); keeping all IPv4 direct addrs");
+            Vec::new()
+        }
+    }
+}
+
+/// Does `peer` share a subnet with `local` (i.e. `peer & mask == local & mask`)?
+fn same_subnet_v4(peer: Ipv4Addr, local: &LocalV4) -> bool {
+    let mask = u32::from(local.mask);
+    (u32::from(peer) & mask) == (u32::from(local.ip) & mask)
+}
+
+/// Is `peer` on the same LAN subnet as any local interface?
+///
+/// This is the load-bearing filter for a peer's **stored** direct addrs: a
+/// direct addr on a subnet no local interface belongs to can only ever be a
+/// stale capture (a VPN/tunnel IP grabbed at pairing time, `100.x` CGNAT, a
+/// public WAN addr, …). Dialing it can never establish a direct path — the
+/// relay already covers cross-network reachability — but iroh 1.0.0's multipath
+/// opens a path to it anyway and stalls the whole connect on the dead path
+/// (`MultipathNotNegotiated`, ~30s). Dropping it loses nothing and removes the
+/// stall.
+///
+/// **`ifaces` empty ⇒ keep everything** (fail-open — see [`local_v4_ifaces`]).
+/// Loopback (`127.0.0.1`) always matches the `lo0` interface, so loopback dials
+/// (tests, same-host peers) are never dropped.
+fn is_reachable_lan_ipv4(peer: Ipv4Addr, ifaces: &[LocalV4]) -> bool {
+    ifaces.is_empty() || ifaces.iter().any(|iface| same_subnet_v4(peer, iface))
+}
 
 /// Build the per-workspace peers path: `<workspace_root>/.outl/peers.json`.
 ///
@@ -142,7 +200,20 @@ impl PeerEntry {
     /// 2. Node id + `relay_url` (legacy entries, or if the full addr won't
     ///    decode) — connecting via the relay still beats a bare id.
     /// 3. Bare node id — last resort, relies on n0 discovery resolving a route.
+    ///
+    /// Stored direct addrs are additionally filtered to the local machine's
+    /// current LAN: an IPv4 addr on a subnet no local interface belongs to (a
+    /// stale VPN/tunnel IP captured at pairing time) is dropped, because dialing
+    /// it can never form a direct path yet stalls iroh's multipath. See
+    /// `iroh_endpoint_addr_with_ifaces` for the injectable, unit-tested filter.
     pub fn iroh_endpoint_addr(&self) -> Result<iroh::EndpointAddr> {
+        self.iroh_endpoint_addr_with_ifaces(&local_v4_ifaces())
+    }
+
+    /// [`iroh_endpoint_addr`](Self::iroh_endpoint_addr) with the local IPv4
+    /// interface list injected, so the LAN-reachability filter is unit-testable
+    /// without depending on the host's real network config.
+    fn iroh_endpoint_addr_with_ifaces(&self, ifaces: &[LocalV4]) -> Result<iroh::EndpointAddr> {
         let id = self.iroh_node_id()?;
         // Dial the relay AND the IPv4 direct addrs. On the same LAN the direct
         // IPv4 path connects without touching the relay — which is what saves
@@ -157,6 +228,15 @@ impl PeerEntry {
         // before that bind. (The old code dialed relay-only to dodge the IPv6
         // stall, but that also threw away the LAN-direct path and made every
         // connect hostage to the relay.)
+        //
+        // We ALSO drop IPv4 direct addrs that are NOT on any local subnet: a
+        // peer paired while on a VPN captures its tunnel IPs (`10.x`, `100.x`
+        // CGNAT, a public WAN addr) into `endpoint_addr` alongside the real LAN
+        // address. Those are unreachable from this machine's LAN, but iroh 1.0.0
+        // opens a multipath path to each anyway and stalls the whole connect on
+        // the dead paths — even when the real `192.168.x` addr is right there.
+        // `is_reachable_lan_ipv4` keeps only addrs sharing a subnet with a local
+        // interface; the relay still covers genuine cross-network peers.
         let relay = self
             .relay_url
             .as_ref()
@@ -170,8 +250,10 @@ impl PeerEntry {
                         addr = addr.with_relay_url(url);
                     }
                     for sock in stored.ip_addrs() {
-                        if sock.is_ipv4() {
-                            addr = addr.with_ip_addr(*sock);
+                        if let SocketAddr::V4(v4) = sock {
+                            if is_reachable_lan_ipv4(*v4.ip(), ifaces) {
+                                addr = addr.with_ip_addr(*sock);
+                            }
                         }
                     }
                     return Ok(addr);
@@ -303,6 +385,52 @@ mod tests {
             .with_ip_addr("192.168.7.7:4242".parse().expect("direct addr"))
     }
 
+    /// A fake local interface, so the LAN-reachability filter is deterministic
+    /// regardless of the host running the test.
+    fn iface(ip: &str, mask: &str) -> LocalV4 {
+        LocalV4 {
+            ip: ip.parse().expect("iface ip"),
+            mask: mask.parse().expect("iface mask"),
+        }
+    }
+
+    /// The `192.168.7.0/24` LAN the `addr_with_relay_and_direct` direct addr
+    /// (`192.168.7.7`) lives on, so it survives the reachability filter.
+    fn lan_192_168_7() -> Vec<LocalV4> {
+        vec![iface("192.168.7.1", "255.255.255.0")]
+    }
+
+    /// Issue #3: `same_subnet_v4` / `is_reachable_lan_ipv4` — the pure filter
+    /// that drops stale VPN/tunnel IPv4 while keeping same-LAN and loopback.
+    #[test]
+    fn is_reachable_lan_ipv4_matches_only_local_subnets() {
+        let ifaces = vec![
+            iface("192.168.1.50", "255.255.255.0"), // home WiFi
+            iface("127.0.0.1", "255.0.0.0"),        // loopback
+        ];
+        // Same LAN + loopback: reachable.
+        assert!(is_reachable_lan_ipv4(
+            "192.168.1.83".parse().unwrap(),
+            &ifaces
+        ));
+        assert!(is_reachable_lan_ipv4("127.0.0.1".parse().unwrap(), &ifaces));
+        // VPN / CGNAT / WAN captured on another network: not reachable.
+        assert!(!is_reachable_lan_ipv4(
+            "10.71.22.9".parse().unwrap(),
+            &ifaces
+        ));
+        assert!(!is_reachable_lan_ipv4(
+            "100.78.230.122".parse().unwrap(),
+            &ifaces
+        ));
+        assert!(!is_reachable_lan_ipv4(
+            "188.37.137.132".parse().unwrap(),
+            &ifaces
+        ));
+        // Empty iface list ⇒ fail-open (keep everything).
+        assert!(is_reachable_lan_ipv4("10.71.22.9".parse().unwrap(), &[]));
+    }
+
     /// Bug #6 (reachability resolution, relay branch): with a relay present, the
     /// dial addr keeps the relay AND the IPv4 direct addrs — so a same-LAN peer
     /// connects directly without the (possibly flaky) relay — but DROPS global
@@ -319,7 +447,11 @@ mod tests {
             .with_ip_addr("[2001:db8::1]:4242".parse().expect("ipv6")); // dropped
         let entry = PeerEntry::from_endpoint_addr(&full, None).expect("build entry");
 
-        let resolved = entry.iroh_endpoint_addr().expect("resolve");
+        // Inject the peer's LAN as a local interface so the IPv4 direct addr is
+        // reachable and the assertion isolates the IPv6-drop behaviour.
+        let resolved = entry
+            .iroh_endpoint_addr_with_ifaces(&lan_192_168_7())
+            .expect("resolve");
         assert_eq!(resolved.id, id, "resolved must target the same node id");
         assert_eq!(
             resolved.relay_urls().count(),
@@ -334,6 +466,56 @@ mod tests {
         );
     }
 
+    /// Issue #3 (stale VPN/tunnel IPs in `peers.json`): a peer paired while on a
+    /// VPN captured its tunnel IPs alongside the real LAN address. On resolution
+    /// the dial must keep ONLY the same-LAN direct addr (`192.168.1.83`) and the
+    /// relay, dropping every unreachable tunnel/CGNAT/WAN IPv4 — otherwise iroh's
+    /// multipath stalls on the dead paths (`MultipathNotNegotiated`).
+    #[test]
+    fn iroh_endpoint_addr_drops_stale_vpn_ipv4_keeps_lan() {
+        let id = iroh::SecretKey::generate().public();
+        let relay: iroh::RelayUrl = "https://euc1-1.relay.n0.iroh.link./"
+            .parse()
+            .expect("relay url");
+        // The exact `endpoint_addr` payload from the issue: one real LAN addr
+        // buried among five stale tunnel/CGNAT/WAN addrs.
+        let full = iroh::EndpointAddr::new(id)
+            .with_relay_url(relay)
+            .with_ip_addr("10.71.22.9:62858".parse().unwrap())
+            .with_ip_addr("100.78.230.122:62858".parse().unwrap())
+            .with_ip_addr("100.85.18.51:62858".parse().unwrap())
+            .with_ip_addr("188.37.137.132:62858".parse().unwrap())
+            .with_ip_addr("192.0.0.6:62858".parse().unwrap())
+            .with_ip_addr("192.168.1.83:62858".parse().unwrap());
+        let entry = PeerEntry::from_endpoint_addr(&full, None).expect("build entry");
+
+        // This machine is on the same home WiFi as the peer.
+        let ifaces = vec![
+            iface("192.168.1.50", "255.255.255.0"),
+            iface("127.0.0.1", "255.0.0.0"),
+        ];
+        let resolved = entry
+            .iroh_endpoint_addr_with_ifaces(&ifaces)
+            .expect("resolve");
+
+        let ips: Vec<_> = resolved.ip_addrs().copied().collect();
+        assert_eq!(
+            ips.len(),
+            1,
+            "only the same-LAN direct addr survives, got {ips:?}"
+        );
+        assert_eq!(
+            ips[0],
+            "192.168.1.83:62858".parse().unwrap(),
+            "the survivor is the reachable LAN addr"
+        );
+        assert_eq!(
+            resolved.relay_urls().count(),
+            1,
+            "the relay stays as the cross-network fallback"
+        );
+    }
+
     /// Bug #6 (reachability resolution, no-relay branch): with no relay url, fall
     /// back to the stored full `endpoint_addr` (the loopback case — direct addrs
     /// are all we have, e.g. the integration tests dialing 127.0.0.1). Those
@@ -345,7 +527,9 @@ mod tests {
         // No relay → the resolution order must drop through to endpoint_addr.
         entry.relay_url = None;
 
-        let resolved = entry.iroh_endpoint_addr().expect("resolve");
+        let resolved = entry
+            .iroh_endpoint_addr_with_ifaces(&lan_192_168_7())
+            .expect("resolve");
         assert_eq!(resolved.id, full.id);
         assert!(
             resolved.ip_addrs().next().is_some(),

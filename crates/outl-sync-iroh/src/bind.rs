@@ -36,6 +36,7 @@
 
 use iroh::endpoint::presets;
 use iroh::endpoint::Builder;
+use iroh::tls::CaTlsConfig;
 use iroh::{RelayMode, RelayUrl};
 use tracing::warn;
 
@@ -75,7 +76,18 @@ pub(crate) fn n0_builder_ipv4_only(relay_url: Option<&str>) -> Builder {
     // `bind_addr("0.0.0.0:0")` re-adds IPv4 only. `bind_addr` only errors on an
     // unparseable socket address, and this constant is a valid literal, so the
     // `expect` cannot fire.
+    //
+    // `ca_tls_config(CaTlsConfig::system())` delegates relay-TLS trust to the OS
+    // keychain (`rustls-platform-verifier`, gated by the `platform-verifier`
+    // feature) instead of iroh's default `CaTlsConfig::EmbeddedWebPki` (Mozilla's
+    // bundled roots). Any environment with a custom root CA in the OS trust store
+    // — e.g. a corporate TLS-inspection proxy — has its relay certs accepted like
+    // macOS / curl / Safari already do, instead of failing every relay handshake
+    // with `invalid peer certificate: UnknownIssuer`. Enabling the feature alone
+    // is not sufficient: the default stays `EmbeddedWebPki` unless `system()` is
+    // passed explicitly.
     let builder = iroh::Endpoint::builder(presets::N0)
+        .ca_tls_config(CaTlsConfig::system())
         .clear_ip_transports()
         .bind_addr(IPV4_UNSPECIFIED)
         .expect("0.0.0.0:0 is a valid IPv4 socket address");

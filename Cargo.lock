@@ -3836,6 +3836,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "if-addrs"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0a05c691e1fae256cf7013d99dad472dc52d5543322761f83ec8d47eab40d2b"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "igd-next"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4208,6 +4218,7 @@ dependencies = [
  "reqwest 0.13.4",
  "rustls",
  "rustls-pki-types",
+ "rustls-platform-verifier",
  "serde",
  "serde_bytes",
  "strum",
@@ -6177,6 +6188,7 @@ dependencies = [
  "bytes",
  "chrono",
  "dirs",
+ "if-addrs",
  "iroh",
  "iroh-gossip",
  "n0-future",

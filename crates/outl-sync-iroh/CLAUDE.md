@@ -216,7 +216,7 @@ Shared seed/read/wait helpers stay in `tests/common/mod.rs` (read-only); saga-sp
 | 3. Mismatched ids are rejected | `delta_sync_rejects_mismatched_workspace_id` (pre-existing) | `tests/integration.rs` |
 | 4. Pairing adoption (joiner adopts host id, syncs as one) | `gui_pairing_over_live_sync_endpoint` (pre-existing; asserts adopted id persisted in both peers.json) | `tests/integration.rs` |
 | 5. Single endpoint per identity (pair AND sync over the live sync endpoint, no relay hijack) | `gui_pairing_over_live_sync_endpoint` (pre-existing; pairing rides the live sync endpoint, no second bind) | `tests/integration.rs` |
-| 6. Relay-only dial / reachability resolution order | the four `iroh_endpoint_addr_*` tests (prefers relay-only + drops stale direct addrs, falls back to stored addrs, falls back to bare node id, recovers from corrupt stored addr) | `src/peers.rs` `#[cfg(test)]` |
+| 6. Reachability resolution + off-LAN/IPv6 direct-addr filter (issue #133) | `iroh_endpoint_addr_*` + `is_reachable_lan_ipv4_*` (keep on-LAN IPv4, drop IPv6 + stale VPN IPs, fall back to stored/bare/corrupt) | `src/peers.rs` `#[cfg(test)]` |
 | 7. Bidirectional push materializes on BOTH sides AND fires BOTH reload signals | `bidirectional_sync_fires_reload_signal_on_both_sides` (set convergence + `peer_ready_tx` on initiator AND responder) | `tests/regression.rs` |
 | 7. (set-convergence half) both sides hold all ops | `bidirectional_delta_sync` (pre-existing) | `tests/integration.rs` |
 | 8. Membership merge is ADD-only (never clobber a local entry, drop self, drop undialable) | `merge_unknown_never_clobbers_a_known_entry` + `merge_skips_self` / `merge_adds_unknown_and_dedups_known` / `merge_skips_unreachable_peer` | `src/peers.rs`, `src/engine_membership.rs` `#[cfg(test)]` |
@@ -326,30 +326,26 @@ The transport on MCP/GUI is a **latency** optimization (real-time vs next catch-
 URL + **direct socket addrs** — base64-JSON-encoded in the `endpoint_addr`
 field, not just the bare node id.
 
-**Why:** a bare node id forces every connect (boot, catch-up, status probe) to depend on n0 discovery resolving a route, which does not resolve reliably between real devices.
-The status dot showed offline and the first sync never pulled history.
-Two devices on the same WiFi can connect instantly via direct addresses — but only if those addresses were captured and stored.
-They weren't: the old `PeerEntry` stored `relay_url: null` and no addrs.
+**Why:** a bare node id makes every connect depend on n0 discovery resolving a route, unreliable between real devices (offline dot, first sync never pulled history).
+Same-WiFi devices connect instantly via direct addrs — but only if captured; the old `PeerEntry` stored `relay_url: null` and no addrs.
 
-**Capture (`pairing::ready_addr`):** `endpoint.addr()` right after `bind()` is typically empty.
-Before minting the ticket (host) or sending the payload (joiner), both sides call `ready_addr`, which awaits `endpoint.online()` under a mandatory 5s timeout (`online` pends forever with no relay/WAN).
-After that the addr carries the relay + discovered LAN direct addrs.
-On timeout we proceed anyway — the local net report has usually already filled in the direct addrs, all two same-WiFi devices need.
+**Capture (`pairing::ready_addr`):** `endpoint.addr()` right after `bind()` is typically empty, so both sides call `ready_addr` before minting the ticket / sending the payload.
+It awaits `endpoint.online()` under a mandatory 5s timeout (pends forever with no relay/WAN), after which the addr carries the relay + LAN direct addrs; on timeout we proceed anyway (the local net report usually already filled them).
 
-**Exchange:** the host mints the ticket from its ready addr, so the joiner stores a reachable host; the joiner sends its own ready `EndpointAddr` in the pairing payload, so the host stores a reachable joiner.
-Each side persists the other's full addr.
+**Exchange:** host mints the ticket from its ready addr (joiner stores a reachable host); joiner sends its ready `EndpointAddr` in the payload (host stores a reachable joiner).
 
-**Resolution order** (`PeerEntry::iroh_endpoint_addr`): stored `endpoint_addr` → keep the relay + the **IPv4** direct addrs, **drop IPv6**; else id + `relay_url`; else bare id.
+**Resolution order** (`PeerEntry::iroh_endpoint_addr`): stored `endpoint_addr` → keep the relay + the **on-LAN IPv4** direct addrs, **drop IPv6** and **drop off-LAN IPv4**; else id + `relay_url`; else bare id.
 A corrupt `endpoint_addr` logs a warning and falls through, never failing the dial.
 
 **Why not relay-only:** it dropped all direct addrs, so a flaky relay broke even same-WiFi sync.
-Keeping IPv4 direct fixes it; IPv6 is dropped (a dead one stalls multipath for minutes).
+Keeping on-LAN IPv4 direct fixes it (IPv6 + off-LAN IPv4 dropped — a dead one stalls multipath).
 
-**Back-compat:** `endpoint_addr` is `#[serde(default)]`, so old `peers.json` entries (just `node_id` + `relay_url`) still deserialize and dial via the fallback.
-`relay_url` is kept for display + back-compat.
+**Off-LAN IPv4 drop (issue #133):** a VPN-paired peer stores tunnel IPs (`10.x`, `100.x`, WAN) beside its LAN addr, stalling iroh's multipath on the dead ones.
+`iroh_endpoint_addr` keeps only IPv4 on a **local** subnet (`is_reachable_lan_ipv4` + `if-addrs`; injectable `iroh_endpoint_addr_with_ifaces`), fail-open on error.
 
-The ticket codec and the `endpoint_addr` codec are the **same** function (`peers::encode_endpoint_addr` / `decode_endpoint_addr`).
-`encode_ticket` / `decode_ticket` delegate to it — a pairing ticket IS a `PeerEntry.endpoint_addr`.
+**Back-compat:** `endpoint_addr` is `#[serde(default)]`, so old `peers.json` entries (`node_id` + `relay_url` only) still deserialize and dial via the fallback; `relay_url` is kept for display.
+
+Ticket codec == `endpoint_addr` codec (`peers::encode_endpoint_addr` / `decode_endpoint_addr`); `encode_ticket` / `decode_ticket` delegate to it — a pairing ticket IS a `PeerEntry.endpoint_addr`.
 
 ## STOPGAP: IPv4-only bind (iroh 1.0.0 multipath workaround)
 
