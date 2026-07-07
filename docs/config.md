@@ -96,6 +96,19 @@ See [theming.md](theming.md) for the look of each.
 | `transport` | `"iroh"` \| `"file"` | `"iroh"` | every client (TUI / desktop / mobile / MCP) | Which transport ships each device's `ops-<actor>.jsonl` to the others. `"iroh"` opens direct P2P QUIC connections to paired peers; `"file"` is the opt-out that relies on iCloud Drive / a shared filesystem. Missing `[sync]` defaults to iroh (P2P is the primary sync). |
 | `relay_url` | string (URL) | _empty_ | TUI peer-sync wiring | iroh relay used for NAT traversal + fallback. Empty means iroh's n0 public relays. Ignored when `transport = "file"`. See [relay.md](relay.md). |
 
+#### `[snapshot]`
+
+| Field | Type | Default | Read by | Effect |
+|---|---|---|---|---|
+| `enabled` | bool | `true` | TUI / desktop / mobile | Master switch for materialised-state snapshots on disk. The CLI ignores this (always off — its work is ephemeral). When `true`, `Workspace::apply` writes a snapshot every `op_threshold` ops so the next boot skips the full op-log replay. |
+| `op_threshold` | integer (ops) | `10_000` | TUI / desktop / mobile | How many ops between snapshot writes. Lower = faster boot, more disk churn; higher = less churn, slower boot. |
+
+#### `[storage]`
+
+| Field | Type | Default | Read by | Effect |
+|---|---|---|---|---|
+| `lru_cap` | integer (ops) | `20_000` | TUI / desktop / mobile | Maximum number of ops held in `JsonlStorage`'s in-memory cache. `0` keeps the legacy unbounded behaviour (every op resident forever). Any positive value caps the cache so RSS stays roughly constant regardless of workspace history; cold ops stay addressable through the per-actor offset index (`ops-<actor>.idx`). Mobile pins this to `min(lru_cap, 5_000)` to stay well under iOS jetsam. See [RFC #137](https://github.com/avelino/outl/issues/137). |
+
 #### `[tui]`
 
 | Field | Type | Default | Read by | Effect |

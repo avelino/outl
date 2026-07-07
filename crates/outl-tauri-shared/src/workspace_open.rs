@@ -25,10 +25,16 @@ use tracing::{info, warn};
 /// the number of pages; each client decides whether to run
 /// [`reconcile_orphan_md`] inline (mobile) or on a background thread
 /// (desktop).
+///
+/// `lru_cap` is the in-memory op cache bound (RFC #137). `0` keeps the
+/// legacy unbounded behaviour; any positive value sheds cold history
+/// after boot completes (so RSS stays constant regardless of workspace
+/// age).
 pub fn open_workspace_at(
     actor: ActorId,
     hlc: &HlcGenerator,
     path: &Path,
+    lru_cap: usize,
 ) -> anyhow::Result<Workspace> {
     std::fs::create_dir_all(path.join("ops"))?;
     std::fs::create_dir_all(path.join("journals"))?;
@@ -44,6 +50,12 @@ pub fn open_workspace_at(
     if let Err(e) = open_today(&mut workspace, hlc) {
         warn!("could not pre-open today: {e}");
     }
+
+    // Apply the LRU cap AFTER boot so `ops_for_node` (used to rebuild
+    // Yrs `Doc`s) had the full history in RAM. After this point cold
+    // ops are read back from disk on demand via the offset index.
+    workspace.apply_lru_cap(lru_cap);
+
     Ok(workspace)
 }
 

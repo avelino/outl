@@ -99,7 +99,13 @@ impl From<Settings> for Config {
             // `[snapshot]` is core-managed; the desktop doesn't model it.
             // `save` restores it from disk so a hand-set policy survives a
             // settings write (same pattern as `[calendar]` / `[tui]`).
+            // `[snapshot]` is core-managed; the desktop doesn't model it.
+            // `save` restores it from disk so a hand-set policy survives
+            // a settings write (same pattern as `[calendar]` / `[tui]`).
             snapshot: outl_config::SnapshotCfg::default(),
+            // `[storage]` is core-managed (LRU cap for JsonlStorage);
+            // same restore-on-save pattern as the other core sections.
+            storage: outl_config::StorageCfg::default(),
         }
     }
 }

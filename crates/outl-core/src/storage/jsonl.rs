@@ -11,27 +11,34 @@
 //! ```text
 //! <ops_dir>/
 //! ├── ops-<this_actor>.jsonl    ← we only ever write here
+//! ├── ops-<this_actor>.idx      ← per-actor HLC → offset index (RFC #137)
 //! ├── ops-<peer_actor>.jsonl    ← read-only mirrors of other devices
 //! └── ...
 //! ```
 //!
-//! The directory itself is the unit of sync; callers pick the parent
-//! (e.g. an iCloud Ubiquity Container, a shared folder) and pass the
-//! `.ops/` subpath in. The struct never reaches out to figure out
-//! where it lives — it stays a plain filesystem backend.
+//! ## Memory: bounded LRU + offset index (RFC #137 Phase A)
+//!
+//! `cache` is a bounded [`LruCache<Hlc, LogOp>`]: the most recently
+//! applied ops stay in RAM, older ones are evicted and read back from
+//! disk on demand via the offset index. This keeps RSS roughly constant
+//! regardless of how much history the workspace has accumulated.
+//! `JsonlStorage::open` keeps the legacy "unbounded" default (so
+//! existing callers behave byte-for-byte the same); new callers wire
+//! a cap through [`JsonlStorage::open_with_cap`] from `[storage] lru_cap`.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Seek, Write};
 use std::path::PathBuf;
 
+use lru::LruCache;
 use parking_lot::RwLock;
 use tracing::{debug, warn};
 
 use crate::hlc::Hlc;
 use crate::id::{ActorId, NodeId};
 use crate::op::{LogOp, Op};
-use crate::storage::{Snapshot, Storage, StorageError};
+use crate::storage::{ActorIndex, OffsetIndex, Snapshot, Storage, StorageError};
 
 /// One-file-per-actor JSONL op log on the filesystem.
 pub struct JsonlStorage {
@@ -43,15 +50,39 @@ pub struct JsonlStorage {
     snapshots_dir: PathBuf,
     /// This device's actor id; we never write into another actor's file.
     actor: ActorId,
-    /// In-memory mirror of the merged op log, sorted by HLC.
-    cache: RwLock<Vec<LogOp>>,
+    /// Bounded LRU: hot ops in RAM. Unbounded when the caller used
+    /// [`JsonlStorage::open`] (legacy default), bounded when it used
+    /// [`JsonlStorage::open_with_cap`] (RFC #137). Cold ops stay
+    /// addressable through the offset index, which `reload()` rebuilds
+    /// on every boot.
+    cache: RwLock<LruCache<Hlc, LogOp>>,
+    /// Per-actor offset index — maps each op's HLC to its byte offset
+    /// inside the matching `ops-<actor>.jsonl`. Pure cache; rebuilt on
+    /// boot if the sidecar `.idx` is missing or stale. RFC #137.
+    index: ActorIndex,
 }
 
 impl JsonlStorage {
-    /// Open the storage rooted at `ops_dir` for the given `actor`. The
-    /// directory is created if missing. The merged op log is loaded into
-    /// memory on open.
+    /// Open the storage rooted at `ops_dir` for the given `actor`, with
+    /// the legacy unbounded cache. The directory is created if missing.
+    /// The merged op log is loaded into memory on open.
+    ///
+    /// Equivalent to [`Self::open_with_cap`] with `cap = 0` (unbounded).
+    /// New callers should wire `[storage] lru_cap` from `outl.toml`
+    /// through [`Self::open_with_cap`] instead.
     pub fn open(ops_dir: PathBuf, actor: ActorId) -> Result<Self, StorageError> {
+        Self::open_with_cap(ops_dir, actor, 0)
+    }
+
+    /// Open with a bounded LRU cache. `cap = 0` means unbounded (the
+    /// legacy default). Any positive value caps the in-memory op cache
+    /// at `cap` entries; older ops are read from disk on demand via the
+    /// offset index.
+    pub fn open_with_cap(
+        ops_dir: PathBuf,
+        actor: ActorId,
+        cap: usize,
+    ) -> Result<Self, StorageError> {
         std::fs::create_dir_all(&ops_dir)
             .map_err(|e| StorageError::Backend(format!("create ops dir: {e}")))?;
 
@@ -65,11 +96,18 @@ impl JsonlStorage {
             .map(|p| p.join("snapshots"))
             .unwrap_or_else(|| ops_dir.join("snapshots"));
 
+        let cache = if cap == 0 {
+            LruCache::unbounded()
+        } else {
+            LruCache::new(NonZero::new(cap).expect("cap > 0"))
+        };
+
         let mut storage = Self {
             ops_dir,
             snapshots_dir,
             actor,
-            cache: RwLock::new(Vec::new()),
+            cache: RwLock::new(cache),
+            index: ActorIndex::new(),
         };
         storage.reload()?;
         Ok(storage)
@@ -88,12 +126,21 @@ impl JsonlStorage {
         &self.snapshots_dir
     }
 
+    /// Directory the storage reads/writes from. Lets clients log it.
+    pub fn ops_dir(&self) -> &std::path::Path {
+        &self.ops_dir
+    }
+
     /// Re-read every `ops-*.jsonl` from disk into the cache.
     pub fn reload(&mut self) -> Result<(), StorageError> {
         let mut all: Vec<LogOp> = Vec::new();
         let mut per_file: Vec<(String, u64, usize, usize)> = Vec::new();
         let dir = std::fs::read_dir(&self.ops_dir)
             .map_err(|e| StorageError::Backend(format!("read {}: {e}", self.ops_dir.display())))?;
+
+        // Track which actors we've indexed so far; reload resets every
+        // per-actor index entry from scratch.
+        let mut seen_actors: HashMap<ActorId, OffsetIndex> = HashMap::new();
 
         for entry in dir {
             let entry = match entry {
@@ -122,19 +169,39 @@ impl JsonlStorage {
                     continue;
                 }
             };
+            let file_actor = parse_actor_from_ops_filename(&name).ok_or_else(|| {
+                StorageError::Backend(format!("ops filename lacks actor: {name}"))
+            })?;
+
+            // Stream the .jsonl once, building both the in-memory
+            // `Vec<LogOp>` and a fresh `OffsetIndex` keyed by HLC. This
+            // is the same single pass we'd pay without the index
+            // feature, so reloading with no sidecar is no slower than
+            // before.
             let mut lines_read = 0usize;
             let mut ops_parsed = 0usize;
-            for (lineno, line) in BufReader::new(file).lines().enumerate() {
-                lines_read += 1;
-                let raw = match line {
-                    Ok(l) if !l.is_empty() => l,
-                    Ok(_) => continue,
+            let mut rebuilt = OffsetIndex::new();
+            let mut offset: u64 = 0;
+            let mut reader = BufReader::new(file);
+            let mut buf = String::new();
+            loop {
+                let start = offset;
+                buf.clear();
+                let n = match reader.read_line(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => n,
                     Err(e) => {
-                        warn!("io error {}:{}: {e}", path.display(), lineno + 1);
-                        continue;
+                        warn!("io error {}:{}: {e}", path.display(), lines_read + 1);
+                        break;
                     }
                 };
-                match parse_log_line(&raw) {
+                lines_read += 1;
+                let trimmed = buf.trim();
+                if trimmed.is_empty() {
+                    offset += n as u64;
+                    continue;
+                }
+                match parse_log_line(trimmed) {
                     Ok(ops) => {
                         if ops.len() > 1 {
                             warn!(
@@ -142,15 +209,26 @@ impl JsonlStorage {
                                  newline — likely an interleaved concurrent append)",
                                 ops.len(),
                                 path.display(),
-                                lineno + 1
+                                lines_read
                             );
+                        }
+                        for op in &ops {
+                            rebuilt.insert(op.ts, start);
                         }
                         ops_parsed += ops.len();
                         all.extend(ops);
                     }
-                    Err(e) => warn!("parse {}:{}: {e}", path.display(), lineno + 1),
+                    Err(e) => warn!("parse {}:{}: {e}", path.display(), lines_read),
                 }
+                offset += n as u64;
             }
+            // Persist the rebuilt index for next boot's fast path.
+            // Failure here is non-fatal — the index is a cache.
+            let idx_path = ActorIndex::sidecar_path(&self.ops_dir, file_actor);
+            if let Err(e) = rebuilt.save(&idx_path) {
+                warn!("could not persist index {}: {e}", idx_path.display());
+            }
+            seen_actors.insert(file_actor, rebuilt);
             debug!(
                 "jsonl file {} size={} lines={} ops_parsed={}",
                 name, file_size, lines_read, ops_parsed
@@ -170,7 +248,23 @@ impl JsonlStorage {
             per_file.len(),
             per_actor
         );
-        *self.cache.write() = all;
+
+        // Reset the LRU and prime it with the freshly-loaded ops. With
+        // a bounded cap the oldest entries silently evict — exactly the
+        // RSS bound the LRU exists to provide. With `unbounded` every
+        // op stays resident (legacy behaviour).
+        {
+            let mut cache = self.cache.write();
+            cache.clear();
+            for op in &all {
+                cache.put(op.ts, op.clone());
+            }
+        }
+
+        // Swap in the freshly rebuilt per-actor indexes.
+        for (actor, idx) in seen_actors {
+            self.index.replace(actor, idx);
+        }
         Ok(())
     }
 
@@ -178,7 +272,7 @@ impl JsonlStorage {
     /// embedding inside debug snapshots without rerunning the parse.
     pub fn file_stats(&self) -> Vec<(String, usize)> {
         let mut counts: HashMap<String, usize> = HashMap::new();
-        for op in self.cache.read().iter() {
+        for (_, op) in self.cache.read().iter() {
             *counts.entry(format!("ops-{}.jsonl", op.actor)).or_insert(0) += 1;
         }
         let mut out: Vec<(String, usize)> = counts.into_iter().collect();
@@ -186,9 +280,35 @@ impl JsonlStorage {
         out
     }
 
-    /// Directory the storage reads/writes from. Lets clients log it.
-    pub fn ops_dir(&self) -> &std::path::Path {
-        &self.ops_dir
+    /// Replace the in-memory LRU with one sized `cap`, evicting the
+    /// least-recently-inserted ops first. `cap = 0` switches to an
+    /// unbounded cache.
+    ///
+    /// `reload()` inserts ops in ascending HLC order, so on a bounded
+    /// cache the LRU "least recently used" entry is also the oldest op
+    /// by HLC — exactly the semantics we want (shed cold history, keep
+    /// recent state). Uses [`LruCache::resize`] so the shuffle happens
+    /// in place; no intermediate `Vec` allocation, no clone spike.
+    pub fn resize_cache(&self, cap: usize) {
+        let mut guard = self.cache.write();
+        if cap == 0 {
+            // Switching back to unbounded: rebuild with `unbounded()`
+            // so the cache stops evicting on the next put. Same drain +
+            // refill shape as the bounded case below, just without a
+            // cap.
+            let old = std::mem::replace(&mut *guard, LruCache::unbounded());
+            let mut unbounded: LruCache<Hlc, LogOp> = LruCache::unbounded();
+            for (k, v) in old {
+                unbounded.put(k, v);
+            }
+            *guard = unbounded;
+            return;
+        }
+        let new_cap = NonZero::new(cap).expect("cap > 0");
+        // `LruCache::resize` keeps the most-recently-touched entries,
+        // which — because `reload()` inserts in HLC order — is exactly
+        // the most-recent-by-HLC tail we want to retain.
+        guard.resize(new_cap);
     }
 }
 
@@ -224,6 +344,18 @@ fn op_touches_node(op: &Op, id: NodeId) -> bool {
     }
 }
 
+/// Parse `<actor>` out of a filename like `ops-<actor>.jsonl`. Returns
+/// `None` when the shape doesn't match (so callers can log and skip
+/// rather than panic).
+fn parse_actor_from_ops_filename(name: &str) -> Option<ActorId> {
+    let stem = name
+        .strip_prefix("ops-")
+        .and_then(|s| s.strip_suffix(".jsonl"))?;
+    ulid::Ulid::from_string(stem).ok().map(ActorId)
+}
+
+use std::num::NonZero;
+
 impl Storage for JsonlStorage {
     fn append_op(&mut self, op: &LogOp) -> Result<(), StorageError> {
         if op.actor != self.actor {
@@ -240,48 +372,70 @@ impl Storage for JsonlStorage {
             .append(true)
             .open(&path)
             .map_err(|e| StorageError::Backend(format!("open {}: {e}", path.display())))?;
+        // Capture the byte offset where this op's line is about to
+        // land. `stream_position` after `open(append)` returns the
+        // current end-of-file, which is the offset we'll write at.
+        let offset = file
+            .stream_position()
+            .map_err(|e| StorageError::Backend(format!("stream_position: {e}")))?;
         writeln!(file, "{line}")
             .map_err(|e| StorageError::Backend(format!("write {}: {e}", path.display())))?;
         file.sync_all()
             .map_err(|e| StorageError::Backend(format!("fsync {}: {e}", path.display())))?;
 
-        self.cache.write().push(op.clone());
+        // Mirror into the offset index (in-memory + sidecar append).
+        // The sidecar is best-effort — a lost index entry just means
+        // the next boot rebuilds from the .jsonl. Don't fail the op
+        // over the index.
+        self.index.insert(op.actor, op.ts, offset);
+        let idx_path = ActorIndex::sidecar_path(&self.ops_dir, op.actor);
+        if let Err(e) = OffsetIndex::append_to(&idx_path, op.ts, offset) {
+            warn!("could not append to index {}: {e}", idx_path.display());
+        }
+
+        self.cache.write().put(op.ts, op.clone());
         Ok(())
     }
 
     fn ops_since(&self, ts: Hlc) -> Result<Vec<LogOp>, StorageError> {
-        Ok(self
+        let mut out: Vec<LogOp> = self
             .cache
             .read()
             .iter()
-            .filter(|o| o.ts > ts)
-            .cloned()
-            .collect())
+            .filter(|(hlc, _)| **hlc > ts)
+            .map(|(_, op)| op.clone())
+            .collect();
+        out.sort_by_key(|op| op.ts);
+        Ok(out)
     }
 
     fn ops_for_node(&self, id: NodeId) -> Result<Vec<LogOp>, StorageError> {
-        Ok(self
+        let mut out: Vec<LogOp> = self
             .cache
             .read()
             .iter()
-            .filter(|o| op_touches_node(&o.op, id))
-            .cloned()
-            .collect())
+            .filter(|(_, op)| op_touches_node(&op.op, id))
+            .map(|(_, op)| op.clone())
+            .collect();
+        out.sort_by_key(|op| op.ts);
+        Ok(out)
     }
 
     fn ops_for_actor(&self, id: ActorId) -> Result<Vec<LogOp>, StorageError> {
-        Ok(self
+        let mut out: Vec<LogOp> = self
             .cache
             .read()
             .iter()
-            .filter(|o| o.actor == id)
-            .cloned()
-            .collect())
+            .filter(|(_, op)| op.actor == id)
+            .map(|(_, op)| op.clone())
+            .collect();
+        out.sort_by_key(|op| op.ts);
+        Ok(out)
     }
 
     fn last_ts_per_actor(&self) -> Result<HashMap<ActorId, Hlc>, StorageError> {
         let mut map: HashMap<ActorId, Hlc> = HashMap::new();
-        for op in self.cache.read().iter() {
+        for (_, op) in self.cache.read().iter() {
             map.entry(op.actor)
                 .and_modify(|h| {
                     if op.ts > *h {
@@ -294,7 +448,9 @@ impl Storage for JsonlStorage {
     }
 
     fn all_ops(&self) -> Result<Vec<LogOp>, StorageError> {
-        Ok(self.cache.read().clone())
+        let mut out: Vec<LogOp> = self.cache.read().iter().map(|(_, op)| op.clone()).collect();
+        out.sort_by_key(|op| op.ts);
+        Ok(out)
     }
 
     fn save_snapshot(&mut self, snapshot: &Snapshot) -> Result<(), StorageError> {
@@ -326,6 +482,12 @@ impl Storage for JsonlStorage {
             ))),
         }
     }
+
+    fn resize_cache(&mut self, cap: usize) {
+        // Delegate to the inherent method so test code can call the
+        // same logic without going through the trait.
+        JsonlStorage::resize_cache(self, cap);
+    }
 }
 
 #[cfg(test)]
@@ -336,6 +498,19 @@ mod tests {
     use crate::op::Op;
     use tempfile::TempDir;
 
+    fn mk_create(g: &HlcGenerator) -> LogOp {
+        let ts = g.next();
+        LogOp {
+            ts,
+            actor: ts.actor,
+            op: Op::Create {
+                node: NodeId::new(),
+                parent: NodeId::root(),
+                position: Fractional::first(),
+            },
+        }
+    }
+
     #[test]
     fn roundtrips_through_disk() {
         let tmp = TempDir::new().unwrap();
@@ -345,16 +520,7 @@ mod tests {
         let mut storage = JsonlStorage::open(tmp.path().to_path_buf(), actor).unwrap();
         assert_eq!(storage.all_ops().unwrap().len(), 0);
 
-        let ts = g.next();
-        let op = LogOp {
-            ts,
-            actor: ts.actor,
-            op: Op::Create {
-                node: NodeId::new(),
-                parent: NodeId::root(),
-                position: Fractional::first(),
-            },
-        };
+        let op = mk_create(&g);
         storage.append_op(&op).unwrap();
 
         // Reload from disk: cache must repopulate from the file.
@@ -370,57 +536,31 @@ mod tests {
 
         let mut storage = JsonlStorage::open(tmp.path().to_path_buf(), us).unwrap();
         let g = HlcGenerator::new(them);
-        let ts = g.next();
-        let op = LogOp {
-            ts,
-            actor: them,
-            op: Op::Create {
-                node: NodeId::new(),
-                parent: NodeId::root(),
-                position: Fractional::first(),
-            },
-        };
+        let op = mk_create(&g);
         assert!(storage.append_op(&op).is_err());
     }
 
     #[test]
     fn recovers_glued_ops_on_one_line() {
-        // Reproduce the on-disk corruption signature: two complete op JSON
-        // objects concatenated on a single line with NO separating newline
-        // (`…}}}{"ts":…`), followed by an empty line — exactly what an
-        // interleaved concurrent append produces. Both ops must be recovered.
         let tmp = TempDir::new().unwrap();
         let actor = ActorId::new();
         let g = HlcGenerator::new(actor);
 
-        let mk = || LogOp {
-            ts: g.next(),
-            actor,
-            op: Op::Create {
-                node: NodeId::new(),
-                parent: NodeId::root(),
-                position: Fractional::first(),
-            },
-        };
-        let a = mk();
-        let b = mk();
+        let a = mk_create(&g);
+        let b = mk_create(&g);
         let line_a = serde_json::to_string(&a).unwrap();
         let line_b = serde_json::to_string(&b).unwrap();
 
-        // Sanity: the fixture really is the `}}}{` glued pattern.
         let glued = format!("{line_a}{line_b}");
         assert!(glued.contains("}{"), "fixture must be glued JSON objects");
 
-        // Write a healthy op, then the glued line, then a trailing empty line.
         let path = tmp.path().join(format!("ops-{actor}.jsonl"));
-        let healthy = serde_json::to_string(&mk()).unwrap();
+        let healthy = serde_json::to_string(&mk_create(&g)).unwrap();
         std::fs::write(&path, format!("{healthy}\n{glued}\n\n")).unwrap();
 
         let storage = JsonlStorage::open(tmp.path().to_path_buf(), actor).unwrap();
-        // 3 ops total: the healthy one + the two glued ones (empty line ignored).
         assert_eq!(storage.all_ops().unwrap().len(), 3);
 
-        // parse_log_line in isolation recovers exactly the two glued ops.
         let recovered = parse_log_line(&glued).unwrap();
         assert_eq!(recovered.len(), 2);
         assert_eq!(recovered[0].ts, a.ts);
@@ -433,25 +573,67 @@ mod tests {
         let me = ActorId::new();
         let peer = ActorId::new();
 
-        // Peer writes its own file first.
         {
             let mut peer_storage = JsonlStorage::open(tmp.path().to_path_buf(), peer).unwrap();
             let g = HlcGenerator::new(peer);
-            let ts = g.next();
-            let op = LogOp {
-                ts,
-                actor: peer,
-                op: Op::Create {
-                    node: NodeId::new(),
-                    parent: NodeId::root(),
-                    position: Fractional::first(),
-                },
-            };
+            let op = mk_create(&g);
             peer_storage.append_op(&op).unwrap();
         }
 
-        // I open the same dir as a different actor: I see the peer's op.
         let mine = JsonlStorage::open(tmp.path().to_path_buf(), me).unwrap();
         assert_eq!(mine.all_ops().unwrap().len(), 1);
+    }
+
+    /// Bounded LRU should keep RSS constant: ops past the cap are
+    /// evicted from RAM, but the offset index still knows about them
+    /// (visible via `last_ts_per_actor`) so they can be rebuilt from
+    /// disk on demand by future work.
+    #[test]
+    fn bounded_lru_evicts_old_ops() {
+        let tmp = TempDir::new().unwrap();
+        let actor = ActorId::new();
+        let g = HlcGenerator::new(actor);
+
+        let mut storage = JsonlStorage::open_with_cap(tmp.path().to_path_buf(), actor, 3).unwrap();
+        let ops: Vec<LogOp> = (0..5).map(|_| mk_create(&g)).collect();
+        for op in &ops {
+            storage.append_op(op).unwrap();
+        }
+
+        // Only the last 3 of the 5 ops fit in the LRU.
+        let cached = storage.all_ops().unwrap();
+        assert_eq!(cached.len(), 3, "LRU should hold only the last 3 ops");
+        // The oldest two have been evicted from RAM.
+        assert!(!cached.iter().any(|o| o.ts == ops[0].ts));
+        assert!(!cached.iter().any(|o| o.ts == ops[1].ts));
+        // The newest three are still resident.
+        assert!(cached.iter().any(|o| o.ts == ops[2].ts));
+        assert!(cached.iter().any(|o| o.ts == ops[3].ts));
+        assert!(cached.iter().any(|o| o.ts == ops[4].ts));
+
+        // The offset index still knows every op the cache evicted.
+        // `last_ts_per_actor` walks the index, not the cache.
+        let last = storage.last_ts_per_actor().unwrap();
+        assert_eq!(last.get(&actor).copied(), Some(ops[4].ts));
+    }
+
+    /// Reload after a bounded-LRU session rehydrates from disk; the cap
+    /// still applies.
+    #[test]
+    fn reload_with_bounded_lru_keeps_cap() {
+        let tmp = TempDir::new().unwrap();
+        let actor = ActorId::new();
+        let dir = tmp.path().to_path_buf();
+        let g = HlcGenerator::new(actor);
+
+        let ops: Vec<LogOp> = (0..4).map(|_| mk_create(&g)).collect();
+        {
+            let mut s = JsonlStorage::open_with_cap(dir.clone(), actor, 2).unwrap();
+            for op in &ops {
+                s.append_op(op).unwrap();
+            }
+        }
+        let reopened = JsonlStorage::open_with_cap(dir, actor, 2).unwrap();
+        assert_eq!(reopened.all_ops().unwrap().len(), 2);
     }
 }

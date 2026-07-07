@@ -512,6 +512,23 @@ impl Workspace {
         self.ensure_doc_for_edit(node);
         self.content.replace_text(node, &self.log, new_text)
     }
+
+    /// Apply the LRU cap configured by the client, after boot has
+    /// finished re-materialising Yrs `Doc`s.
+    ///
+    /// Boot needs every op in RAM so `ops_for_node` (used to rebuild
+    /// `Doc`s for nodes edited after the snapshot cutoff) sees the full
+    /// `Edit` history. Once boot is done, the long-running client can
+    /// shed cold history: `cap = 50_000` keeps the most-recent ops
+    /// resident; older ones come back from disk via the offset index.
+    /// RFC #137 Phase A.
+    ///
+    /// `cap = 0` means "unbounded" — keep every op resident (legacy
+    /// default). Idempotent and safe to call at any point in the
+    /// lifecycle (clients may resize on config change).
+    pub fn apply_lru_cap(&mut self, cap: usize) {
+        self.storage.resize_cache(cap);
+    }
 }
 
 #[cfg(test)]

@@ -101,6 +101,7 @@ pub(crate) fn spawn_workspace_opener(
     app: tauri::AppHandle,
 ) {
     let actor = hlc.actor();
+    let lru_cap = outl_config::load().storage.lru_cap;
     thread::spawn(move || {
         if !last_workspace.exists() {
             warn!(
@@ -113,7 +114,7 @@ pub(crate) fn spawn_workspace_opener(
         // resolved; legacy blocks moved under it. **No orphan
         // reconcile here** — that runs after we publish the workspace
         // so the user sees today's journal immediately.
-        let workspace = match open_workspace_at(actor, &hlc, &last_workspace) {
+        let workspace = match open_workspace_at(actor, &hlc, &last_workspace, lru_cap) {
             Ok(w) => w,
             Err(e) => {
                 warn!(

@@ -29,7 +29,8 @@ pub(crate) fn set_workspace(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let path = PathBuf::from(&path);
-    let workspace = open_workspace_at(state.hlc.actor(), &state.hlc, &path)
+    let lru_cap = outl_config::load().storage.lru_cap;
+    let workspace = open_workspace_at(state.hlc.actor(), &state.hlc, &path, lru_cap)
         .map_err(|e| format!("open workspace at {}: {e}", path.display()))?;
 
     *state.workspace.lock() = Some(workspace);

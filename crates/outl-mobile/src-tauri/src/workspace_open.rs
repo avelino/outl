@@ -127,8 +127,13 @@ pub(crate) fn spawn_workspace_opener(
     app: tauri::AppHandle,
 ) {
     let actor = hlc.actor();
+    // Mobile pins the LRU cap to 5k ops (≈ 1 MB of cache) regardless of
+    // what `outl.toml` says. The home page + its backlink set fit
+    // comfortably in 5k ops; the rest is rebuildable from the offset
+    // index. Keeps the long-lived client well under iOS jetsam.
+    let lru_cap = outl_config::load().storage.lru_cap.min(5_000);
     thread::spawn(move || {
-        let mut workspace = match open_workspace_at(actor, &hlc, &storage_root) {
+        let mut workspace = match open_workspace_at(actor, &hlc, &storage_root, lru_cap) {
             Ok(w) => w,
             Err(e) => {
                 warn!("background open failed for {}: {e}", storage_root.display());

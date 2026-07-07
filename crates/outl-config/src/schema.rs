@@ -29,6 +29,7 @@ pub struct Config {
     pub sync: SyncConfig,
     pub tui: TuiCfg,
     pub snapshot: SnapshotCfg,
+    pub storage: StorageCfg,
 }
 
 /// TUI-only preferences (the desktop ignores this section).
@@ -201,6 +202,30 @@ impl Default for SnapshotCfg {
             enabled: true,
             op_threshold: 10_000,
         }
+    }
+}
+
+/// Storage section — controls `JsonlStorage`'s in-memory footprint
+/// (RFC #137). The op-log cache is a bounded LRU; ops evicted from
+/// RAM are addressable through the per-actor offset index. This keeps
+/// RSS roughly constant regardless of how much history the workspace
+/// has accumulated.
+///
+/// Defaults are conservative: 20k ops ≈ 4 MB of cache on the desktop,
+/// enough for the home page plus its backlinks; mobile pins to 5k
+/// (≈ 1 MB) at boot to stay well under iOS jetsam.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StorageCfg {
+    /// Maximum number of ops held in RAM per `JsonlStorage` instance.
+    /// `0` is treated as "unbounded" (legacy behaviour — every op
+    /// stays resident). Anything `> 0` enforces the LRU cap.
+    pub lru_cap: usize,
+}
+
+impl Default for StorageCfg {
+    fn default() -> Self {
+        Self { lru_cap: 20_000 }
     }
 }
 

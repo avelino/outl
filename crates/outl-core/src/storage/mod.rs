@@ -10,9 +10,11 @@ use crate::op::LogOp;
 use std::collections::HashMap;
 use thiserror::Error;
 
+pub mod index;
 pub mod jsonl;
 pub mod memory;
 
+pub use index::{ActorIndex, OffsetIndex};
 pub use jsonl::JsonlStorage;
 pub use memory::MemoryStorage;
 
@@ -89,4 +91,18 @@ pub trait Storage: Send + Sync {
     fn snapshot_cutoff(&self) -> Result<Option<Hlc>, StorageError> {
         Ok(None)
     }
+
+    /// Shrink (or grow) the in-memory op cache to hold at most `cap`
+    /// ops. `cap = 0` means "unbounded" — keep every op resident (the
+    /// legacy default). Default no-op; [`JsonlStorage`] implements it
+    /// for real.
+    ///
+    /// Called by `Workspace` after boot completes (see
+    /// `Workspace::apply_lru_cap`). Boot needs every op in RAM to
+    /// re-materialise Yrs `Doc`s via `ops_for_node`; once that's done,
+    /// the long-running client can shed the cold history.
+    ///
+    /// Implementations must be idempotent and safe to call from any
+    /// point in the lifecycle.
+    fn resize_cache(&mut self, _cap: usize) {}
 }

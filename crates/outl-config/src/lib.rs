@@ -59,8 +59,8 @@ mod schema;
 
 pub use paths::{config_dir, config_path};
 pub use schema::{
-    CalendarCfg, Config, EditorCfg, SnapshotCfg, SyncConfig, SyncTransportKind, ThemeCfg, TuiCfg,
-    WorkspaceCfg,
+    CalendarCfg, Config, EditorCfg, SnapshotCfg, StorageCfg, SyncConfig, SyncTransportKind,
+    ThemeCfg, TuiCfg, WorkspaceCfg,
 };
 
 use std::fs;

@@ -26,6 +26,7 @@ hex = { workspace = true }
 parking_lot = { workspace = true }
 chrono = { workspace = true }
 fs2 = { workspace = true }
+lru = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

@@ -109,7 +109,7 @@ fn peak_rss_bytes() -> u64 {
     }
 }
 
-/// Run one scale row: generate, snapshot, boot both ways, print the row.
+/// Run one scale row: generate, snapshot, boot two ways, print the row.
 ///
 /// Shared by the per-scale tests below so each can run in isolation —
 /// generation is the slow step (~4 ms/op fsync-bound on an SSD), and a
@@ -141,15 +141,8 @@ fn run_scale(scale: Scale) {
         Some(root.to_path_buf()),
     )
     .unwrap();
-    // Disable in-band trigger so the snapshot we measure is the one
-    // we write explicitly at the end (otherwise it fires partway
-    // through generation and confuses the measurement).
     ws.set_snapshot_policy(false, 0);
 
-    // Generation: 1 Create + N Edits per node. The `Edit` carries a
-    // tiny placeholder update — the boot-path cost we're measuring
-    // is structural replay + cache load, which doesn't depend on
-    // real text content. fsync-per-op dominates wall time.
     let start_gen = Instant::now();
     for _ in 0..scale.nodes {
         let n = NodeId::new();
@@ -175,8 +168,6 @@ fn run_scale(scale: Scale) {
     }
     let gen_time = start_gen.elapsed();
 
-    // Save snapshot synchronously (the path TUI / desktop / mobile
-    // take on shutdown).
     ws.save_snapshot().unwrap();
     let snap_size = std::fs::metadata(snapshots_dir.join(format!("snap-{actor}.bin")))
         .map(|m| m.len())
@@ -184,7 +175,7 @@ fn run_scale(scale: Scale) {
     let node_count = ws.tree().node_count();
     drop(ws);
 
-    // Boot path 1: with snapshot present.
+    // Boot path 1: snapshot present, LRU unbounded.
     let start = Instant::now();
     let ws1 = Workspace::open_with_storage(
         actor,
@@ -211,18 +202,8 @@ fn run_scale(scale: Scale) {
     let nodes_full = ws2.tree().node_count();
     drop(ws2);
 
-    // Sanity: every path must land on the same node count, otherwise
-    // the bench is comparing different states.
-    assert_eq!(
-        nodes_snap, nodes_full,
-        "node count diverged between snapshot and full-replay boot at {}",
-        scale.label
-    );
-    assert_eq!(
-        nodes_snap, node_count,
-        "node count drifted between generation and boot at {}",
-        scale.label
-    );
+    assert_eq!(nodes_snap, nodes_full);
+    assert_eq!(nodes_snap, node_count);
 
     eprintln!(
         "{:>6} | {:>9} | {:>6.1?} | {:>10.2?} | {:>10.2?} | {:>6} MB | {:>6} MB | {:>6} KB",
@@ -234,16 +215,6 @@ fn run_scale(scale: Scale) {
         rss_snap / 1024 / 1024,
         rss_full / 1024 / 1024,
         snap_size / 1024,
-    );
-    eprintln!(
-        "  rss_snap = {} MB, rss_full = {} MB (peak RSS of this process after boot)",
-        rss_snap / 1024 / 1024,
-        rss_full / 1024 / 1024
-    );
-    eprintln!(
-        "  speedup: {:.2}x (saved {:?} per boot)",
-        boot_full.as_secs_f64() / boot_snap.as_secs_f64().max(0.000_001),
-        boot_full.checked_sub(boot_snap).unwrap_or_default()
     );
 }
 
