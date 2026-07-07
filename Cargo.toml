@@ -123,6 +123,7 @@ tauri-plugin-os = "2"
 # Dev
 proptest = "1"
 tempfile = "3"
+libc = "0.2"
 
 [profile.release]
 lto = "thin"
