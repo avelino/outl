@@ -105,6 +105,11 @@ export function PageSwitcher(props: PageSwitcherProps) {
     if (p.kind === "journal") return {};
     let timer: ReturnType<typeof setTimeout> | undefined;
     let start: { x: number; y: number } | undefined;
+    // Set when the long-press fires so the subsequent `click` event
+    // (the browser always emits one when the finger lifts, even
+    // after a sustained hold) is suppressed. Without this, both
+    // `handleDelete` and `props.onPick` fire on the same gesture.
+    let suppressedClick = false;
     const LONG_PRESS_MS = 500;
     const MOVE_TOLERANCE = 10;
     return {
@@ -112,6 +117,7 @@ export function PageSwitcher(props: PageSwitcherProps) {
         start = { x: e.clientX, y: e.clientY };
         timer = setTimeout(() => {
           timer = undefined;
+          suppressedClick = true;
           void handleDelete(p);
         }, LONG_PRESS_MS);
       },
@@ -134,6 +140,16 @@ export function PageSwitcher(props: PageSwitcherProps) {
         if (timer) {
           clearTimeout(timer);
           timer = undefined;
+        }
+      },
+      // Captured BEFORE the row's `onClick` (React fires pointer
+      // capture-phase before click bubble-phase). Eats the click
+      // that follows a long-press so `onPick` doesn't also run.
+      onClickCapture(e: MouseEvent) {
+        if (suppressedClick) {
+          e.preventDefault();
+          e.stopPropagation();
+          suppressedClick = false;
         }
       },
     };

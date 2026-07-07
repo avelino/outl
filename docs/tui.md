@@ -353,13 +353,17 @@ Hooks are dispatched once per mutation; a hook that itself mutates the workspace
 
 ### Pages sidebar
 
-Toggled by `\` (Backspace in Normal mode) or `Ctrl+E`.
+Toggled by `Ctrl+E` (the desktop-standard "toggle sidebar" chord; `\` was dropped to avoid clashing with it).
 Shows Today / pinned / recent pages and a mini-calendar of journals.
-`j` / `k` move the selection, `Tab` cycles the section (Today / Pinned / Recent / Calendar), `Enter` opens the focused page, and `d` on a regular page arms a `delete page '<title>'? y/n` confirmation in the status line — `y` confirms, any other key cancels (and is swallowed).
-The `g d` chord (Normal mode) routes through the same confirmation flow: when the sidebar has focus it deletes the highlighted row, when the outline has focus it deletes the current page (refusing journals).
-Journals and calendar rows are excluded from both affordances (only regular pages can be deleted); pinned/recent journals are also safe.
-On confirm, the page root is moved to `NodeId::trash()` via `outl_actions::page::delete`, the `.md` + `.outl` are removed via `outl_actions::journal::remove_page_projection`, the index is rebuilt, and if you deleted the page you were viewing the TUI lands on today's journal.
-For fuzzy title jumps without the pane, `Ctrl+P` (quick switcher) still works without opening the sidebar.
+`j` / `k` move the selection.
+`Tab` cycles the section (Today / Pinned / Recent / Calendar).
+`Enter` opens the focused page.
+`d` on a regular page arms a `delete page '<title>'? y/n` confirmation in the status line.
+`y` confirms, any other key cancels (and is swallowed).
+The `g d` chord (Normal mode) routes through the same confirmation flow: with the sidebar focused it deletes the highlighted row, with the outline focused it deletes the current page.
+Journals are refused in both paths (calendar rows are a no-op; pinned/recent journals are silently skipped).
+On confirm, the page root moves to `NodeId::trash()` via `outl_actions::page::delete`, the `.md` + `.outl` projections are removed, the index is rebuilt, and if the deleted page was the current view the TUI lands on today's journal.
+For fuzzy title jumps without the pane, `Ctrl+P` (quick switcher) still works with the sidebar closed.
 
 ## Parser-warning banner
 

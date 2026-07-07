@@ -163,6 +163,20 @@ impl App {
             SidebarSection::Calendar => None,
         };
         if let Some(slug) = slug {
+            // Journal guard: Pinned / Recent can surface journals
+            // (a pinned daily note, a recently-opened journal).
+            // Deleting one from the sidebar contradicts the calendar
+            // exclusion and the chord path's journal refusal, so
+            // refuse here too. No toast — a silent no-op matches the
+            // Calendar section's posture.
+            let is_journal = self
+                .index
+                .by_slug(&slug)
+                .map(|e| e.is_journal)
+                .unwrap_or_else(|| NaiveDate::parse_from_str(&slug, "%Y-%m-%d").is_ok());
+            if is_journal {
+                return;
+            }
             self.arm_sidebar_delete(slug);
         }
     }
