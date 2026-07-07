@@ -23,6 +23,7 @@ import {
   copyMarkdown,
   createBlock,
   deleteBlock,
+  deletePage,
   editBlock,
   indentBlock,
   moveBlockAfter,
@@ -545,6 +546,24 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
       // cursor doesn't land on `null` after the delete.
       const prev = previousVisibleId(id, appState.outline);
       await runOn(deleteBlock(pageId, id), prev);
+    },
+    // Delete the currently-viewed page. Triggered from the sidebar's
+    // hover × button (the handler is reused here for keyboard parity
+    // if a future binding maps a chord to `DeletePage`). We confirm
+    // via the OS dialog before calling the backend; the backend does
+    // NOT re-confirm. Returns today's journal so the view navigates
+    // away from the deleted page in the same round-trip.
+    DeletePage: async () => {
+      const slug = appState.page?.slug;
+      if (!slug) return;
+      const title = appState.page?.title ?? slug;
+      const ok = window.confirm(
+        `Delete page "${title}"?\n\nThis removes the page and all its blocks. ` +
+          `The deletion syncs to paired devices.`,
+      );
+      if (!ok) return;
+      const view = await safeCall(deletePage(slug));
+      if (view) deps.applyView(view);
     },
     ToggleCollapsed: async () => {
       const pageId = appState.page?.id;

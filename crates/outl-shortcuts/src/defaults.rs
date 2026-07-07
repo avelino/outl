@@ -202,6 +202,18 @@ pub fn default_bindings() -> Vec<Binding> {
             Action::OpenToday,
             "Jump to today (chord)",
         ),
+        // `g d` = delete the focused page. "go delete" mnemonic, same
+        // `g<action>` pattern as `g j` (today) / `g x` (execute) /
+        // `g p` (pin). Acts on the sidebar-highlighted row when the
+        // sidebar has focus (TUI) or the current page otherwise
+        // (desktop / TUI outline). Each client confirms before
+        // invoking — see `Action::DeletePage`.
+        Binding::new(
+            pair('g', 'd'),
+            Normal,
+            Action::DeletePage,
+            "Delete page (chord)",
+        ),
         Binding::new(
             ctrl('p'),
             Normal,

@@ -127,6 +127,22 @@ pub enum Action {
     /// Copy the current block's `((blk-…))` ref handle to clipboard.
     CopyBlockRef,
 
+    // ── page operations ──────────────────────────────────────────
+    //
+    // Page-level actions that act on the page as a whole rather than
+    // an individual block. Wired through the shared `(chord, action)`
+    // catalog so every client agrees on the spelling: `g d` (Normal
+    // mode, "go delete") is the canonical chord, mirroring the
+    // `g<action>` family (`g j`, `g x`, `g p`). Desktop also exposes
+    // it via the sidebar hover `×` button; mobile via long-press in
+    // the page switcher (no chord consumed). Each client confirms
+    // before invoking the underlying `outl_actions::page::delete`.
+    /// Delete the focused page. When the sidebar has focus (TUI), the
+    /// highlighted row is the target; otherwise the current page.
+    /// Each client asks for confirmation before invoking
+    /// `outl_actions::page::delete`.
+    DeletePage,
+
     // ── block clipboard (view-mode cut / copy / paste of a block) ─
     //
     // These act on a whole block + its subtree while the user is in

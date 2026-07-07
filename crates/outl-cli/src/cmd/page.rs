@@ -352,22 +352,33 @@ pub fn update(
 }
 
 /// Delete a page by moving its root to the trash. The op stays in the
-/// log so peers converge.
+/// log so peers converge; the on-disk `.md` + sidecar projection is
+/// dropped so the page disappears from this device's listings right
+/// away.
+///
+/// The CRDT half lives in [`outl_actions::page::delete`] (shared with
+/// the TUI sidebar and the desktop / mobile clients); this wrapper
+/// owns only the projection cleanup and the JSON envelope.
 pub fn delete(ctx: &mut WsCtx, slug: &str) -> Result<Value, ApiError> {
-    let id = resolve(ctx, slug)?;
-    let meta = page_meta(&ctx.workspace, id)
-        .ok_or_else(|| ApiError::new(codes::INTERNAL, "page meta missing".to_string()))?;
-
-    outl_actions::block::delete(&mut ctx.workspace, &ctx.hlc, id).map_err(ApiError::internal)?;
+    let meta =
+        outl_actions::delete_page(&mut ctx.workspace, &ctx.hlc, slug).map_err(|e| match e {
+            outl_actions::ActionError::PageNotFound(_) => {
+                ApiError::new(codes::PAGE_NOT_FOUND, format!("page `{slug}` not found"))
+            }
+            other => ApiError::internal(other),
+        })?;
 
     // Remove the on-disk projection so peers don't see a stale page.
     // We log failures so a broken FS doesn't silently leave orphans —
     // `outl doctor` would flag them, but the operator deserves to know
     // immediately.
-    let md_path = outl_actions::page_md_path(&ctx.root, &meta);
-    remove_or_warn(&md_path, "page md");
-    let sidecar_path = outl_md::resolve_sidecar_path(&md_path);
-    remove_or_warn(&sidecar_path, "page sidecar");
+    if let Err(e) = outl_actions::remove_page_projection(&ctx.root, &meta) {
+        tracing::warn!(
+            target: "outl::cmd::page",
+            "could not remove page projection for {}: {e}",
+            meta.slug
+        );
+    }
 
     Ok(json!({
         "slug": meta.slug,

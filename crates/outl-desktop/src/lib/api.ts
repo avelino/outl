@@ -249,6 +249,7 @@ export type Action =
   | { kind: "MoveBlockUp" }
   | { kind: "MoveBlockDown" }
   | { kind: "DeleteBlock" }
+  | { kind: "DeletePage" }
   | { kind: "ToggleCollapsed" }
   | { kind: "ToggleTodo" }
   | { kind: "CopyBlockRef" }

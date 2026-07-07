@@ -321,7 +321,35 @@ pub fn open_or_create(
     Ok(node)
 }
 
-// `open_or_create_by_name` / `open_or_create_by_ref` and the shared
+/// Delete a page by moving its root node to the trash.
+///
+/// The page's whole subtree (its blocks) travels with it in a single
+/// `Op::Move` to [`NodeId::trash()`] (via [`crate::block::delete`]),
+/// so the page disappears from listings in one op. The op stays in the
+/// log forever — that's what lets deletion converge across devices and
+/// keeps future reordering correct (see `docs/crdt.md`).
+///
+/// This function is the **CRDT half** of "delete a page". It does not
+/// touch the on-disk `.md` + `.outl` projection: filesystem cleanup
+/// stays in the caller (CLI / Tauri command / TUI each own a different
+/// workspace root path). After this returns, callers should drop the
+/// projection via [`crate::journal::remove_page_projection`] so a peer
+/// that hasn't received the op yet doesn't keep reading a stale page.
+///
+/// Returns the deleted page's [`PageMeta`] so the caller can derive
+/// the projection path and navigate the user away.
+pub fn delete(
+    workspace: &mut Workspace,
+    hlc: &HlcGenerator,
+    slug: &str,
+) -> Result<PageMeta, ActionError> {
+    let id =
+        find_by_slug(workspace, slug).ok_or_else(|| ActionError::PageNotFound(slug.to_string()))?;
+    let meta = page_meta(workspace, id).ok_or_else(|| ActionError::NotInTree(id.to_string()))?;
+    crate::block::delete(workspace, hlc, id)?;
+    Ok(meta)
+}
+
 // resolution ladder live in the sibling `resolve` module; `person`
 // owns the `type:: person` policy. Both are re-exported at the crate
 // root via `lib.rs`.
@@ -576,6 +604,35 @@ mod tests {
         let today_id = open_today(&mut w, &hlc).unwrap();
         assert_eq!(w.tree().parent(a), Some(today_id));
         assert_eq!(w.tree().parent(b), Some(today_id));
+    }
+
+    #[test]
+    fn delete_removes_page_from_listings() {
+        // `page::delete` moves the page root to `NodeId::trash()`, so
+        // `find_by_slug` / `list_all` stop surfacing it. The op stays
+        // in the log; only the materialised tree drops the node.
+        let (mut w, hlc) = ws();
+        let id = open_or_create(&mut w, &hlc, "doomed", "Doomed", PageKind::Page).unwrap();
+        // Sanity: exists before delete.
+        assert_eq!(find_by_slug(&w, "doomed"), Some(id));
+        assert_eq!(list_all(&w).len(), 1);
+
+        let meta = delete(&mut w, &hlc, "doomed").unwrap();
+        assert_eq!(meta.slug, "doomed");
+
+        // After delete: gone from slug lookup and from the listing.
+        assert_eq!(find_by_slug(&w, "doomed"), None);
+        assert!(list_all(&w).is_empty());
+    }
+
+    #[test]
+    fn delete_unknown_slug_is_page_not_found() {
+        // Deleting a slug that doesn't resolve surfaces
+        // `ActionError::PageNotFound` — the caller decides how to
+        // present it (toast / status line / silent no-op).
+        let (mut w, hlc) = ws();
+        let err = delete(&mut w, &hlc, "never-existed").unwrap_err();
+        assert!(matches!(err, ActionError::PageNotFound(s) if s == "never-existed"));
     }
 
     // Person-typed page tests (`type:: person`, `@` mention resolution,

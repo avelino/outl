@@ -24,6 +24,7 @@ vi.mock("@outl/shared/api/commands", () => ({
   copyBlockMarkdown: vi.fn(),
   createBlock: vi.fn(),
   deleteBlock: vi.fn(),
+  deletePage: vi.fn(),
   editBlock: vi.fn(),
   indentBlock: vi.fn(),
   moveBlockAfter: vi.fn(),

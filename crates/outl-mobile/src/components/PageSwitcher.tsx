@@ -6,7 +6,7 @@ import {
   createSignal,
 } from "solid-js";
 import type { PageMeta } from "@outl/shared/api/types";
-import { listPages } from "@outl/shared/api/commands";
+import { deletePage, listPages } from "@outl/shared/api/commands";
 import { createSheetDrag } from "../lib/sheet-drag";
 import { useKeyboardInset } from "../lib/viewport";
 
@@ -21,6 +21,11 @@ interface PageSwitcherProps {
  * Bottom-sheet style page switcher. Lists every page in the
  * workspace with fuzzy filtering. Tap to open, `Enter` to open the
  * first match, swipe down on the handle to dismiss.
+ *
+ * Long-press a **page** row (not a journal) to surface a delete
+ * confirmation. Journals are excluded — deleting a daily note by
+ * accident from the picker would be a hostile surprise, and there's
+ * no trash UI to recover from today.
  */
 export function PageSwitcher(props: PageSwitcherProps) {
   const [pages, { refetch }] = createResource(() =>
@@ -61,6 +66,77 @@ export function PageSwitcher(props: PageSwitcherProps) {
     const first = filtered()[0];
     if (!first) return;
     props.onPick(first.slug, first.kind);
+  }
+
+  /**
+   * Delete a page after confirmation. Journals are rejected at the
+   * call site (long-press only fires for `kind === "page"`). The
+   * shared `deletePage` wrapper calls the backend, which returns
+   * today's journal — we pass it to `onPick` so the caller navigates
+   * away from the deleted page, then refetch the list to drop the
+   * row from the picker.
+   */
+  async function handleDelete(p: PageMeta) {
+    const label = p.title || p.slug;
+    // `window.confirm` maps to a native dialog on iOS WKWebView —
+    // a real "Delete / Cancel" sheet, not a web alert.
+    const ok = window.confirm(
+      `Delete page "${label}"?\n\nThis removes the page and all its blocks. ` +
+        `The deletion syncs to paired devices.`,
+    );
+    if (!ok) return;
+    try {
+      const view = await deletePage(p.slug);
+      props.onPick(view.page.slug, view.page.kind);
+      refetch();
+    } catch (e) {
+      // Surface as a brief alert — the picker is already modal.
+      window.alert(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * Long-press detector for page rows (not journals). iOS context
+   * menus fire on a sustained touch (~500ms) without significant
+   * movement — the same gesture UIKit uses for interactive menus.
+   * Returns Solid `onPointer*` handlers to spread onto the row.
+   */
+  function longPressHandlers(p: PageMeta) {
+    if (p.kind === "journal") return {};
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let start: { x: number; y: number } | undefined;
+    const LONG_PRESS_MS = 500;
+    const MOVE_TOLERANCE = 10;
+    return {
+      onPointerDown(e: PointerEvent) {
+        start = { x: e.clientX, y: e.clientY };
+        timer = setTimeout(() => {
+          timer = undefined;
+          void handleDelete(p);
+        }, LONG_PRESS_MS);
+      },
+      onPointerMove(e: PointerEvent) {
+        if (!start || !timer) return;
+        const dx = Math.abs(e.clientX - start.x);
+        const dy = Math.abs(e.clientY - start.y);
+        if (dx > MOVE_TOLERANCE || dy > MOVE_TOLERANCE) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+      },
+      onPointerUp() {
+        if (timer) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+      },
+      onPointerCancel() {
+        if (timer) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+      },
+    };
   }
 
   return (
@@ -202,6 +278,7 @@ export function PageSwitcher(props: PageSwitcherProps) {
                 <button
                   type="button"
                   onClick={() => props.onPick(p.slug, p.kind)}
+                  {...longPressHandlers(p)}
                   class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left active:bg-(--color-ios-card)/60 dark:active:bg-(--color-iosd-card)/60"
                   classList={{
                     "bg-(--color-ios-card)/40 dark:bg-(--color-iosd-card)/40":

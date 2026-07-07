@@ -48,6 +48,13 @@ pub enum ActionError {
     #[error("invalid page slug `{0}`")]
     InvalidSlug(String),
 
+    /// No page in the workspace carries the requested slug. Returned
+    /// by `page::delete` (and any caller that resolves a slug before
+    /// acting on a page that must already exist) so the UI can surface
+    /// "page not found" instead of a generic `NotInTree`.
+    #[error("page `{0}` not found")]
+    PageNotFound(String),
+
     /// Underlying workspace failure (storage, etc).
     #[error(transparent)]
     Workspace(#[from] WorkspaceError),

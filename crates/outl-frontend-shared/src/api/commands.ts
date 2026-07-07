@@ -163,6 +163,23 @@ export function resolveRef(target: string): Promise<PageMeta | null> {
   return invoke<PageMeta | null>("resolve_ref", { target });
 }
 
+/**
+ * Delete a page by slug. The caller MUST confirm before invoking —
+ * this call does not re-prompt. The backend moves the page root to
+ * `NodeId::trash()` (a single `Op::Move`, so the whole subtree goes
+ * with it), drops the on-disk `.md` + `.outl` projection, and
+ * returns a fresh {@link PageView} of **today's journal** so the
+ * caller navigates away from the (now-gone) page in the same
+ * round-trip.
+ *
+ * The op stays in the log forever — deletion converges across
+ * devices through the normal CRDT replay and is theoretically
+ * recoverable from the log (no UI for that exists today).
+ */
+export function deletePage(slug: string): Promise<PageView> {
+  return invoke<PageView>("delete_page", { slug });
+}
+
 export function workspaceStats(): Promise<WorkspaceSummary> {
   return invoke<WorkspaceSummary>("workspace_stats");
 }

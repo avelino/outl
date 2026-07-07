@@ -9,6 +9,7 @@ import {
 } from "solid-js";
 
 import {
+  deletePage,
   listPages,
   openJournalFor,
   openPageBySlug,
@@ -49,7 +50,7 @@ export function Sidebar(props: {
   onPickPage: (view: PageView) => void;
 }) {
   const pageKey = () => appState.page?.id ?? "(none)";
-  const [pages] = createResource(pageKey, async () => {
+  const [pages, { refetch }] = createResource(pageKey, async () => {
     try {
       return await listPages();
     } catch {
@@ -187,41 +188,84 @@ export function Sidebar(props: {
     return out;
   });
 
+  /**
+   * Delete a page after confirming. Used by the hover × button on
+   * Pinned / Recent rows. Journals are excluded at the call site so
+   * the user can't accidentally delete a daily note from the sidebar.
+   * Shared `deletePage` wrapper handles the backend round-trip +
+   * returns today's journal, which we apply via `onPickPage`.
+   */
+  async function handleDelete(p: PageMeta) {
+    const label = p.title || p.slug;
+    const ok = window.confirm(
+      `Delete page "${label}"?\n\nThis removes the page and all its blocks. ` +
+        `The deletion syncs to paired devices.`,
+    );
+    if (!ok) return;
+    try {
+      const view = await deletePage(p.slug);
+      props.onPickPage(view);
+      // Force a re-fetch of the page list so the deleted row
+      // disappears from Pinned / Recent immediately.
+      void refetch();
+    } catch (e) {
+      setAppState("lastError", e instanceof Error ? e.message : String(e));
+    }
+  }
+
   // ── presentation primitives ───────────────────────────────────
 
   /** A list row. Active state shows a soft accent bar on the left
-   *  instead of a full-row highlight — quieter, more Bear-like. */
+   *  instead of a full-row highlight — quieter, more Bear-like.
+   *  Shows a hover-only × button when `onDelete` is provided. */
   function Row(props: {
     label: string;
     icon?: string;
     active: boolean;
     onClick: () => void;
+    onDelete?: () => void;
   }) {
     return (
-      <button
-        type="button"
-        onClick={props.onClick}
-        class="group relative block w-full truncate rounded-sm px-3 py-[3px] pl-4 text-left text-[12.5px] leading-[1.5] text-(--color-outl-fg-dim) hover:text-(--color-outl-fg)"
-      >
-        <Show when={props.active}>
-          <span
-            aria-hidden="true"
-            class="absolute top-[6px] bottom-[6px] left-0 w-[2px] rounded-full bg-(--color-outl-accent)"
-          />
-        </Show>
-        <span
-          class={
-            props.active
-              ? "text-(--color-outl-fg)"
-              : "text-(--color-outl-fg-dim) group-hover:text-(--color-outl-fg)"
-          }
+      <div class="group relative">
+        <button
+          type="button"
+          onClick={props.onClick}
+          class="block w-full truncate rounded-sm px-3 py-[3px] pl-4 text-left text-[12.5px] leading-[1.5] text-(--color-outl-fg-dim) hover:text-(--color-outl-fg)"
         >
-          {props.icon ? (
-            <span class="mr-1.5 opacity-70">{props.icon}</span>
-          ) : null}
-          {props.label}
-        </span>
-      </button>
+          <Show when={props.active}>
+            <span
+              aria-hidden="true"
+              class="absolute top-[6px] bottom-[6px] left-0 w-[2px] rounded-full bg-(--color-outl-accent)"
+            />
+          </Show>
+          <span
+            class={
+              props.active
+                ? "text-(--color-outl-fg)"
+                : "text-(--color-outl-fg-dim) group-hover:text-(--color-outl-fg)"
+            }
+          >
+            {props.icon ? (
+              <span class="mr-1.5 opacity-70">{props.icon}</span>
+            ) : null}
+            {props.label}
+          </span>
+        </button>
+        <Show when={props.onDelete}>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              props.onDelete?.();
+            }}
+            aria-label={`Delete page "${props.label}"`}
+            title="Delete page"
+            class="absolute top-1/2 right-1.5 -translate-y-1/2 rounded px-1 text-[13px] text-(--color-outl-fg-dimmer) opacity-0 transition-opacity hover:text-(--color-outl-error,--color-outl-fg) group-hover:opacity-100 focus:opacity-100"
+          >
+            ×
+          </button>
+        </Show>
+      </div>
     );
   }
 
@@ -372,6 +416,9 @@ export function Sidebar(props: {
                   icon={p.icon || (p.kind === "journal" ? "📅" : "📄")}
                   active={appState.page?.slug === p.slug}
                   onClick={() => void openSlug(p.slug)}
+                  onDelete={
+                    p.kind === "journal" ? undefined : () => void handleDelete(p)
+                  }
                 />
               )}
             </For>
@@ -391,6 +438,9 @@ export function Sidebar(props: {
                     void (p.kind === "journal"
                       ? openJournalFor(p.slug).then(props.onPickPage)
                       : openSlug(p.slug))
+                  }
+                  onDelete={
+                    p.kind === "journal" ? undefined : () => void handleDelete(p)
                   }
                 />
               )}

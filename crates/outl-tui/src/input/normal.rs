@@ -83,7 +83,36 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
     // the item, Esc returns focus to the outline (sidebar stays
     // visible). `\` always closes the sidebar entirely, handled
     // further down in the Normal handler.
-    if app.sidebar_focus.is_some() {
+    //
+    // `d` arms a one-shot "delete this page?" confirmation; the next
+    // keystroke resolves it inside the same intercept — `y` / `Y`
+    // confirms, anything else cancels (and is swallowed, matching
+    // the `pending_input_op` contract).
+    if app.sidebar_focus.is_some() || app.pending_sidebar_delete.is_some() {
+        // Delete confirmation: takes priority over regular sidebar
+        // navigation so the user can't accidentally move the cursor
+        // while the "delete? y/n" prompt is up.
+        if app.pending_sidebar_delete.is_some() {
+            match key.code {
+                KeyCode::Char('y' | 'Y') => {
+                    app.sidebar_confirm_delete()?;
+                    return Ok(false);
+                }
+                KeyCode::Esc | KeyCode::Char('n' | 'N') => {
+                    app.pending_sidebar_delete = None;
+                    app.status.clear();
+                    return Ok(false);
+                }
+                _ => {
+                    // Swallow every other key — the prompt is modal.
+                    // (Same posture as `pending_input_op`: cancel on
+                    // any non-confirming input rather than routing it.)
+                    app.pending_sidebar_delete = None;
+                    app.status.clear();
+                    return Ok(false);
+                }
+            }
+        }
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
                 app.sidebar_move(1);
@@ -111,6 +140,10 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             }
             KeyCode::Enter => {
                 app.sidebar_activate()?;
+                return Ok(false);
+            }
+            KeyCode::Char('d') => {
+                app.sidebar_delete_current();
                 return Ok(false);
             }
             KeyCode::Esc => {
@@ -177,6 +210,19 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                 // mode — overloading it would surprise yanker
                 // muscle memory.
                 app.toggle_pinned();
+                return Ok(false);
+            }
+            ('g', KeyCode::Char('d')) => {
+                // `gd` = delete the focused page. "go delete".
+                // Mirrors `Action::DeletePage` in the shared shortcut
+                // catalog. Two targets: the sidebar-highlighted row
+                // when the sidebar owns focus, otherwise the current
+                // page. Both paths funnel through
+                // `sidebar_delete_current` (which arms a `y/n`
+                // confirmation) — the outline branch pre-fills the
+                // pending state with the current slug so the same
+                // confirm handler runs.
+                app.delete_page_from_chord();
                 return Ok(false);
             }
             ('y', KeyCode::Char('y')) => {

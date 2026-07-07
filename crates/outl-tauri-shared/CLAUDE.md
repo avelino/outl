@@ -10,7 +10,7 @@ Before this crate existed, both clients kept near-identical copies of the same n
 | `state.rs` | Wire DTOs every command returns: `PageView`, `CreateBlockReply`, `WorkspaceSummary`, `BlockHit` (a `((…))` block-ref autocomplete hit — `handle` + `text` + `source_slug`), `ERR_LOADING` |
 | `host.rs` | `AppHost` + `StorageRootProvider` — the two traits that absorb the one real client divergence (desktop storage root is `Arc<Mutex<Option<PathBuf>>>`, mobile is a plain `PathBuf`) |
 | `helpers.rs` | `parse_node_id`, `parse_date`, `with_ws*`, `build_page_view`, `finish_in_page*`, `storage_root_or_err` |
-| `commands/` | The command *bodies* (`block`, `page`, `peers`, `plugin`, `exec`) — generic over `S: AppHost` |
+| `commands/` | The command *bodies* (`block`, `page`, `peers`, `plugin`, `exec`) — generic over `S: AppHost`. `commands/page.rs` owns page navigation, search, and `delete_page` (calls `outl_actions::delete_page` + `remove_page_projection`, returns today's-journal `PageView` so the caller navigates away from the deleted slug) |
 | `workspace_open.rs` | `resolve_storage_root` / `reconcile_orphan_md` primitives |
 | `iroh_sync.rs` | `build_iroh_transport` / `start_with_reload_bridge` |
 | `plugin_service.rs` + `plugin_thread.rs` | `PluginService` — the dedicated plugin thread (Boa `Context` is `!Send`), parametrized by client id + capability set + `StorageRootProvider` |

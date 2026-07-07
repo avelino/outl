@@ -58,6 +58,37 @@ pub fn page_md_path(root: &Path, meta: &PageMeta) -> PathBuf {
     folder.join(format!("{}.md", meta.slug))
 }
 
+/// Remove a page's `.md` projection and its `.outl` sidecar from disk.
+///
+/// The inverse of [`apply_page_md_with_sidecar`]: after
+/// [`crate::page::delete`] moves the page root to the trash, the
+/// on-disk projection would otherwise linger. A peer that hasn't
+/// received the delete op yet would keep reading the stale `.md`;
+/// removing the projection here on the acting device means the next
+/// `outl doctor` / orphan scan agrees with the op log, and the page
+/// disappears from listings that walk `pages/` directly.
+///
+/// Idempotent: a missing file is silently OK (the page may never have
+/// been projected on this device — common right after a peer-shipped
+/// delete). Any other I/O error is returned so the caller can decide
+/// whether to swallow (CLI's `remove_or_warn`) or propagate (Tauri
+/// command's error envelope).
+pub fn remove_page_projection(root: &Path, meta: &PageMeta) -> std::io::Result<()> {
+    let md_path = page_md_path(root, meta);
+    match std::fs::remove_file(&md_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    let sidecar_path = outl_md::resolve_sidecar_path(&md_path);
+    match std::fs::remove_file(&sidecar_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    Ok(())
+}
+
 fn build_outline(workspace: &Workspace, parent: NodeId) -> Vec<OutlineNode> {
     children_of(workspace, parent)
         .into_iter()

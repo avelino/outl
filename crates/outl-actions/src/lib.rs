@@ -92,7 +92,7 @@ pub use history::{restore_page_md, HistoryStacks, DEFAULT_HISTORY_CAP};
 pub use journal::{
     apply_all_pages_md, apply_page_md, apply_page_md_with_sidecar,
     apply_page_md_with_sidecar_if_absent, journals_dir, mutate_page_md, page_md_path, pages_dir,
-    render_block_md, render_page_md, write_md_atomic,
+    remove_page_projection, render_block_md, render_page_md, write_md_atomic,
 };
 pub use outl_md::parse::{ParseWarning, ParseWarningKind};
 pub use outline::{
@@ -101,9 +101,9 @@ pub use outline::{
     read_page_view_with_workspace, OutlineNode, PageOutline,
 };
 pub use page::{
-    find_by_slug, is_valid_slug, list_all as list_pages, migrate_legacy_into_today, open_journal,
-    open_or_create as open_or_create_page, open_today, page_meta, read_text_prop, set_property,
-    today, PageKind, PageMeta,
+    delete as delete_page, find_by_slug, is_valid_slug, list_all as list_pages,
+    migrate_legacy_into_today, open_journal, open_or_create as open_or_create_page, open_today,
+    page_meta, read_text_prop, set_property, today, PageKind, PageMeta,
 };
 pub use paste::{
     looks_like_outline, normalize_external_syntax, paste_markdown, paste_plain, PasteAnchor,

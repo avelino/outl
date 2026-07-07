@@ -87,6 +87,7 @@ impl App {
             show_sidebar: false,
             sidebar_focus: None,
             sidebar_cursor: 0,
+            pending_sidebar_delete: None,
             recent_paths: Vec::new(),
             toasts: Vec::new(),
             focus: Focus::Outline,

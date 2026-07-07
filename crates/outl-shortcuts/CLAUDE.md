@@ -29,6 +29,7 @@ A binding that only the TUI cares about still lives here (with `Mode::Normal` / 
 
 - **[`Action`]** — every named operation outl performs in response to a key.
   Tagged-union serde (`{"kind": "OpenToday"}`) so the desktop frontend can `switch` on a string instead of an arbitrary integer.
+  > **`DeletePage` is bound to `g d` (Normal mode).** Same `g<action>` family as `g j` / `g x` / `g p`: the chord deletes the focused page (sidebar-highlighted row when the sidebar has focus on the TUI, otherwise the current page), and each client confirms before invoking `outl_actions::page::delete`. Clients also surface the action through their native page-list affordance (desktop hover `×`, mobile long-press) — same `Action`, multiple entry points.
 - **[`Chord`] / [`ChordSequence`]** — modifier-prefixed key combos, expressed independently of any input library so `crossterm::KeyEvent` (TUI) and `KeyboardEvent` (browser DOM) can both map into them.
   `Chord::parse` / `ChordSequence::parse` turn a human string (`"Ctrl+Shift+A"`, `"Ctrl+T S"`) into the typed form.
   This is the one owner of that parse, so a plugin's `contributes.keybindings[].key` resolves the same way on every client instead of each reimplementing it.

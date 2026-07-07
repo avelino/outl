@@ -129,6 +129,14 @@ It derives reachability from `peerStatus()` → `peersOnline()` (`@outl/shared/p
 It re-probes on a slow interval and immediately on `peer-ops-changed` (a delivery proves the mesh is up).
 Do not add a second reachability path; `peersOnline` is the one owner.
 
+### Sidebar page deletion
+
+`Sidebar.tsx`'s `<Row>` takes an optional `onDelete` callback; when provided, a `×` button appears on hover (top-right, `opacity-0 → group-hover:opacity-100`).
+`handleDelete(p)` calls `window.confirm(...)`, then `deletePage(slug)` (from `@outl/shared/api/commands`), applies the returned today's-journal view, and refetches the page list.
+Journals are excluded (`p.kind === "journal" ? undefined : ...`) — only regular pages show the affordance.
+The `g d` chord (Normal mode, "go delete") routes through the `DeletePage` case in `action-handlers.ts` — the same `window.confirm` + `deletePage(slug)` flow as the `×` button (the `Action` TS union in `lib/api.ts` carries `| { kind: "DeletePage" }`).
+The backend `delete_page` Tauri command is the shared `outl_tauri_shared::commands::page::delete_page` body — no desktop-specific logic.
+
 ## Blockquote chrome
 
 A block whose `text` starts with the CommonMark `"> "` marker renders with a left border, a ~6% tint (`bg-(--color-outl-fg-dimmer)/[0.06]`), and a right-rounded corner.

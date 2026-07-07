@@ -108,3 +108,11 @@ pub(crate) fn resolve_ref(
 ) -> Result<Option<PageMeta>, String> {
     shared::resolve_ref(state.inner(), target)
 }
+
+/// Delete a page by slug. Caller confirms before invoking — this
+/// command does not re-prompt. Returns a fresh `PageView` of today's
+/// journal so the frontend navigates away from the (now-gone) page.
+#[tauri::command]
+pub(crate) fn delete_page(slug: String, state: State<'_, AppState>) -> Result<PageView, String> {
+    shared::delete_page(state.inner(), slug)
+}

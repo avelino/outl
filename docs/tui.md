@@ -351,8 +351,15 @@ Hooks are dispatched once per mutation; a hook that itself mutates the workspace
   Press `i` / `Enter` on a backlink to jump to its source page positioned on the referencing block (in-place editing lands in a follow-up).
 - **Status / hint** — mode badge, contextual key reminder, backlink count, status messages.
 
-There is *no* pages sidebar.
-Use `Ctrl+P` (quick switcher) to jump to any page or journal by fuzzy title — the sidebar was redundant with that and ate horizontal space on narrow terminals.
+### Pages sidebar
+
+Toggled by `\` (Backspace in Normal mode) or `Ctrl+E`.
+Shows Today / pinned / recent pages and a mini-calendar of journals.
+`j` / `k` move the selection, `Tab` cycles the section (Today / Pinned / Recent / Calendar), `Enter` opens the focused page, and `d` on a regular page arms a `delete page '<title>'? y/n` confirmation in the status line — `y` confirms, any other key cancels (and is swallowed).
+The `g d` chord (Normal mode) routes through the same confirmation flow: when the sidebar has focus it deletes the highlighted row, when the outline has focus it deletes the current page (refusing journals).
+Journals and calendar rows are excluded from both affordances (only regular pages can be deleted); pinned/recent journals are also safe.
+On confirm, the page root is moved to `NodeId::trash()` via `outl_actions::page::delete`, the `.md` + `.outl` are removed via `outl_actions::journal::remove_page_projection`, the index is rebuilt, and if you deleted the page you were viewing the TUI lands on today's journal.
+For fuzzy title jumps without the pane, `Ctrl+P` (quick switcher) still works without opening the sidebar.
 
 ## Parser-warning banner
 

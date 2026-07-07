@@ -3,7 +3,8 @@
 use outl_actions::{
     find_by_slug, journal_slug, journal_title, list_pages, next_journal_date, open_journal,
     open_or_create_by_name, open_or_create_by_ref, open_today, page_meta as page_meta_action,
-    previous_journal_date, search_persons as action_search_persons, today, PageKind, PageMeta,
+    previous_journal_date, remove_page_projection, search_persons as action_search_persons, today,
+    PageKind, PageMeta,
 };
 
 use outl_md::index::WorkspaceIndex;
@@ -292,6 +293,50 @@ pub fn resolve_ref<S: AppHost>(state: &S, target: String) -> Result<Option<PageM
         Ok(list_pages(ws)
             .into_iter()
             .find(|p| p.title.to_lowercase() == lower))
+    })
+}
+
+/// Delete the page identified by `slug` and return a fresh
+/// [`PageView`] of today's journal so the caller navigates to a sane
+/// page after the deletion (the deleted page no longer exists).
+///
+/// Two-phase: the CRDT delete (`outl_actions::page::delete` →
+/// `Op::Move(node, TRASH_ROOT)`) plus on-disk projection removal
+/// (`remove_page_projection`), then announce the op to peers.
+///
+/// A missing slug surfaces as a string error; the frontend shows a
+/// toast instead of silently navigating away. Confirm before calling
+/// — this command does not re-prompt.
+pub fn delete_page<S: AppHost>(state: &S, slug: String) -> Result<PageView, String> {
+    let root = state.storage_root()?;
+    // Delete + open-today's-journal in one lock acquire: both are
+    // workspace mutations, and keeping them together avoids a second
+    // lock round-trip between the delete and the navigation target.
+    let (meta, today_id) = with_ws_mut(state, |ws| {
+        let meta = outl_actions::delete_page(ws, state.hlc(), &slug).map_err(|e| e.to_string())?;
+        let today_id = open_today(ws, state.hlc()).map_err(|e| e.to_string())?;
+        Ok((meta, today_id))
+    })?;
+
+    // Drop the `.md` + `.outl` so the page vanishes from disk-side
+    // listings right away. Idempotent — a missing file is OK.
+    if let Err(e) = remove_page_projection(&root, &meta) {
+        tracing::warn!(
+            "delete_page: could not remove projection for {}: {e}",
+            meta.slug
+        );
+    }
+
+    // Announce to peers so the delete propagates over iroh without
+    // waiting for the catch-up re-sync. Mirrors `announce_after_commit`
+    // but we can't reuse it because the deleted page no longer has a
+    // `PageMeta` to read from the workspace.
+    if let Some(transport) = state.sync_transport() {
+        transport.announce_local_ops(&meta.slug, state.hlc().next());
+    }
+
+    with_ws(state, |ws| {
+        build_page_view(ws, &root, today_id).map_err(|e| e.to_string())
     })
 }
 

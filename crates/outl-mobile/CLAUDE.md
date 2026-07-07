@@ -166,6 +166,14 @@ Every **ref-click** code path on the frontend (`handleRefClick`, `handleTagClick
 land on `<page>`") but is **not** the navigation entry point — for
 that, always call `openRef`.
 
+## Page switcher — long-press to delete
+
+`PageSwitcher.tsx` renders each page as a row button; spreading `longPressHandlers(p)` on the row arms a 500 ms sustained-touch detector (canceled if the finger moves more than 10 px, so a scroll never false-fires).
+On fire, `handleDelete(p)` runs `window.confirm(...)` → `deletePage(slug)` (from `@outl/shared/api/commands`) → navigates to the returned today's journal → refetches the list.
+Journals are excluded (`p.kind === "journal"` skips the handlers) — only regular pages can be deleted from the switcher.
+The backend `delete_page` Tauri command is the shared `outl_tauri_shared::commands::page::delete_page` body — no mobile-specific logic.
+`Action::DeletePage` carries a `g d` chord in the shared catalog (Normal mode), but mobile has no keyboard surface — long-press in the page switcher remains the only trigger on touch devices.
+
 ## Opening an external `[label](url)` link
 
 Tapping an external markdown link opens it in the system browser via **`tauri-plugin-opener`** (registered in `src-tauri/src/lib.rs`; the capability grants a scoped `opener:allow-open-url` for `http`/`https`/`mailto` in `capabilities/default.json`).

@@ -18,7 +18,7 @@
 //! nothing. Day-by-day navigation needs its own cursor state (which
 //! date is highlighted) — a follow-up patch.
 
-use crate::state::{App, SidebarSection, View};
+use crate::state::{App, PendingSidebarDelete, SidebarSection, View};
 use anyhow::Result;
 use chrono::NaiveDate;
 use std::path::PathBuf;
@@ -140,6 +140,143 @@ impl App {
             .collect();
         v.sort_by_key(|(_, t)| t.to_lowercase());
         v.into_iter().map(|(s, _)| s).collect()
+    }
+
+    /// `d` on a focused Pinned / Recent sidebar row: arm a one-shot
+    /// "delete this page?" confirmation. The status line shows the
+    /// prompt; the next `y` / `Y` confirms via [`Self::sidebar_confirm_delete`],
+    /// any other keystroke cancels (handled in `input::normal`).
+    ///
+    /// Calendar rows are a no-op — deleting a journal by accident from
+    /// the mini-calendar would be a hostile surprise, and there's no
+    /// trash UI to recover from today.
+    pub(crate) fn sidebar_delete_current(&mut self) {
+        let Some(section) = self.sidebar_focus else {
+            return;
+        };
+        let slug = match section {
+            SidebarSection::Pinned => self.pinned_slugs_sorted().get(self.sidebar_cursor).cloned(),
+            SidebarSection::Recent => self
+                .recent_paths
+                .get(self.sidebar_cursor)
+                .and_then(|p| p.file_stem().and_then(|s| s.to_str()).map(String::from)),
+            SidebarSection::Calendar => None,
+        };
+        if let Some(slug) = slug {
+            self.arm_sidebar_delete(slug);
+        }
+    }
+
+    /// `g d` chord (`Action::DeletePage`) entry point shared by the
+    /// chord accumulator and the catalog dispatcher. When the sidebar
+    /// owns focus, delegates to [`Self::sidebar_delete_current`] so the
+    /// highlighted row is the target. Otherwise arms the confirmation
+    /// against the **current page** — the page the user is viewing.
+    ///
+    /// Refuses to delete a journal (date-shaped slug) from the
+    /// outline branch: deleting today's note by accident from `gd`
+    /// would be a hostile surprise, and there's no trash UI to
+    /// recover from today. Matches the sidebar's calendar exclusion.
+    pub(crate) fn delete_page_from_chord(&mut self) {
+        if self.sidebar_focus.is_some() {
+            self.sidebar_delete_current();
+            return;
+        }
+        let slug = self.current_slug();
+        if slug.is_empty() {
+            return;
+        }
+        // Journal guard: a date-shaped slug means we're on a daily
+        // note. Same exclusion the sidebar applies to Calendar rows.
+        if NaiveDate::parse_from_str(&slug, "%Y-%m-%d").is_ok() {
+            self.toast(
+                crate::state::ToastKind::Warning,
+                "can't delete a journal page",
+            );
+            return;
+        }
+        self.arm_sidebar_delete(slug);
+    }
+
+    /// Resolve `slug` to its display title (workspace index, falling
+    /// back to the slug itself), stash a [`PendingSidebarDelete`], and
+    /// surface the `y/n` prompt in the status line. Shared arm path
+    /// for the sidebar `d` key and the `gd` chord so the two entry
+    /// points never drift on title resolution or prompt wording.
+    fn arm_sidebar_delete(&mut self, slug: String) {
+        let title = self
+            .index
+            .by_slug(&slug)
+            .map(|e| e.title.clone())
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or_else(|| slug.clone());
+        self.status = format!("delete page '{title}'? y/n");
+        self.pending_sidebar_delete = Some(PendingSidebarDelete { slug, title });
+    }
+
+    /// Resolve an armed `pending_sidebar_delete`: run the CRDT delete
+    /// via `outl_actions::page::delete`, drop the on-disk projection,
+    /// rebuild the index, navigate away if we just deleted the current
+    /// view, and announce the op to peers. Returns `Err` only on a
+    /// workspace / I/O failure the caller can't ignore.
+    pub(crate) fn sidebar_confirm_delete(&mut self) -> Result<()> {
+        let pending = self.pending_sidebar_delete.take();
+        let Some(pending) = pending else {
+            return Ok(());
+        };
+        let is_current = self.current_slug() == pending.slug;
+
+        let meta = match outl_actions::delete_page(&mut self.workspace, &self.hlc, &pending.slug) {
+            Ok(meta) => meta,
+            Err(outl_actions::ActionError::PageNotFound(_)) => {
+                // A peer (or a previous delete in this session) beat
+                // us to it. Re-sync the index and tell the user.
+                self.spawn_index_rebuild();
+                self.toast(crate::state::ToastKind::Warning, "page already gone");
+                return Ok(());
+            }
+            Err(e) => {
+                self.toast(
+                    crate::state::ToastKind::Error,
+                    format!("delete failed: {e}"),
+                );
+                return Ok(());
+            }
+        };
+
+        if let Err(e) = outl_actions::remove_page_projection(&self.workspace_root, &meta) {
+            tracing::warn!(
+                target: "outl::tui::sidebar",
+                "could not remove page projection for {}: {e}",
+                meta.slug
+            );
+        }
+
+        // The page list just changed — re-scan so the sidebar drops
+        // the deleted row on the next render. Spawning (not sync)
+        // keeps the event loop responsive on big workspaces.
+        self.spawn_index_rebuild();
+        self.invalidate_backlinks_cache();
+
+        if is_current {
+            // Never leave the user staring at a deleted page — jump
+            // to today's journal, same as boot.
+            self.go_today()?;
+        }
+
+        // Announce to peers so the delete propagates over iroh
+        // immediately instead of waiting for the catch-up re-sync.
+        if let Some(transport) = &self.sync_transport {
+            let hlc = self.hlc.next();
+            transport.announce_local_ops(&meta.slug, hlc);
+        }
+
+        self.toast(
+            crate::state::ToastKind::Info,
+            format!("deleted: {}", pending.title),
+        );
+        self.status.clear();
+        Ok(())
     }
 
     fn sidebar_item_count(&self, section: SidebarSection) -> usize {

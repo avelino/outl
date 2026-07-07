@@ -51,7 +51,7 @@ use tracing::info;
 
 use crate::commands::{
     add_block, copy_block_markdown, copy_markdown, create_block, date_title, delete_block,
-    edit_block, exec, indent_block, list_all_pages, list_outline, move_block_after,
+    delete_page, edit_block, exec, indent_block, list_all_pages, list_outline, move_block_after,
     move_block_down, move_block_up, next_day, open_journal_for, open_page_by_slug, open_ref,
     open_today_journal, outdent_block, outl_emoji_search, outl_peer_list, outl_peer_pair_host,
     outl_peer_pair_join, outl_peer_remove, outl_peer_status, outl_sync_now, paste_block_after,
@@ -268,6 +268,7 @@ pub fn run() {
             date_title,
             workspace_stats,
             resolve_ref,
+            delete_page,
             // Mutations
             create_block,
             edit_block,
