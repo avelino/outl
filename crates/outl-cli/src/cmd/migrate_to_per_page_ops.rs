@@ -87,7 +87,8 @@ pub fn run(path: &std::path::Path) -> Result<()> {
         let target_path = actor_dir.join(format!("{slug}.jsonl"));
         let mut file = fs::OpenOptions::new()
             .create(true)
-            .append(true)
+            .write(true)
+            .truncate(true)
             .open(&target_path)
             .with_context(|| format!("opening {}", target_path.display()))?;
         for op in ops {

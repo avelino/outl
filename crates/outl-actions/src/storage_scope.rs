@@ -19,6 +19,10 @@ use tracing::warn;
 /// the workspace. Also reads `.outl` sidecars to build the
 /// `NodeId → slug` map that `apply` uses to route ops.
 ///
+/// Shards are opened **unbounded** (cap = 0) so `all_ops()` returns
+/// the full history during the subsequent reboot. The caller applies
+/// `Workspace::apply_lru_cap(cap)` afterwards to shed cold history.
+///
 /// No-op when the `<actor>/` subdir doesn't exist (legacy Global
 /// layout). Safe to call on every boot.
 ///
@@ -30,7 +34,6 @@ pub fn register_per_page_storages(
     ws: &mut Workspace,
     ops_dir: &Path,
     actor: ActorId,
-    lru_cap: usize,
     workspace_root: &Path,
 ) {
     let actor_dir = ops_dir.join(actor.to_string());
@@ -56,7 +59,7 @@ pub fn register_per_page_storages(
             ops_dir.to_path_buf(),
             actor,
             PageScope::PerPage(slug.clone()),
-            lru_cap,
+            0, // unbounded — boot needs full history; caller applies LRU cap after reboot
         );
         match storage {
             Ok(s) => {

@@ -256,6 +256,13 @@ impl ActorNodeIndex {
     pub fn sidecar_path(ops_dir: &Path, actor: ActorId) -> PathBuf {
         ops_dir.join(format!("ops-{actor}.nodes.idx"))
     }
+
+    /// Snapshot of every actor known to the index. Used by
+    /// `cold_ops_for_node` to enumerate peer actors without depending
+    /// on which ops happen to be warm in the LRU cache.
+    pub fn actors(&self) -> Vec<ActorId> {
+        self.inner.read().keys().copied().collect()
+    }
 }
 
 #[cfg(test)]

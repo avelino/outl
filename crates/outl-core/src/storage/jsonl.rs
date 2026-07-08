@@ -535,15 +535,10 @@ impl JsonlStorage {
     /// the disk file via [`Self::read_op_at`]. RFC #137 Phase A.
     fn cold_ops_for_node(&self, id: NodeId) -> Result<Vec<LogOp>, StorageError> {
         let mut out: Vec<LogOp> = Vec::new();
-        // Always includes `self.actor` even if every op of its has
-        // been evicted — the node index still tracks them.
-        let mut actor_set: std::collections::HashSet<ActorId> = std::collections::HashSet::new();
-        actor_set.insert(self.actor);
-        for (_, op) in self.cache.read().iter() {
-            actor_set.insert(op.actor);
-        }
-
-        for actor in actor_set {
+        // Derive the actor set from the node index (persistent), not
+        // from the LRU cache (eviction-sensitive). If all ops for a
+        // peer actor were evicted, the index still tracks them.
+        for actor in self.node_index.actors() {
             let entries = self.node_index.get(actor, id);
             for (ts, _offset) in entries {
                 // Cache hit first.
