@@ -99,6 +99,20 @@ pub enum Op {
     },
 }
 
+/// Extract the `NodeId` an op targets, if any. Every `Op` variant
+/// carries one — there is no op that touches zero nodes. Returns
+/// `Option` so callers can `filter_map` cleanly. Used by the migrate
+/// CLI to route ops to per-page shards (RFC #137 Phase B).
+pub fn op_node(op: &Op) -> Option<NodeId> {
+    match op {
+        Op::Create { node, .. }
+        | Op::Move { node, .. }
+        | Op::Edit { node, .. }
+        | Op::SetProp { node, .. }
+        | Op::SetCollapsed { node, .. } => Some(*node),
+    }
+}
+
 /// An op wrapped with its HLC and actor.
 ///
 /// `LogOp`s are what is stored, sorted, and exchanged between peers.

@@ -13,10 +13,45 @@ use thiserror::Error;
 pub mod index;
 pub mod jsonl;
 pub mod memory;
+pub mod node_index;
 
 pub use index::{ActorIndex, OffsetIndex};
 pub use jsonl::JsonlStorage;
 pub use memory::MemoryStorage;
+pub use node_index::{ActorNodeIndex, NodeIndex};
+
+/// Which page a storage backend is responsible for.
+///
+/// `Global` is the legacy single-file-per-actor layout every workspace
+/// shipped with before RFC #137 Phase B. `PerPage(slug)` is the
+/// sharded layout — one `ops/<actor>/<slug>.jsonl` per (actor, page)
+/// pair — that lets boot and sync be proportional to the active page
+/// rather than the whole workspace.
+///
+/// Layouts on disk:
+///
+/// - `Global` → `ops/ops-<actor>.jsonl` (+ `.idx`, `.nodes.idx` sidecars)
+/// - `PerPage(slug)` → `ops/<actor>/<slug>.jsonl` (+ sidecars)
+///
+/// `Global` stays the default for back-compat. New workspaces opt into
+/// `PerPage` via `outl init --scope=per-page`; existing ones migrate
+/// via `outl migrate-to-per-page-ops`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PageScope {
+    /// Single op log per actor — every page shares one file.
+    #[default]
+    Global,
+    /// Op log scoped to one page. The slug is the page's URL-safe name
+    /// (same one used for the `.md` filename under `pages/`).
+    PerPage(String),
+}
+
+impl PageScope {
+    /// `true` for the legacy single-file layout.
+    pub fn is_global(&self) -> bool {
+        matches!(self, PageScope::Global)
+    }
+}
 
 /// Errors a `Storage` implementation may produce.
 #[derive(Debug, Error)]
