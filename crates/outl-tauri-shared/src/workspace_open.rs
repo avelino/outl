@@ -56,6 +56,18 @@ pub fn open_workspace_at(
     // ops are read back from disk on demand via the offset index.
     workspace.apply_lru_cap(lru_cap);
 
+    outl_actions::storage_scope::register_per_page_storages(
+        &mut workspace,
+        &path.join("ops"),
+        actor,
+        lru_cap,
+        path,
+    );
+    if workspace.has_page_storages() {
+        workspace.reboot_with_all_storages()?;
+        workspace.apply_lru_cap(lru_cap);
+    }
+
     Ok(workspace)
 }
 

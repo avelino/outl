@@ -350,11 +350,15 @@ fn open_workspace(
             .with_context(|| format!("opening jsonl storage at {}", ops_dir.display()))?,
     );
     let mut ws = Workspace::open_with_storage(actor, storage, Some(root.to_path_buf()))?;
-    // Apply the LRU cap AFTER boot finishes re-materialising Yrs
-    // `Doc`s via `ops_for_node`. Boot needs every op in RAM; the
-    // long-running TUI then sheds cold history to keep RSS constant
-    // regardless of how much the workspace has accumulated. RFC #137.
-    ws.apply_lru_cap(outl_config::load().storage.lru_cap);
+    let lru_cap = outl_config::load().storage.lru_cap;
+    ws.apply_lru_cap(lru_cap);
+    outl_actions::storage_scope::register_per_page_storages(
+        &mut ws, &ops_dir, actor, lru_cap, root,
+    );
+    if ws.has_page_storages() {
+        ws.reboot_with_all_storages()?;
+        ws.apply_lru_cap(lru_cap);
+    }
     Ok((ws, actor, cfg, lock, actor_lock))
 }
 
