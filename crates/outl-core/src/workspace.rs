@@ -17,7 +17,7 @@
 use crate::content::ContentStore;
 use crate::id::{ActorId, NodeId};
 use crate::log::OpLog;
-use crate::op::{LogOp, Op};
+use crate::op::{op_node, LogOp, Op};
 use crate::snapshot::{self, SnapshotBody};
 use crate::storage::{Storage, StorageError};
 use crate::tree::Tree;
@@ -49,8 +49,21 @@ pub struct Workspace {
     log: OpLog,
     /// Block text content (Yrs docs).
     content: ContentStore,
-    /// Pluggable storage backend.
+    /// Pluggable storage backend (Global scope — the legacy
+    /// single-file-per-actor layout). Per-page shards live in
+    /// `page_storages`.
     storage: Box<dyn Storage>,
+    /// Per-page storage backends (Phase B of RFC #137). Keyed by page
+    /// slug. Empty for workspaces that haven't migrated to per-page
+    /// shards. When non-empty, `apply` routes each op to the storage
+    /// that owns the op's node.
+    page_storages: HashMap<String, Box<dyn Storage>>,
+    /// `NodeId → slug` map for page roots. Populated by the client
+    /// (which reads sidecars via `outl-md`) via
+    /// [`Self::register_page_root`]. `apply` walks the parent chain
+    /// from an op's node up to a page root, then uses this map to
+    /// find the slug and route to the right `page_storages` entry.
+    page_root_to_slug: HashMap<NodeId, String>,
     /// `<root>/.outl/snapshots` when `root` is set, `None` for
     /// in-memory workspaces. Background snapshot writes go straight
     /// here — they don't go through `storage` (the snapshot is a local
@@ -109,6 +122,8 @@ impl Workspace {
             log: OpLog::new(),
             content: ContentStore::default(),
             storage,
+            page_storages: HashMap::new(),
+            page_root_to_slug: HashMap::new(),
             snapshots_dir,
             snapshot_workers: Vec::new(),
             ops_since_snapshot: 0,
@@ -172,7 +187,7 @@ impl Workspace {
         // Replay only the ops the snapshot hasn't seen yet. `Edit` ops
         // in this delta will be re-materialized in the loop below; the
         // rest of the snapshot's text is still authoritative.
-        let delta = self.storage.ops_since(body.hlc_cutoff)?;
+        let delta = self.ops_since_combined(body.hlc_cutoff)?;
         let mut edited_in_delta: HashSet<NodeId> = HashSet::new();
         for op in delta {
             if let Op::Edit { node, .. } = &op.op {
@@ -189,7 +204,7 @@ impl Workspace {
         // resulting text match the full-replay path (#129).
         let rematerialized_count = edited_in_delta.len();
         for node in &edited_in_delta {
-            let mut ops = match self.storage.ops_for_node(*node) {
+            let mut ops = match self.ops_for_node_combined(*node) {
                 Ok(o) => o,
                 Err(e) => {
                     warn!("skipping re-materialize for {node}: {e}");
@@ -232,7 +247,7 @@ impl Workspace {
         // no-op there) and the log. Text is materialized in pass 2 so the
         // open-time memory peak stays at a single live `Doc` instead of
         // one per block — that peak is what jetsam was killing on iOS.
-        let ops = self.storage.all_ops()?;
+        let ops = self.all_ops_combined()?;
         for op in ops {
             self.tree.apply_op(&mut self.log, op);
         }
@@ -285,7 +300,7 @@ impl Workspace {
         if self.log_complete {
             return; // ContentStore::ensure_doc rebuilds from the full log.
         }
-        let mut ops = match self.storage.ops_for_node(node) {
+        let mut ops = match self.ops_for_node_combined(node) {
             Ok(o) => o,
             Err(e) => {
                 warn!("could not load ops for {node} from storage: {e}");
@@ -324,7 +339,21 @@ impl Workspace {
             self.content.merge_update(*node, &self.log, text_op);
         }
         self.tree.apply_op(&mut self.log, op.clone());
-        self.storage.append_op(&op)?;
+
+        // Route to the right storage. If the op's node belongs to a
+        // registered page, write to that page's shard; otherwise write
+        // to the global storage (legacy behaviour).
+        let slug = op_node(&op.op).and_then(|node| self.slug_for_node(node));
+        match slug {
+            Some(ref slug) if self.page_storages.contains_key(slug) => {
+                if let Some(s) = self.page_storages.get_mut(slug) {
+                    s.append_op(&op)?;
+                }
+            }
+            _ => {
+                self.storage.append_op(&op)?;
+            }
+        }
 
         // Background snapshot trigger. `snapshot_threshold = 0` is the
         // opt-out (CLI). When the threshold is crossed we build the
@@ -513,6 +542,110 @@ impl Workspace {
         self.content.replace_text(node, &self.log, new_text)
     }
 
+    /// Re-boot the workspace from all registered storages (Global +
+    /// PerPage). Called by clients after registering per-page shards
+    /// via [`Self::register_page_storage`] — the initial boot only
+    /// sees the Global storage, so a re-boot is needed to load the
+    /// per-page ops into the materialized tree. RFC #137 Phase B.
+    pub fn reboot_with_all_storages(&mut self) -> Result<(), WorkspaceError> {
+        self.tree = Tree::new();
+        self.log = OpLog::new();
+        self.content = ContentStore::default();
+        self.log_complete = true;
+        self.boot_from_full_replay()?;
+        Ok(())
+    }
+
+    /// Whether any per-page storage shards have been registered.
+    pub fn has_page_storages(&self) -> bool {
+        !self.page_storages.is_empty()
+    }
+
+    /// Register a per-page storage backend. The client (CLI / TUI /
+    /// desktop / mobile) calls this after opening the workspace if the
+    /// workspace uses the per-page shard layout (RFC #137 Phase B).
+    /// Ops whose node belongs to `slug` will be routed to this storage
+    /// instead of the global one.
+    pub fn register_page_storage(&mut self, slug: &str, storage: Box<dyn Storage>) {
+        self.page_storages.insert(slug.to_string(), storage);
+    }
+
+    /// Register a page root → slug mapping. The client calls this for
+    /// every page/journal it knows about (read from sidecars via
+    /// `outl-md`). `apply` uses this to resolve which page an op
+    /// belongs to by walking the parent chain up to a page root.
+    pub fn register_page_root(&mut self, root_id: NodeId, slug: &str) {
+        self.page_root_to_slug.insert(root_id, slug.to_string());
+    }
+
+    /// Walk `tree.parent(node)` up until we hit a registered page root.
+    /// Returns the slug of that page, or `None` if the chain dead-ends
+    /// at the workspace root without finding one.
+    fn slug_for_node(&self, node: NodeId) -> Option<String> {
+        let mut current = node;
+        loop {
+            if let Some(slug) = self.page_root_to_slug.get(&current) {
+                return Some(slug.clone());
+            }
+            current = self.tree.parent(current)?;
+        }
+    }
+
+    /// Merge ops from the global storage and every registered
+    /// per-page storage, sorted by HLC. Used by boot and read-side
+    /// accessors (`all_ops`, `ops_since`, `ops_for_node`, etc.).
+    fn all_ops_combined(&self) -> Result<Vec<LogOp>, StorageError> {
+        let mut all = self.storage.all_ops()?;
+        for s in self.page_storages.values() {
+            all.extend(s.all_ops()?);
+        }
+        all.sort_by_key(|op| op.ts);
+        all.dedup_by_key(|op| op.ts);
+        Ok(all)
+    }
+
+    /// Merge ops with HLC > `ts` from every storage.
+    fn ops_since_combined(&self, ts: crate::hlc::Hlc) -> Result<Vec<LogOp>, StorageError> {
+        let mut all = self.storage.ops_since(ts)?;
+        for s in self.page_storages.values() {
+            all.extend(s.ops_since(ts)?);
+        }
+        all.sort_by_key(|op| op.ts);
+        all.dedup_by_key(|op| op.ts);
+        Ok(all)
+    }
+
+    /// Merge ops for `node` from every storage.
+    fn ops_for_node_combined(&self, node: NodeId) -> Result<Vec<LogOp>, StorageError> {
+        let mut all = self.storage.ops_for_node(node)?;
+        for s in self.page_storages.values() {
+            all.extend(s.ops_for_node(node)?);
+        }
+        all.sort_by_key(|op| op.ts);
+        all.dedup_by_key(|op| op.ts);
+        Ok(all)
+    }
+
+    /// Merge `last_ts_per_actor` from every storage.
+    #[allow(dead_code)]
+    fn last_ts_per_actor_combined(
+        &self,
+    ) -> Result<HashMap<ActorId, crate::hlc::Hlc>, StorageError> {
+        let mut map = self.storage.last_ts_per_actor()?;
+        for s in self.page_storages.values() {
+            for (actor, ts) in s.last_ts_per_actor()? {
+                map.entry(actor)
+                    .and_modify(|existing| {
+                        if ts > *existing {
+                            *existing = ts;
+                        }
+                    })
+                    .or_insert(ts);
+            }
+        }
+        Ok(map)
+    }
+
     /// Apply the LRU cap configured by the client, after boot has
     /// finished re-materialising Yrs `Doc`s.
     ///
@@ -528,6 +661,9 @@ impl Workspace {
     /// lifecycle (clients may resize on config change).
     pub fn apply_lru_cap(&mut self, cap: usize) {
         self.storage.resize_cache(cap);
+        for s in self.page_storages.values_mut() {
+            s.resize_cache(cap);
+        }
     }
 }
 
