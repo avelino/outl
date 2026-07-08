@@ -331,6 +331,7 @@ impl Workspace {
     /// storage fails, the in-memory state is still mutated — the caller
     /// is responsible for surfacing the error and/or invoking `outl doctor`.
     pub fn apply(&mut self, op: LogOp) -> Result<(), WorkspaceError> {
+        let is_new = !self.log.contains_ts(&op.ts);
         if let Op::Edit { node, text_op } = &op.op {
             // Merge the update into the block's text. The Doc is rebuilt
             // from the log here, before this op is appended below, so the
@@ -339,6 +340,14 @@ impl Workspace {
             self.content.merge_update(*node, &self.log, text_op);
         }
         self.tree.apply_op(&mut self.log, op.clone());
+
+        // Only persist ops the tree didn't already have. `apply_op`
+        // deduplicates via `contains_ts`, but the storage append below
+        // is unconditional without this guard — a re-delivered op
+        // (sync replay, plugin pull) would write a duplicate line.
+        if !is_new {
+            return Ok(());
+        }
 
         // Route to the right storage. If the op's node belongs to a
         // registered page, write to that page's shard; otherwise write
