@@ -239,7 +239,7 @@ mod tests {
 
         let dst_dir = TempDir::new().unwrap();
         let dst = dst_dir.path().join("ws");
-        crate::cmd::init::run(&dst).unwrap();
+        crate::cmd::init::run(&dst, "global").unwrap();
         let paths = Paths::at(&dst);
         let report = import(&src, &paths).unwrap();
         // We return dst_dir to keep the tempdir alive.

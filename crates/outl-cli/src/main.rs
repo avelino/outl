@@ -90,6 +90,19 @@ enum Command {
     Init {
         /// Workspace path. Created if it does not exist. Overrides `--workspace`.
         path: Option<PathBuf>,
+        /// Op-log layout: `global` (single file per actor, legacy) or
+        /// `per-page` (one file per (actor, page) — Phase B of RFC #137).
+        /// New workspaces default to `global` for back-compat.
+        #[arg(long, default_value = "global", value_parser = ["global", "per-page"])]
+        scope: String,
+    },
+    /// Migrate a workspace's op log from `Global` (single file per
+    /// actor) to `PerPage` (one file per actor + page). RFC #137
+    /// Phase B. Reversible — the legacy file is preserved as
+    /// `ops-<actor>.jsonl.v0.bak`.
+    MigrateToPerPageOps {
+        /// Workspace path. Overrides `--workspace`.
+        path: Option<PathBuf>,
     },
     /// Run the file watcher; keep the workspace in sync.
     Serve {
@@ -255,9 +268,13 @@ fn main() -> Result<()> {
             ensure_workspace_or_prompt(&p)?;
             outl_tui::run_with_theme_override(&p, cli.theme.as_deref())
         }
-        Some(Command::Init { path }) => {
+        Some(Command::Init { path, scope }) => {
             let p = resolve_init_path(cli.workspace.as_ref(), path.as_ref())?;
-            cmd::init::run(&p)
+            cmd::init::run(&p, &scope)
+        }
+        Some(Command::MigrateToPerPageOps { path }) => {
+            let p = resolve_path(cli.workspace.as_ref(), path.as_ref())?;
+            cmd::migrate_to_per_page_ops::run(&p)
         }
         Some(Command::Serve { path, once }) => {
             let p = resolve_path(cli.workspace.as_ref(), path.as_ref())?;
@@ -590,7 +607,7 @@ fn ensure_workspace_or_prompt(path: &Path) -> Result<()> {
         .with_context(|| "reading prompt response")?;
     let answer = line.trim().to_lowercase();
     if answer == "y" || answer == "yes" {
-        cmd::init::run(path)?;
+        cmd::init::run(path, "global")?;
         Ok(())
     } else {
         anyhow::bail!("aborted — no workspace initialized at {}", path.display());

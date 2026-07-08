@@ -21,7 +21,7 @@ use tempfile::TempDir;
 fn run_import(vault: &Path) -> (TempDir, Paths, ImportReport) {
     let dst_dir = TempDir::new().unwrap();
     let dst = dst_dir.path().join("ws");
-    crate::cmd::init::run(&dst).unwrap();
+    crate::cmd::init::run(&dst, "global").unwrap();
     let paths = Paths::at(dst);
     let report = import(vault, &paths).unwrap();
     (dst_dir, paths, report)
@@ -321,13 +321,13 @@ fn reimport_produces_same_files() {
 
     let dst1 = TempDir::new().unwrap();
     let dst1_path = dst1.path().join("ws");
-    crate::cmd::init::run(&dst1_path).unwrap();
+    crate::cmd::init::run(&dst1_path, "global").unwrap();
     let paths1 = Paths::at(dst1_path);
     import(vault.path(), &paths1).unwrap();
 
     let dst2 = TempDir::new().unwrap();
     let dst2_path = dst2.path().join("ws");
-    crate::cmd::init::run(&dst2_path).unwrap();
+    crate::cmd::init::run(&dst2_path, "global").unwrap();
     let paths2 = Paths::at(dst2_path);
     import(vault.path(), &paths2).unwrap();
 
@@ -353,7 +353,7 @@ fn reimport_into_same_destination_is_idempotent() {
 
     let dst = TempDir::new().unwrap();
     let dst_path = dst.path().join("ws");
-    crate::cmd::init::run(&dst_path).unwrap();
+    crate::cmd::init::run(&dst_path, "global").unwrap();
     let paths = Paths::at(dst_path.clone());
 
     import(vault.path(), &paths).unwrap();

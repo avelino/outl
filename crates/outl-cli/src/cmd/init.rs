@@ -2,23 +2,29 @@
 
 use crate::workspace_layout::{init, read_config, today, Paths};
 use anyhow::{Context, Result};
-use outl_core::storage::JsonlStorage;
+use outl_core::storage::{JsonlStorage, PageScope};
 use std::fs;
 use std::path::Path;
 
 /// Run the `init` subcommand.
-pub fn run(path: &Path) -> Result<()> {
+///
+/// `scope = "per-page"` switches new workspaces to the Phase B layout
+/// (`ops/<actor>/<slug>.jsonl`) — boot is proportional to the active
+/// page, not the whole workspace. Default is `"global"` for back-compat
+/// with every existing workspace.
+pub fn run(path: &Path, scope: &str) -> Result<()> {
     let paths = Paths::at(path.to_path_buf());
 
     // Create all directories and seed config/templates.
     init(&paths)?;
 
-    // Touch the per-actor JSONL so the workspace has a writable
-    // storage from the first op onwards. We just want the file on
-    // disk; the handle is closed immediately.
     let cfg = read_config(&paths)?;
     let actor = cfg.actor()?;
-    let _ = JsonlStorage::open(paths.ops.clone(), actor)
+    let initial_scope = match scope {
+        "per-page" => PageScope::PerPage("home".into()),
+        _ => PageScope::Global,
+    };
+    let _ = JsonlStorage::open_with_scope_cap(paths.ops.clone(), actor, initial_scope, 0)
         .with_context(|| format!("opening JSONL log at {}", paths.ops.display()))?;
 
     // Seed today's journal if missing.
@@ -35,6 +41,7 @@ pub fn run(path: &Path) -> Result<()> {
     println!("  ops:      {}", paths.ops.display());
     println!("  config:   {}", paths.config.display());
     println!("  journal:  {}", journal_path.display());
+    println!("  scope:    {}", scope);
     Ok(())
 }
 
@@ -47,7 +54,7 @@ mod tests {
     fn init_creates_full_workspace() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("notes");
-        run(&root).unwrap();
+        run(&root, "global").unwrap();
 
         let paths = Paths::at(&root);
         assert!(paths.dot_outl.is_dir(), ".outl/ should exist");
@@ -68,10 +75,22 @@ mod tests {
     fn init_is_idempotent() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("notes");
-        run(&root).unwrap();
+        run(&root, "global").unwrap();
         // Second run must not error or wipe state.
-        run(&root).unwrap();
+        run(&root, "global").unwrap();
         let paths = Paths::at(&root);
+        assert!(paths.ops.is_dir());
+    }
+
+    #[test]
+    fn init_with_per_page_scope_creates_actor_subdir() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("notes");
+        run(&root, "per-page").unwrap();
+
+        let paths = Paths::at(&root);
+        // `ops/` exists; the per-actor subdir gets created on first
+        // `JsonlStorage::open_with_scope_cap` call (lazy).
         assert!(paths.ops.is_dir());
     }
 }

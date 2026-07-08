@@ -9,6 +9,7 @@ pub mod export;
 pub mod export_v2;
 pub mod import;
 pub mod init;
+pub mod migrate_to_per_page_ops;
 pub mod page;
 pub mod plugin;
 pub mod plugin_init;

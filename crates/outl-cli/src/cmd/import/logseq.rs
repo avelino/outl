@@ -226,7 +226,7 @@ mod tests {
 
         let dst_dir = TempDir::new().unwrap();
         let dst = dst_dir.path().join("ws");
-        crate::cmd::init::run(&dst).unwrap();
+        crate::cmd::init::run(&dst, "global").unwrap();
         let paths = Paths::at(&dst);
         let report = import(src_dir.path(), &paths).unwrap();
 
@@ -257,7 +257,7 @@ mod tests {
 
         let dst_dir = TempDir::new().unwrap();
         let dst = dst_dir.path().join("ws");
-        crate::cmd::init::run(&dst).unwrap();
+        crate::cmd::init::run(&dst, "global").unwrap();
         let paths = Paths::at(&dst);
         let _ = import(src_dir.path(), &paths).unwrap();
 
@@ -281,7 +281,7 @@ mod tests {
 
         let dst_dir = TempDir::new().unwrap();
         let dst = dst_dir.path().join("ws");
-        crate::cmd::init::run(&dst).unwrap();
+        crate::cmd::init::run(&dst, "global").unwrap();
         let paths = Paths::at(&dst);
         let report = import(src_dir.path(), &paths).unwrap();
 

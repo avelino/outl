@@ -103,6 +103,24 @@ pub fn open(path: &Path) -> Result<WsCtx, ApiError> {
     // that own the workspace, and snapshots already pay back at boot
     // via `load_snapshot`. So opt out — read, don't write.
     workspace.set_snapshot_policy(false, 0);
+    // Register per-page shards if the workspace has been migrated
+    // (RFC #137 Phase B). No-op for legacy Global workspaces.
+    outl_actions::storage_scope::register_per_page_storages(
+        &mut workspace,
+        &paths.ops,
+        actor,
+        0,
+        &paths.root,
+    );
+    // If per-page shards were registered, re-boot so the materialized
+    // tree includes their ops. The initial boot only saw the Global
+    // storage (which is empty after migration).
+    if workspace.has_page_storages() {
+        workspace
+            .reboot_with_all_storages()
+            .map_err(ApiError::internal)?;
+        workspace.set_snapshot_policy(false, 0);
+    }
     let hlc = HlcGenerator::new(actor);
 
     Ok(WsCtx {

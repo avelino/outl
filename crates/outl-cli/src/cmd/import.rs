@@ -26,7 +26,7 @@ pub use common::ImportReport;
 pub fn run(source: &str, src: &Path, dst: &Path) -> Result<()> {
     let dst = dst.to_path_buf();
     if !dst.exists() {
-        crate::cmd::init::run(&dst)?;
+        crate::cmd::init::run(&dst, "global")?;
     }
     let paths = crate::workspace_layout::Paths::at(dst.clone());
 
