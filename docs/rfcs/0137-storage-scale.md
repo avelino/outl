@@ -64,7 +64,7 @@ afterwards.
 Cold reads use `File + seek + read_line` (not mmap — see
 "Decision: mmap deferred" below).
 
-Result: RSS ≈ constant (LRU cap + index + mmap window), regardless of
+Result: RSS ≈ constant (LRU cap + index), regardless of
 history. No `.jsonl` format change. No migration. No client breaks.
 
 ### Phase A PRs (DONE)

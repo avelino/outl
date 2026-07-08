@@ -68,3 +68,5 @@ __pycache__/
 scripts/local-*.sh
 
 docs/app-store-*
+.lsp/
+.clj-kondo/

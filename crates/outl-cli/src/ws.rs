@@ -109,7 +109,6 @@ pub fn open(path: &Path) -> Result<WsCtx, ApiError> {
         &mut workspace,
         &paths.ops,
         actor,
-        0,
         &paths.root,
     );
     // If per-page shards were registered, re-boot so the materialized

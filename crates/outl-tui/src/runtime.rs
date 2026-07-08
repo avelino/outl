@@ -351,14 +351,14 @@ fn open_workspace(
     );
     let mut ws = Workspace::open_with_storage(actor, storage, Some(root.to_path_buf()))?;
     let lru_cap = outl_config::load().storage.lru_cap;
-    ws.apply_lru_cap(lru_cap);
-    outl_actions::storage_scope::register_per_page_storages(
-        &mut ws, &ops_dir, actor, lru_cap, root,
-    );
+    // Register per-page shards BEFORE applying the LRU cap. Shards
+    // open unbounded (cap = 0) so the reboot replays the full history.
+    outl_actions::storage_scope::register_per_page_storages(&mut ws, &ops_dir, actor, root);
     if ws.has_page_storages() {
         ws.reboot_with_all_storages()?;
-        ws.apply_lru_cap(lru_cap);
     }
+    // Shed cold history AFTER the materialized tree is complete.
+    ws.apply_lru_cap(lru_cap);
     Ok((ws, actor, cfg, lock, actor_lock))
 }
 

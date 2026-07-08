@@ -44,6 +44,19 @@ pub fn open_workspace_at(
     let mut workspace =
         Workspace::open_with_storage(actor, Box::new(storage), Some(path.to_path_buf()))?;
 
+    // Register per-page shards + reboot BEFORE running boot helpers so
+    // the materialized tree is complete (migrated workspaces have an
+    // empty global log — the initial boot sees nothing without shards).
+    outl_actions::storage_scope::register_per_page_storages(
+        &mut workspace,
+        &path.join("ops"),
+        actor,
+        path,
+    );
+    if workspace.has_page_storages() {
+        workspace.reboot_with_all_storages()?;
+    }
+
     if let Err(e) = migrate_legacy_into_today(&mut workspace, hlc) {
         warn!("legacy migration: {e}");
     }
@@ -51,22 +64,10 @@ pub fn open_workspace_at(
         warn!("could not pre-open today: {e}");
     }
 
-    // Apply the LRU cap AFTER boot so `ops_for_node` (used to rebuild
-    // Yrs `Doc`s) had the full history in RAM. After this point cold
-    // ops are read back from disk on demand via the offset index.
+    // Shed cold history AFTER boot + helpers finish. Boot needs every
+    // op in RAM to rebuild Yrs `Doc`s; afterwards cold ops come back
+    // from disk via the offset index.
     workspace.apply_lru_cap(lru_cap);
-
-    outl_actions::storage_scope::register_per_page_storages(
-        &mut workspace,
-        &path.join("ops"),
-        actor,
-        lru_cap,
-        path,
-    );
-    if workspace.has_page_storages() {
-        workspace.reboot_with_all_storages()?;
-        workspace.apply_lru_cap(lru_cap);
-    }
 
     Ok(workspace)
 }
