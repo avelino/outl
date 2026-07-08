@@ -67,6 +67,7 @@ pub mod paste;
 pub mod person;
 pub mod quote;
 pub mod resolve;
+pub mod storage_scope;
 pub mod sync;
 pub mod todo;
 pub mod tree;
