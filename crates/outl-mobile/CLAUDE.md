@@ -17,9 +17,16 @@ outl-mobile (this crate)
    │   ├── workspace_open.rs       (boot orchestration over outl_tauri_shared::workspace_open primitives)
    │   ├── workspace_picker.rs     (set_workspace — folder choice + persistence; native picker deferred)
    │   ├── iroh_sync.rs            (wire_iroh_transport — boot the P2P transport, register the bg-sync handle)
-   │   ├── bg_sync.rs              (outl_ios_background_sync FFI — drives a forced sync from the iOS BGProcessingTask)
-   │   ├── plugin_service.rs       (mobile shim: CLIENT id + capability set over outl_tauri_shared::PluginService)
-   │   └── commands/               (thin #[tauri::command] wrappers over outl_tauri_shared::commands)
+   │   ├── bg_sync.rs             (outl_ios_background_sync FFI — drives a forced sync from the iOS BGProcessingTask)
+   │   ├── plugin_service.rs       (PluginService + dedicated plugin thread — Boa Context is !Send, so it can't live in AppState)
+   │   └── commands/               (Tauri command surface — split mirrors outl-desktop)
+   │       ├── mod.rs
+   │       ├── workspace.rs        (workspace_stats, reload_workspace)
+   │       ├── page.rs             (list_all_pages / search_pages / search_persons / outl_emoji_search / open_* / *_day / resolve_ref / legacy compat shims)
+   │       ├── block.rs            (create / edit / toggle_todo / toggle_quote / delete / indent / outdent / move_* / set_collapsed / paste_markdown_at / copy_markdown)
+   │       ├── peers.rs            (outl_peer_list / outl_peer_remove — read/edit <workspace>/.outl/peers.json, no workspace lock)
+   │       ├── plugin.rs           (plugin_list / plugin_run / plugin_sync_hooks — thin shims over PluginService)
+   │       └── exec.rs             (run_code_block — thin shim over outl_actions::exec::run_code_block)
    ├── gen/apple/.../main.mm       (NSMetadataQuery + NSFileCoordinator iCloud watcher)
    └── (frontend in ../src)        (Solid components, Tailwind, Tauri bridge)
 ```
@@ -217,6 +224,8 @@ Plain text routes to `outl_actions::paste_markdown` (`paste_markdown_at`) when `
 Multi-paragraph plain text splits into one block per paragraph; single-paragraph falls through to the browser's default splice.
 
 `create_block` has a **stale-anchor fallback**: if `after_id` is not in the tree (`NotInTree`), the block is appended at the end of the page instead of returning an error (mirrors the desktop fix).
+
+The long-press context menu's "Copy" action calls `copy_markdown` (`commands/block.rs` → `outl_actions::copy_markdown`), serialising the block and its full subtree as clean outl markdown to the iOS clipboard.
 
 ## Code execution (`run_code_block`)
 
