@@ -349,4 +349,48 @@ mod tests {
         // shipped) should look like "never ran" so it gets refreshed.
         assert_eq!(result_source_hash(&parent), None);
     }
+
+    #[test]
+    fn upsert_embeds_creates_result_with_children_when_absent() {
+        let mut parent = OutlineNode {
+            text: "```query\nstatus: todo\n```".into(),
+            properties: Vec::new(),
+            children: Vec::new(),
+        };
+        upsert_result_embeds(
+            &mut parent,
+            "> **result:** (2 blocks)".into(),
+            &["!((blk-aaa))", "!((blk-bbb))"],
+        );
+        assert_eq!(parent.children.len(), 1);
+        assert_eq!(parent.children[0].text, "> **result:** (2 blocks)");
+        assert_eq!(parent.children[0].children.len(), 2);
+        assert_eq!(parent.children[0].children[0].text, "!((blk-aaa))");
+        assert_eq!(parent.children[0].children[1].text, "!((blk-bbb))");
+    }
+
+    #[test]
+    fn upsert_embeds_replaces_existing_result_in_place() {
+        let mut parent = OutlineNode {
+            text: "```query\nstatus: todo\n```".into(),
+            properties: Vec::new(),
+            children: vec![OutlineNode {
+                text: "> **result:** (1 blocks)".into(),
+                properties: Vec::new(),
+                children: vec![OutlineNode {
+                    text: "!((blk-old))".into(),
+                    properties: Vec::new(),
+                    children: Vec::new(),
+                }],
+            }],
+        };
+        upsert_result_embeds(
+            &mut parent,
+            "> **result:** (3 blocks)".into(),
+            &["!((blk-a))", "!((blk-b))", "!((blk-c))"],
+        );
+        assert_eq!(parent.children.len(), 1, "must not create a second child");
+        assert_eq!(parent.children[0].text, "> **result:** (3 blocks)");
+        assert_eq!(parent.children[0].children.len(), 3);
+    }
 }

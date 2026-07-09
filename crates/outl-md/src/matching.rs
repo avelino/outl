@@ -114,15 +114,15 @@ pub fn match_blocks(
     // mint a fresh NodeId + ref_handle, breaking all `((blk-…))` refs
     // and `!((blk-…))` embeds pointing at the edited block.
     //
-    // Both `flat` (new) and `old_blocks` are in DFS preorder, so the
-    // indices align when the tree shape hasn't changed. If blocks were
-    // inserted or deleted, the indices shift and this pass is a no-op
-    // (the `used` guard + indent check prevent false matches).
-    for (i, maybe_id) in found.iter_mut().enumerate() {
-        if maybe_id.is_some() {
-            continue;
-        }
-        if let Some(old) = old_blocks.get(i) {
+    // Only runs when the flat block count matches — if blocks were
+    // inserted or deleted, DFS indices shift and positional matching
+    // would assign the wrong NodeId.
+    if flat.len() == old_blocks.len() {
+        for (i, maybe_id) in found.iter_mut().enumerate() {
+            if maybe_id.is_some() {
+                continue;
+            }
+            let old = &old_blocks[i];
             if !used.contains(&old.id) && old.indent == flat[i].indent {
                 *maybe_id = Some(old.id);
                 used.insert(old.id);
