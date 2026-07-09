@@ -61,9 +61,10 @@ use crate::commands::{
     outl_peer_status, outl_sync_now, paste_block_after, paste_markdown_at, paste_plain_at,
     plugin_install_official, plugin_keybindings, plugin_list, plugin_registry_list, plugin_run,
     plugin_set_enabled, plugin_sync_hooks, plugin_toolbar, plugin_transform, plugin_transformers,
-    plugin_uninstall, previous_day, redo_page, reload_workspace, resolve_ref, run_code_block,
-    search_blocks, search_pages, search_persons, set_block_collapsed, set_workspace,
-    today_slug_cmd, toggle_quote, toggle_todo, undo_page, update_settings, workspace_stats,
+    plugin_uninstall, previous_day, redo_page, reload_workspace, resolve_embeds, resolve_ref,
+    run_auto_run_blocks, run_code_block, search_blocks, search_pages, search_persons,
+    set_block_collapsed, set_workspace, today_slug_cmd, toggle_quote, toggle_todo, undo_page,
+    update_settings, workspace_stats,
 };
 use crate::plugin_service::spawn_plugin_service;
 use crate::state::AppState;
@@ -325,6 +326,8 @@ pub fn run() {
             redo_page,
             // Code execution
             run_code_block,
+            run_auto_run_blocks,
+            resolve_embeds,
             // Peer / device management
             outl_peer_list,
             outl_peer_remove,

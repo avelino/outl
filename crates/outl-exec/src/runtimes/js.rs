@@ -25,7 +25,7 @@ use std::time::Instant;
 
 use boa_engine::{js_string, Context, JsValue, NativeFunction, Source};
 
-use crate::runtime::{ExecContext, ExecError, ExecOutput, ExitStatus, Runtime};
+use crate::runtime::{ExecContext, ExecError, ExecOutput, ExitStatus, OutputFormat, Runtime};
 
 /// Boa-backed JavaScript runtime.
 pub struct JsRuntime;
@@ -44,7 +44,7 @@ impl Runtime for JsRuntime {
         "js"
     }
 
-    fn execute(&self, source: &str, _ctx: &ExecContext) -> Result<ExecOutput, ExecError> {
+    fn execute(&self, source: &str, ctx: &ExecContext) -> Result<ExecOutput, ExecError> {
         let start = Instant::now();
         let mut context = Context::default();
         let sink: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
@@ -65,6 +65,42 @@ impl Runtime for JsRuntime {
         context
             .register_global_callable(js_string!("__outl_log"), 1, log_fn)
             .map_err(|e| ExecError::Sandbox(format!("register __outl_log: {e}")))?;
+
+        // Register `outl.query(params)` — structured workspace query
+        // available to JS plugins and code blocks. Captures
+        // `workspace_root` so it can build a WorkspaceIndex lazily.
+        let ws_root = Rc::new(ctx.workspace_root.clone());
+        let query_fn = unsafe {
+            NativeFunction::from_closure(move |_, args, js_ctx| {
+                let root = ws_root.clone();
+                let arg0 = args.get(0).cloned().unwrap_or(JsValue::undefined());
+                let params = js_value_to_query_params(&arg0, js_ctx).map_err(|e| {
+                    boa_engine::JsError::from(
+                        boa_engine::error::JsNativeError::typ().with_message(e),
+                    )
+                })?;
+                let hits = super::query::run_query_structured(&params, &root).map_err(|e| {
+                    boa_engine::JsError::from(
+                        boa_engine::error::JsNativeError::typ().with_message(e),
+                    )
+                })?;
+                hits_to_js_array(&hits, js_ctx).map_err(|e| {
+                    boa_engine::JsError::from(
+                        boa_engine::error::JsNativeError::typ().with_message(e),
+                    )
+                })
+            })
+        };
+        let outl_obj = boa_engine::object::ObjectInitializer::new(&mut context)
+            .function(query_fn, js_string!("query"), 1)
+            .build();
+        context
+            .register_global_property(
+                js_string!("outl"),
+                JsValue::from(outl_obj),
+                boa_engine::property::Attribute::all(),
+            )
+            .map_err(|e| ExecError::Sandbox(format!("register outl: {e}")))?;
         // Run the shim that wires console.log → __outl_log. Errors
         // here would mean a broken Boa install, so just panic-via-?.
         let _ = context
@@ -81,6 +117,7 @@ impl Runtime for JsRuntime {
                     stderr: e.to_string(),
                     duration: start.elapsed(),
                     exit: ExitStatus::Trap("js-error".into()),
+                    format: OutputFormat::Text,
                 });
             }
         };
@@ -98,8 +135,101 @@ impl Runtime for JsRuntime {
             stderr: String::new(),
             duration: start.elapsed(),
             exit: ExitStatus::Ok,
+            format: OutputFormat::Text,
         })
     }
+}
+
+/// Convert a JS value (expected: plain object) into [`QueryParams`].
+fn js_value_to_query_params(
+    val: &JsValue,
+    ctx: &mut Context,
+) -> Result<super::query::QueryParams, String> {
+    let obj = val.as_object().ok_or("outl.query expects an object")?;
+    let mut params = super::query::QueryParams::default();
+    if let Some(v) = obj
+        .get(js_string!("status"), ctx)
+        .map_err(|e| e.to_string())?
+        .as_string()
+    {
+        params.status = Some(v.to_std_string_escaped());
+    }
+    if let Some(v) = obj
+        .get(js_string!("tag"), ctx)
+        .map_err(|e| e.to_string())?
+        .as_string()
+    {
+        params.tag = Some(v.to_std_string_escaped());
+    }
+    if let Some(v) = obj
+        .get(js_string!("kind"), ctx)
+        .map_err(|e| e.to_string())?
+        .as_string()
+    {
+        params.kind = Some(v.to_std_string_escaped());
+    }
+    if let Some(v) = obj
+        .get(js_string!("since"), ctx)
+        .map_err(|e| e.to_string())?
+        .as_string()
+    {
+        params.since = Some(v.to_std_string_escaped());
+    }
+    if let Some(v) = obj
+        .get(js_string!("text"), ctx)
+        .map_err(|e| e.to_string())?
+        .as_string()
+    {
+        params.text = Some(v.to_std_string_escaped());
+    }
+    if let Some(v) = obj
+        .get(js_string!("limit"), ctx)
+        .map_err(|e| e.to_string())?
+        .as_number()
+    {
+        params.limit = Some(v as usize);
+    }
+    let sort_val = obj
+        .get(js_string!("sort"), ctx)
+        .map_err(|e| e.to_string())?;
+    if let Some(s) = sort_val.as_string() {
+        params.sort.push(s.to_std_string_escaped());
+    }
+    Ok(params)
+}
+
+/// Convert query hits into a JS array of `{ handle, text, status, page }`.
+fn hits_to_js_array(hits: &[super::query::QueryHit], ctx: &mut Context) -> Result<JsValue, String> {
+    let arr = boa_engine::object::ObjectInitializer::new(ctx).build();
+    for (i, hit) in hits.iter().enumerate() {
+        let obj = boa_engine::object::ObjectInitializer::new(ctx)
+            .property(
+                js_string!("handle"),
+                js_string!(hit.handle.as_str()),
+                boa_engine::property::Attribute::all(),
+            )
+            .property(
+                js_string!("text"),
+                js_string!(hit.text.as_str()),
+                boa_engine::property::Attribute::all(),
+            )
+            .property(
+                js_string!("page"),
+                js_string!(hit.page.as_str()),
+                boa_engine::property::Attribute::all(),
+            )
+            .property(
+                js_string!("status"),
+                match hit.status.as_deref() {
+                    Some(s) => js_string!(s).into(),
+                    None => JsValue::null(),
+                },
+                boa_engine::property::Attribute::all(),
+            )
+            .build();
+        arr.set(i, obj, true, ctx).map_err(|e| e.to_string())?;
+    }
+    Ok(arr.into())
 }
 
 #[cfg(test)]

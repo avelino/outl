@@ -19,6 +19,7 @@ export const KNOWN_ALIASES: ReadonlyArray<readonly [string, ReadonlyArray<string
   ["lua", ["lua"]],
   ["lisp", ["lisp", "cl", "common-lisp", "elisp"]],
   ["echo", ["echo", "text", "txt", "plain"]],
+  ["query", ["query", "tasks"]],
   ["typescript", ["typescript", "ts"]],
   ["tsx", ["tsx"]],
   ["jsx", ["jsx"]],

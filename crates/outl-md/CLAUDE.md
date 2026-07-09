@@ -173,7 +173,7 @@ tags:: #project
 - `#tag` = tag (page reference with classification semantics).
 - `((blk-XXXXXX))` = inline block reference (renders as the source block's text).
 - `!((blk-XXXXXX))` = block embed (renders source block expanded with subtree).
-- `{{query: ...}}` = saved query (query DSL not yet implemented, parse as opaque for now).
+- `{{query: ...}}` = inline query token (legacy; parsed as opaque text; the ` ```query ` code block is the supported path — see `docs/query.md`).
 
 **No `id::`, no UUID, no HTML comments** — IDs go in the sidecar only.
 

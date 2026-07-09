@@ -1,4 +1,4 @@
-export { MarkdownInline } from "./MarkdownInline";
+export { MarkdownInline, type EmbedMap } from "./MarkdownInline";
 export {
   QUOTE_PREFIX,
   isQuote,

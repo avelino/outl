@@ -42,6 +42,8 @@ export interface AppStateShape {
    * a clean file.
    */
   parseWarnings: ParseWarning[];
+  /** Resolved embed content for `!((blk-…))` tokens on the current page. */
+  embeds: Record<string, { handle: string; text: string; page_slug: string; status: string | null }>;
   /** DFS path of the selected block, or `null` for no selection. */
   selectedPath: number[] | null;
   /**
@@ -191,6 +193,7 @@ const [state, setState] = createStore<AppStateShape>({
   outline: [],
   backlinks: [],
   parseWarnings: [],
+  embeds: {},
   selectedPath: null,
   selectedBlockId: null,
   selectedBacklinkBlockId: null,

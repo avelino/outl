@@ -100,6 +100,34 @@ pub fn upsert_result_child(parent: &mut OutlineNode, body: String) {
     }
 }
 
+/// Insert or replace the result child under `parent` with embed children.
+///
+/// Used by runtimes that return [`crate::runtime::OutputFormat::Embeds`]: each line of
+/// stdout becomes a child bullet under the result header. Lines are
+/// expected to be embed references (`!((blk-…))`) so the displayed
+/// result is a **live view** of the original blocks, not a copy.
+pub fn upsert_result_embeds(parent: &mut OutlineNode, header: String, lines: &[&str]) {
+    let embed_children: Vec<OutlineNode> = lines
+        .iter()
+        .map(|line| OutlineNode {
+            text: line.to_string(),
+            properties: Vec::new(),
+            children: Vec::new(),
+        })
+        .collect();
+
+    if let Some(idx) = parent.children.iter().position(is_result_block) {
+        parent.children[idx].text = header;
+        parent.children[idx].children = embed_children;
+    } else {
+        parent.children.push(OutlineNode {
+            text: header,
+            properties: Vec::new(),
+            children: embed_children,
+        });
+    }
+}
+
 /// Same as [`upsert_result_child`] but also stamps the result subblock
 /// with a `source-hash::` property. The auto-run loop reads that
 /// property to short-circuit re-runs when the parent source hasn't
@@ -150,6 +178,7 @@ fn is_result_block(node: &OutlineNode) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::OutputFormat;
     use std::time::Duration;
 
     fn ok_output(stdout: &str) -> ExecOutput {
@@ -158,6 +187,7 @@ mod tests {
             stderr: String::new(),
             duration: Duration::from_millis(1),
             exit: ExitStatus::Ok,
+            format: OutputFormat::Text,
         }
     }
 
@@ -186,6 +216,7 @@ mod tests {
             stderr: String::new(),
             duration: Duration::from_millis(1),
             exit: ExitStatus::NonZero(2),
+            format: OutputFormat::Text,
         };
         let body = render_result_body(Ok(&out));
         assert!(body.starts_with("> **result (exit 2):**"));
@@ -198,6 +229,7 @@ mod tests {
             stderr: "divide by zero".into(),
             duration: Duration::from_millis(1),
             exit: ExitStatus::Trap("div-by-zero".into()),
+            format: OutputFormat::Text,
         };
         let body = render_result_body(Ok(&out));
         assert!(body.starts_with("> **result (trap: div-by-zero):**"));

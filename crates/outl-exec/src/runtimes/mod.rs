@@ -28,3 +28,6 @@ pub mod lua;
 
 #[cfg(feature = "lang-rust")]
 pub mod rust;
+
+#[cfg(feature = "lang-query")]
+pub mod query;

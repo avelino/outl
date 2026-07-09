@@ -221,6 +221,20 @@ The **cross-client glue** every UI uses to wire a "run this fence" gesture (TUI 
 The runtime catalog (which languages are available) is selected by the **binary** that consumes this crate, via `outl-exec` features in its own `Cargo.toml`.
 `outl-actions` itself depends on `outl-exec` with `default-features = false` so it doesn't drag `wasmtime` (Rust runtime) into the mobile IPA via the back door.
 
+The `query` runtime (`outl_exec::runtimes::query`) is a special case: it returns `OutputFormat::Embeds` instead of `OutputFormat::Text`, so the orchestrator renders results as live `!((blk-XXXXXX))` embeds rather than a code-fence stdout dump.
+It also overrides `Runtime::auto_run()` to return `true`, so query blocks always re-run on page load without needing the `auto-run::` property or manual `gx`.
+
+The query engine also exposes a **structured API** for plugins and code that runs outside the ` ```query ` fence:
+
+| Intent | Use this | File |
+|---|---|---|
+| Structured query from a `QueryParams` object (plugin-facing) | `outl_exec::run_query_structured` | `crates/outl-exec/src/runtimes/query.rs` |
+| DSL query from a string (user-facing) | `outl_exec::run_query_dsl` | `crates/outl-exec/src/runtimes/query.rs` |
+| Query parameters struct (status, tag, kind, since, text, sort, limit) | `outl_exec::QueryParams` | `crates/outl-exec/src/runtimes/query.rs` |
+| Query result hit (handle, text, status, page) | `outl_exec::QueryHit` | `crates/outl-exec/src/runtimes/query.rs` |
+
+In JS code blocks, the same API is available as `outl.query({ status: "todo", … })`.
+
 ## 14. Sync engine, locks, storage trait
 
 | Intent | Use this | File |

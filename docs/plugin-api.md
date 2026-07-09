@@ -121,7 +121,8 @@ A capability the client can't honor lands in a warning, and the plugin still loa
 
 Live capabilities: `op-hook`, `slash-command`, `keybinding`, `config-schema` (read), `toolbar-button`, `ui-render`, and `content-transformer:text` / `:rich`.
 `sync-transport` is core-ready (the host serializes/applies ops through a registered transport) but no client polls it yet.
-A plugin that wants to be a query engine registers a `content-transformer` for the `query` fence language (` ```query `); `{{query}}` inline would need a new markdown token the parser defers, so there is no separate `query-provider` capability.
+A plugin that wants to be a query engine registers a `content-transformer` for the `query` fence language (` ```query `).
+Plugins and JS code blocks can also call `outl.query({ status: "todo", … })` to get structured `QueryHit[]` results — see [Query code blocks → Plugin SDK API](query.md#plugin-sdk-api-outlquery).
 
 ### `permissions[]`
 
@@ -241,7 +242,7 @@ These are typed in `@outl/plugin-sdk` and/or enumerated in the manifest schema s
 |---|---|---|
 | `sync-transport` client polling | **Core live, no client driver** | `ctx.sync.register` works and convergence is tested, but no client calls `push`/`pull` on a timer yet. |
 | `ctx.page.open(slug)` / `ctx.page.today()` | **Not present** | Typed in the SDK; the runtime `ctx.page` exposes only `list`/`create`. |
-| `{{query}}` inline | **Parser defers it** | A fenced ` ```query ` block already works through a `content-transformer`; inline `{{query}}` needs a new markdown token the project defers. |
+| `{{query}}` inline | **Parser defers it** | A fenced ` ```query ` block works natively (auto-run, embeds). Plugins can call `outl.query({ … })` for structured results. Inline `{{query}}` needs a new parser token the project defers. |
 
 `github:` install and `outl plugin init` ship today (see [Plugins → Installing](plugins.md#installing)).
 The remaining tooling roadmap (`outl plugin update`, `.outlpkg` pack, dev hot-reload, a dev console, a config-editing form UI, and discovery / marketplace / signing in the clients) is tracked in [Plugins](plugins.md).

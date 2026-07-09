@@ -24,7 +24,7 @@ use wasmtime_wasi::p1::WasiP1Ctx;
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 use wasmtime_wasi::WasiCtxBuilder;
 
-use crate::runtime::{ExecContext, ExecError, ExecOutput, ExitStatus, Runtime};
+use crate::runtime::{ExecContext, ExecError, ExecOutput, ExitStatus, OutputFormat, Runtime};
 use crate::wasm::engine::SandboxLimits;
 
 /// A WASM-hosted language runtime.
@@ -139,6 +139,7 @@ impl Runtime for WasmModule {
                 stderr,
                 duration,
                 exit: ExitStatus::Ok,
+                format: OutputFormat::Text,
             }),
             Err(e) => {
                 // Classify the trap.
@@ -164,6 +165,7 @@ impl Runtime for WasmModule {
                     stderr,
                     duration,
                     exit,
+                    format: OutputFormat::Text,
                 })
             }
         }

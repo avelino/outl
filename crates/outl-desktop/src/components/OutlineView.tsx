@@ -12,6 +12,8 @@ import {
   pastePlain,
   pluginRun,
   pluginSyncHooks,
+  resolveEmbeds,
+  runAutoRunBlocks,
   runCodeBlock,
   setBlockCollapsed,
   toggleTodo,
@@ -109,6 +111,41 @@ export function OutlineView() {
       backlinks: view.backlinks,
       parseWarnings: view.warnings ?? [],
     });
+    // Auto-run query blocks after page load / commit.
+    void runAutoRunBlocks(view.page.id)
+      .then((reply) => {
+        if (reply.ran > 0) {
+          setAppState({
+            page: reply.view.page,
+            outline: reply.view.outline,
+            backlinks: reply.view.backlinks,
+            parseWarnings: reply.view.warnings ?? [],
+          });
+        }
+      })
+      .catch(() => {});
+    // Resolve embeds on the page so `!((blk-…))` blocks expand.
+    void resolvePageEmbeds(view.outline);
+  }
+
+  /** Collect all embed handles from the outline and batch-resolve them. */
+  function resolvePageEmbeds(outline: import("@outl/shared/api/types").BlockNode[]) {
+    const handles: string[] = [];
+    const walk = (nodes: import("@outl/shared/api/types").BlockNode[]) => {
+      for (const n of nodes) {
+        for (const tok of n.tokens) {
+          if (tok.kind === "embed" && tok.value) handles.push(tok.value);
+        }
+        if (n.children.length > 0) walk(n.children);
+      }
+    };
+    walk(outline);
+    if (handles.length === 0) return;
+    void resolveEmbeds(handles)
+      .then((map) => {
+        setAppState("embeds", map);
+      })
+      .catch(() => {});
   }
 
   /**

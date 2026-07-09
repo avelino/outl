@@ -18,7 +18,7 @@ use std::time::Instant;
 
 use rustpython_vm::{compiler, scope::Scope, Interpreter, PyObjectRef, Settings, VirtualMachine};
 
-use crate::runtime::{ExecContext, ExecError, ExecOutput, ExitStatus, Runtime};
+use crate::runtime::{ExecContext, ExecError, ExecOutput, ExitStatus, OutputFormat, Runtime};
 
 /// RustPython-backed runtime.
 pub struct PythonRuntime;
@@ -86,12 +86,14 @@ impl Runtime for PythonRuntime {
                 stderr: String::new(),
                 duration: start.elapsed(),
                 exit: ExitStatus::Ok,
+                format: OutputFormat::Text,
             }),
             Err(stderr) => Ok(ExecOutput {
                 stdout: String::new(),
                 stderr: stderr.0,
                 duration: start.elapsed(),
                 exit: ExitStatus::Trap("python-error".into()),
+                format: OutputFormat::Text,
             }),
         }
     }

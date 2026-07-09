@@ -395,6 +395,30 @@ export function runCodeBlock(
 }
 
 /**
+ * Sweep the page for query blocks (runtimes with `auto_run() == true`)
+ * and execute them. Returns the refreshed `PageView`.
+ */
+export function runAutoRunBlocks(
+  pageId: string,
+): Promise<{ ran: number; view: PageView }> {
+  return invoke<{ ran: number; view: PageView }>("run_auto_run_blocks", {
+    pageId,
+  });
+}
+
+/**
+ * Batch-resolve embed handles (`blk-XXXXXX`) to their source content.
+ * Returns a map from handle to `{ handle, text, page_slug }`.
+ */
+export function resolveEmbeds(
+  handles: string[],
+): Promise<Record<string, { handle: string; text: string; page_slug: string; status: string | null }>> {
+  return invoke<
+    Record<string, { handle: string; text: string; page_slug: string; status: string | null }>
+  >("resolve_embeds", { handles });
+}
+
+/**
  * Open an external `[label](url)` link in the user's default browser
  * via `tauri-plugin-opener`. Shared by every client's `onLinkClick`
  * handler so the scheme allow-list lives in one place.

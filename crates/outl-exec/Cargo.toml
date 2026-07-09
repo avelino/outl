@@ -11,7 +11,7 @@ readme.workspace = true
 description = "Code-block execution engine for outl: trait Runtime + sandbox + idempotent result subblock."
 
 [features]
-default = ["lang-lisp", "lang-js", "lang-python", "lang-lua", "lang-rust"]
+default = ["lang-lisp", "lang-js", "lang-python", "lang-lua", "lang-rust", "lang-query"]
 
 # Each language is its own feature so binaries can opt out (mobile,
 # embedded, "lisp-only" distributions, ...). Adding a new language is
@@ -20,10 +20,11 @@ lang-lisp = ["dep:steel-core"]
 lang-js = ["dep:boa_engine"]
 lang-python = ["dep:rustpython-vm"]
 lang-lua = ["dep:mlua"]
-# Rust support requires the wasmtime sandbox — there is no in-process
-# Rust interpreter. We compile user source to `wasm32-wasip1` via
-# `rustc` and run the resulting module via wasmtime.
+# Rust support requires the wasmtime sandbox
 lang-rust = ["wasm"]
+# Query language — workspace queries (tasks, filters) as code blocks.
+# No external interpreter needed; runs against the in-process block index.
+lang-query = []
 # Generic WASM sandbox. Pulls in wasmtime; enable when the host wants
 # to load drop-in `.wasm` interpreters or use language runtimes that
 # need WASM (Rust today; Steel/QuickJS-wasi tomorrow).

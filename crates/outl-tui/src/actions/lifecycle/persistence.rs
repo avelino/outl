@@ -136,6 +136,9 @@ impl App {
         // mistake our own save for an external edit.
         self.last_mtime = file_mtime(&path);
         self.last_saved_at = Some(std::time::Instant::now());
+        // Re-run query / auto-run blocks — workspace state changed,
+        // so results may be different now.
+        self.run_auto_run_blocks();
         // Post-commit hook: tell the transport new local ops landed.
         // No-op for FileSyncTransport (the file is already on disk and
         // a peer's poller will notice it); IrohSyncTransport gossips

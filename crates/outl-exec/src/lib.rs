@@ -62,6 +62,8 @@ pub use orchestrate::{
 pub use registry::RuntimeRegistry;
 pub use result_block::{
     render_result_body, result_source_hash, source_hash, upsert_result_child,
-    upsert_result_child_with_hash, RESULT_MARKER, SOURCE_HASH_KEY,
+    upsert_result_child_with_hash, upsert_result_embeds, RESULT_MARKER, SOURCE_HASH_KEY,
 };
-pub use runtime::{ExecContext, ExecError, ExecOutput, ExitStatus, Runtime};
+pub use runtime::{ExecContext, ExecError, ExecOutput, ExitStatus, OutputFormat, Runtime};
+
+pub use runtimes::query::{run_query_dsl, run_query_structured, QueryHit, QueryParams};

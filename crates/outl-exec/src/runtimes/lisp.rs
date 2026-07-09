@@ -14,7 +14,7 @@ use steel::steel_vm::engine::Engine;
 use steel::steel_vm::register_fn::RegisterFn;
 use steel::SteelVal;
 
-use crate::runtime::{ExecContext, ExecError, ExecOutput, ExitStatus, Runtime};
+use crate::runtime::{ExecContext, ExecError, ExecOutput, ExitStatus, OutputFormat, Runtime};
 
 /// Steel-backed Scheme runtime.
 pub struct LispRuntime;
@@ -50,6 +50,7 @@ impl Runtime for LispRuntime {
                     stderr: String::new(),
                     duration: start.elapsed(),
                     exit: ExitStatus::Ok,
+                    format: OutputFormat::Text,
                 })
             }
             Err(e) => Ok(ExecOutput {
@@ -57,6 +58,7 @@ impl Runtime for LispRuntime {
                 stderr: format!("{e}"),
                 duration: start.elapsed(),
                 exit: ExitStatus::Trap("steel-error".into()),
+                format: OutputFormat::Text,
             }),
         }
     }

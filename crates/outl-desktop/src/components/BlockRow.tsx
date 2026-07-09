@@ -941,6 +941,7 @@ export function BlockRow(props: {
                                   onRefClick={props.cb.onRefClick}
                                   onTagClick={props.cb.onTagClick}
                                   onLinkClick={props.cb.onLinkClick}
+                                  embeds={appState.embeds}
                                 />
                               </Show>
                             </div>
