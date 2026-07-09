@@ -183,15 +183,13 @@ pub fn resolve_embeds<S: AppHost>(
     Ok(result)
 }
 
-/// Split `"TODO body"` / `"DONE body"` into `(Some("todo"|"done"), "body")`.
+/// Split `"TODO body"` / `"DONE body"` into `(Some("todo"|"done"), "body")`,
+/// reusing the canonical `outl_actions::split_todo` so TODO encoding
+/// stays consistent.
 fn split_todo_prefix(raw: &str) -> (Option<String>, String) {
-    if let Some(rest) = raw.strip_prefix("TODO ") {
-        (Some("todo".into()), rest.into())
-    } else if let Some(rest) = raw.strip_prefix("DONE ") {
-        (Some("done".into()), rest.into())
-    } else {
-        (None, raw.into())
-    }
+    let (state, body) = outl_actions::split_todo(raw);
+    let status = state.map(|s| s.as_str().to_lowercase());
+    (status, body.into())
 }
 
 fn collect_auto_run_flat_indices(

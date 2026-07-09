@@ -193,13 +193,21 @@ fn js_value_to_query_params(
         .map_err(|e| e.to_string())?
         .as_number()
     {
-        params.limit = Some(v as usize);
+        if v.is_finite() && v >= 0.0 {
+            params.limit = Some(v as usize);
+        }
     }
     let sort_val = obj
         .get(js_string!("sort"), ctx)
         .map_err(|e| e.to_string())?;
     if let Some(s) = sort_val.as_string() {
-        params.sort.push(s.to_std_string_escaped());
+        let raw = s.to_std_string_escaped();
+        for part in raw.split(',') {
+            let trimmed = part.trim();
+            if !trimmed.is_empty() {
+                params.sort.push(trimmed.to_string());
+            }
+        }
     }
     Ok(params)
 }

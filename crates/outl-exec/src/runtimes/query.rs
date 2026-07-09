@@ -486,12 +486,10 @@ pub(crate) mod engine {
                 KindFilter::Page => is_journal != Some(true),
             },
             Filter::Since(days) => {
-                let cutoff = *today - Duration::days(*days as i64);
-                if let Some(d) = parse_journal_date(&entry.source_slug) {
-                    d >= cutoff
-                } else {
-                    false
-                }
+                is_journal == Some(true)
+                    && parse_journal_date(&entry.source_slug)
+                        .map(|d| d >= *today - Duration::days(*days as i64))
+                        .unwrap_or(false)
             }
             Filter::Text(needle) => entry.text_fold.contains(&needle.to_lowercase()),
         }
