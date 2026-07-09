@@ -47,6 +47,8 @@ impl Runtime for JsRuntime {
     fn execute(&self, source: &str, ctx: &ExecContext) -> Result<ExecOutput, ExecError> {
         let start = Instant::now();
         let mut context = Context::default();
+        // Prevent unused-variable warning when lang-query is off.
+        let _ = ctx;
         let sink: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
 
         // Register `__outl_log(string)` as a native fn that pushes
