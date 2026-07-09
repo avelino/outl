@@ -66,4 +66,5 @@ pub use result_block::{
 };
 pub use runtime::{ExecContext, ExecError, ExecOutput, ExitStatus, OutputFormat, Runtime};
 
+#[cfg(feature = "lang-query")]
 pub use runtimes::query::{run_query_dsl, run_query_structured, QueryHit, QueryParams};
