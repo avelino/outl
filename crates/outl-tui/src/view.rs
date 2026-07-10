@@ -81,6 +81,7 @@ pub(crate) fn render_app(f: &mut ratatui::Frame<'_>, app: &mut App) {
         Some(Overlay::Command(c)) => overlays::render_command_bar(f, area, app, c),
         Some(Overlay::Error(e)) => overlays::render_error_overlay(f, area, app, e),
         Some(Overlay::Slash(s)) => overlays::render_slash_overlay(f, area, app, s),
+        Some(Overlay::TemplatePicker(tp)) => overlays::render_template_picker(f, area, app, tp),
         None => {}
     }
 

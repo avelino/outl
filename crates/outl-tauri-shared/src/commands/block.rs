@@ -69,7 +69,18 @@ pub fn edit_block<S: AppHost>(
 ) -> Result<PageView, String> {
     let page = parse_node_id(&page_id)?;
     let node = parse_node_id(&id)?;
-    finish_in_page(state, page, |ws| edit_text(ws, state.hlc(), node, &text))
+    let registry = state.exec_registry();
+    finish_in_page(state, page, |ws| {
+        edit_text(ws, state.hlc(), node, &text)?;
+        // Finishing an edit on a `call:<name>` block re-runs it so the
+        // `> **result:**` reflects the freshly-typed params. Best-effort:
+        // a failing template must never drop the edit itself.
+        if let Some((name, params)) = outl_actions::parse_call_invocation(&text) {
+            let _ =
+                outl_actions::run_callable_block(ws, state.hlc(), &registry, &name, &params, node);
+        }
+        Ok(())
+    })
 }
 
 pub fn toggle_todo<S: AppHost>(state: &S, page_id: String, id: String) -> Result<PageView, String> {

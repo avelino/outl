@@ -100,9 +100,12 @@ where
 /// its `source_path` (the `.md` of the page the source block lives
 /// in).
 pub fn backlinks_for_target(workspace: &Workspace, root: &Path, target: &str) -> Vec<Backlink> {
-    let matcher = TargetMatcher::new(target);
-    let mut out: Vec<Backlink> = Vec::new();
+    collect_backlinks(workspace, root, &TargetMatcher::refs(target))
+}
 
+/// Walk every page's blocks and collect the ones `matcher` accepts.
+fn collect_backlinks(workspace: &Workspace, root: &Path, matcher: &TargetMatcher) -> Vec<Backlink> {
+    let mut out: Vec<Backlink> = Vec::new();
     for (page_id, _) in children_of(workspace, NodeId::root()) {
         let Some(meta) = page_meta(workspace, page_id) else {
             continue;
@@ -115,48 +118,100 @@ pub fn backlinks_for_target(workspace: &Workspace, root: &Path, target: &str) ->
             &meta,
             &source_path,
             &mut path,
-            &matcher,
+            matcher,
             &mut out,
         );
     }
     out
 }
 
-/// Pre-computed match state for one backlink target: the literal
-/// `[[target]]` needle plus the target's slug form for `#tag`
-/// comparison.
+/// Pre-computed match state for one backlink target.
+///
+/// A block counts as a backlink when it matches any enabled channel:
+/// the literal `[[target]]` needle, a `#tag` whose slug form equals
+/// the target's, a ` ```call:<name> ` fence (callable-template render
+/// site), or a `from-template:: <slug>` property (structural-template
+/// instance). The last two are how a template page surfaces where it
+/// was used without the user hand-writing a `[[link]]`.
 struct TargetMatcher {
+    /// `[[target]]` literal; empty disables the ref channel.
     needle: String,
-    target_slug: String,
+    /// Slug form for `#tag` comparison; `None` disables the tag channel.
+    tag_slug: Option<String>,
+    /// Template invocation name for `call:<name>` fences; `None`
+    /// disables the callable channel.
+    call_name: Option<String>,
+    /// Page slug matched against `from-template::`; `None` disables the
+    /// structural-instance channel.
+    provenance_slug: Option<String>,
 }
 
 impl TargetMatcher {
-    fn new(target: &str) -> Self {
+    /// The ordinary text-reference matcher: `[[target]]` + `#tag`.
+    fn refs(target: &str) -> Self {
         Self {
             needle: format!("[[{target}]]"),
-            target_slug: outl_md::slug::slugify(target),
+            tag_slug: Some(outl_md::slug::slugify(target)),
+            call_name: None,
+            provenance_slug: None,
         }
     }
 
-    /// Does this block's text mention the target? `[[ref]]` is a
-    /// substring probe (cheap, exact thanks to the `]]` terminator);
-    /// `#tag` goes through the real inline tokenizer so tags inside
-    /// code spans don't count and `#avelino-foo` doesn't false-match
-    /// a target of `avelino`.
-    fn matches(&self, text: &str) -> bool {
-        if text.contains(&self.needle) {
+    /// The template-provenance matcher for a template page: a
+    /// `call:<name>` fence or a `from-template:: <slug>` instance.
+    fn template(slug: &str, name: &str) -> Self {
+        Self {
+            needle: String::new(),
+            tag_slug: None,
+            call_name: Some(name.to_string()),
+            provenance_slug: Some(slug.to_string()),
+        }
+    }
+
+    /// Does this block mention the target on any enabled channel?
+    /// `[[ref]]` is a substring probe (cheap, exact thanks to the `]]`
+    /// terminator); `#tag` goes through the real inline tokenizer so
+    /// tags inside code spans don't count and `#avelino-foo` doesn't
+    /// false-match `avelino`.
+    fn matches(&self, workspace: &Workspace, block_id: NodeId, text: &str) -> bool {
+        if !self.needle.is_empty() && text.contains(&self.needle) {
             return true;
         }
-        if !text.contains('#') {
-            return false;
-        }
-        outl_md::inline::tokenize(text).iter().any(|tok| match tok {
-            outl_md::inline::InlineTok::Tag { name } => {
-                outl_md::slug::slugify(name) == self.target_slug
+        if let Some(name) = &self.call_name {
+            if crate::template::call_target_name(text).as_deref() == Some(name.as_str()) {
+                return true;
             }
-            _ => false,
-        })
+        }
+        if let Some(slug) = &self.provenance_slug {
+            let from = crate::page::read_text_prop(
+                workspace,
+                block_id,
+                crate::template::FROM_TEMPLATE_KEY,
+            );
+            if from.as_deref() == Some(slug.as_str()) {
+                return true;
+            }
+        }
+        if let Some(want) = &self.tag_slug {
+            if text.contains('#') {
+                return outl_md::inline::tokenize(text).iter().any(|tok| match tok {
+                    outl_md::inline::InlineTok::Tag { name } => {
+                        outl_md::slug::slugify(name) == *want
+                    }
+                    _ => false,
+                });
+            }
+        }
+        false
     }
+}
+
+/// The template invocation name of `meta`'s page, when it is a template
+/// (has a non-empty `template::` property).
+fn template_name_of(workspace: &Workspace, meta: &PageMeta) -> Option<String> {
+    let id = crate::page::find_by_slug(workspace, &meta.slug)?;
+    let name = crate::page::read_text_prop(workspace, id, crate::template::TEMPLATE_KEY)?;
+    (!name.trim().is_empty()).then_some(name)
 }
 
 /// Convenience: backlinks against either the page's slug or its title.
@@ -188,6 +243,16 @@ pub fn backlinks_for_page(workspace: &Workspace, root: &Path, meta: &PageMeta) -
             push(backlinks_for_target(workspace, root, &at_title));
         }
     }
+    // When this page is a template, also surface where it was rendered
+    // (`call:<name>` fences) or instantiated (`from-template:: <slug>`).
+    // These aren't `[[refs]]`, so the plain text scan above misses them.
+    if let Some(name) = template_name_of(workspace, meta) {
+        push(collect_backlinks(
+            workspace,
+            root,
+            &TargetMatcher::template(&meta.slug, &name),
+        ));
+    }
     acc
 }
 
@@ -207,7 +272,7 @@ fn walk_inside_page(
     for (idx, (child_id, _)) in children_of(workspace, parent).into_iter().enumerate() {
         path.push(idx);
         let text = workspace.block_text(child_id).unwrap_or_default();
-        if matcher.matches(&text) {
+        if matcher.matches(workspace, child_id, &text) {
             let (todo, body) = split_todo(&text);
             let source_block = project_outline_node(workspace, child_id);
             out.push(Backlink {
@@ -271,7 +336,7 @@ pub fn extract_refs(text: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::block::{append_block, edit_text};
-    use crate::page::{open_journal, open_or_create, PageKind};
+    use crate::page::{find_by_slug, open_journal, open_or_create, PageKind};
     use chrono::NaiveDate;
     use outl_core::hlc::HlcGenerator;
     use outl_core::id::ActorId;
@@ -301,6 +366,83 @@ mod tests {
     fn extract_refs_ignores_unbalanced() {
         let refs = extract_refs("[[unterminated and [[ok]] mixed");
         assert!(refs.contains(&"ok".to_string()));
+    }
+
+    /// Build a template page named `name` with a single code block, so
+    /// it can be both instantiated (structural) and called (callable).
+    fn make_template(workspace: &mut Workspace, hlc: &HlcGenerator, slug: &str, name: &str) {
+        use crate::page::set_property;
+        use crate::template::TEMPLATE_KEY;
+        use outl_core::property::PropValue;
+
+        let id = open_or_create(workspace, hlc, slug, slug, PageKind::Page).unwrap();
+        set_property(
+            workspace,
+            hlc,
+            id,
+            TEMPLATE_KEY,
+            Some(PropValue::Text(name.into())),
+        )
+        .unwrap();
+        append_block(workspace, hlc, Some(id), Some("- **Item:**")).unwrap();
+    }
+
+    #[test]
+    fn structural_instance_shows_in_template_backlinks() {
+        // Instantiate a template into a journal, then the template
+        // page's backlinks must list where it was stamped — the
+        // `from-template::` property is not a `[[ref]]`, so this only
+        // works because the matcher reads the property directly.
+        let (mut w, hlc) = ws();
+        make_template(&mut w, &hlc, "template-1on1", "1on1");
+        let j = open_journal(&mut w, &hlc, NaiveDate::from_ymd_opt(2026, 7, 9).unwrap()).unwrap();
+        let target = append_block(&mut w, &hlc, Some(j), Some("host")).unwrap();
+        crate::template::instantiate_template(&mut w, &hlc, "1on1", target, "2026-07-09", None)
+            .unwrap();
+
+        let meta = page_meta(&w, find_by_slug(&w, "template-1on1").unwrap()).unwrap();
+        let bl = backlinks_for_page(&w, root(), &meta);
+        assert!(
+            !bl.is_empty(),
+            "structural instance should appear in the template's backlinks"
+        );
+        assert!(bl.iter().any(|b| b
+            .source_page
+            .as_ref()
+            .is_some_and(|p| p.slug == "2026-07-09")));
+    }
+
+    #[test]
+    fn callable_site_shows_in_template_backlinks() {
+        // A `call:<name>` fence must surface in the template page's
+        // backlinks without a hand-written `[[link]]`.
+        let (mut w, hlc) = ws();
+        make_template(&mut w, &hlc, "template-calc", "calc");
+        let j = open_journal(&mut w, &hlc, NaiveDate::from_ymd_opt(2026, 7, 9).unwrap()).unwrap();
+        append_block(&mut w, &hlc, Some(j), Some("```call:calc\nx: 1\n```")).unwrap();
+
+        let meta = page_meta(&w, find_by_slug(&w, "template-calc").unwrap()).unwrap();
+        let bl = backlinks_for_page(&w, root(), &meta);
+        assert!(
+            bl.iter().any(|b| b
+                .source_page
+                .as_ref()
+                .is_some_and(|p| p.slug == "2026-07-09")),
+            "callable site should appear in the template's backlinks"
+        );
+    }
+
+    #[test]
+    fn non_template_page_ignores_call_and_provenance() {
+        // A regular page must not accidentally pull in call/provenance
+        // matches — the template channel only fires for template pages.
+        let (mut w, hlc) = ws();
+        let p = open_or_create(&mut w, &hlc, "regular", "regular", PageKind::Page).unwrap();
+        append_block(&mut w, &hlc, Some(p), Some("```call:regular\n```")).unwrap();
+
+        let meta = page_meta(&w, p).unwrap();
+        let bl = backlinks_for_page(&w, root(), &meta);
+        assert!(bl.is_empty(), "regular page has no template channel");
     }
 
     #[test]

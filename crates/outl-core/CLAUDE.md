@@ -12,7 +12,11 @@ Treat every change as production-bound.
 
 - `Op` enum and `LogOp` envelope
 - HLC timestamps (wrapper over `uhlc`)
-- `NodeId`, `ActorId` (ULID-based)
+- `NodeId`, `ActorId` (ULID-based).
+  `NodeId::from_slug(slug)` is the **single owner** of the deterministic page/journal-root id derivation (`sha256("outl-page:" + slug)[..16]`).
+  Every path that materialises a page root routes here — in-app `open_or_create`, `outl-md`'s external-`.md` reconcile, `outl-actions::desync` recovery.
+  Two paths (or two devices) then converge on the **same** root id for a slug instead of splitting the page across two competing roots.
+  `outl_actions::page::page_id_from_slug` is a thin wrapper kept for its call sites.
 - `WorkspaceId` — the stable, **shared** workspace identity (one per workspace, the same bytes on every paired device), persisted at `<root>/.outl/workspace-id`.
   This is NOT the local path: the P2P transport keys its gossip topic on this id so two devices at different paths sync as one workspace, and pairing makes the joiner adopt the host's id.
   Read-or-generated on first open (migration-safe); never written into the clean markdown.

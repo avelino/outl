@@ -35,6 +35,7 @@
 
 * [Markdown dialect](markdown-format.md)
 * [Query code blocks](query.md)
+* [Templates](templates.md)
 * [Workspace layout](concepts.md)
 
 ## Under the hood
