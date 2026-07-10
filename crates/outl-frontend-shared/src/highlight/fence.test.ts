@@ -44,4 +44,11 @@ describe("detectFence", () => {
       body: "print();",
     });
   });
+
+  it("detects a callable-template fence (`call:<name>`) as a code block", () => {
+    expect(detectFence("```call:calc-salary\npedido: 10\nproposta: 19\n```")).toEqual({
+      language: "call:calc-salary",
+      body: "pedido: 10\nproposta: 19",
+    });
+  });
 });

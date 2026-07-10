@@ -28,6 +28,7 @@ mod dates;
 mod exec;
 mod page;
 mod refer;
+mod template;
 mod workspace;
 
 use super::CommandRegistry;
@@ -42,6 +43,7 @@ use dates::{
 use exec::{RunCommand, SearchCommand, ThemeCommand};
 use page::{PinCommand, PropBlockCommand, PropPageCommand};
 use refer::{ReferCommand, ReferEmbedCommand};
+use template::TemplateCommand;
 use workspace::{
     HelpCommand, OpenCommand, QuitCommand, RefreshCommand, TodayCommand, WriteCommand,
 };
@@ -69,6 +71,9 @@ pub(super) fn register_all(reg: &mut CommandRegistry) {
     // refer — capture block ref / embed handles
     reg.register(ReferCommand);
     reg.register(ReferEmbedCommand);
+
+    // template — instantiate structural templates
+    reg.register(TemplateCommand);
 
     // dates — Insert-mode inserters. The slash dispatcher uses
     // `inserts_inline()` (set true in each command) to skip

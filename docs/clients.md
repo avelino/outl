@@ -118,6 +118,28 @@ The runtime catalog is selected per-binary via `outl-exec` features:
 - `outl-mobile` — opts out of `lang-rust` (wasmtime is heavy and trips iOS code-signing restrictions on dynamic code generation).
 - `outl-actions` — `default-features = false` so it never drags `wasmtime` into the mobile IPA via the back door.
 
+## Structural templates
+
+A **template** is any page with a non-empty `template::` property; its outline is a body every client can deep-copy under a target block (see [`docs/templates.md`](templates.md) for the authoring model).
+Instantiation is reachable from every surface (TUI/CLI `/template <name>`, MCP), and both GUI clients wrap the **same** two shared command bodies in `outl_tauri_shared::commands::template` — no plugin needed:
+
+- `list_templates` → `Vec<TemplateDto>` (`{ name, slug, duplicate }`) — wraps `outl_actions::list_templates`.
+- `instantiate_template_at(name, target_block)` → refreshed `PageView`.
+  It resolves the target block's enclosing page (slug + journal date), calls `outl_actions::instantiate_template`, reprojects, and announces the ops.
+  An unknown name or stale block id is a typed error the client toasts.
+
+Both clients register the wire command as `list_templates_cmd` plus `instantiate_template_at`.
+The `_cmd` suffix dodges a glob-import collision with the `outl_actions::list_templates` re-export.
+The TS wrappers are `listTemplates()` / `instantiateTemplateAt(name, targetBlockId)` in `@outl/shared/api/commands`.
+
+Client affordances (chrome per-client, one backend):
+
+- **Desktop** — the block-initial `/` slash menu lists `template: <name>` entries alongside plugin commands.
+  They are injected via `templateSlashCommands` under a reserved `@outl/template` sentinel `plugin_id`.
+  Picking one instantiates under the selected block; `OutlineView`'s `onRunPluginCommand` intercepts the sentinel and calls `instantiateTemplateAt` instead of `pluginRun`.
+- **Mobile** — the block long-press menu has an "Insert template" action that opens `TemplateSheet` (a bottom sheet listing templates).
+  Picking a template instantiates it under the long-pressed block and applies the returned `PageView`.
+
 ## Copy and paste
 
 Every client supports copying blocks as clean outl markdown and pasting markdown from external apps.
@@ -245,6 +267,16 @@ The policy diverges; the engine does not.
 `engine.scan_for_orphans()` is the other shared piece: it walks `journals/` and `pages/` for `.md` files whose sidecar is missing or stale (fresh import from Roam/Logseq, peer-shipped projection without sidecar, external vim edit).
 The TUI runs the scan every 10s on a worker thread; mobile runs it once at boot.
 Both feed the same `outl_md::reconcile::reconcile_md`.
+
+### Split-brain slug repair (boot)
+
+`outl_actions::merge_duplicate_slug_roots(ws, hlc)` is the boot-time repair for the split-brain bug where two creators minted **different** ids for the same slug.
+Two `2026-07-10` journal roots split a day's content across two roots, so the client flickers between them.
+For each slug with more than one root it picks a canonical survivor: the `page_id_from_slug` id if one is present, else the root with the most descendants, tie-broken by smallest id.
+It then re-parents every child of the other roots under the survivor preserving order (no data loss), and trashes the emptied duplicates.
+Every step is an `Op` through `Workspace::apply`, so running it on **any** client converges on every device via the CRDT; it's idempotent (returns 0 on a clean workspace) and safe to call on every boot.
+Clients call it once at startup alongside `migrate_legacy_into_today`.
+Belt-and-suspenders: `find_by_slug` already resolves the same canonical winner deterministically, so the UI stops flickering even before the merge runs.
 
 ### Peer reachability indicator (P2P / iroh transport)
 

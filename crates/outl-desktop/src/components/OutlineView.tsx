@@ -5,6 +5,7 @@ import {
   deleteBlock,
   editBlock,
   indentBlock,
+  instantiateTemplateAt,
   openExternalUrl,
   openRef,
   outdentBlock,
@@ -24,6 +25,7 @@ import type { PageView } from "@outl/shared/api/types";
 import { ParseWarningsBanner } from "@outl/shared/warnings";
 import { journalSlugToDate } from "@outl/shared/journal";
 import { visualRangeSet } from "@outl/shared/outline";
+import { NATIVE_TEMPLATE_PLUGIN_ID } from "../lib/slash-commands";
 import { playPluginViews } from "../lib/plugin-views";
 import { appState, setAppState } from "../lib/store";
 import { BlockRow, type BlockCallbacks } from "./BlockRow";
@@ -209,6 +211,23 @@ export function OutlineView() {
       setEditingId(id);
     },
     onRunPluginCommand: async (pluginId, commandId) => {
+      // Native `/template <name>`: instantiate the structural template
+      // under the block the slash was typed in (or the current
+      // selection). Intercepted here because it reuses the slash popup
+      // but is a core feature, not a plugin — `commandId` is the
+      // template name (see `templateSlashCommands`).
+      if (pluginId === NATIVE_TEMPLATE_PLUGIN_ID) {
+        const target = appState.selectedBlockId;
+        if (!target) {
+          setAppState("lastError", "select a block to insert a template");
+          return;
+        }
+        const view = await handleError(
+          instantiateTemplateAt(commandId, target),
+        );
+        if (view) applyView(view);
+        return;
+      }
       // Same dispatch the `⧉` PluginPalette runs: surface the command's
       // notifications / errors on the status line, re-render from the
       // returned view, and play any `ui-render` overlays.

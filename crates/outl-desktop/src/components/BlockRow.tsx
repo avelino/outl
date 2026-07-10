@@ -39,6 +39,7 @@ import {
 } from "@outl/shared/autocomplete";
 import {
   type EmojiHit,
+  listTemplates,
   openRef,
   pluginList,
   searchBlocks,
@@ -60,7 +61,10 @@ import {
 import { detectFence } from "@outl/shared/highlight";
 import { appState, setAppState } from "../lib/store";
 import { handlePopupNav } from "../lib/popup-nav";
-import { rankSlashCommands } from "../lib/slash-commands";
+import {
+  rankSlashCommands,
+  templateSlashCommands,
+} from "../lib/slash-commands";
 
 export interface BlockCallbacks {
   /** A textarea was double-clicked → enter edit mode on `id`. */
@@ -166,10 +170,17 @@ export function BlockRow(props: {
   const [slashCommands, setSlashCommands] = createSignal<PluginCommand[]>([]);
   const [slashIndex, setSlashIndex] = createSignal(0);
   // Lazily-loaded, cached command list (null until the first `/`).
+  // Native `/template <name>` entries (structural templates, no plugin
+  // needed) are merged ahead of plugin commands so the core feature is
+  // reachable from the same popup — see `templateSlashCommands`.
   let allSlashCommands: PluginCommand[] | null = null;
   async function ensureSlashCommands(): Promise<PluginCommand[]> {
     if (allSlashCommands) return allSlashCommands;
-    allSlashCommands = await pluginList().catch(() => []);
+    const [plugins, templates] = await Promise.all([
+      pluginList().catch(() => []),
+      listTemplates().catch(() => []),
+    ]);
+    allSlashCommands = [...templateSlashCommands(templates), ...plugins];
     return allSlashCommands;
   }
   // `query` last sent to the backend — skip redundant round-trips when

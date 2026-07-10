@@ -12,6 +12,7 @@ Read the [tutorial](plugin-tutorial.md) first, then the [API reference](plugin-a
 |---|---|---|
 | `op-hook` | [Word Count](plugin-examples/word-count.md) | Notifies word-count milestones as you type |
 | `slash-command` | [Workspace Stats](plugin-examples/workspace-stats.md) | Counts blocks / TODO / DONE / pages |
+| `slash-command` | [Template Stamper](plugin-examples/template-stamper.md) | Stamps a structural template under the cursor |
 | `config-schema` | [Greeter](plugin-examples/greeter.md) | Greets you using a configurable name |
 | `keybinding` | [Random Task](plugin-examples/random-task.md) | A chord that picks a random TODO to focus on |
 | `toolbar-button` | [Page Pulse](plugin-examples/page-pulse.md) | A chrome button that shows page stats |

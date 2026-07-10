@@ -24,6 +24,7 @@ outl-md = { workspace = true }
 # doesn't pull `wasmtime` into the mobile IPA via the back door.
 outl-exec = { path = "../outl-exec", default-features = false }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
