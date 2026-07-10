@@ -127,6 +127,12 @@ pub fn open(path: &Path) -> Result<WsCtx, ApiError> {
     // writes. Idempotent and a no-op when clean; only emits Ops when a duplicate
     // exists, and those converge across devices via the op log. Covers every CLI
     // command and the long-lived MCP server (both open through here).
+    //
+    // Cost: an O(roots) scan grouping page roots by slug. It runs on every CLI
+    // invocation, but the open above already replays the whole op log (O(ops),
+    // far larger), so this scan is noise next to it. If a huge workspace ever
+    // makes it show up in a profile, gate it on a persisted "merged at op-count
+    // N" marker in `.outl/` rather than paying the scan when nothing changed.
     match outl_actions::merge_duplicate_slug_roots(&mut workspace, &hlc) {
         Ok(0) => {}
         Ok(n) => tracing::warn!("merged {n} duplicate slug root(s)"),

@@ -20,6 +20,11 @@ use crate::template::vars::{substitute_vars, VarContext};
 use crate::template::{FROM_TEMPLATE_KEY, PARAMS_KEY, TEMPLATE_KEY};
 use crate::tree::children_of;
 
+/// Recursion cap for structural instantiation. A template's block subtree is a
+/// finite tree (the CRDT forbids cycles), so this only trips on a pathologically
+/// deep template — the guard turns a would-be stack overflow into a clean error.
+const MAX_TEMPLATE_DEPTH: usize = 256;
+
 /// Instantiate a structural template under `target_block`.
 ///
 /// Walks the template page's child subtree, creates fresh blocks
@@ -84,6 +89,7 @@ pub(crate) fn instantiate_template_traced(
         &template_slug,
         true,
         trace,
+        0,
     )
 }
 
@@ -101,7 +107,13 @@ fn clone_children_recursive(
     template_slug: &str,
     is_root_level: bool,
     trace: bool,
+    depth: usize,
 ) -> Result<Vec<NodeId>, ActionError> {
+    if depth > MAX_TEMPLATE_DEPTH {
+        return Err(ActionError::Exec(format!(
+            "template recursion exceeded {MAX_TEMPLATE_DEPTH} levels"
+        )));
+    }
     let template_children = children_of(workspace, template_parent);
     let mut new_ids = Vec::with_capacity(template_children.len());
 
@@ -132,6 +144,7 @@ fn clone_children_recursive(
             template_slug,
             false,
             trace,
+            depth + 1,
         )?;
 
         new_ids.push(new_id);

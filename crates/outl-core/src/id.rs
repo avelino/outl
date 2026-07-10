@@ -47,6 +47,10 @@ impl NodeId {
     /// namespaces the scheme so two derivations (page-root ids, callable-result
     /// ids) can't collide. Same input always yields the same id, so two devices
     /// converge on it with no coordination. Stable across releases.
+    ///
+    /// Taking the first 16 bytes of SHA-256 leaves a 2^128 space, so the
+    /// birthday-paradox collision risk is negligible for any real workspace
+    /// (well under 10k pages).
     pub fn from_seed(prefix: &[u8], seed: &str) -> Self {
         let mut h = Sha256::new();
         h.update(prefix);

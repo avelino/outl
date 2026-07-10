@@ -36,7 +36,8 @@ pub enum TemplateCommand {
         #[arg(long)]
         page: String,
         /// Target block id to instantiate under. When omitted, the
-        /// template is appended at the end of the page.
+        /// template is appended at the end of the page. Must belong to
+        /// `--page`; a block on another page is rejected.
         #[arg(long)]
         block: Option<String>,
         /// Force JSON output.
