@@ -464,6 +464,7 @@ fn read_query(model: &ReadModel, query_json: &str) -> String {
             serde_json::to_value(model.blocks.iter().find(|b| b.id == id)).unwrap_or(Value::Null)
         }
         "pages" => serde_json::to_value(&model.pages).unwrap_or(Value::Null),
+        "templates" => serde_json::to_value(&model.templates).unwrap_or(Value::Null),
         _ => Value::Null,
     };
     serde_json::to_string(&result).unwrap_or_else(|_| "null".into())
@@ -527,6 +528,10 @@ function __outl_ctx() {
             create: (slug) => __outl_emit(JSON.stringify({ op: 'ensure-page', slug })),
             open: () => { throw new Error('ctx.page.open is not available yet in this outl version (roadmap)'); },
             today: () => { throw new Error('ctx.page.today is not available yet in this outl version (roadmap)'); },
+        },
+        template: {
+            list: () => read({ kind: 'templates' }),
+            instantiate: (name, targetBlock) => __outl_emit(JSON.stringify({ op: 'instantiate-template', name, under: targetBlock })),
         },
         config: { get: () => JSON.parse(__outl_config()) },
         log: { info: (m) => __outl_log(String(m)), warn: (m) => __outl_log(String(m)), error: (m) => __outl_log(String(m)) },

@@ -135,15 +135,11 @@ pub fn init(paths: &Paths) -> Result<()> {
         write_config(paths, &cfg)?;
     }
 
-    if !paths.journal_template.exists() {
-        // Seed with a single empty bullet — outl's parser only
-        // recognizes `- ` as a block marker, so a leading `# {{date}}`
-        // heading would silently make the page parse to zero blocks
-        // (see issue #55). Journals are slug-keyed by date already; no
-        // heading needed.
-        fs::write(&paths.journal_template, "- \n")
-            .with_context(|| format!("writing {}", paths.journal_template.display()))?;
-    }
+    // The journal template is a **page** now (`templates/journal` with
+    // `template:: journal`), seeded through the op log in `cmd::init`,
+    // not a `templates/journal.md` file — see issue #146. `cmd::init`
+    // still reads `paths.journal_template` best-effort to migrate a
+    // legacy file if one exists.
 
     // Touch orphan log so `doctor` can rely on it existing.
     if !paths.orphans.exists() {

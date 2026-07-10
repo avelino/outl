@@ -204,6 +204,8 @@ pub(crate) enum Overlay {
     /// the user can trigger. Discoverable in a way `:` (vim command
     /// palette) isn't — every command shows up with a description.
     Slash(SlashState),
+    /// Template picker: fuzzy-searchable list of template pages.
+    TemplatePicker(TemplatePickerState),
 }
 
 /// One entry in the slash menu.
@@ -241,6 +243,18 @@ pub(crate) enum SlashOrigin {
         plugin_id: String,
         command_id: String,
     },
+}
+
+/// State of the template picker overlay.
+#[derive(Debug)]
+pub(crate) struct TemplatePickerState {
+    pub(crate) query: String,
+    /// All templates in the workspace, fetched once on open.
+    pub(crate) all: Vec<outl_actions::TemplateEntry>,
+    /// Indices into `all` matching the current query.
+    pub(crate) filtered: Vec<usize>,
+    /// Index into `filtered` of the highlighted entry.
+    pub(crate) selected: usize,
 }
 
 /// State of the slash overlay.

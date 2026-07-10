@@ -7,6 +7,18 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Added
 
+- **Template engine — reusable block structures and callable code blocks (issue #146).**
+  Any page becomes a template the moment it gets a `template:: <name>` property; the page's outline is the template body, so templates are searchable, have backlinks, and sync like any other page — no special folder, no file-based config.
+  Two invocation modes.
+  **Structural** (`/template <name>` in the TUI, `outl template apply <name> --page <slug>` on the CLI, `outl_template_apply` over MCP) deep-copies the template's subtree under the target block, minting fresh `NodeId`s and op-log entries, and substitutes the built-in variables `{{date}}`, `{{today}}`, `{{yesterday}}`, `{{tomorrow}}`, `{{page}}`, and `{{time}}` in the block text.
+  **Callable** (a ` ```call:<name> ` fence, run with `gx` in the TUI or the Run action on desktop) resolves the named template's code block, injects the `params::` declared on the call block, and executes it through the existing `outl-exec` runtimes — Roam's `{{roam/render}}` without a ClojureScript runtime.
+  Callable execution lives once in `outl_actions::run_callable_block` and is intercepted inside the shared `run_code_block` action, so the desktop and mobile Run paths get `call:` fences for free instead of erroring "no runtime for `call:<name>`".
+  On the GUI clients a `call:<name>` fence now renders as a proper code block (with a language chip and Run button) — the shared `detectFence` info-string pattern accepts the `:` so the block is no longer left as raw ```` ``` ```` text, and its `key: value` params are syntax-highlighted (as YAML) instead of rendering flat.
+  Finishing an edit on a `call:<name>` block re-runs it automatically, so the `> **result:**` reflects the freshly-typed params without a manual `gx` / Run — on the TUI (Insert commit) and both GUI clients (the shared `edit_block` command).
+  **Every template page shows where it was used.** The template page's backlinks panel now lists every block that rendered it (a `call:<name>` fence) or instantiated it (`from-template:: <slug>`), so you jump from a template to its call sites with no hand-written `[[link]]` — the matcher reads the fence and the provenance property directly, not just plain `[[refs]]`.
+  **The daily journal is now a template too.** `outl init` creates a `templates/journal` page (`template:: journal`) instead of a `templates/journal.md` file, and opening a fresh daily note stamps that template automatically — the built-in variables resolve against the daily's date. Existing customized `templates/journal.md` bodies migrate into the page on `init` (best-effort).
+  Callable params are injected as JSON (`serde_json`), so a value containing a quote can't break — or inject into — the generated program, and the language is canonicalized so `py`/`python3`/`node` aliases still receive the params prelude. Built-in date/time tokens resolve through the workspace clock (honouring `[calendar] timezone`), matching the journal date instead of reading UTC in containers.
+  The engine lives once in `outl_actions::template` and every client wraps it (TUI, CLI, MCP), so the semantics stay identical across surfaces.
 - **Paste with formatting now brings rich clipboard formatting across (bold, italic, links, lists) on the GUI clients.**
   Copying a formatted message — a Slack post, a Google Doc paragraph, a Notion block, a Gmail draft — puts the bold/italic/links/lists on the clipboard's `text/html` flavour; the `text/plain` flavour is stripped of them.
   The desktop and mobile paste used to read only `text/plain`, so a pasted Slack message arrived flat.
@@ -33,7 +45,35 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
   Default `false`, and deliberately so — capturing the mouse disables the terminal's own text selection (selecting a URL, copying a single word), which is muscle memory for many terminal users.
   The keyboard yank copies markdown to the clipboard regardless of this flag.
 
+### Changed
+
+- **P2P sync now defaults to outl's dedicated relay (`use1-1.relay.avelino.outl.iroh.link`) instead of the shared n0 public pool.**
+  The relay only ever sees end-to-end-encrypted bytes (never your notes), but it *can* observe coordination metadata — which two devices sync, and when.
+  Defaulting to a dedicated, outl-scoped relay endpoint (hosted on n0 infra under our `*.iroh.link` namespace) is the first step toward a fully outl-owned relay; n0's shared relays remain the documented fallback (a malformed `[sync] relay_url` degrades to them rather than failing the bind).
+  No action needed — a device with an empty / omitted `[sync] relay_url` picks it up automatically. Point `relay_url` at any `iroh-relay` to override. See `docs/relay.md` (the vanity `relay.outl.app` name is on the roadmap, pending TLS).
+
 ### Fixed
+
+- **Template footguns from the issue #146 release audit.**
+  Three sharp edges in the template engine (issue #146) are fixed.
+  **Callable vs structural dispatch now keys off the presence of a runnable code block**, not on whether `params::` is declared — a callable template with a code block but no `params::` used to be misrouted as structural, so its ` ```lang…``` ` fence got deep-copied as literal text instead of executing; it now runs (with an empty `params`).
+  **Duplicate template names are visible** — when two pages share a `template:: <name>`, resolution still picks the first in tree order but now logs a `tracing::warn!`, and `list_templates` flags the collision on each `TemplateEntry` (`duplicate`) so a client can surface it.
+  **Plugin-instantiated templates honour the target page's date** — the host derived `{{date}}` from *today* even on a journal page (`page_date: None`); it now derives it from the target slug, matching the CLI/TUI path.
+- **P2P sync no longer reports a false "sync ok" that silently drops a device's edits.**
+  A desktop-initiated delta-sync logged `catch-up: sync ok` as soon as it finished *writing* its push — never confirming the peer durably *ingested* it.
+  Over a lossy desktop → mobile path (a backgrounded iPhone / carrier NAT), the connection could tear down cleanly for the initiator while the mobile never persisted the pushed ops, so a page edited on the desktop stayed empty on the phone even though sync claimed success.
+  The responder already closes the stream with a `done` sentinel **only after** a durable ingest; the initiator now **requires** that sentinel before reporting success (a lost close on an otherwise-successful ingest just costs a harmless, deduped re-push).
+  Regression: `initiator_reports_failure_when_responder_never_confirms_ingest`.
+- **Sync connect no longer stalls ~30s on a stale peer address, and self-heals when a device moves networks.**
+  iroh 1.0.0's QUIC multipath opens a path to every stored address at once and wedges ~30s on a dead one; a peer's old on-LAN IP (still in `peers.json` after it moved Wi-Fi / went cellular) passed the subnet filter and stalled every catch-up tick.
+  Each connect attempt is now bounded by a timeout, and a stalled/failed direct dial falls back to a **bare-node-id** dial so iroh's relay + discovery resolves the peer's *current* address instead of retrying the dead one forever.
+  On top of that, when a peer dials *in* directly, outl reads the live socket off the connection and rewrites the stored address to it (dropping the stale one), so the next outbound dial uses the fresh route with no re-pair — the stored address self-heals the moment the peer reconnects.
+- **Mobile stops flip-flopping a page between two devices' states on the sync poll.**
+  The mobile's routine reload (every ~3s) ran the orphan-`.md` reconcile + desync-recovery **inline** — operations that *mutate* the op log (md → ops). On a page being edited on two devices while sync ingested peer ops, the desync-recovery false-positived on the racing read and minted fresh ops each poll, so the page oscillated between the desktop's and the phone's versions (and briefly flashed an empty "0 ops" state).
+  Reconcile/recovery is a **boot** concern (a stable moment, no concurrent ingest); iroh peers ship *ops*, not `.md`, so a routine reload only needs to re-materialize the op log. The reload is now a pure re-read — orphan `.md` recovery still runs once at boot — and the reload no longer clobbers real content with a transient empty read.
+- **Callable-template results stop churning the op log and oscillating across devices.**
+  The `> **result:**` subtree was deleted and recreated on every run with fresh node ids, so two devices running the same `call:` block fought a delete/recreate war (each deleting the other's result), bloating the op log into the thousands and flip-flopping the page between the two devices' outputs.
+  The result now uses a **deterministic node id derived from the call block** and updates in place, so re-runs are idempotent and two devices converge on one result (last write wins per line) instead of competing subtrees.
 
 - **iroh sync survives restrictive networks — custom-CA proxies and post-VPN stale peer addrs (issue #133).**
   Two blockers that stopped Mac ↔ iOS sync on corporate / VPN networks are fixed in code.

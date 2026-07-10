@@ -7,7 +7,8 @@
 
 use crate::state::{
     hit_count, App, CommandState, ErrorState, LastSearch, Overlay, QuickSwitchState, SearchHit,
-    SearchState, SlashCommand, SlashOrigin, SlashState, SwitchCandidate, SwitchKind, View,
+    SearchState, SlashCommand, SlashOrigin, SlashState, SwitchCandidate, SwitchKind,
+    TemplatePickerState, View,
 };
 use anyhow::Result;
 use outl_md::parse::OutlineNode;
@@ -533,6 +534,70 @@ impl App {
         self.overlay = Some(Overlay::Command(CommandState {
             buffer: String::new(),
         }));
+    }
+
+    // --- template picker ------------------------------------------------
+
+    /// Open the template picker overlay. Lists every template in the
+    /// workspace with fuzzy filtering. On accept, structural templates
+    /// are instantiated at the cursor; callable templates are executed
+    /// and the output is inserted as a block.
+    pub(crate) fn open_template_picker(&mut self) {
+        let all = outl_actions::list_templates(&self.workspace);
+        let filtered: Vec<usize> = (0..all.len()).collect();
+        self.overlay = Some(Overlay::TemplatePicker(TemplatePickerState {
+            query: String::new(),
+            all,
+            filtered,
+            selected: 0,
+        }));
+    }
+
+    /// Refresh the filtered list as the user types.
+    pub(crate) fn refresh_template_picker(&mut self) {
+        let Some(Overlay::TemplatePicker(ref mut tp)) = self.overlay else {
+            return;
+        };
+        let q = tp.query.to_lowercase();
+        if q.is_empty() {
+            tp.filtered = (0..tp.all.len()).collect();
+        } else {
+            tp.filtered = tp
+                .all
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| {
+                    t.name.to_lowercase().contains(&q) || t.slug.to_lowercase().contains(&q)
+                })
+                .map(|(i, _)| i)
+                .collect();
+        }
+        tp.selected = 0;
+    }
+
+    /// Accept the highlighted template. Structural templates deep-copy
+    /// under the cursor; callable templates execute and insert stdout.
+    pub(crate) fn accept_template_picker(&mut self) -> Result<bool> {
+        let pick = match &self.overlay {
+            Some(Overlay::TemplatePicker(tp)) => tp
+                .filtered
+                .get(tp.selected)
+                .and_then(|&i| tp.all.get(i).cloned()),
+            _ => None,
+        };
+        self.overlay = None;
+        let Some(tpl) = pick else {
+            return Ok(false);
+        };
+
+        if tpl.params.is_empty() {
+            self.instantiate_template_at_cursor(&tpl.name);
+        } else {
+            self.overlay = Some(Overlay::Command(CommandState {
+                buffer: format!("template {} ", tpl.name),
+            }));
+        }
+        Ok(false)
     }
 
     // --- inline autocomplete --------------------------------------------

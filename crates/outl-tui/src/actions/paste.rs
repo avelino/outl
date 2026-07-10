@@ -215,7 +215,7 @@ impl App {
 /// `path` when every step lines up, `None` if any segment is out of
 /// range (in practice only happens when the AST drifted from the
 /// workspace state, e.g. a peer added blocks since the last reload).
-fn resolve_node_id_at_path(
+pub(crate) fn resolve_node_id_at_path(
     workspace: &Workspace,
     page_id: NodeId,
     path: &[usize],

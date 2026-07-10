@@ -27,6 +27,12 @@ Treat matching with the same paranoia as the CRDT.
   The old-handle lookup is O(N) overall (HashMap by id), not O(N²) — never reintroduce a linear scan per new block.
   **`diff_to_ops` only emits structural ops (Create / Move / SetProp); a second pass inside `reconcile_md::sync_block_text` walks the AST + new sidecar in lockstep and emits one `Op::Edit` per block whose text differs from the workspace.
   Skipping that pass silently zeroes text across devices — local stays fine, peer replays an empty tree, iCloud ships the empty `.md` back.**
+  **Page-root id derivation.**
+  When a `.md` has **no sidecar**, `reconcile_md` seeds the page/journal-root id with `NodeId::from_slug(file_stem)`, **never** a fresh `NodeId::new()`.
+  A page root's identity is its slug.
+  Minting a time-based ULID here split a day's journal across two competing roots.
+  That happened when the same `journals/YYYY-MM-DD.md` was reconciled on a device that had no `.outl` yet (external editor, peer that shipped only the `.md`, crash before the sidecar landed).
+  `ensure_page_root_in_tree` then writes that same slug into `page-slug`, so the id and the property stay in agreement.
 - **`outline_ops`** — pure `Vec<OutlineNode>` AST helpers (`flat_count`, `path_for_index`, `insert_sibling_after/before`, `indent_at_path`, `outdent_at_path`, `delete_at_path`, `move_up_at_path`, `move_down_at_path`, …).
   They operate on an in-flight AST that hasn't been parsed back into a workspace yet, so they sit in `outl-md` (UI-agnostic, no `Workspace`) rather than in `outl-actions`.
   The TUI re-exports them through a one-line shim at `outl-tui/src/outline_ops.rs`; the mobile client consumes them directly.

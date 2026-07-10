@@ -7,7 +7,7 @@
 
 use crate::state::{
     App, AutocompleteKind, AutocompleteState, CommandState, ErrorState, QuickSwitchState,
-    SearchState, SlashState, SwitchKind,
+    SearchState, SlashState, SwitchKind, TemplatePickerState,
 };
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
@@ -577,13 +577,76 @@ fn command_icon(name: &str) -> &'static str {
     }
 }
 
+pub(crate) fn render_template_picker(
+    f: &mut ratatui::Frame<'_>,
+    full: Rect,
+    app: &App,
+    tp: &TemplatePickerState,
+) {
+    let area = centered_rect(full, 60, 50);
+    f.render_widget(Clear, area);
+
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(3)])
+        .split(area);
+
+    let input = Paragraph::new(Line::from(vec![
+        Span::styled(" 📋 ", app.theme.help_title),
+        Span::raw(tp.query.clone()),
+        Span::styled("▏", app.theme.cursor_caret),
+    ]))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(app.theme.border)
+            .title(Span::styled(" Templates ", app.theme.help_title)),
+    )
+    .style(app.theme.popup_style());
+    f.render_widget(input, outer[0]);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (vis_i, &data_i) in tp.filtered.iter().enumerate() {
+        let Some(tpl) = tp.all.get(data_i) else {
+            continue;
+        };
+        let icon = if tpl.params.is_empty() { "📄" } else { "⚡" };
+        let label = format!(" {icon} {:<20} {}", tpl.name, tpl.slug);
+        if vis_i == tp.selected {
+            lines.push(Line::from(vec![Span::styled(label, app.theme.help_title)]));
+        } else {
+            lines.push(Line::from(vec![Span::raw(label)]));
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            " No templates found. Add `template:: name` to a page.",
+            app.theme.help_title,
+        )]));
+    }
+
+    let list = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(app.theme.border)
+                .style(app.theme.popup_style()),
+        )
+        .scroll(if tp.selected > 5 {
+            (0, (tp.selected - 5) as u16)
+        } else {
+            (0, 0)
+        });
+    f.render_widget(list, outer[1]);
+}
+
 pub(crate) fn render_error_overlay(
     f: &mut ratatui::Frame<'_>,
     full: Rect,
     app: &App,
     err: &ErrorState,
 ) {
-    // Auto-size: pick 80% of the viewport, capped so a tiny body
     // doesn't draw a giant empty modal.
     let body_lines = err.body.lines().count().max(1) as u16;
     let popup_w = (full.width as f32 * 0.8) as u16;

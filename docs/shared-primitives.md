@@ -76,8 +76,9 @@ Every entry here routes through `Workspace::apply` — never build a `LogOp` fro
 | Canonical `type::` value marking a page as a person (`@` mention autocomplete filter) | `outl_actions::page::PERSON_TYPE` | `crates/outl-actions/src/page.rs` |
 | Page metadata (slug, kind, title, **`page_type`**) for a node id | `outl_actions::page::page_meta` / `PageMeta` / `PageKind` | `crates/outl-actions/src/page.rs` |
 | Validate a slug for filesystem safety (`..`, `/`, `\`, control chars) | `outl_actions::page::is_valid_slug` | `crates/outl-actions/src/page.rs` |
-| Derive a **deterministic page id** from slug (so two peers converge) | `outl_actions::page::page_id_from_slug` | `crates/outl-actions/src/page.rs` |
-| Find / list / create-if-missing pages | `outl_actions::page::find_by_slug` / `list_all` / `open_or_create` | `crates/outl-actions/src/page.rs` |
+| Derive a **deterministic page/journal-root id** from slug (so every creation path — in-app, `outl-md` reconcile, desync recovery — converges on ONE root; the single owner) | `outl_core::NodeId::from_slug` (thin wrapper `outl_actions::page::page_id_from_slug`) | `crates/outl-core/src/id.rs` |
+| Find / list / create-if-missing pages (`find_by_slug` resolves a deterministic winner when a slug has >1 root, so a split-brain workspace stops flickering pre-merge) | `outl_actions::page::find_by_slug` / `list_all` / `open_or_create` | `crates/outl-actions/src/page.rs` |
+| Repair a split-brain workspace where a slug has >1 page/journal root (re-parents every child under the canonical root, trashes the emptied duplicates, all via `Op`s so it converges on every device; idempotent) | `outl_actions::merge_duplicate_slug_roots` (impl `outl_actions::page_merge`) | `crates/outl-actions/src/page_merge.rs` |
 | Delete a page (move root to `NodeId::trash()` via one `Op::Move`; whole subtree travels with it; returns `PageMeta` so callers can drop projections + navigate away; `ActionError::PageNotFound` when the slug doesn't resolve) | `outl_actions::page::delete` (re-exported as `outl_actions::delete_page`) | `crates/outl-actions/src/page.rs` |
 | Remove a page's `.md` + `.outl` from disk (the inverse of `apply_page_md_with_sidecar`; idempotent on missing files; pairs with `page::delete`) | `outl_actions::journal::remove_page_projection` (re-exported at crate root) | `crates/outl-actions/src/journal.rs` |
 | Open-or-create a page from a **human-typed name** (slugifies + keeps original as title, used when a `[[ref]]` / `#tag` / picker query may not be a valid slug) | `outl_actions::resolve::open_or_create_by_name` | `crates/outl-actions/src/resolve.rs` |
@@ -268,6 +269,26 @@ This is *not* per-keystroke undo inside an uncommitted draft — that belongs to
 | Bounded undo / redo stacks over any snapshot type (`record` / `undo` / `redo` / `can_undo` / `can_redo` / `clear`) | `outl_actions::history::HistoryStacks` | `crates/outl-actions/src/history.rs` |
 | Default per-stack bound (matches the TUI's session cap) | `outl_actions::DEFAULT_HISTORY_CAP` | `crates/outl-actions/src/history.rs` |
 | Restore a page to a previously-rendered `.md` snapshot (write + reconcile → min ops through `Workspace::apply`) | `outl_actions::restore_page_md` | `crates/outl-actions/src/history.rs` |
+
+---
+
+## 16. Templates
+
+| Intent | Use this | File |
+|---|---|---|
+| List all template pages (any page with a non-empty `template::` property), sorted by name (each entry flags `duplicate` when another page shares its name) | `outl_actions::list_templates` → `TemplateEntry` | `crates/outl-actions/src/template/list.rs` |
+| Resolve the page node for a `template:: <name>` (first in tree order; `tracing::warn!` on a name collision) | `outl_actions::template::list::find_template_by_name` | `crates/outl-actions/src/template/list.rs` |
+| Instantiate (deep-copy) a structural template's subtree under a target block, with `{{token}}` substitution and `from-template::` traceability on each root clone | `outl_actions::instantiate_template` | `crates/outl-actions/src/template/instantiate.rs` |
+| Resolve a callable template's code block (language, source, declared `params::`) | `outl_actions::resolve_call` → `CallResolution` | `crates/outl-actions/src/template/call.rs` |
+| Parse a ` ```call:<name> ` block's `key: value` body into params | `outl_actions::parse_call_params` | `crates/outl-actions/src/template/call.rs` |
+| The template name invoked by a ` ```call:<name> ` fence (inverse of the exec path's fence read; drives the backlinks traceability match) | `outl_actions::call_target_name` | `crates/outl-actions/src/template/call.rs` |
+| Inject a `params` binding into a callable template's source (serde_json-escaped, language canonicalized via `outl_md::lang::canonical`, so quotes/newlines in a value can't break or inject into the generated program) | `outl_actions::inject_call_params` | `crates/outl-actions/src/template/call.rs` |
+| Detect + parse a ` ```call:<name> ` block into `(name, params)` — the shared "is this a call invocation?" check every client uses before running normal exec | `outl_actions::parse_call_invocation` | `crates/outl-actions/src/template/run.rs` |
+| Execute a callable template (resolve → inject params → run via a client `RuntimeRegistry` → write the `> **result:**` subtree). The single owner every client wraps for `call:` execution | `outl_actions::run_callable_block` | `crates/outl-actions/src/template/run.rs` |
+| Template property key constant | `outl_actions::TEMPLATE_KEY` | `crates/outl-actions/src/template/mod.rs` |
+| Traceability property key constant (set on structural-instance root blocks) | `outl_actions::FROM_TEMPLATE_KEY` | `crates/outl-actions/src/template/mod.rs` |
+| Callable params key constant | `outl_actions::PARAMS_KEY` | `crates/outl-actions/src/template/mod.rs` |
+| Reserved template name for the daily journal body — a page with `template:: journal` is auto-instantiated (untraced) into every fresh daily note | `outl_actions::JOURNAL_TEMPLATE_NAME` | `crates/outl-actions/src/template/mod.rs` |
 
 ---
 

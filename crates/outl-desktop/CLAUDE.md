@@ -134,25 +134,15 @@ Do not add a second reachability path; `peersOnline` is the one owner.
 `Sidebar.tsx`'s `<Row>` takes an optional `onDelete` callback; when provided, a `×` button appears on hover (top-right, `opacity-0 → group-hover:opacity-100`).
 `handleDelete(p)` calls `window.confirm(...)`, then `deletePage(slug)` (from `@outl/shared/api/commands`), applies the returned today's-journal view, and refetches the page list.
 Journals are excluded (`p.kind === "journal" ? undefined : ...`) — only regular pages show the affordance.
-The `g d` chord (Normal mode, "go delete") routes through the `DeletePage` case in `action-handlers.ts` — the same `window.confirm` + `deletePage(slug)` flow as the `×` button (the `Action` TS union in `lib/api.ts` carries `| { kind: "DeletePage" }`).
+The `g d` chord (Normal mode, "go delete") routes through the `DeletePage` case in `action-handlers.ts`.
+It runs the same `window.confirm` + `deletePage(slug)` flow as the `×` button (the `Action` TS union in `lib/api.ts` carries `| { kind: "DeletePage" }`).
 The backend `delete_page` Tauri command is the shared `outl_tauri_shared::commands::page::delete_page` body — no desktop-specific logic.
 
 ## Blockquote chrome
 
-A block whose `text` starts with the CommonMark `"> "` marker renders with a left border, a ~6% tint (`bg-(--color-outl-fg-dimmer)/[0.06]`), and a right-rounded corner.
-Body keeps **full colour** — refs, tags, bold, code stay on their normal palette so the styled-token affordance isn't lost.
-
-The chrome wrapper sits one level above the bullet button — it envelops **both bullet *and* body** as one flex container (`│ ☐ body`, matching the TUI).
-The fold chevron and indent guides stay *outside* the chrome so the gutter isn't boxed twice.
-A non-quoted block degrades the wrapper to a plain `flex min-w-0 flex-1 items-start` container, so those rows render byte-identical to before.
-
-TUI has no per-line background available in ratatui, so it stays with just the `│ ` bar — the tint is a desktop/mobile addition that costs nothing to omit on terminal.
-The detection uses `splitQuote` from `@outl/shared/markdown` (mirror of `outl_actions::quote::split_quote`);
-`stripQuoteFromTokens` drops the `> ` from the first `Plain` token before handing the list to `<MarkdownInline />` so the marker doesn't render twice.
-
-Composition: the marker stacks with TODO/DONE like the TUI (`> TODO foo` → quote chrome + checkbox).
-Toggling routes `toggleQuote` (`@outl/shared/api/commands`) → `toggle_quote` command → `outl_actions::block::toggle_quote` (same Rust fn as mobile/TUI).
-**No string surgery on the TS side** — the prefix arithmetic stays in one place.
+A `"> "`-prefixed block renders with a left border + ~6% tint, right-rounded, body full-colour; the chrome wraps **both bullet and body** (`│ ☐ body`, TUI order).
+Detection is `splitQuote` + `stripQuoteFromTokens`; toggling routes `toggleQuote` → `toggle_quote` → `outl_actions::block::toggle_quote`.
+Full convention: [`docs/clients.md` → Blockquote convention](../../docs/clients.md#blockquote-convention).
 
 ## Theme tokens
 
@@ -160,14 +150,12 @@ Toggling routes `toggleQuote` (`@outl/shared/api/commands`) → `toggle_quote` c
 
 - **`--color-outl-*`** — the canonical set.
   New desktop code uses only these (`bg-(--color-outl-bg-elev)`, `border-(--color-outl-fg)/15`, etc.).
-- **`--color-ios-*` / `--color-iosd-*`** — legacy names still consumed by `@outl/shared/markdown::MarkdownInline`.
-  They are mapped from the active palette so the shared renderer stays client-agnostic until it migrates.
+- **`--color-ios-*` / `--color-iosd-*`** — legacy names still consumed by `MarkdownInline`, mapped from the active palette until it migrates.
 
-`src/styles.css` provides boot-default values for both namespaces (the `outl` brand palette) so the page isn't flash-unstyled before `applyPaletteToRoot` runs.
-`color-scheme` (`light` / `dark`) is also set from the palette's `bg` luminance so native controls (scrollbars, `<select>`) follow the active preset.
+`src/styles.css` provides boot-default values for both namespaces so the page isn't flash-unstyled before `applyPaletteToRoot` runs.
+`color-scheme` is set from the palette's `bg` luminance so native controls (scrollbars, `<select>`) follow the active preset.
 
-**When `@outl/shared/markdown::MarkdownInline` migrates to `--color-outl-*`**, the `--color-ios-*` writes in `applyPaletteToRoot` and the legacy block in `styles.css` can both be removed.
-See [`outl-frontend-shared/CLAUDE.md`](../outl-frontend-shared/CLAUDE.md#theming-note) for the migration plan.
+When `MarkdownInline` migrates to `--color-outl-*`, the `--color-ios-*` writes in `applyPaletteToRoot` + the legacy `styles.css` block can both go — see [`outl-frontend-shared/CLAUDE.md`](../outl-frontend-shared/CLAUDE.md#theming-note).
 
 ## Running
 
@@ -319,8 +307,6 @@ On the desktop, **following a ref is the click on the token** (`onRefClick`); `E
 
 ### `:shortcode:` emoji autocomplete
 
-### `:shortcode:` emoji autocomplete
-
 Inside an open `:shortcode` trigger, `BlockRow` shows `EmojiSuggestPopup`, reusing `detectEmojiContext` / `applyEmojiSuggestion` and the `searchEmojis` command (backed by `outl_md::emoji::search`).
 Accept inserts the canonical `:shortcode:` (the `.md` stores the literal, never the codepoint).
 It beats the ref popup at the same caret (`detectEmojiContext` only fires on word-initial `:[a-z]`).
@@ -347,6 +333,11 @@ Failures (malformed URL, disallowed scheme) land on the status line via `appStat
 The `[[ref]]` / `#tag` click handlers are unchanged (they navigate the workspace, not the browser).
 The opener call lives in the shared wrapper — not a custom Tauri command — so mobile can opt in later by registering the same plugin and passing `onLinkClick`.
 Backlink rows stay inert (the whole row is already a navigate-to-source button; nesting a second click target would conflict).
+
+### `/template` slash entry
+
+The block-initial `/` menu lists native `template: <name>` rows (via `templateSlashCommands` in `lib/slash-commands.ts`, a `NATIVE_TEMPLATE_PLUGIN_ID` sentinel `PluginCommand`) that `OutlineView` intercepts to call `instantiateTemplateAt`.
+Contract + backend: [`docs/clients.md` → Structural templates](../../docs/clients.md#structural-templates).
 
 ## Plugins
 
