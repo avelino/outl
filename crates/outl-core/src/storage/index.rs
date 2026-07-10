@@ -176,37 +176,18 @@ impl OffsetIndex {
     /// per-append hot path writes one line via [`Self::append_to`]
     /// instead, so this full save is for checkpointing only.
     pub fn save(&self, path: &Path) -> Result<(), StorageError> {
-        // Unique temp name per write. Two reload/reindex passes for the
-        // SAME actor can race (an inbound sync ingest re-checkpoints while
-        // a catch-up / poller reload does too); a shared `.idx.tmp` meant
-        // one pass renamed the temp away and the other's rename failed with
-        // ENOENT ("No such file or directory"). A per-write suffix removes
-        // the collision — both write the same content, last rename wins.
-        let tmp = path.with_extension(format!("idx.tmp.{}", ulid::Ulid::new()));
-        let mut file = File::create(&tmp)
-            .map_err(|e| StorageError::Backend(format!("create {}: {e}", tmp.display())))?;
-        for (ts, offset) in &self.entries {
-            let line = serde_json::to_string(&IndexEntry {
-                ts: *ts,
-                offset: *offset,
-            })
-            .map_err(|e| StorageError::Serialize(e.to_string()))?;
-            writeln!(file, "{line}")
-                .map_err(|e| StorageError::Backend(format!("write {}: {e}", tmp.display())))?;
-        }
-        file.sync_all()
-            .map_err(|e| StorageError::Backend(format!("fsync {}: {e}", tmp.display())))?;
-        drop(file);
-        if let Err(e) = std::fs::rename(&tmp, path) {
-            // Never leave an orphan temp behind on a failed rename.
-            let _ = std::fs::remove_file(&tmp);
-            return Err(StorageError::Backend(format!(
-                "rename {} -> {}: {e}",
-                tmp.display(),
-                path.display()
-            )));
-        }
-        Ok(())
+        super::write_atomic(path, |file, tmp| {
+            for (ts, offset) in &self.entries {
+                let line = serde_json::to_string(&IndexEntry {
+                    ts: *ts,
+                    offset: *offset,
+                })
+                .map_err(|e| StorageError::Serialize(e.to_string()))?;
+                writeln!(file, "{line}")
+                    .map_err(|e| StorageError::Backend(format!("write {}: {e}", tmp.display())))?;
+            }
+            Ok(())
+        })
     }
 
     /// Append a single entry to `path`. Cheap, durable, append-only —

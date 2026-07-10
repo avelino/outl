@@ -134,35 +134,22 @@ impl NodeIndex {
 
     /// Persist the full index to `path` atomically.
     pub fn save(&self, path: &Path) -> Result<(), StorageError> {
-        // Unique temp name per write — see `ActorIndex::save` for the
-        // concurrent-reindex ENOENT race this avoids.
-        let tmp = path.with_extension(format!("idx.tmp.{}", ulid::Ulid::new()));
-        let mut file = File::create(&tmp)
-            .map_err(|e| StorageError::Backend(format!("create {}: {e}", tmp.display())))?;
-        for (node, entries) in &self.entries {
-            for (ts, offset) in entries {
-                let line = serde_json::to_string(&NodeEntry {
-                    node: *node,
-                    ts: *ts,
-                    offset: *offset,
-                })
-                .map_err(|e| StorageError::Serialize(e.to_string()))?;
-                writeln!(file, "{line}")
-                    .map_err(|e| StorageError::Backend(format!("write {}: {e}", tmp.display())))?;
+        super::write_atomic(path, |file, tmp| {
+            for (node, entries) in &self.entries {
+                for (ts, offset) in entries {
+                    let line = serde_json::to_string(&NodeEntry {
+                        node: *node,
+                        ts: *ts,
+                        offset: *offset,
+                    })
+                    .map_err(|e| StorageError::Serialize(e.to_string()))?;
+                    writeln!(file, "{line}").map_err(|e| {
+                        StorageError::Backend(format!("write {}: {e}", tmp.display()))
+                    })?;
+                }
             }
-        }
-        file.sync_all()
-            .map_err(|e| StorageError::Backend(format!("fsync {}: {e}", tmp.display())))?;
-        drop(file);
-        if let Err(e) = std::fs::rename(&tmp, path) {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(StorageError::Backend(format!(
-                "rename {} -> {}: {e}",
-                tmp.display(),
-                path.display()
-            )));
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Append one entry to `path` (hot path from `append_op`).

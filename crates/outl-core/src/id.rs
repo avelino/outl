@@ -39,9 +39,18 @@ impl NodeId {
     /// `outl_md::reconcile` both call through here so the three page-root
     /// creation paths cannot drift.
     pub fn from_slug(slug: &str) -> Self {
+        Self::from_seed(b"outl-page:", slug)
+    }
+
+    /// Derive a deterministic [`NodeId`] from a domain `prefix` and a `seed`
+    /// string: the ULID body is `sha256(prefix ++ seed)[..16]`. The prefix
+    /// namespaces the scheme so two derivations (page-root ids, callable-result
+    /// ids) can't collide. Same input always yields the same id, so two devices
+    /// converge on it with no coordination. Stable across releases.
+    pub fn from_seed(prefix: &[u8], seed: &str) -> Self {
         let mut h = Sha256::new();
-        h.update(b"outl-page:");
-        h.update(slug.as_bytes());
+        h.update(prefix);
+        h.update(seed.as_bytes());
         let digest = h.finalize();
         let mut bytes = [0u8; 16];
         bytes.copy_from_slice(&digest[..16]);

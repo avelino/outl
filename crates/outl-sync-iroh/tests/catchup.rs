@@ -105,6 +105,7 @@ async fn catch_up_syncs_peer_paired_after_boot() {
             shared_wid(),
             actor_b,
             b_ready_tx,
+            None,
         )
         .await;
     });
@@ -204,7 +205,7 @@ async fn catch_up_redials_after_workspace_id_change() {
 
     let b_workspace = dir_b.path().to_path_buf();
     let catchup = tokio::spawn(async move {
-        test_support::run_catch_up_loop_with_wid_change(
+        test_support::run_catch_up_loop(
             ep_b,
             Duration::from_millis(200),
             // Long interval so the re-dial under test comes from the workspace-id
@@ -216,7 +217,7 @@ async fn catch_up_redials_after_workspace_id_change() {
             shared_wid(),
             actor_b,
             b_ready_tx,
-            wid_rx,
+            Some(wid_rx),
         )
         .await;
     });
@@ -335,6 +336,7 @@ async fn catch_up_resyncs_peer_after_interval() {
             shared_wid(),
             actor_b,
             b_ready_tx,
+            None,
         )
         .await;
     });

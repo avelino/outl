@@ -630,6 +630,7 @@ async fn membership_auto_discovery_then_direct_sync() {
             shared_wid(),
             actor_a,
             a_ready_tx,
+            None,
         )
         .await;
     });

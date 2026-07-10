@@ -13,7 +13,6 @@ use outl_core::hlc::HlcGenerator;
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
 use outl_exec::{ExecContext, ExecOutput, RuntimeRegistry};
-use sha2::{Digest, Sha256};
 
 use crate::block::{create_with_explicit_id, delete, edit_text, move_under};
 use crate::error::ActionError;
@@ -89,23 +88,13 @@ fn is_result_header(text: &str) -> bool {
 /// delete/recreate war that bloated the op log and made the tree
 /// oscillate under P2P sync.
 fn result_node_id(anchor: NodeId) -> NodeId {
-    derive_result_id(&format!("{anchor}:result"))
+    NodeId::from_seed(b"outl-call-result:", &format!("{anchor}:result"))
 }
 
 /// Deterministic `NodeId` for the `index`-th output line under a result
 /// node.
 fn result_child_id(result: NodeId, index: usize) -> NodeId {
-    derive_result_id(&format!("{result}:{index}"))
-}
-
-fn derive_result_id(seed: &str) -> NodeId {
-    let mut h = Sha256::new();
-    h.update(b"outl-call-result:");
-    h.update(seed.as_bytes());
-    let digest = h.finalize();
-    let mut bytes = [0u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    NodeId(ulid::Ulid::from_bytes(bytes))
+    NodeId::from_seed(b"outl-call-result:", &format!("{result}:{index}"))
 }
 
 fn node_is_child(workspace: &Workspace, parent: NodeId, node: NodeId) -> bool {

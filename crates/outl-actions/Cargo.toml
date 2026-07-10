@@ -32,7 +32,6 @@ tracing = { workspace = true }
 walkdir = "2"
 yrs = { workspace = true }
 ulid = { workspace = true }
-sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

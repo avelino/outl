@@ -156,6 +156,12 @@ pub async fn run_delta_sync(
 /// prove "a peer added AFTER the loop started gets caught up" over real QUIC.
 ///
 /// Runs until the spawned task is dropped/aborted (the loop never returns).
+///
+/// `wid_changed`: `Some(rx)` wires the workspace-id-change broadcast so a test
+/// can prove the loop **clears its per-session `synced` dedup and re-dials**
+/// when the joiner adopts the host's id at runtime; `None` drives a fixed id and
+/// asserts plain convergence (the adoption path is covered by
+/// `catch_up_redials_after_workspace_id_change`).
 #[allow(clippy::too_many_arguments)]
 pub async fn run_catch_up_loop<F>(
     endpoint: iroh::Endpoint,
@@ -166,6 +172,7 @@ pub async fn run_catch_up_loop<F>(
     workspace_id: WorkspaceId,
     actor: ActorId,
     peer_ready_tx: std::sync::mpsc::Sender<()>,
+    wid_changed: Option<tokio::sync::broadcast::Receiver<WorkspaceId>>,
 ) where
     F: FnMut() -> Vec<iroh::EndpointAddr>,
 {
@@ -185,50 +192,7 @@ pub async fn run_catch_up_loop<F>(
         // dedup inside the loop is what the test exercises).
         std::sync::Arc::new(tokio::sync::Mutex::new(())),
         None,
-        // No workspace-id-change signal in this harness: the catch-up regression
-        // test drives a fixed id and asserts plain convergence. The adoption →
-        // re-dial path is covered by `catch_up_redials_after_workspace_id_change`.
-        None,
-    )
-    .await
-}
-
-/// Like [`run_catch_up_loop`], but wired to a workspace-id-change broadcast so a
-/// test can prove the catch-up loop **clears its per-session `synced` dedup and
-/// re-dials** when the joiner adopts the host's id at runtime (the resume-sync
-/// item 2 fix).
-///
-/// The caller holds the matching [`tokio::sync::broadcast::Sender`]: it seeds a
-/// peer, lets the loop sync it once (peer goes into `synced`), adds more ops to
-/// that peer, then fires the sender — without which the loop would never re-dial
-/// the already-synced peer and the new ops would never land.
-#[allow(clippy::too_many_arguments)]
-pub async fn run_catch_up_loop_with_wid_change<F>(
-    endpoint: iroh::Endpoint,
-    period: Duration,
-    resync_after: Duration,
-    resolve_peers: F,
-    workspace_root: PathBuf,
-    workspace_id: WorkspaceId,
-    actor: ActorId,
-    peer_ready_tx: std::sync::mpsc::Sender<()>,
-    wid_changed: tokio::sync::broadcast::Receiver<WorkspaceId>,
-) where
-    F: FnMut() -> Vec<iroh::EndpointAddr>,
-{
-    run_catch_up(
-        endpoint,
-        period,
-        resync_after,
-        resolve_peers,
-        workspace_root,
-        Arc::new(RwLock::new(workspace_id)),
-        actor,
-        peer_ready_tx,
-        None,
-        std::sync::Arc::new(tokio::sync::Mutex::new(())),
-        None,
-        Some(wid_changed),
+        wid_changed,
     )
     .await
 }

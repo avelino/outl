@@ -204,9 +204,6 @@ export function Journal() {
   // start; a reload whose generation is no longer the latest is a stale read
   // that must NOT clobber a newer one (the mobile "flicker" was an unguarded
   // slow reload applying an older op-log state after a fresh one landed).
-  // Monotonic reload generation — see `pullAndReload`. A reload whose
-  // generation is no longer the latest is a stale read that must not clobber a
-  // newer one.
   let reloadGen = 0;
 
   function applyView(v: PageView) {
