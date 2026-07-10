@@ -176,7 +176,13 @@ impl OffsetIndex {
     /// per-append hot path writes one line via [`Self::append_to`]
     /// instead, so this full save is for checkpointing only.
     pub fn save(&self, path: &Path) -> Result<(), StorageError> {
-        let tmp = path.with_extension("idx.tmp");
+        // Unique temp name per write. Two reload/reindex passes for the
+        // SAME actor can race (an inbound sync ingest re-checkpoints while
+        // a catch-up / poller reload does too); a shared `.idx.tmp` meant
+        // one pass renamed the temp away and the other's rename failed with
+        // ENOENT ("No such file or directory"). A per-write suffix removes
+        // the collision — both write the same content, last rename wins.
+        let tmp = path.with_extension(format!("idx.tmp.{}", ulid::Ulid::new()));
         let mut file = File::create(&tmp)
             .map_err(|e| StorageError::Backend(format!("create {}: {e}", tmp.display())))?;
         for (ts, offset) in &self.entries {
@@ -191,13 +197,15 @@ impl OffsetIndex {
         file.sync_all()
             .map_err(|e| StorageError::Backend(format!("fsync {}: {e}", tmp.display())))?;
         drop(file);
-        std::fs::rename(&tmp, path).map_err(|e| {
-            StorageError::Backend(format!(
+        if let Err(e) = std::fs::rename(&tmp, path) {
+            // Never leave an orphan temp behind on a failed rename.
+            let _ = std::fs::remove_file(&tmp);
+            return Err(StorageError::Backend(format!(
                 "rename {} -> {}: {e}",
                 tmp.display(),
                 path.display()
-            ))
-        })?;
+            )));
+        }
         Ok(())
     }
 
@@ -349,6 +357,45 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("does-not-exist.idx");
         assert!(OffsetIndex::load(&path).unwrap().is_none());
+    }
+
+    #[test]
+    fn concurrent_saves_to_same_path_do_not_race_on_temp() {
+        use std::sync::Arc;
+        let tmp = TempDir::new().unwrap();
+        let path = Arc::new(tmp.path().join("ops-race.idx"));
+        let actor = ActorId::new();
+        let g = HlcGenerator::new(actor);
+        let mut index = OffsetIndex::new();
+        for offset in 0..64u64 {
+            index.insert(g.next(), offset * 16);
+        }
+        let index = Arc::new(index);
+
+        // Many threads checkpoint the SAME actor's index at once — the
+        // reload/reindex race that produced `rename …idx.tmp -> …idx:
+        // No such file or directory` when the temp name was shared. With
+        // a per-write temp name every save must succeed.
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let index = Arc::clone(&index);
+                let path = Arc::clone(&path);
+                std::thread::spawn(move || {
+                    for _ in 0..20 {
+                        index
+                            .save(&path)
+                            .expect("concurrent save must not race on the temp file");
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // The final index still loads cleanly after the storm.
+        let loaded = OffsetIndex::load(&path).unwrap().expect("index loads");
+        assert_eq!(loaded.len(), 64);
     }
 
     #[test]

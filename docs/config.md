@@ -61,7 +61,8 @@ timezone = "Europe/London"
 transport = "iroh"
 
 # Optional relay URL for the "iroh" transport. Empty (or omitted)
-# means use iroh's n0 default relays. Ignored by the "file" transport.
+# means use outl's default relay (use1-1.relay.avelino.outl.iroh.link). Set to override with
+# your own iroh-relay. Ignored by the "file" transport.
 relay_url = ""
 ```
 
@@ -94,7 +95,7 @@ See [theming.md](theming.md) for the look of each.
 | Field | Type | Default | Read by | Effect |
 |---|---|---|---|---|
 | `transport` | `"iroh"` \| `"file"` | `"iroh"` | every client (TUI / desktop / mobile / MCP) | Which transport ships each device's `ops-<actor>.jsonl` to the others. `"iroh"` opens direct P2P QUIC connections to paired peers; `"file"` is the opt-out that relies on iCloud Drive / a shared filesystem. Missing `[sync]` defaults to iroh (P2P is the primary sync). |
-| `relay_url` | string (URL) | _empty_ | TUI peer-sync wiring | iroh relay used for NAT traversal + fallback. Empty means iroh's n0 public relays. Ignored when `transport = "file"`. See [relay.md](relay.md). |
+| `relay_url` | string (URL) | _empty_ | TUI peer-sync wiring | iroh relay used for NAT traversal + fallback. Empty means outl's default relay (`use1-1.relay.avelino.outl.iroh.link`); set it to point at your own `iroh-relay`. Ignored when `transport = "file"`. See [relay.md](relay.md). |
 
 #### `[snapshot]`
 

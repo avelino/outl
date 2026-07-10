@@ -45,20 +45,28 @@ use tracing::warn;
 /// the same default the iroh builder would pick for IPv4, minus the IPv6 leg.
 const IPV4_UNSPECIFIED: &str = "0.0.0.0:0";
 
+/// outl's own iroh relay, used by default instead of the n0 public relay.
+///
+/// The n0 relay proved slow/unreachable on some networks (cross-network
+/// connects timing out even on the same LAN), so outl ships its own relay.
+/// A `[sync] relay_url` in the config still overrides this per deployment.
+const DEFAULT_RELAY_URL: &str = "https://use1-1.relay.avelino.outl.iroh.link";
+
 /// Build an `Endpoint::builder(presets::N0)` constrained to **IPv4-only** direct
 /// transports.
 ///
 /// `relay_url` selects the relay server the endpoint registers with:
 ///
-/// - `None` (or empty after the config layer normalizes it) keeps the
-///   `presets::N0` relay — the n0 public relay outl ships with today.
-/// - `Some(url)` swaps in a single custom relay via
-///   [`RelayMode::Custom`], for users who run their own relay. The
+/// - `None` (or empty after the config layer normalizes it) uses outl's
+///   own relay, [`DEFAULT_RELAY_URL`] (`use1-1.relay.avelino.outl.iroh.link`), via
+///   [`RelayMode::Custom`].
+/// - `Some(url)` swaps in a different single relay via
+///   [`RelayMode::Custom`], for users who run their own. The
 ///   IPv4-only STOPGAP is preserved either way (`clear_ip_transports`
 ///   only drops the IP direct transports, never the relay transport).
-/// - A `Some(url)` that fails to parse as a [`RelayUrl`] logs a warning
-///   and falls back to the n0 default, so a typo in `relay_url` degrades
-///   to "use the default relay" instead of failing the bind.
+/// - A `url` (default or configured) that fails to parse as a [`RelayUrl`]
+///   logs a warning and falls back to the `presets::N0` (n0) relay, so a
+///   typo degrades to "use the n0 default" instead of failing the bind.
 ///
 /// STOPGAP for the iroh 1.0.0 multipath stall on unreachable IPv6 paths — see
 /// the module docs for the full rationale and the revert condition.
@@ -92,16 +100,20 @@ pub(crate) fn n0_builder_ipv4_only(relay_url: Option<&str>) -> Builder {
         .bind_addr(IPV4_UNSPECIFIED)
         .expect("0.0.0.0:0 is a valid IPv4 socket address");
 
-    // `presets::N0` already configures the n0 relay, so no override is the
-    // common path: leave the builder untouched and the n0 relay stays.
-    match relay_url {
-        None => builder,
-        Some(url) => match url.parse::<RelayUrl>() {
-            Ok(relay) => builder.relay_mode(RelayMode::custom([relay])),
-            Err(e) => {
-                warn!("invalid relay_url {url:?} ({e}); using n0 default relay");
-                builder
-            }
-        },
+    // Default to outl's own relay ([`DEFAULT_RELAY_URL`]); a non-empty
+    // `[sync] relay_url` in the config overrides it per deployment. Only a
+    // parse failure falls back to the untouched builder (the `presets::N0`
+    // n0 relay), so a typo degrades to "use the n0 default" rather than
+    // failing the bind.
+    let relay = relay_url
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .unwrap_or(DEFAULT_RELAY_URL);
+    match relay.parse::<RelayUrl>() {
+        Ok(url) => builder.relay_mode(RelayMode::custom([url])),
+        Err(e) => {
+            warn!("invalid relay_url {relay:?} ({e}); using n0 default relay");
+            builder
+        }
     }
 }

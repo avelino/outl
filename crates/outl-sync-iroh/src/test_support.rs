@@ -45,6 +45,57 @@ pub async fn bind_sync_endpoint(identity: &crate::IrohIdentity) -> Result<iroh::
         .context("bind sync endpoint")
 }
 
+/// A responder that completes the sync exchange up to — but NOT
+/// including — the durable-ingest `close(0, "done")`.
+///
+/// It sends a valid (empty) response + empty push, drains the
+/// initiator's frames so its writes all succeed, then closes with a
+/// **non-"done"** code WITHOUT ingesting. This simulates a
+/// suspended-iPhone / carrier-NAT-drop peer: the connection completes
+/// cleanly for the initiator, but the peer never durably persisted the
+/// push. Used to prove `delta_sync` does NOT report success in that
+/// case (the false-"catch-up: sync ok" bug).
+#[derive(Debug, Clone)]
+struct HalfResponder;
+
+impl iroh::protocol::ProtocolHandler for HalfResponder {
+    async fn accept(
+        &self,
+        conn: iroh::endpoint::Connection,
+    ) -> std::result::Result<(), iroh::protocol::AcceptError> {
+        let Ok((mut send, mut recv)) = conn.accept_bi().await else {
+            return Ok(());
+        };
+        // Send a valid response + empty push so the initiator proceeds
+        // all the way through pushing its own ops.
+        let response = crate::protocol::SyncResponse {
+            vector_clock: std::collections::HashMap::new(),
+        };
+        if let Ok(bytes) = crate::protocol::encode_response(&response) {
+            let _ = send.write_all(&bytes).await;
+        }
+        if let Ok(bytes) = crate::protocol::encode_ops_blob(&[]) {
+            let _ = send.write_all(&bytes).await;
+        }
+        let _ = send.finish();
+        // Drain the initiator's request + push so ITS writes succeed
+        // (the connection looks healthy from the initiator's side) — but
+        // never ingest, and close with a code that is NOT the "done"
+        // durable-ingest sentinel.
+        let _ = recv.read_to_end(16 * 1024 * 1024).await;
+        conn.close(9u32.into(), b"early-no-ingest");
+        Ok(())
+    }
+}
+
+/// Mount a `HalfResponder` (completes the exchange but never confirms
+/// durable ingest) on a `Router`. See the `HalfResponder` doc.
+pub fn spawn_half_responder(endpoint: iroh::Endpoint) -> Router {
+    Router::builder(endpoint)
+        .accept(SYNC_ALPN, HalfResponder)
+        .spawn()
+}
+
 /// Mount the production `SyncProtocolHandler` on a `Router` and return it.
 ///
 /// Keep the returned `Router` alive for as long as the responder must accept

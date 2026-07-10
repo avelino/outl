@@ -134,7 +134,9 @@ impl NodeIndex {
 
     /// Persist the full index to `path` atomically.
     pub fn save(&self, path: &Path) -> Result<(), StorageError> {
-        let tmp = path.with_extension("idx.tmp");
+        // Unique temp name per write — see `ActorIndex::save` for the
+        // concurrent-reindex ENOENT race this avoids.
+        let tmp = path.with_extension(format!("idx.tmp.{}", ulid::Ulid::new()));
         let mut file = File::create(&tmp)
             .map_err(|e| StorageError::Backend(format!("create {}: {e}", tmp.display())))?;
         for (node, entries) in &self.entries {
@@ -152,13 +154,14 @@ impl NodeIndex {
         file.sync_all()
             .map_err(|e| StorageError::Backend(format!("fsync {}: {e}", tmp.display())))?;
         drop(file);
-        std::fs::rename(&tmp, path).map_err(|e| {
-            StorageError::Backend(format!(
+        if let Err(e) = std::fs::rename(&tmp, path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(StorageError::Backend(format!(
                 "rename {} -> {}: {e}",
                 tmp.display(),
                 path.display()
-            ))
-        })?;
+            )));
+        }
         Ok(())
     }
 

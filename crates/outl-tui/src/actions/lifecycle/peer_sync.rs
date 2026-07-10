@@ -306,8 +306,9 @@ impl App {
 /// on-disk identity and peer store under `~/.outl/`.
 ///
 /// `relay_url` is the configured `[sync] relay_url` (normalized to `None`
-/// for the empty string by `SyncConfig::relay_url`); `None` keeps iroh's
-/// n0 default relay, `Some(url)` points the sync endpoint at a custom one.
+/// for the empty string by `SyncConfig::relay_url`); `None` uses outl's
+/// default relay (`use1-1.relay.avelino.outl.iroh.link`), `Some(url)` points the sync endpoint
+/// at a different one.
 ///
 /// Returns the transport behind an `Arc` so the poller thread can hold
 /// its own handle. Errors (no `$HOME`, unreadable identity / peers

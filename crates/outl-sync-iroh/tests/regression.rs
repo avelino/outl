@@ -687,3 +687,57 @@ fn assert_no_glued_lines(workspace_root: &Path) {
     }
     assert!(checked > 0, "expected at least one ops file to inspect");
 }
+
+/// Fix: `delta_sync` must NOT report success when the responder never
+/// confirms durable ingest.
+///
+/// A suspended-iPhone / carrier-NAT-drop peer can complete the exchange
+/// (the connection tears down cleanly for the initiator) yet never
+/// persist the pushed ops. Before this fix, the initiator discarded the
+/// close reason and returned `Ok(())`, logging "catch-up: sync ok" while
+/// the peer stayed empty — the desktop→mobile "synced ok but nothing
+/// arrived" bug. The responder now signals durable ingest with a
+/// `close(0, "done")`; the initiator requires it.
+#[tokio::test(flavor = "multi_thread")]
+async fn initiator_reports_failure_when_responder_never_confirms_ingest() {
+    let dir_a = tempfile::tempdir().expect("A tempdir");
+    let dir_b = tempfile::tempdir().expect("B tempdir");
+    let actor_a = ActorId::new();
+    seed_ops(dir_a.path(), actor_a, 3);
+
+    let id_a = fresh_identity(dir_a.path(), "a");
+    let id_b = fresh_identity(dir_b.path(), "b");
+
+    // B is a half-responder: full exchange, but it closes WITHOUT the
+    // "done" durable-ingest sentinel.
+    let ep_b = test_support::bind_sync_endpoint(&id_b)
+        .await
+        .expect("bind B endpoint");
+    let b_addr = ep_b.addr();
+    let _router_b = test_support::spawn_half_responder(ep_b);
+
+    let (a_ready_tx, _a_ready_rx) = mpsc::channel::<()>();
+    let ep_a = test_support::bind_sync_endpoint(&id_a)
+        .await
+        .expect("bind A endpoint");
+
+    let result = tokio::time::timeout(
+        STEP_TIMEOUT,
+        test_support::run_delta_sync(
+            &ep_a,
+            b_addr,
+            dir_a.path(),
+            &shared_wid(),
+            actor_a,
+            a_ready_tx,
+        ),
+    )
+    .await
+    .expect("delta_sync did not finish within the step timeout");
+
+    assert!(
+        result.is_err(),
+        "delta_sync must report failure when the responder never confirms \
+         durable ingest (no `done` close), not a false success"
+    );
+}

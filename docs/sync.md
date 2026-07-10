@@ -527,7 +527,7 @@ Here are ours:
   The `iroh` transport (the default) removes that dependency and works across non-Apple devices without changing the algorithm or the on-disk layout.
 - **iroh sync still trusts a relay for NAT traversal.**
   Content is E2E encrypted, but a relay operator can see *that* two devices sync, *when*, and roughly *how much* — never *what*.
-  Today that relay is n0's public infrastructure; running our own (`relay.outl.app`) is on the roadmap.
+  The default is a dedicated relay under outl's `*.iroh.link` namespace (hosted on n0 infra); a fully outl-owned relay fronted by `relay.outl.app` is on the roadmap.
   Full threat model in [relay.md](relay.md).
 - **iroh pairing is CLI-only today.**
   `outl peer pair` runs the handshake; the mobile and desktop apps can list, remove, and probe peers but don't yet run the interactive ticket exchange.
@@ -655,9 +655,9 @@ What's left is hardening on top of it:
 - **iroh-blobs snapshot transfer.**
   Once per-page snapshots exist (see [Snapshots](#snapshots)), a freshly paired device shouldn't replay the entire op log over the wire.
   iroh-blobs can ship the binary snapshot directly, then stream only the delta ops past `snapshot.cursor`.
-- **Self-hosted relay (`relay.outl.app`).**
-  iroh uses n0's public relays today; running our own removes the last third party from the coordination path.
-  Design + trigger conditions in [relay.md](relay.md).
+- **Fully outl-owned relay (`relay.outl.app`).**
+  The default is already a dedicated relay under our `*.iroh.link` namespace (hosted on n0 infra); running the relay on a box we own, fronted by `relay.outl.app` with our own cert, takes the coordination path off third-party infra entirely.
+  Details in [relay.md](relay.md).
 
 [iroh]: https://www.iroh.computer
 

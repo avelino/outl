@@ -153,7 +153,8 @@ pub struct SyncConfig {
 
     /// Optional relay URL for the `iroh` transport. `None` (or an
     /// empty string in the TOML, normalized to `None` on read) means
-    /// use iroh's n0 default relays. Ignored by the `file` transport.
+    /// use outl's default relay (`use1-1.relay.avelino.outl.iroh.link`). Ignored by the
+    /// `file` transport.
     pub relay_url: Option<String>,
 }
 

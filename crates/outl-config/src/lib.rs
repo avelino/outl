@@ -32,7 +32,7 @@
 //!
 //! [sync]
 //! transport = "iroh"   # "iroh" (P2P, default) | "file" (iCloud/fs opt-out)
-//! relay_url = ""        # optional; empty = use iroh n0 default relays
+//! relay_url = ""        # optional; empty = outl's default relay (use1-1.relay.avelino.outl.iroh.link)
 //!
 //! [snapshot]
 //! enabled = true        # default; long-lived clients write a snapshot periodically

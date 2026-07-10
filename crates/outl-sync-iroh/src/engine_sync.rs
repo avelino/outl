@@ -19,15 +19,16 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Write as _;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
-use iroh::endpoint::Connection;
+use iroh::endpoint::{Connection, ConnectionError};
 use iroh::protocol::{AcceptError, ProtocolHandler};
 use outl_core::hlc::Hlc;
 use outl_core::id::ActorId;
 use outl_core::storage::{JsonlStorage, Storage};
 use outl_core::{LogOp, WorkspaceId};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::engine::{AppendLock, SharedWorkspaceId};
 use crate::protocol::{
@@ -356,6 +357,52 @@ async fn read_ops_blob(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<LogO
     decode_ops_blob(&read_frame(recv).await?)
 }
 
+/// How long to wait for a single connect attempt before giving up.
+///
+/// iroh 1.0.0's QUIC multipath opens paths to every candidate address at
+/// once and stalls ~30s on a dead one (`MultipathNotNegotiated`) before
+/// the relay path can carry the connection. Bounding each attempt caps
+/// that stall so a stale direct address can't wedge every catch-up tick,
+/// and lets the bare-id (relay/discovery) fallback take over.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Connect to `peer` for a sync, resilient to a stale direct address.
+///
+/// Tries the full `EndpointAddr` (relay + on-LAN direct) first — fast on
+/// the same LAN — bounded by [`CONNECT_TIMEOUT`]. If that stalls or fails
+/// **and** the address carried direct addrs (which may be a moved peer's
+/// dead LAN IP that still sits in `peers.json`), it retries by **bare
+/// node id**, so iroh's relay + discovery learns the peer's CURRENT
+/// address instead of wedging on the dead path. Same route the
+/// gossip-triggered dial uses; here it's the self-heal for a moved peer.
+async fn connect_with_fallback(
+    endpoint: &iroh::Endpoint,
+    peer_addr: iroh::EndpointAddr,
+) -> Result<Connection> {
+    let node_id = peer_addr.id;
+    let had_direct = peer_addr.ip_addrs().next().is_some();
+
+    match tokio::time::timeout(CONNECT_TIMEOUT, endpoint.connect(peer_addr, SYNC_ALPN)).await {
+        Ok(Ok(conn)) => return Ok(conn),
+        Ok(Err(e)) if !had_direct => return Err(e).context("connect for delta sync"),
+        Err(_) if !had_direct => return Err(anyhow::anyhow!("connect for delta sync timed out")),
+        Ok(Err(e)) => debug!(
+            "direct connect to {} failed ({e}); retrying via relay/discovery",
+            node_id.fmt_short()
+        ),
+        Err(_) => debug!(
+            "direct connect to {} timed out; retrying via relay/discovery",
+            node_id.fmt_short()
+        ),
+    }
+
+    // Fallback: bare node id → relay + discovery resolves the current addr.
+    tokio::time::timeout(CONNECT_TIMEOUT, endpoint.connect(node_id, SYNC_ALPN))
+        .await
+        .context("relay/discovery connect timed out")?
+        .context("connect for delta sync (relay/discovery)")
+}
+
 /// Bidirectional delta sync (initiator side).
 ///
 /// One bi stream, four framed messages:
@@ -387,10 +434,7 @@ pub(crate) async fn delta_sync(
 
     let peer_addr: iroh::EndpointAddr = peer.into();
     let peer_node_id = peer_addr.id;
-    let conn = endpoint
-        .connect(peer_addr, SYNC_ALPN)
-        .await
-        .context("connect for delta sync")?;
+    let conn = connect_with_fallback(endpoint, peer_addr).await?;
 
     let (mut send, mut recv) = conn.open_bi().await.context("open bi stream")?;
 
@@ -435,8 +479,22 @@ pub(crate) async fn delta_sync(
     // races that read and silently drops our push (the "B never receives A's
     // ops" bug). Instead, wait for the responder to finish ingesting and close
     // the connection itself; `closed()` returns once it does.
-    conn.closed().await;
-    Ok(())
+    //
+    // The responder closes with code 0 ("done") ONLY after it has durably
+    // ingested our pushed ops (`serve` step 4). Any OTHER close — a
+    // mid-exchange teardown on a suspended iPhone / carrier-NAT drop, a reset,
+    // a timeout — means our push may never have landed. So require the "done"
+    // close: without it, reporting `Ok` was a false success that logged
+    // "catch-up: sync ok" while the peer stayed empty (the desktop→mobile
+    // "synced ok but nothing arrived" bug). A lost close frame on an otherwise-
+    // successful ingest only costs a redundant re-push next tick, which the
+    // receiver's ingest dedup absorbs — far cheaper than silently losing ops.
+    match conn.closed().await {
+        ConnectionError::ApplicationClosed(ac) if ac.error_code == 0u32.into() => Ok(()),
+        other => Err(anyhow::anyhow!(
+            "peer did not confirm durable ingest (closed: {other})"
+        )),
+    }
 }
 
 // ── Sync protocol handler ────────────────────────────────────────────────────
@@ -544,6 +602,32 @@ impl SyncProtocolHandler {
         .await?;
         if received_count > 0 {
             info!("delta sync: received {} ops (serve side)", received_count);
+        }
+
+        // Self-heal a moved peer's stale stored address: this inbound dial
+        // arrived over the peer's CURRENT direct socket, so refresh
+        // `peers.json` with it (dropping any dead direct addr) — the next
+        // outbound dial then reaches the peer directly instead of stalling
+        // on the old IP. Only when there IS a direct (IP) path; a purely
+        // relayed connection carries no usable peer socket. Best-effort —
+        // never fail the sync over it.
+        let direct_sock = conn.paths().iter().find_map(|p| match p.remote_addr() {
+            iroh::TransportAddr::Ip(sock) => Some(*sock),
+            _ => None,
+        });
+        if let Some(sock) = direct_sock {
+            match crate::peers::refresh_peer_direct_addr(
+                &self.workspace_root,
+                conn.remote_id(),
+                sock,
+            ) {
+                Ok(true) => info!(
+                    "refreshed direct addr for {} → {sock}",
+                    conn.remote_id().fmt_short()
+                ),
+                Ok(false) => {}
+                Err(e) => debug!("peer addr refresh failed: {e}"),
+            }
         }
 
         // We've now drained the initiator's pushed ops, so it's safe to close.

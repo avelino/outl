@@ -23,8 +23,8 @@ use tracing::{info, warn};
 /// the per-workspace peer store (`<workspace_root>/.outl/peers.json`).
 ///
 /// Runs the one-time global → workspace peers migration first, and reads
-/// `[sync] relay_url` from the global config (`None` / empty keeps
-/// iroh's n0 default relay).
+/// `[sync] relay_url` from the global config (`None` / empty uses outl's
+/// default relay, `use1-1.relay.avelino.outl.iroh.link`).
 ///
 /// Returns the **concrete** transport (cheaply `Clone`, internally
 /// `Arc`-backed) so the caller can keep one handle for pairing and wrap

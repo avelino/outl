@@ -178,6 +178,105 @@ pub fn decode_endpoint_addr(encoded: &str) -> Result<iroh::EndpointAddr> {
     serde_json::from_slice(&json).context("deserialize endpoint addr")
 }
 
+/// Self-heal a moved peer's stale direct address from a live inbound
+/// connection.
+///
+/// When a peer changes LAN IP (new DHCP lease on the same subnet), its
+/// `peers.json` entry still holds the OLD direct addr. Every outbound dial
+/// then stalls ~30s on that dead address (iroh 1.0.0 multipath) before the
+/// relay can carry the connection, and nothing ever prunes it — pairing is
+/// the only writer. So a moved peer can go unreachable on a direct dial
+/// indefinitely.
+///
+/// This rewrites the peer's entry with the address it actually connected
+/// **from** (dropping the stale direct addr, keeping the relay as the
+/// cross-network fallback), so the next outbound dial goes straight to the
+/// working address. Called from the sync responder on every inbound direct
+/// connection — the NAT-friendly mobile→desktop direction that reliably
+/// lands even when the reverse dial can't.
+///
+/// Best-effort and idempotent: an unknown peer (not paired) is ignored; an
+/// entry already carrying exactly this address is left untouched (no write).
+/// Returns `Ok(true)` when the entry was refreshed.
+///
+/// **Only an on-LAN IPv4 inbound is adopted.** A peer's iroh multipath opens
+/// paths on *every* interface it has, so inbound connections arrive from a
+/// rotating set of source addrs — the same-subnet LAN addr, a VPN / Tailscale
+/// CGNAT addr (`100.x`), a carrier WAN addr. Storing an off-LAN one is exactly
+/// what stalls multipath (`LastOpenPath`) and would thrash the stored addr on
+/// every reconnect (the "mobile keeps flickering" bug). The relay already
+/// covers cross-network reachability, so this adopts only a same-subnet IPv4 —
+/// matching [`PeerEntry::iroh_endpoint_addr`]'s resolution filter. An off-LAN
+/// or IPv6 inbound is a no-op that leaves the good stored addr intact.
+pub fn refresh_peer_direct_addr(
+    workspace_root: &Path,
+    node_id: iroh::EndpointId,
+    sock: SocketAddr,
+) -> Result<bool> {
+    refresh_peer_direct_addr_with_ifaces(workspace_root, node_id, sock, &local_v4_ifaces())
+}
+
+/// [`refresh_peer_direct_addr`] with an injectable interface list, so tests can
+/// assert the on-LAN filter deterministically regardless of the host's real NICs.
+pub(crate) fn refresh_peer_direct_addr_with_ifaces(
+    workspace_root: &Path,
+    node_id: iroh::EndpointId,
+    sock: SocketAddr,
+    ifaces: &[LocalV4],
+) -> Result<bool> {
+    // Reject off-LAN / IPv6 inbounds before touching disk — see the doc above.
+    let std::net::IpAddr::V4(v4) = sock.ip() else {
+        return Ok(false);
+    };
+    if !is_reachable_lan_ipv4(v4, ifaces) {
+        return Ok(false);
+    }
+
+    let path = workspace_peers_path(workspace_root);
+    let mut store = PeersStore::load_or_default(&path)?;
+    let nid = node_id.to_string();
+
+    let Some(existing) = store.list().iter().find(|p| p.node_id == nid).cloned() else {
+        return Ok(false); // not a paired peer — never add one this way
+    };
+
+    let decoded = existing
+        .endpoint_addr
+        .as_deref()
+        .and_then(|e| decode_endpoint_addr(e).ok());
+
+    // Already current? (exactly this direct addr) → no write.
+    if decoded
+        .as_ref()
+        .map(|a| {
+            let ips: Vec<_> = a.ip_addrs().copied().collect();
+            ips.len() == 1 && ips[0] == sock
+        })
+        .unwrap_or(false)
+    {
+        return Ok(false);
+    }
+
+    // Fresh addr: node id + the live direct socket + the known relay
+    // (from the decoded addr, else the legacy `relay_url`). Dropping the
+    // old direct addrs is the whole point — a stale one stalls multipath.
+    let mut fresh = iroh::EndpointAddr::new(node_id).with_ip_addr(sock);
+    if let Some(url) = decoded
+        .as_ref()
+        .and_then(|a| a.relay_urls().next().cloned())
+        .or_else(|| existing.relay_url.as_deref().and_then(|u| u.parse().ok()))
+    {
+        fresh = fresh.with_relay_url(url);
+    }
+
+    let entry = PeerEntry {
+        endpoint_addr: Some(encode_endpoint_addr(&fresh)?),
+        ..existing
+    };
+    store.add(entry)?; // overwrites the stale entry by node_id
+    Ok(true)
+}
+
 impl PeerEntry {
     /// Build a [`PeerEntry`] from a peer's full [`iroh::EndpointAddr`], stamping
     /// `added_at` with the current wall-clock time.
@@ -496,7 +595,7 @@ mod tests {
     #[test]
     fn iroh_endpoint_addr_drops_stale_vpn_ipv4_keeps_lan() {
         let id = iroh::SecretKey::generate().public();
-        let relay: iroh::RelayUrl = "https://euc1-1.relay.n0.iroh.link./"
+        let relay: iroh::RelayUrl = "https://use1-1.relay.avelino.outl.iroh.link./"
             .parse()
             .expect("relay url");
         // The exact `endpoint_addr` payload from the issue: one real LAN addr
@@ -671,5 +770,106 @@ mod tests {
             after, sentinel,
             "migration must not overwrite an existing workspace peers.json"
         );
+    }
+
+    /// Auto-refresh (self-heal stale addrs): a peer stored with an old **on-LAN**
+    /// direct addr is rewritten to the live socket observed on an inbound direct
+    /// connection, keeping the relay and dropping the stale addr. Re-running with
+    /// the same socket is a no-op, and an unknown node id is never added this way.
+    #[test]
+    fn refresh_peer_direct_addr_replaces_stale_keeps_relay_and_is_idempotent() {
+        // This machine is on `192.168.18.0/24`, so the peer's LAN addr is on-LAN.
+        let ifaces = vec![iface("192.168.18.50", "255.255.255.0")];
+        let ws = tempfile::tempdir().expect("tempdir");
+        let root = ws.path();
+        let path = workspace_peers_path(root);
+
+        // Seed a paired peer carrying a STALE LAN addr + a relay.
+        let id = iroh::SecretKey::generate().public();
+        let stale = iroh::EndpointAddr::new(id)
+            .with_relay_url(
+                "https://use1-1.relay.avelino.outl.iroh.link/"
+                    .parse()
+                    .expect("relay"),
+            )
+            .with_ip_addr("192.168.18.72:50009".parse().expect("stale addr"));
+        let entry = PeerEntry::from_endpoint_addr(&stale, Some("iPhone".into())).expect("entry");
+        let mut store = PeersStore::load_or_default(&path).expect("store");
+        store.add(entry).expect("seed peer");
+
+        // The live on-LAN socket seen when the peer dials us directly.
+        let fresh: SocketAddr = "192.168.18.99:50009".parse().expect("fresh sock");
+        assert!(
+            refresh_peer_direct_addr_with_ifaces(root, id, fresh, &ifaces).expect("refresh"),
+            "a stale on-LAN addr must be rewritten (returns true)"
+        );
+
+        // Exactly the fresh addr survives, the relay is preserved, stale is gone.
+        let store = PeersStore::load_or_default(&path).expect("reload");
+        let e = store
+            .list()
+            .iter()
+            .find(|p| p.node_id == id.to_string())
+            .expect("peer still present");
+        let decoded =
+            decode_endpoint_addr(e.endpoint_addr.as_deref().expect("addr")).expect("decode");
+        let ips: Vec<_> = decoded.ip_addrs().copied().collect();
+        assert_eq!(ips, vec![fresh], "only the live socket is kept");
+        assert_eq!(decoded.relay_urls().count(), 1, "relay is preserved");
+
+        // Idempotent: the same socket is already current → no write.
+        assert!(
+            !refresh_peer_direct_addr_with_ifaces(root, id, fresh, &ifaces).expect("second"),
+            "an already-current addr must be a no-op (returns false)"
+        );
+
+        // An unknown peer is never added through this path.
+        let stranger = iroh::SecretKey::generate().public();
+        assert!(
+            !refresh_peer_direct_addr_with_ifaces(root, stranger, fresh, &ifaces).expect("unknown"),
+            "an unpaired peer must not be added (returns false)"
+        );
+        let store = PeersStore::load_or_default(&path).expect("reload after unknown");
+        assert_eq!(store.list().len(), 1, "unknown peer was not persisted");
+    }
+
+    /// The flicker bug: a peer's iroh multipath dials in from a rotating set of
+    /// source addrs (LAN, Tailscale CGNAT `100.x`, carrier WAN). Adopting an
+    /// off-LAN one would thrash the stored addr and stall multipath, so the
+    /// refresh must **reject** an off-LAN / IPv6 inbound and keep the good LAN
+    /// addr untouched.
+    #[test]
+    fn refresh_peer_direct_addr_ignores_off_lan_inbound() {
+        let ifaces = vec![iface("192.168.18.50", "255.255.255.0")];
+        let ws = tempfile::tempdir().expect("tempdir");
+        let root = ws.path();
+        let path = workspace_peers_path(root);
+
+        let id = iroh::SecretKey::generate().public();
+        let good = iroh::EndpointAddr::new(id)
+            .with_relay_url("https://relay.example/".parse().expect("relay"))
+            .with_ip_addr("192.168.18.99:59313".parse().expect("good lan addr"));
+        let entry = PeerEntry::from_endpoint_addr(&good, None).expect("entry");
+        let mut store = PeersStore::load_or_default(&path).expect("store");
+        store.add(entry).expect("seed peer");
+        let before = std::fs::read_to_string(&path).expect("read peers");
+
+        // Each of these off-LAN / IPv6 inbounds must be a no-op.
+        for off in [
+            "100.113.140.115:59313", // Tailscale CGNAT
+            "138.94.127.156:55859",  // carrier WAN
+            "[2001:db8::1]:59313",   // IPv6
+        ] {
+            let sock: SocketAddr = off.parse().expect("off-lan sock");
+            assert!(
+                !refresh_peer_direct_addr_with_ifaces(root, id, sock, &ifaces)
+                    .expect("off-lan refresh"),
+                "off-LAN inbound {off} must not be adopted (returns false)"
+            );
+        }
+
+        // peers.json is byte-for-byte unchanged — the good LAN addr stayed.
+        let after = std::fs::read_to_string(&path).expect("reread peers");
+        assert_eq!(before, after, "off-LAN inbounds must not rewrite the entry");
     }
 }

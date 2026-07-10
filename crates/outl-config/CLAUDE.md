@@ -55,7 +55,7 @@ timezone = "Europe/London"        # optional IANA name; omit = OS local timezone
 
 [sync]
 transport = "iroh"                # "iroh" (P2P, default) | "file" (iCloud/fs opt-out)
-relay_url = ""                    # optional; empty = use iroh n0 default relays
+relay_url = ""                    # optional; empty = outl's default relay (use1-1.relay.avelino.outl.iroh.link)
 
 [tui]
 mouse_capture = false             # opt-in: enables mouse wheel + click + drag-to-copy in the TUI
@@ -65,7 +65,7 @@ Six sections, each modelled as its own struct ([`WorkspaceCfg`], [`ThemeCfg`], [
 `CalendarCfg::timezone` is an optional IANA name resolved at boot by `outl_actions::clock::init`; missing/empty/unknown falls back to the OS local timezone (the previous behaviour).
 It exists for environments where the OS clock lies about the zone — containers and Chrome OS **Crostini** run in UTC regardless of the user's real timezone (issue #107).
 `SyncConfig::transport` is a [`SyncTransportKind`] enum (`File` | `Iroh`, serde `lowercase`); missing `[sync]` falls back to `Iroh` (P2P is outl's primary sync), and `transport = "file"` is the explicit iCloud/filesystem opt-out.
-`SyncConfig::relay_url()` treats an empty string as `None` (use iroh's default relays).
+`SyncConfig::relay_url()` treats an empty string as `None`, which the iroh transport resolves to outl's default relay (`use1-1.relay.avelino.outl.iroh.link`; see [`docs/relay.md`](../../docs/relay.md)).
 `TuiCfg::mouse_capture` (default `false`) is read by the TUI at boot in `runtime.rs` to decide whether to call `EnableMouseCapture` and listen for `Event::Mouse`; the desktop ignores this section entirely.
 `#[serde(default)]` everywhere — a missing field falls back to the type's `Default`, so an older binary reading a newer config doesn't choke and a newer binary reading an older config doesn't blow up.
 

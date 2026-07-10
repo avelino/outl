@@ -207,9 +207,9 @@ impl ServerCtx {
                 return;
             }
         };
-        // `[sync] relay_url` from the global config: `None` (or empty) keeps
-        // iroh's n0 default relay, `Some(url)` points the sync endpoint at a
-        // custom relay.
+        // `[sync] relay_url` from the global config: `None` (or empty) uses
+        // outl's default relay (`use1-1.relay.avelino.outl.iroh.link`), `Some(url)` points the sync
+        // endpoint at a different relay.
         let relay_url = outl_config::load().sync.relay_url().map(str::to_string);
         let transport: Arc<dyn SyncTransport> = Arc::new(outl_sync_iroh::IrohSyncTransport::new(
             identity, peers, relay_url,
