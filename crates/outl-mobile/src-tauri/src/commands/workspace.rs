@@ -4,7 +4,6 @@ use outl_actions::open_today;
 use tauri::State;
 
 use crate::state::{AppState, WorkspaceSummary};
-use crate::workspace_open::reconcile_orphan_md;
 
 #[tauri::command]
 pub(crate) fn workspace_stats(state: State<'_, AppState>) -> WorkspaceSummary {
@@ -34,11 +33,15 @@ pub(crate) fn reload_workspace(state: State<'_, AppState>) -> Result<(), String>
     let mut fresh = engine
         .reload_workspace()
         .map_err(|e| format!("reload workspace: {e}"))?;
-    // Catch any `.md` files iCloud delivered without their sidecar
-    // (peer wrote only the projection, or an external editor like
-    // vim touched the file). Runs before we resolve today's id so
-    // newly-reconciled blocks show up in the rebuild that follows.
-    reconcile_orphan_md(&mut fresh, &state.hlc, &state.storage_root);
+    // NOTE: orphan-`.md` reconcile is a BOOT/recovery concern (it runs
+    // md → ops and desync recovery, both of which MUTATE the op log). It
+    // used to run here inline on every 3s poll, which — on a page being
+    // edited concurrently on two devices while sync ingests peer ops —
+    // turned the routine reload into a projection↔op-log feedback loop
+    // and made the page flip-flop between the two devices' states. iroh
+    // peers ship OPS (not `.md`), so a routine reload only needs to
+    // re-materialize the op log; orphan `.md` recovery already runs once
+    // at boot (`workspace_open`). Keep the reload a pure re-read.
     // Resolve today's journal *in the fresh workspace* so the page
     // id reflects the merged op log. `open_today` is idempotent —
     // when the page already exists it just returns the id; when it
