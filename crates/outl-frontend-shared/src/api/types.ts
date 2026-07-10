@@ -386,3 +386,23 @@ export interface RegistryItem {
   installed: boolean;
   enabled: boolean;
 }
+
+/**
+ * One structural template surfaced by {@link import("./commands").listTemplates}.
+ * Mirrors `outl_tauri_shared::state::TemplateDto`. A template is any page
+ * with a non-empty `template::` property; its outline is the body
+ * deep-copied under a target block by
+ * {@link import("./commands").instantiateTemplateAt}.
+ */
+export interface TemplateDto {
+  /** Invocation name (the page's `template::` property value). */
+  name: string;
+  /** Slug of the page that defines the template. */
+  slug: string;
+  /**
+   * `true` when another page shares this `template:: <name>`; the picker
+   * can flag it since resolution silently picks the first in tree order.
+   * Omitted from the wire (defaults to `false`) when not a duplicate.
+   */
+  duplicate?: boolean;
+}

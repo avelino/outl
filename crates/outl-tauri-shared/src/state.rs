@@ -57,6 +57,26 @@ pub struct BlockHit {
     pub source_slug: String,
 }
 
+/// One structural template surfaced by `list_templates` — the `/template`
+/// picker in every GUI client. Mirrors the invocation `name` (what the
+/// user picks) and the `slug` of the page that defines the body.
+///
+/// Deliberately narrower than `outl_actions::TemplateEntry`: the GUIs
+/// only need the name (label) + slug (secondary label / dedupe key);
+/// `page_id` and `params` are backend detail the pick doesn't carry.
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplateDto {
+    /// Invocation name (the value of the page's `template::` property).
+    pub name: String,
+    /// Slug of the page that defines the template.
+    pub slug: String,
+    /// `true` when another page shares this `template:: <name>` — the
+    /// picker surfaces it so the user knows a duplicate silently
+    /// shadows the rest (resolution picks the first in tree order).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub duplicate: bool,
+}
+
 /// Reply for `create_block`. Pairs the refreshed [`PageView`] with the
 /// id of the freshly-inserted block so the frontend can focus / start
 /// editing it without re-discovering the id via a DFS diff (the diff

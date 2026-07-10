@@ -63,12 +63,14 @@ pub mod history;
 pub mod journal;
 pub mod outline;
 pub mod page;
+pub mod page_merge;
 pub mod paste;
 pub mod person;
 pub mod quote;
 pub mod resolve;
 pub mod storage_scope;
 pub mod sync;
+pub mod template;
 pub mod todo;
 pub mod tree;
 
@@ -103,8 +105,9 @@ pub use outline::{
 };
 pub use page::{
     delete as delete_page, find_by_slug, is_valid_slug, list_all as list_pages,
-    migrate_legacy_into_today, open_journal, open_or_create as open_or_create_page, open_today,
-    page_meta, read_text_prop, set_property, today, PageKind, PageMeta,
+    merge_duplicate_slug_roots, migrate_legacy_into_today, open_journal,
+    open_or_create as open_or_create_page, open_today, page_meta, read_text_prop, set_property,
+    today, PageKind, PageMeta,
 };
 pub use paste::{
     looks_like_outline, normalize_external_syntax, paste_markdown, paste_plain, PasteAnchor,
@@ -113,6 +116,11 @@ pub use paste::{
 pub use person::{search_persons, PERSON_TYPE, TYPE_KEY};
 pub use resolve::{open_or_create_by_name, open_or_create_by_ref};
 pub use sync::{FileSyncTransport, OpsFileSnapshot, PeerHealthSnapshot, SyncEngine, SyncTransport};
+pub use template::{
+    call_target_name, inject_call_params, instantiate_template, list_templates,
+    parse_call_invocation, parse_call_params, resolve_call, run_callable_block, CallResolution,
+    TemplateEntry, FROM_TEMPLATE_KEY, JOURNAL_TEMPLATE_NAME, PARAMS_KEY, TEMPLATE_KEY,
+};
 pub use todo::{cycle_todo, split_todo, TodoState, DONE_PREFIX, TODO_PREFIX};
 pub use tree::{
     children_of, enclosing_page_id, position_after, position_for_new_last_child, walk_subtree,

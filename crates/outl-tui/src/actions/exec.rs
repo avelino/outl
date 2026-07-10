@@ -6,9 +6,93 @@
 //! in-memory AST picks up the newly inserted/updated result child.
 
 use crate::state::{App, Mode};
+use outl_actions::{parse_call_invocation, run_callable_block};
+use outl_core::id::NodeId;
 use outl_md::parse::OutlineNode;
+use std::time::Duration;
 
 impl App {
+    /// Check if the block at `idx` is a `call:<template>` fence.
+    /// If so, run it through the shared callable-template path and
+    /// insert the result as a `> **result:**` subblock. Returns `true`
+    /// when handled (caller should skip normal exec).
+    fn maybe_run_call_block(&mut self, idx: usize) -> bool {
+        let mut cursor = 0usize;
+        let block = find_block_at_flat(&self.page.blocks, idx, &mut cursor).cloned();
+        let Some(block) = block else {
+            return false;
+        };
+        let Some((name, params)) = parse_call_invocation(&block.text) else {
+            return false;
+        };
+        let anchor = self.id_by_flat.get(idx).copied().unwrap_or(NodeId::root());
+
+        match self.run_callable_template(&name, &params, anchor) {
+            Ok(dur) => self.status = format!("ran call:{name} ({}ms)", dur.as_millis()),
+            Err(e) => self.status = format!("call: {e}"),
+        }
+        true
+    }
+
+    /// Run callable template `name` with `params`, attaching the result
+    /// under `anchor`, then reproject + reload the page.
+    ///
+    /// Both the `call:<name>` fence (`gx`) and the `/template <name> k=v`
+    /// slash command wrap this. The execution itself lives in
+    /// [`outl_actions::run_callable_block`] (shared with the desktop);
+    /// the TUI only owns the reproject + AST reload afterwards.
+    pub(crate) fn run_callable_template(
+        &mut self,
+        name: &str,
+        params: &[(String, String)],
+        anchor: NodeId,
+    ) -> Result<Duration, String> {
+        let out = run_callable_block(
+            &mut self.workspace,
+            &self.hlc,
+            &self.exec_registry,
+            name,
+            params,
+            anchor,
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Re-render the page projection, then reload the AST.
+        if let Some(root) = self.workspace.root.clone() {
+            let slug = self.current_slug();
+            if let Some(page_id) = outl_actions::find_by_slug(&self.workspace, &slug) {
+                let _ = outl_actions::apply_page_md_with_sidecar(&self.workspace, &root, page_id);
+            }
+        }
+        self.load_current();
+        Ok(out.duration)
+    }
+
+    /// Re-run the block at `path` if it is a `call:<name>` fence, so its
+    /// `> **result:**` stays fresh after the user edits the params.
+    /// A no-op for every other block. Called on Insert commit.
+    pub(crate) fn rerun_call_block_at(&mut self, path: &[usize]) {
+        let slug = self.current_slug();
+        let Some(page_id) = outl_actions::find_by_slug(&self.workspace, &slug) else {
+            return;
+        };
+        let Some(node) =
+            crate::actions::paste::resolve_node_id_at_path(&self.workspace, page_id, path)
+        else {
+            return;
+        };
+        let Some(text) = self.workspace.block_text(node) else {
+            return;
+        };
+        let Some((name, params)) = outl_actions::parse_call_invocation(&text) else {
+            return;
+        };
+        match self.run_callable_template(&name, &params, node) {
+            Ok(dur) => self.status = format!("ran call:{name} ({}ms)", dur.as_millis()),
+            Err(e) => self.status = format!("call: {e}"),
+        }
+    }
+
     /// Run the code block under the current selection through
     /// [`outl_exec`]. The result lands as a `> **result:**` subblock
     /// (or replaces an existing one), the `.md` is rewritten, and the
@@ -28,6 +112,13 @@ impl App {
         let auto_run_langs = self.collect_auto_run_langs();
         if self.block_flat_is_auto_run_lang(idx, &auto_run_langs) {
             self.status = "query blocks auto-run — no manual execution needed".into();
+            return;
+        }
+
+        // Intercept `call:<template>` blocks — resolve the template,
+        // inject params from the YAML-ish body, execute via the
+        // template's runtime, and insert the result.
+        if self.maybe_run_call_block(idx) {
             return;
         }
 

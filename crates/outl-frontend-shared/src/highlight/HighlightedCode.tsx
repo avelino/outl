@@ -53,7 +53,17 @@ async function loadHljs(): Promise<HljsLike> {
 export function HighlightedCode(props: HighlightedCodeProps): JSX.Element {
   // Resolve the alias once per render. Memoized so children that
   // observe both `language` and `code` re-render together.
-  const resolvedLang = createMemo(() => canonical(props.language));
+  //
+  // A callable-template fence (`call:<name>`) has no grammar of its
+  // own, but its body is `key: value` params — highlight it as YAML so
+  // the keys/values get colour instead of rendering flat. The display
+  // chip still shows the raw `call:<name>` (CodeFenceView uses the raw
+  // language, not this).
+  const resolvedLang = createMemo(() => {
+    const lang = props.language;
+    if (lang && lang.toLowerCase().startsWith("call:")) return "yaml";
+    return canonical(lang);
+  });
 
   // Trigger the lazy `highlight.js` import. Solid's `createResource`
   // does the suspending; while the bundle is loading we show plain

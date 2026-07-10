@@ -43,3 +43,18 @@ pub(crate) fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, Api
 pub(crate) fn opt_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key).and_then(Value::as_str)
 }
+
+/// Flatten a `params` JSON object (`{ "k": "v" }`) into the `["k=v", …]`
+/// shape the CLI `template run` handler consumes, so the MCP tool and
+/// the CLI subcommand share one param parser. Missing / non-object
+/// `params` yields an empty list.
+pub(crate) fn opt_params(args: &Value) -> Vec<String> {
+    args.get("params")
+        .and_then(Value::as_object)
+        .map(|map| {
+            map.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| format!("{k}={s}")))
+                .collect()
+        })
+        .unwrap_or_default()
+}

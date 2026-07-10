@@ -44,4 +44,4 @@ pub mod workspace_open;
 
 pub use host::{AppHost, StorageRootProvider};
 pub use plugin_service::PluginService;
-pub use state::{CreateBlockReply, PageView, WorkspaceSummary, ERR_LOADING};
+pub use state::{CreateBlockReply, PageView, TemplateDto, WorkspaceSummary, ERR_LOADING};

@@ -20,5 +20,6 @@ pub mod reconcile;
 pub mod search;
 pub mod serve;
 pub mod tag;
+pub mod template;
 pub mod theme;
 pub mod workspace_info;

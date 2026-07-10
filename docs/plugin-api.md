@@ -196,6 +196,7 @@ The typed signatures live in `@outl/plugin-sdk`; the runtime ships the subset be
 | `ctx.ops` | `onOp(cb: (op: LogOp) => void)` | `read-op-log` |
 | `ctx.blocks` | `query(filter) → Block[]`, `get(id) → Block`, `edit(id, text)`, `create(parentId, text)`, `createAfter(afterId, text)`, `move(id, { toPage } \| { toParent })`, `toggleTodo(id)`, `delete(id)` | `read-page` (reads) · `write-page` (writes) |
 | `ctx.page` | `list() → { slug, title, kind }[]`, `create(slug)` | `read-page` (`list`) · `write-page` (`create`) |
+| `ctx.template` | `list() → { name, slug, params? }[]`, `instantiate(name, blockId)` — stamp a structural template under a block (see [Templates](templates.md)) | `read-page` (`list`) · `write-page` (`instantiate`) |
 | `ctx.commands` | `register(id, handler)` | — (declared in `contributes.commands`) |
 | `ctx.config` | `get<T>() → T` | — |
 | `ctx.content` | `register(lang, fn)` — `fn(body) → { kind: "text" \| "rich", content } \| null` renders a fenced block of language `lang` (e.g. ` ```query `) | capability `content-transformer:text` / `:rich` |

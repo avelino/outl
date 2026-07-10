@@ -22,6 +22,7 @@ mod backlink_edit;
 pub(crate) mod insert;
 mod metadata;
 mod structural;
+mod template;
 
 pub(crate) use insert::InsertCursor;
 

@@ -17,7 +17,11 @@ export interface FenceParts {
   body: string;
 }
 
-const FENCE_RE = /^```([A-Za-z0-9_+\-#]*)\n([\s\S]*?)\n```\s*$/;
+// `:` is allowed in the info string so a callable-template fence
+// (` ```call:<name> `) is detected as a code block, not left as raw
+// text. The backend's `extract_fence` takes the same first-token info
+// string, so the two stay consistent.
+const FENCE_RE = /^```([A-Za-z0-9_+\-#:]*)\n([\s\S]*?)\n```\s*$/;
 
 export function detectFence(text: string): FenceParts | null {
   const m = text.match(FENCE_RE);

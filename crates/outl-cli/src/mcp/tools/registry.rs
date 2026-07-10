@@ -421,5 +421,50 @@ pub fn list() -> Vec<Value> {
             "Run integrity checks (op log, sidecars, block refs, lock). Returns a structured report.",
             json!({ "type": "object", "properties": {} }),
         ),
+        // Templates
+        tool_def(
+            "outl_template_list",
+            "List every template in the workspace (pages with a non-empty `template::` property).",
+            json!({ "type": "object", "properties": {} }),
+        ),
+        tool_def(
+            "outl_template_apply",
+            "Instantiate a structural template under a target block. Deep-copies the template page's subtree with built-in variable substitution (`{{date}}`, `{{today}}`, `{{page}}`, `{{time}}`).",
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "page": { "type": "string" },
+                    "block": { "type": "string" }
+                },
+                "required": ["name", "page"]
+            }),
+        ),
+        tool_def(
+            "outl_template_resolve",
+            "Resolve a callable template — returns its code block language, source, and declared params.",
+            json!({
+                "type": "object",
+                "properties": { "name": { "type": "string" } },
+                "required": ["name"]
+            }),
+        ),
+        tool_def(
+            "outl_template_run",
+            "Execute a callable template: injects params, runs its code block, and writes the `> **result:**` subtree under the anchor block. `block` must belong to `page`.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "page": { "type": "string" },
+                    "block": { "type": "string" },
+                    "params": {
+                        "type": "object",
+                        "additionalProperties": { "type": "string" }
+                    }
+                },
+                "required": ["name", "page", "block"]
+            }),
+        ),
     ]
 }
