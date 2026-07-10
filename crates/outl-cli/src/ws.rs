@@ -122,6 +122,17 @@ pub fn open(path: &Path) -> Result<WsCtx, ApiError> {
     }
     let hlc = HlcGenerator::new(actor);
 
+    // Repair split-brain page/journal roots (two roots sharing one slug, e.g. a
+    // sidecar-less `.md` reconciled to a fresh id) before any command reads or
+    // writes. Idempotent and a no-op when clean; only emits Ops when a duplicate
+    // exists, and those converge across devices via the op log. Covers every CLI
+    // command and the long-lived MCP server (both open through here).
+    match outl_actions::merge_duplicate_slug_roots(&mut workspace, &hlc) {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!("merged {n} duplicate slug root(s)"),
+        Err(e) => tracing::warn!("duplicate-slug-root repair: {e}"),
+    }
+
     Ok(WsCtx {
         root: paths.root.clone(),
         paths,

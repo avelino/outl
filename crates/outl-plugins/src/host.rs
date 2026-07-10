@@ -19,6 +19,7 @@ use serde_json::Value;
 
 use outl_actions::block;
 use outl_actions::page::{self, PageKind};
+use outl_actions::template as tpl_actions;
 use outl_actions::todo::{split_todo, TodoState};
 use outl_core::hlc::HlcGenerator;
 use outl_core::id::NodeId;
@@ -30,7 +31,8 @@ use crate::capability::{self, Capability, CapabilityMatch, ClientCapabilities};
 use crate::error::{PluginError, Result};
 use crate::manifest::PluginManifest;
 use crate::model::{
-    BlockView, HostIntent, LogOpView, MoveTarget, PageView, ReadModel, TransformResult,
+    BlockView, HostIntent, LogOpView, MoveTarget, PageView, ReadModel, TemplateView,
+    TransformResult,
 };
 use crate::permission::PermissionSet;
 use crate::runtime::PluginEngine;
@@ -609,6 +611,18 @@ fn apply_one(workspace: &mut Workspace, hlc: &HlcGenerator, intent: &HostIntent)
                 .map(|_| ())
                 .map_err(act)
         }
+        HostIntent::InstantiateTemplate { name, under } => {
+            let target = parse_node(under)?;
+            let slug = page_slug_of(workspace, target).unwrap_or_default();
+            // Derive the page date from the target slug so `{{date}}`
+            // resolves to the journal's own date on a daily note, matching
+            // the CLI/TUI path — passing `None` here made it always render
+            // today's date regardless of which page the block lives on.
+            let page_date = outl_actions::dates::date_from_slug(&slug);
+            tpl_actions::instantiate_template(workspace, hlc, name, target, &slug, page_date)
+                .map(|_| ())
+                .map_err(act)
+        }
         HostIntent::Move { node, target } => {
             let n = parse_node(node)?;
             let parent = match target {
@@ -646,6 +660,15 @@ fn build_read_model(workspace: &Workspace) -> ReadModel {
         })
         .collect();
 
+    let templates: Vec<TemplateView> = tpl_actions::list_templates(workspace)
+        .into_iter()
+        .map(|t| TemplateView {
+            name: t.name,
+            slug: t.slug,
+            params: t.params,
+        })
+        .collect();
+
     let mut blocks = Vec::new();
     for (node, _parent, _pos) in workspace.tree().iter_nodes() {
         if node == NodeId::root() || node == NodeId::trash() {
@@ -669,6 +692,7 @@ fn build_read_model(workspace: &Workspace) -> ReadModel {
     ReadModel {
         blocks,
         pages,
+        templates,
         op: None,
     }
 }

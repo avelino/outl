@@ -632,3 +632,50 @@ fn storage_persists_across_turns_and_is_gated() {
     let denied = bare.run_command(&mut ws, &hlc, id, "save");
     assert!(denied.is_err(), "storage without permission should error");
 }
+
+/// A plugin `InstantiateTemplate` intent on a journal page must resolve
+/// `{{date}}` to the journal's OWN date (derived from its slug), not to
+/// today — matching the CLI/TUI path. Regression for the footgun where
+/// the host passed `page_date: None` and every plugin instantiation
+/// rendered today's date regardless of which page the block lived on.
+#[test]
+fn instantiate_template_intent_uses_journal_page_date() {
+    use outl_core::property::PropValue;
+
+    let (mut ws, hlc) = ws();
+
+    // A template whose body echoes `{{date}}`.
+    let tpl =
+        page::open_or_create(&mut ws, &hlc, "template-daily", "daily", PageKind::Page).unwrap();
+    page::set_property(
+        &mut ws,
+        &hlc,
+        tpl,
+        tpl_actions::TEMPLATE_KEY,
+        Some(PropValue::Text("daily".into())),
+    )
+    .unwrap();
+    block::append_block(&mut ws, &hlc, Some(tpl), Some("day is {{date}}")).unwrap();
+
+    // A journal page dated well in the past, with a host block.
+    let journal =
+        page::open_or_create(&mut ws, &hlc, "2020-01-02", "2020-01-02", PageKind::Journal).unwrap();
+    let host_block = block::append_block(&mut ws, &hlc, Some(journal), Some("host")).unwrap();
+
+    let intent = HostIntent::InstantiateTemplate {
+        name: "daily".into(),
+        under: host_block.to_string(),
+    };
+    apply_one(&mut ws, &hlc, &intent).unwrap();
+
+    // The cloned block must carry the journal's date, never today's.
+    let clone_text = outl_actions::tree::children_of(&ws, host_block)
+        .into_iter()
+        .filter_map(|(id, _)| ws.block_text(id))
+        .find(|t| t.starts_with("day is"))
+        .expect("template block was cloned under the host");
+    assert!(
+        clone_text.contains("2020-01-02"),
+        "`{{{{date}}}}` should resolve to the journal's date, got: {clone_text}"
+    );
+}

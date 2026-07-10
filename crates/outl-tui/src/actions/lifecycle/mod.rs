@@ -110,6 +110,16 @@ impl App {
             hidden_by_collapse: Vec::new(),
             transform_cache: std::collections::HashMap::new(),
         };
+        // Repair split-brain page/journal roots (two roots sharing one slug,
+        // e.g. a sidecar-less `.md` reconciled to a fresh id) before the first
+        // render, so the outline never flickers between the duplicates.
+        // Idempotent + a no-op when clean; the merge is Ops, so it converges to
+        // every device via the op log.
+        match outl_actions::merge_duplicate_slug_roots(&mut s.workspace, &s.hlc) {
+            Ok(0) => {}
+            Ok(n) => s.status = format!("repaired {n} duplicate page root(s)"),
+            Err(e) => s.status = format!("duplicate-root repair failed: {e}"),
+        }
         s.refresh_page_list();
         s.ensure_view_file_exists()?;
         s.load_current();

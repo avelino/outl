@@ -4,6 +4,7 @@
 //! a block or page; `ActorId` identifies a device that produces ops.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fmt;
 
 /// Stable identifier for a node in the outline tree.
@@ -17,6 +18,34 @@ impl NodeId {
     /// Generate a fresh `NodeId` using the current time and a random tail.
     pub fn new() -> Self {
         Self(ulid::Ulid::new())
+    }
+
+    /// Deterministic [`NodeId`] derived from a page slug.
+    ///
+    /// A page (or journal) root's identity is its slug, not the wall
+    /// clock. Two devices — or two code paths on one device (in-app
+    /// creation, external-`.md` reconcile, desync recovery) —
+    /// independently materialising the same slug must converge on the
+    /// **same** node, or the day's content splits across two competing
+    /// roots that iCloud / Syncthing can never merge (the CRDT only
+    /// reconciles concurrent edits to the *same* node).
+    ///
+    /// Payload is `sha256("outl-page:" + slug)[..16]` as the ULID's
+    /// 128-bit body. The constant prefix isolates this scheme from any
+    /// other content-derived id. Output is stable across releases.
+    ///
+    /// This is the single owner of the derivation:
+    /// `outl_actions::page::page_id_from_slug` and
+    /// `outl_md::reconcile` both call through here so the three page-root
+    /// creation paths cannot drift.
+    pub fn from_slug(slug: &str) -> Self {
+        let mut h = Sha256::new();
+        h.update(b"outl-page:");
+        h.update(slug.as_bytes());
+        let digest = h.finalize();
+        let mut bytes = [0u8; 16];
+        bytes.copy_from_slice(&digest[..16]);
+        Self(ulid::Ulid::from_bytes(bytes))
     }
 
     /// Returns the canonical [`NodeId`] for the workspace root.
@@ -71,5 +100,38 @@ impl Default for ActorId {
 impl fmt::Display for ActorId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_slug_is_deterministic() {
+        // Same slug → same NodeId, on every call and every device.
+        // This is what lets two reconcile / creation paths converge on
+        // one page root instead of splitting the content in two.
+        assert_eq!(
+            NodeId::from_slug("2026-07-10"),
+            NodeId::from_slug("2026-07-10")
+        );
+        assert_eq!(NodeId::from_slug("ideas"), NodeId::from_slug("ideas"));
+    }
+
+    #[test]
+    fn from_slug_differs_by_slug() {
+        assert_ne!(
+            NodeId::from_slug("2026-07-10"),
+            NodeId::from_slug("2026-07-11")
+        );
+    }
+
+    #[test]
+    fn from_slug_is_never_root_or_trash() {
+        // A derived page id must not collide with the reserved sentinels.
+        let id = NodeId::from_slug("2026-07-10");
+        assert_ne!(id, NodeId::root());
+        assert_ne!(id, NodeId::trash());
     }
 }
