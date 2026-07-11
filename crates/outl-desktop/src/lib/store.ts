@@ -12,6 +12,7 @@ import { createStore } from "solid-js/store";
 
 import type {
   Backlink,
+  BacklinksOrder,
   BlockNode,
   ParseWarning,
   PageMeta,
@@ -146,6 +147,15 @@ export interface AppStateShape {
    */
   backlinksOpen: boolean;
   /**
+   * Direction of the backlinks list (issue #142): `"newest"` puts the
+   * most recently referenced page on top (default), `"oldest"` flips
+   * it. Loaded from `config.toml` at boot (via `getSettings`) and
+   * flipped by the toggle in `<InlineBacklinks />`, which persists it
+   * through the `set_backlinks_order` command and swaps in the
+   * re-sorted view. A pure display preference — never an Op.
+   */
+  backlinksOrder: BacklinksOrder;
+  /**
    * Caret intent the next mounting `<BlockRow />` textarea consumes
    * the moment it lands in the DOM. Set by vim-style entry actions
    * that need the caret somewhere other than where the click would
@@ -205,6 +215,7 @@ const [state, setState] = createStore<AppStateShape>({
   blockClipboard: null,
   sidebarOpen: false,
   backlinksOpen: true,
+  backlinksOrder: "newest",
   caretIntent: null,
   pickerOpen: false,
   pickerSeed: null,

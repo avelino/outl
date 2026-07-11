@@ -236,6 +236,7 @@ Recently added — check these before writing a parallel template helper (catalo
 | Resolve the page node for a `template:: <name>` (first in tree order; `tracing::warn!` on a name collision, and `list_templates` flags `TemplateEntry.duplicate`) | `outl_actions::template::list::find_template_by_name` | `crates/outl-actions/src/template/list.rs` |
 | Derive a page/journal-root id from a slug (single owner — every creation path routes here so two paths converge on one root) | `outl_core::NodeId::from_slug` (wrapper `outl_actions::page::page_id_from_slug`) | `crates/outl-core/src/id.rs` |
 | Repair a split-brain workspace where a slug has >1 root (re-parents children under the canonical root, trashes duplicates; all `Op`s; idempotent) | `outl_actions::merge_duplicate_slug_roots` (impl `outl_actions::page_merge`) | `crates/outl-actions/src/page_merge.rs` |
+| Order a backlinks list chronologically (group-stable by source page, newest-/oldest-first; drives the issue-#142 direction toggle on every client — never re-sort backlinks by hand per client) | `outl_actions::sort_backlinks` | `crates/outl-actions/src/backlinks_sort.rs` |
 
 ### 5.2 Reuse-first violations — no parallel implementations
 

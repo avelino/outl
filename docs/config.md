@@ -64,6 +64,12 @@ transport = "iroh"
 # means use outl's default relay (use1-1.relay.avelino.outl.iroh.link). Set to override with
 # your own iroh-relay. Ignored by the "file" transport.
 relay_url = ""
+
+[display]
+# Direction of the backlinks ("Linked from") list. "newest" (default)
+# puts the most recently referenced page at the top; "oldest" flips
+# it. A pure display preference — never converges between devices.
+backlinks_order = "newest"
 ```
 
 ### Field reference
@@ -115,6 +121,12 @@ See [theming.md](theming.md) for the look of each.
 | Field | Type | Default | Read by | Effect |
 |---|---|---|---|---|
 | `mouse_capture` | bool | `false` | TUI only | When `true`, the TUI captures mouse events: the scroll wheel moves the outline selection, a click selects the block under the pointer, and dragging selects a range that is copied as clean outl markdown to the OS clipboard on release. Default is `false` because capturing the mouse disables the terminal's own text-selection (Shift-drag). The keyboard yank (`yy` / `Y` / Visual `y`) always writes to the clipboard regardless of this flag. |
+
+#### `[display]`
+
+| Field | Type | Default | Read by | Effect |
+|---|---|---|---|---|
+| `backlinks_order` | `"newest"` \| `"oldest"` | `"newest"` | every client (TUI, desktop, mobile) | Sort direction for the backlinks ("Linked from") list. `"newest"` puts the page holding the most recently created referencing block at the top; `"oldest"` flips it. Blocks within a page always keep document order. The TUI toggles it with `Ctrl+O` (see [shortcuts.md](shortcuts.md)); the desktop and mobile apps expose a direction button in the backlinks header. A pure display preference — it never converges between devices (issue #142). |
 
 > The iroh transport also reads `~/.outl/identity.key` (this device's ed25519 keypair, per-machine) and `<workspace>/.outl/peers.json` (the paired-device list, per-graph).
 > Those are managed by `outl peer …`, not by this config file — see [sync.md → iroh transport](sync.md#transport-2-iroh-p2p).

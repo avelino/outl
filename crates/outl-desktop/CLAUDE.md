@@ -115,7 +115,7 @@ The flow is two honest steps, no filler:
 2. **Sync (optional)** — the shared `SYNC_STEP` copy (`@outl/shared/onboarding`) + the existing `<SyncPanel />` so the user can pair right there, or skip.
    A single device is first-class.
 
-The "has the user onboarded" flag is a **per-install UI flag in `localStorage`** (`outl.onboarded`), **not** workspace state — it deliberately does NOT go through the op log (it must not converge across devices; each device onboards once).
+The "has the user onboarded" flag is a **per-install UI flag in `localStorage`** (`outl.onboarded`), **not** workspace state — it deliberately does NOT go through the op log.
 It is intentionally not in `settings.json` either, since `settings.last_workspace` is the only first-run signal the backend tracks.
 
 The onboarding **copy** lives in `@outl/shared/onboarding` (identical to mobile); only the chrome is desktop-local.
@@ -123,20 +123,22 @@ Pairing is **not** reimplemented — `Onboarding` renders the real `<SyncPanel /
 
 ### Sync status dot (always-visible)
 
-`<SyncIndicator />` sits in the bottom-left `<ChromeToggleBar />` cluster so the mesh state is glanceable without opening Settings (GUI users expect that, the way mobile shows a dot in its toolbar).
-Green = at least one iroh peer reachable, orange = none, dim = first probe still running; clicking opens Settings → Sync (the full `<SyncPanel />`).
-It derives reachability from `peerStatus()` → `peersOnline()` (`@outl/shared/peers`) — the **same source** the Sync panel and the mobile dot use, so the three never disagree.
-It re-probes on a slow interval and immediately on `peer-ops-changed` (a delivery proves the mesh is up).
+`<SyncIndicator />` sits in the bottom-left `<ChromeToggleBar />` cluster so the mesh state is glanceable without opening Settings.
+Green = at least one iroh peer reachable, orange = none, dim = first probe still running; clicking opens Settings → Sync.
+It derives reachability from `peerStatus()` → `peersOnline()` (`@outl/shared/peers`), the same source the Sync panel and the mobile dot use.
+It re-probes on a slow interval and immediately on `peer-ops-changed`.
 Do not add a second reachability path; `peersOnline` is the one owner.
 
 ### Sidebar page deletion
 
-`Sidebar.tsx`'s `<Row>` takes an optional `onDelete` callback; when provided, a `×` button appears on hover (top-right, `opacity-0 → group-hover:opacity-100`).
+`Sidebar.tsx`'s `<Row>` takes an optional `onDelete` callback; when provided, a `×` button appears on hover.
 `handleDelete(p)` calls `window.confirm(...)`, then `deletePage(slug)` (from `@outl/shared/api/commands`), applies the returned today's-journal view, and refetches the page list.
-Journals are excluded (`p.kind === "journal" ? undefined : ...`) — only regular pages show the affordance.
+Journals are excluded — only regular pages show the affordance.
 The `g d` chord (Normal mode, "go delete") routes through the `DeletePage` case in `action-handlers.ts`.
-It runs the same `window.confirm` + `deletePage(slug)` flow as the `×` button (the `Action` TS union in `lib/api.ts` carries `| { kind: "DeletePage" }`).
+It runs the same `window.confirm` + `deletePage(slug)` flow as the `×` button.
 The backend `delete_page` Tauri command is the shared `outl_tauri_shared::commands::page::delete_page` body — no desktop-specific logic.
+
+`InlineBacklinks.tsx`'s header direction button (`setBacklinksOrder`) flips newest/oldest; `appState.backlinksOrder` hydrates at boot.
 
 ## Blockquote chrome
 
@@ -440,12 +442,14 @@ Schema (`crates/outl-desktop/src-tauri/src/settings.rs::Settings`):
   "vim_mode": false,
   "theme": "auto",       // "light" | "dark" | "auto"
   "font_size": 15,
-  "sync_transport": "iroh"  // "iroh" (P2P, default) | "file" (iCloud/fs)
+  "sync_transport": "iroh",  // "iroh" (P2P, default) | "file" (iCloud/fs)
+  "backlinks_order": "newest"  // "newest" (default) | "oldest" — read-only, see below
 }
 ```
 
 The Sync transport select in `SettingsModal` writes `sync_transport`.
 `settings.rs` maps it to/from `[sync] transport` and preserves `relay_url` on save; takes effect on next launch.
+`backlinks_order` is read-only here — `save` restores it from disk (same pattern as `[calendar]`) so the modal can't clobber the dedicated `set_backlinks_order` command's write.
 
 The actor id (one per device) lives next to it as `actor` — a plain ULID.
 Switching workspaces does not rotate it.

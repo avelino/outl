@@ -9,6 +9,9 @@
 
 export type TodoState = "TODO" | "DONE";
 export type PageKind = "page" | "journal";
+/** Direction of the backlinks ("Linked from") list (issue #142).
+ * Mirrors `outl_config::BacklinksOrder`. */
+export type BacklinksOrder = "newest" | "oldest";
 
 /**
  * Pre-tokenized inline markdown coming from the Rust backend
@@ -136,6 +139,10 @@ export interface PageView {
   page: PageMeta;
   outline: BlockNode[];
   backlinks: Backlink[];
+  /** Direction `backlinks` was sorted in (issue #142) — `"newest"` or
+   * `"oldest"`. Lets a client's direction toggle show the right arrow
+   * without a separate settings read. Mirrors `PageView.backlinks_order`. */
+  backlinks_order: BacklinksOrder;
   /**
    * Parser recovery records for the page's `.md`. Empty (or
    * absent) when the file is fully in the outl dialect. Drives

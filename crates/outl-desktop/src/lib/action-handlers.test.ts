@@ -79,6 +79,7 @@ function pageView(): PageView {
     page: { id: "pg-source", slug: "source", title: "Source", kind: "page" },
     outline: [],
     backlinks: [],
+    backlinks_order: "newest",
   };
 }
 
@@ -407,6 +408,7 @@ describe("multi-select batch ops (#23)", () => {
       page: { id: "pg-1", slug: "today", title: "Today", kind: "journal" },
       outline: [block("blk-a", "a"), block("blk-d", "d")],
       backlinks: [],
+      backlinks_order: "newest",
     });
     setAppState({
       mode: "vim-visual",

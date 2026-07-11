@@ -221,6 +221,19 @@ Multi-line quote bodies keep the `> ` on every continuation line so the `.md` st
 Children of a quoted block are **not** implicitly quoted — the marker lives on the block, not on its subtree.
 Inline tokens (`**bold**`, `[[ref]]`, `#tag`, `((blk-…))`) continue to tokenize **inside** the body — the wrapper is transparent.
 
+## Backlinks order (issue #142)
+
+Every client sorts the "Linked from" list the same way: `outl_actions::sort_backlinks` groups backlinks by source page (each page's blocks stay contiguous, in document order) and orders the pages by how recently each was referenced.
+The direction — `newest` (default, most recently referenced page on top) or `oldest` — is a pure display preference stored in `[display] backlinks_order` (`config.toml`), same non-converging policy as `theme.preset`.
+
+| Client | Toggle | Persistence |
+|---|---|---|
+| TUI | `Ctrl+O` (Normal mode) | writes `config.toml` directly via `outl_config::save` |
+| Desktop | direction button in the `InlineBacklinks` header | `set_backlinks_order` Tauri command |
+| Mobile | direction button in the `BacklinksSection` header | `set_backlinks_order` Tauri command |
+
+See [config.md → `[display]`](config.md#display) for the schema and [shortcuts.md](shortcuts.md) for the TUI chord.
+
 ## iCloud sync (mobile + TUI, today)
 
 The iOS app is on a public TestFlight beta — <https://testflight.apple.com/join/P2GdWAMd>.

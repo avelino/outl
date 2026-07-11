@@ -125,6 +125,7 @@ No characters insert themselves — every key is a command.
 | `/` | Slash command menu (Notion-style, fuzzy filter) |
 | `:` | Command palette (vim-style) |
 | `B` | Toggle the inline backlinks section below the outline |
+| `Ctrl+O` | Flip the backlinks sort direction (newest ⇄ oldest); persists to `config.toml` |
 | `?` | Toggle this help popup |
 | `q q` / `Ctrl+C` | Quit — `q` alone arms a chord, second `q` confirms |
 | `Z Z` | Quit (vim's "save and quit"). outl already commits Insert on every Normal boundary, so this is equivalent to `q q`; kept distinct so vim muscle memory works. |
@@ -345,6 +346,8 @@ Hooks are dispatched once per mutation; a hook that itself mutates the workspace
   The cursor-bearing block always keeps the raw `((…))` / `!((…))` literal on its first row so column counting stays exact.
 - **Backlinks (inline)** — rendered below the outline, separated by a full-width `─` rule.
   Every block in any other page that contains `[[this]]` or `#this` shows up with its children, grouped by source page.
+  Pages are ordered by how recently they referenced this page (default: most recent on top); `Ctrl+O` flips the direction, shown in the section header (`↓ newest (^O)` / `↑ oldest (^O)`).
+  Within a page, blocks keep document order.
   `j`/`k` navigation crosses the separator transparently: from the last outline block, `j` lands you on the first backlink; `k` from the first backlink walks back into the outline.
   Toggle the section with `B`.
   Self-references are excluded.

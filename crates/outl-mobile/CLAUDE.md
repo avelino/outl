@@ -175,11 +175,13 @@ that, always call `openRef`.
 
 ## Page switcher — long-press to delete
 
-`PageSwitcher.tsx` renders each page as a row button; spreading `longPressHandlers(p)` on the row arms a 500 ms sustained-touch detector (canceled if the finger moves more than 10 px, so a scroll never false-fires).
-On fire, `handleDelete(p)` runs `window.confirm(...)` → `deletePage(slug)` (from `@outl/shared/api/commands`) → navigates to the returned today's journal → refetches the list.
-Journals are excluded (`p.kind === "journal"` skips the handlers) — only regular pages can be deleted from the switcher.
-The backend `delete_page` Tauri command is the shared `outl_tauri_shared::commands::page::delete_page` body — no mobile-specific logic.
+`PageSwitcher.tsx` renders each page as a row button; spreading `longPressHandlers(p)` arms a 500 ms sustained-touch detector (canceled if the finger moves more than 10 px).
+On fire, `handleDelete(p)` runs `window.confirm(...)` → `deletePage(slug)` → navigates to the returned today's journal → refetches the list.
+Journals are excluded — only regular pages can be deleted from the switcher.
+The backend command is the shared `outl_tauri_shared::commands::page::delete_page` body — no mobile-specific logic.
 `Action::DeletePage` carries a `g d` chord in the shared catalog (Normal mode), but mobile has no keyboard surface — long-press in the page switcher remains the only trigger on touch devices.
+
+`BacklinksSection.tsx`'s header button (`order`/`onToggleOrder`) flips newest/oldest via `setBacklinksOrder`; `Journal.tsx` wires `backlinks_order`.
 
 ## Opening an external `[label](url)` link
 
