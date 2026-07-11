@@ -63,8 +63,9 @@ use crate::commands::{
     plugin_registry_list, plugin_run, plugin_set_enabled, plugin_sync_hooks, plugin_toolbar,
     plugin_transform, plugin_transformers, plugin_uninstall, previous_day, redo_page,
     reload_workspace, resolve_embeds, resolve_ref, run_auto_run_blocks, run_code_block,
-    search_blocks, search_pages, search_persons, set_block_collapsed, set_workspace,
-    today_slug_cmd, toggle_quote, toggle_todo, undo_page, update_settings, workspace_stats,
+    search_blocks, search_pages, search_persons, set_backlinks_order, set_block_collapsed,
+    set_workspace, today_slug_cmd, toggle_quote, toggle_todo, undo_page, update_settings,
+    workspace_stats,
 };
 use crate::plugin_service::spawn_plugin_service;
 use crate::state::AppState;
@@ -305,6 +306,7 @@ pub fn run() {
             date_title,
             resolve_ref,
             delete_page,
+            set_backlinks_order,
             // Structural templates
             list_templates_cmd,
             instantiate_template_at,

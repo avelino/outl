@@ -1,10 +1,18 @@
 import { For, JSX, Show } from "solid-js";
-import type { Backlink, TodoState } from "@outl/shared/api/types";
+import type {
+  Backlink,
+  BacklinksOrder,
+  TodoState,
+} from "@outl/shared/api/types";
 import { MarkdownInline } from "@outl/shared/markdown";
 
 interface BacklinksSectionProps {
   backlinks: Backlink[];
   onJump: (link: Backlink) => void;
+  /** Current sort direction (issue #142). */
+  order: BacklinksOrder;
+  /** Flip newest ⇄ oldest — the host persists it + applies the re-sorted view. */
+  onToggleOrder: () => void;
 }
 
 /**
@@ -39,6 +47,19 @@ export function BacklinksSection(props: BacklinksSectionProps): JSX.Element {
         <p class="text-[12px] font-medium uppercase tracking-wider">
           Linked from {props.backlinks.length}
         </p>
+        {/* Direction toggle (issue #142): ↓ newest-on-top, ↑ oldest. */}
+        <Show when={props.backlinks.length > 0}>
+          <button
+            type="button"
+            onClick={() => props.onToggleOrder()}
+            class="ml-auto flex items-center gap-1 rounded-full px-2 py-0.5 text-[12px] font-medium active:opacity-60"
+          >
+            <span aria-hidden="true">
+              {props.order === "newest" ? "↓" : "↑"}
+            </span>
+            <span>{props.order === "newest" ? "Newest" : "Oldest"}</span>
+          </button>
+        </Show>
       </header>
       <Show
         when={props.backlinks.length > 0}

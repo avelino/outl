@@ -30,6 +30,42 @@ pub struct Config {
     pub tui: TuiCfg,
     pub snapshot: SnapshotCfg,
     pub storage: StorageCfg,
+    pub display: DisplayCfg,
+}
+
+/// Direction of the backlinks ("Linked from") list.
+///
+/// `lowercase` serde so the TOML reads `backlinks_order = "newest"` /
+/// `"oldest"` — how a user thinks of it, not the Rust variant casing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BacklinksOrder {
+    /// Most recently referenced page first (the product default).
+    #[default]
+    Newest,
+    /// Oldest referenced page first.
+    Oldest,
+}
+
+impl BacklinksOrder {
+    /// Whether the newest reference sorts to the top — the `bool` the
+    /// `outl_actions::sort_backlinks` renderer path expects.
+    pub fn newest_first(self) -> bool {
+        matches!(self, BacklinksOrder::Newest)
+    }
+}
+
+/// Display section — cross-client presentation preferences that are
+/// pure view state (they never converge between devices, same policy
+/// as [`ThemeCfg`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DisplayCfg {
+    /// Direction of the backlinks list. Read by every renderer (TUI at
+    /// boot, the GUI clients when building a `PageView`). Default
+    /// [`BacklinksOrder::Newest`] — the fix for issue #142, where long
+    /// backlink lists buried the latest reference at the bottom.
+    pub backlinks_order: BacklinksOrder,
 }
 
 /// TUI-only preferences (the desktop ignores this section).
@@ -246,6 +282,23 @@ mod tests {
         assert!(c.sync.relay_url.is_none());
         assert!(c.snapshot.enabled);
         assert_eq!(c.snapshot.op_threshold, 10_000);
+        assert_eq!(c.display.backlinks_order, BacklinksOrder::Newest);
+        assert!(c.display.backlinks_order.newest_first());
+    }
+
+    #[test]
+    fn display_section_parses_backlinks_order() {
+        let c: Config = toml::from_str("[display]\nbacklinks_order = \"oldest\"\n").unwrap();
+        assert_eq!(c.display.backlinks_order, BacklinksOrder::Oldest);
+        assert!(!c.display.backlinks_order.newest_first());
+    }
+
+    #[test]
+    fn missing_display_section_defaults_to_newest() {
+        // Only [theme] populated → display falls back to its default
+        // (newest-first), so an older config keeps the issue-#142 fix.
+        let c: Config = toml::from_str("[theme]\npreset = \"nord\"\n").unwrap();
+        assert_eq!(c.display.backlinks_order, BacklinksOrder::Newest);
     }
 
     #[test]

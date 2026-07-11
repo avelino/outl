@@ -50,6 +50,7 @@
 #![warn(missing_docs)]
 
 pub mod backlinks;
+pub mod backlinks_sort;
 pub mod block;
 pub mod clipboard;
 pub mod clock;
@@ -75,6 +76,7 @@ pub mod todo;
 pub mod tree;
 
 pub use backlinks::{backlinks_for_page, backlinks_for_target, extract_refs, Backlink};
+pub use backlinks_sort::sort_backlinks;
 pub use block::{
     append_block, append_forest, append_tree, create_after, create_after_or_append, create_before,
     create_under, delete, edit_text, indent, move_after, move_down, move_under, move_up, outdent,

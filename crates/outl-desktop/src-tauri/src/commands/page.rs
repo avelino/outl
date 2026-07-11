@@ -116,3 +116,14 @@ pub(crate) fn resolve_ref(
 pub(crate) fn delete_page(slug: String, state: State<'_, AppState>) -> Result<PageView, String> {
     shared::delete_page(state.inner(), slug)
 }
+
+/// Persist the backlinks-list direction and return `slug`'s re-sorted
+/// view (issue #142). `order` is `"newest"` | `"oldest"`.
+#[tauri::command]
+pub(crate) fn set_backlinks_order(
+    order: String,
+    slug: String,
+    state: State<'_, AppState>,
+) -> Result<PageView, String> {
+    shared::set_backlinks_order(state.inner(), order, slug)
+}

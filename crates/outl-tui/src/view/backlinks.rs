@@ -46,10 +46,22 @@ pub(crate) fn render_backlinks_inline(
     out.push(Line::from(""));
     let rule = "─".repeat(inner_width.max(1) as usize);
     out.push(Line::from(Span::styled(rule, app.theme.border)));
-    out.push(Line::from(Span::styled(
-        format!(" Backlinks · {} ref(s)", backlinks.len()),
-        app.theme.heading,
-    )));
+    // Header carries the direction indicator + the toggle hint (issue
+    // #142): ↓ = newest on top (default), ↑ = oldest on top. `Ctrl+O`
+    // flips it.
+    let (arrow, order_label) = if app.backlinks_newest_first {
+        ("↓", "newest")
+    } else {
+        ("↑", "oldest")
+    };
+    out.push(Line::from(vec![
+        Span::styled(
+            format!(" Backlinks · {} ref(s)  ", backlinks.len()),
+            app.theme.heading,
+        ),
+        Span::styled(format!("{arrow} {order_label}"), app.theme.dim),
+        Span::styled("  (^O)", app.theme.dim),
+    ]));
     out.push(Line::from(""));
 
     let mut prev_source: Option<String> = None;

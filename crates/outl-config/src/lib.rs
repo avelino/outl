@@ -37,6 +37,9 @@
 //! [snapshot]
 //! enabled = true        # default; long-lived clients write a snapshot periodically
 //! op_threshold = 10000  # write after this many applied ops
+//!
+//! [display]
+//! backlinks_order = "newest"   # "newest" (default) | "oldest"
 //! ```
 //!
 //! All fields are optional — missing values fall back to
@@ -59,8 +62,8 @@ mod schema;
 
 pub use paths::{config_dir, config_path};
 pub use schema::{
-    CalendarCfg, Config, EditorCfg, SnapshotCfg, StorageCfg, SyncConfig, SyncTransportKind,
-    ThemeCfg, TuiCfg, WorkspaceCfg,
+    BacklinksOrder, CalendarCfg, Config, DisplayCfg, EditorCfg, SnapshotCfg, StorageCfg,
+    SyncConfig, SyncTransportKind, ThemeCfg, TuiCfg, WorkspaceCfg,
 };
 
 use std::fs;

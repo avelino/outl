@@ -370,6 +370,15 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         // `A` (append at end) — `$` then `i`. Single keypress for the
         // common "jump to end and start typing" gesture.
         KeyCode::Char('A') => app.enter_insert_at_end(),
+        // Flip the backlinks list direction (newest ⇄ oldest, issue
+        // #142). `Ctrl+O` — "O" for order — mirrors the `Ctrl+B` panel
+        // toggle and persists the choice to `config.toml`. Must come
+        // **before** the bare `Char('o')` / `Char('O')` below (open
+        // block below / above): those arms are unguarded, so once Rust
+        // reaches them the modifier is lost and they'd swallow Ctrl+O.
+        KeyCode::Char('o' | 'O') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.toggle_backlinks_order()
+        }
         KeyCode::Char('o') => app.create_block_below(),
         KeyCode::Char('O') => app.create_block_above(),
         // ── Vim char / line ops ──────────────────────────────────────

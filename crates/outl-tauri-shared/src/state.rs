@@ -38,6 +38,11 @@ pub struct PageView {
     pub page: PageMeta,
     pub outline: Vec<OutlineNode>,
     pub backlinks: Vec<Backlink>,
+    /// Direction `backlinks` was sorted in (`[display] backlinks_order`,
+    /// issue #142). Carried on the view so a client's direction toggle
+    /// shows the right arrow at boot without a separate settings read.
+    /// Serialises as `"newest"` / `"oldest"`.
+    pub backlinks_order: outl_config::BacklinksOrder,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<outl_md::ParseWarning>,
 }

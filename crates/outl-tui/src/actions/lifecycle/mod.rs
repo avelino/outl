@@ -84,6 +84,9 @@ impl App {
             pending_reload: false,
             orphan_md_rx: None,
             show_backlinks: true,
+            // Product default; the runtime overrides it from
+            // `[display] backlinks_order` right after construction.
+            backlinks_newest_first: true,
             show_sidebar: false,
             sidebar_focus: None,
             sidebar_cursor: 0,

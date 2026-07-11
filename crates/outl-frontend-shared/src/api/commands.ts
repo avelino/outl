@@ -18,6 +18,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import type {
+  BacklinksOrder,
   CreateBlockReply,
   PageMeta,
   PageView,
@@ -179,6 +180,20 @@ export function resolveRef(target: string): Promise<PageMeta | null> {
  */
 export function deletePage(slug: string): Promise<PageView> {
   return invoke<PageView>("delete_page", { slug });
+}
+
+/**
+ * Persist the backlinks-list direction (issue #142) and get `slug`'s
+ * view back re-sorted under it. A pure display preference — it lives in
+ * `config.toml`, never the op log, so it does not converge between
+ * devices (same policy as the theme). The returned `PageView` already
+ * reflects the new order; the caller just swaps it into its store.
+ */
+export function setBacklinksOrder(
+  order: BacklinksOrder,
+  slug: string,
+): Promise<PageView> {
+  return invoke<PageView>("set_backlinks_order", { order, slug });
 }
 
 // ---------------------------------------------------------------------------

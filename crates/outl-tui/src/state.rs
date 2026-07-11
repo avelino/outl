@@ -587,6 +587,14 @@ pub(crate) struct App {
     /// Toggled with `B`. Default `true` so users discover the feature.
     pub(crate) show_backlinks: bool,
 
+    /// Direction of the inline backlinks list (issue #142): `true` puts
+    /// the most recently referenced page on top (the product default),
+    /// `false` flips to oldest-first. Loaded from `[display]
+    /// backlinks_order` at boot and toggled with `Ctrl+O`, which
+    /// persists the new value back to `config.toml`. A pure display
+    /// preference — it never goes through the op log.
+    pub(crate) backlinks_newest_first: bool,
+
     /// Whether the left sidebar (mini-calendar + pinned + recent) is
     /// visible. Default `false` so first-time users land on the
     /// classic single-pane layout — the toggle (`\`) opt-ins those who

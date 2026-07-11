@@ -37,6 +37,7 @@ If a row below disagrees with what you observe in the app, **the code is right a
 | Next journal day | `]` | `Cmd/Ctrl+]` | swipe left |
 | Toggle sidebar | `Ctrl+E` | `Cmd/Ctrl+Shift+E` | _(single pane)_ |
 | Toggle backlinks panel | `Ctrl+B` | `Cmd/Ctrl+Shift+B` | inline below outline |
+| Toggle backlinks order (newest/oldest) | `Ctrl+O` | direction button in the backlinks header | direction button in the backlinks header |
 | Open settings | _via `:settings`_ | `Cmd/Ctrl+,` | gear icon |
 | Toggle help overlay | `?` | `Cmd/Ctrl+/` | help button |
 | Quit | `q q` (chord) / `Z Z` (vim alias) / `Ctrl+C` | `Cmd/Ctrl+Q` (OS) | — |

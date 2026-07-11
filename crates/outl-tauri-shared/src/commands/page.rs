@@ -208,6 +208,35 @@ pub fn open_page_by_slug<S: AppHost>(state: &S, slug: String) -> Result<PageView
     })
 }
 
+/// Persist the backlinks-list direction (`[display] backlinks_order`,
+/// issue #142) and return `slug`'s view re-sorted under the new order.
+///
+/// A pure display preference — it lives in `config.toml`, never the op
+/// log, and does not converge between devices (same policy as the
+/// theme). `build_page_view` re-reads the preference and applies
+/// `sort_backlinks`, so the returned `PageView` already reflects the
+/// flip; the frontend just swaps it in. Unknown `order` values fall
+/// back to `newest` rather than erroring — a UI toggle can't produce
+/// anything else.
+pub fn set_backlinks_order<S: AppHost>(
+    state: &S,
+    order: String,
+    slug: String,
+) -> Result<PageView, String> {
+    let mut cfg = outl_config::load();
+    cfg.display.backlinks_order = match order.as_str() {
+        "oldest" => outl_config::BacklinksOrder::Oldest,
+        _ => outl_config::BacklinksOrder::Newest,
+    };
+    outl_config::save(&cfg).map_err(|e| e.to_string())?;
+
+    let root = state.storage_root()?;
+    with_ws(state, |ws| {
+        let id = find_by_slug(ws, &slug).ok_or_else(|| format!("page not found: {slug}"))?;
+        build_page_view(ws, &root, id).map_err(|e| e.to_string())
+    })
+}
+
 /// Open whatever a user-typed ref / tag / picker entry points at, in one
 /// round-trip. `open_or_create_by_ref` is the single decision tree
 /// (date → journal, else literal/slugified/title match → existing page,

@@ -93,6 +93,12 @@ function App() {
   async function hydrateTheme() {
     try {
       const s = await getSettings();
+      // Backlinks direction is a display preference read from the same
+      // settings file (issue #142); hydrate it here so the first render
+      // already orders correctly.
+      if (s.backlinks_order === "oldest" || s.backlinks_order === "newest") {
+        setAppState("backlinksOrder", s.backlinks_order);
+      }
       const palette = await getTheme(s.theme || null);
       applyPaletteToRoot(palette);
     } catch {

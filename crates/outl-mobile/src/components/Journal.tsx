@@ -39,6 +39,7 @@ import {
   searchEmojis,
   searchPages,
   searchPersons,
+  setBacklinksOrder,
   setBlockCollapsed,
   syncNow,
   todaySlug,
@@ -1443,6 +1444,18 @@ export function Journal() {
         >
           <BacklinksSection
             backlinks={view()!.backlinks}
+            order={view()!.backlinks_order}
+            onToggleOrder={async () => {
+              const v = view();
+              if (!v) return;
+              haptic("light");
+              const next =
+                v.backlinks_order === "newest" ? "oldest" : "newest";
+              const updated = await withError(() =>
+                setBacklinksOrder(next, v.page.slug),
+              );
+              if (updated) applyView(updated);
+            }}
             onJump={async (link) => {
               if (!link.source_page) return;
               haptic("light");

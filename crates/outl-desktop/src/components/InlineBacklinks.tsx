@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js";
 
-import { openRef } from "@outl/shared/api/commands";
+import { openRef, setBacklinksOrder } from "@outl/shared/api/commands";
 import { MarkdownInline } from "@outl/shared/markdown";
 import type { Backlink } from "@outl/shared/api/types";
 
@@ -49,6 +49,20 @@ export function InlineBacklinks() {
       // freshly-opened outline.
       setAppState("selectedBacklinkBlockId", null);
       setAppState("selectedBlockId", link.block_id);
+    } catch (e) {
+      setAppState("lastError", e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /** Flip newest ⇄ oldest, persist it, and swap in the re-sorted view
+   *  the backend returns (issue #142). No-op with no page open. */
+  async function toggleOrder() {
+    const slug = appState.page?.slug;
+    if (!slug) return;
+    const next = appState.backlinksOrder === "newest" ? "oldest" : "newest";
+    try {
+      const view = await setBacklinksOrder(next, slug);
+      setAppState({ backlinksOrder: next, backlinks: view.backlinks });
     } catch (e) {
       setAppState("lastError", e instanceof Error ? e.message : String(e));
     }
@@ -104,9 +118,30 @@ export function InlineBacklinks() {
         {/* Soft full-width rule — mirrors the TUI's `─` separator. */}
         <div class="border-t border-(--color-outl-border) opacity-60" />
 
-        <header class="mt-3 mb-2 text-xs font-semibold uppercase tracking-wide opacity-60">
-          Backlinks · {appState.backlinks.length} ref
-          {appState.backlinks.length === 1 ? "" : "s"}
+        <header class="mt-3 mb-2 flex items-baseline justify-between gap-2">
+          <span class="text-xs font-semibold uppercase tracking-wide opacity-60">
+            Backlinks · {appState.backlinks.length} ref
+            {appState.backlinks.length === 1 ? "" : "s"}
+          </span>
+          {/* Direction toggle (issue #142). The arrow tracks the order:
+              ↓ newest-on-top, ↑ oldest-on-top. */}
+          <button
+            type="button"
+            onClick={() => void toggleOrder()}
+            title={
+              appState.backlinksOrder === "newest"
+                ? "Newest first — click for oldest first"
+                : "Oldest first — click for newest first"
+            }
+            class="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs opacity-60 hover:bg-(--color-outl-fg)/5 hover:opacity-100"
+          >
+            <span aria-hidden="true">
+              {appState.backlinksOrder === "newest" ? "↓" : "↑"}
+            </span>
+            <span>
+              {appState.backlinksOrder === "newest" ? "Newest" : "Oldest"}
+            </span>
+          </button>
         </header>
 
         <div class="space-y-4">
