@@ -95,8 +95,12 @@ A binding that only the TUI cares about still lives here (with `Mode::Normal` / 
 | `Global` | Always active. Chrome chords (`Cmd+P`, `Cmd+J`, `Cmd+T`, `Cmd+,`). | Every client. |
 | `Normal` | Vim Normal mode — outline navigation (`j`, `k`, `i`, `o`, `dd`). | TUI always; desktop when `vim_mode == true`. |
 | `Insert` | Inside a textarea / EditBuffer. Movement (`Up`, `Down`, `Left`, `Right`), commit (`Esc`), inline-markdown wrappers (`Cmd+B`, `Cmd+I`). | TUI + desktop. |
-| `Visual` | Range selection (vim Visual). | TUI; desktop when `vim_mode == true`. |
+| `Visual` | Range selection (vim Visual). | TUI; desktop via `V` (vim) **or** `Shift+↑/↓` (`SelectRange*`, any mode — issue #23). |
 | `Overlay` | Picker / settings modal / help is open. | TUI + desktop — used to give the overlay its own escape chord without it colliding with `Normal` mode bindings. |
+
+**`SelectRangeDown` / `SelectRangeUp` are the "enter a mode from another mode" example** (issue #23).
+Bound in **both** `Normal` and `Visual`, they start a contiguous selection from Normal — the desktop's non-vim multi-select entry, reached via its DOM "nothing focused" → Normal fallback — and keep extending it once Visual is active.
+`MoveVisualRange{Up,Down}` are Visual-only, mirroring the single-block `MoveBlock{Up,Down}` chords one mode over.
 
 **`Cmd+B` is the canonical "context-dependent chord" example:**
 

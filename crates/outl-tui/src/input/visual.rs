@@ -6,7 +6,7 @@
 
 use crate::state::App;
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub(crate) fn handle_visual_key(app: &mut App, key: KeyEvent) -> Result<()> {
     match key.code {
@@ -21,6 +21,12 @@ pub(crate) fn handle_visual_key(app: &mut App, key: KeyEvent) -> Result<()> {
         // without losing the `Tab` discoverability.
         KeyCode::Tab | KeyCode::Char('>') => app.indent_visual_range(),
         KeyCode::BackTab | KeyCode::Char('<') => app.outdent_visual_range(),
+        // `Alt`+arrows drag the whole range among its siblings —
+        // mirrors the single-block `Alt`+arrows in Normal mode. The
+        // plain arrows below extend the selection, so `Alt` is what
+        // separates "reorder the range" from "grow the range".
+        KeyCode::Up if key.modifiers.contains(KeyModifiers::ALT) => app.move_up_visual_range(),
+        KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) => app.move_down_visual_range(),
         KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
         KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
         _ => {}

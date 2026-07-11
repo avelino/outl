@@ -254,17 +254,17 @@ This section captures only the **architectural decisions** a contributor needs t
   3. **Pending-input** (`r{ch}`, `f{ch}`, `F{ch}`) — read a second character before applying.
      The dispatcher has no machinery for this today; categorised as char-cursor since they're blocked anyway.
 
-- **Visual mode is real**: `Mode::"vim-visual"` in the store with `visualAnchorId` + `lastVisualRange`.
-  `<BlockRow />`'s `isInVisualRange()` paints the range at 18% accent opacity (distinct from the 6% single-row selection tint).
-  Every Visual exit (`Esc`, `y`, `d`) captures the range to `lastVisualRange` so `g v` can restore it.
+- **Visual mode is real, and reachable without vim (issue #23)**: `Mode::"vim-visual"` in the store with `visualAnchorId` + `lastVisualRange`, painted at 18% accent opacity.
+  `Shift+↓` / `Shift+↑` (`SelectRange{Down,Up}`, bound in **both** Normal and Visual) start or grow the range via the DOM "nothing focused" → Normal fallback, so one machinery serves vim and non-vim.
+  `extendVisualRange` stays in the outline, never crossing into read-only backlinks.
+  Every exit funnels through one `exitVisual()` (captures `lastVisualRange` for `g v`); resting `vim-normal` folds to `normal` in `detectMode` + `StatusBar`.
 
-- **`*` / `#` is not vim-pure.**
-  Without a char cursor, "word under cursor" isn't defined — we seed the picker with the first 4 words of the selected block's text instead.
-  Document this in `docs/shortcuts.md` so users aren't surprised.
+- **`<BatchToolbar />`** (`components/BatchToolbar.tsx`) floats `N selected` + Indent / Outdent / Move ↑↓ / Delete / Done while `mode === "vim-visual"`, firing the **same** `handlers` the keyboard does so button and chord can't drift.
+  Its **Delete** confirms (`window.confirm`) when a selected block has children; keyboard `d` does not (vim convention).
 
-- **Range ops walk bottom-up + tolerate id-already-gone.**
-  `DeleteRange` iterates `[hi → lo]` so children go before parents (a parent's move-to-trash would otherwise pull a still-targeted descendant out from under us).
-  NodeIds are stable (`deleteBlock` is `Move(node, TRASH)`), so the pre-loop id snapshot stays valid; `safeCall` swallows per-id failures (a peer ate the same id, or the range straddled parent + descendants).
+- **Range ops walk bottom-up or top-down via `applyVisualBlockOp`, and tolerate id-already-gone.**
+  `DeleteRange` + `MoveVisualRangeDown` iterate `[hi → lo]` (children before parents; a descending move clears the block below first); `IndentVisualRange` + `MoveVisualRangeUp` walk `[lo → hi]`.
+  NodeIds are stable (`deleteBlock` is `Move(node, TRASH)`, moves preserve identity), so the highlight follows the re-render; `safeCall` swallows per-id failures.
 
 - **`UnfoldAll` / `FoldAll` walk via `flattenAll` / `flattenParents`, never `flattenVisible`.**
   `zR` must expand subtrees hidden under a collapsed parent; a visible-only walk would no-op on every descendant of a folded node.
@@ -273,27 +273,23 @@ This section captures only the **architectural decisions** a contributor needs t
   Mirrors `outl-tui`'s `collect_collapse_candidates` so the op count matches across clients.
 
 - **`A` (`EnterInsertAtEnd`) routes through `appState.caretIntent`.**
-  The handler sets `caretIntent: "end"` *before* `editingBlockId`; `<BlockRow />`'s `createEffect` reads it on mount, applies `setSelectionRange`, clears the signal (poking the textarea via `queueMicrotask` after flipping `editingBlockId` raced).
+  The handler sets `caretIntent: "end"` *before* `editingBlockId`; `<BlockRow />`'s `createEffect` reads it on mount, applies `setSelectionRange`, then clears the signal.
 
 - **Visual highlight uses a memoised `Set<id>` at the parent, not a per-row predicate.**
   `<OutlineView />` builds `visualSet = createMemo(() => visualRangeSet(...))` once per change; `<BlockRow />` answers `props.visualSet?.has(id) ?? false` in O(1).
-  The old per-row `isInVisualRange` (O(N²)/keystroke) survives in `@outl/shared/outline` for unit tests only — **no render path calls it**.
+  The old per-row `isInVisualRange` (O(N²)/keystroke) is kept in `@outl/shared/outline` for tests only.
 
-- **Char-cursor nudge is one shared handler.**
-  All 10 char-cursor catalog entries (`x` `X` `D` `C` `s` `r` `~` `e` `f` `F`) point at `charCursorNudge`, so the message can't drift between them.
+- **Char-cursor nudge is one shared handler:** the 10 char-cursor entries (`x` `X` `D` `C` `s` `r` `~` `e` `f` `F`) all point at `charCursorNudge`, so the message can't drift.
 
-- **`Y` / Visual `y` copy to the OS clipboard** via `copy_markdown` + `navigator.clipboard.writeText` (fills `yankRegister` too; paste-in `p`/`P` deferred).
+- **`Y` / Visual `y` copy to the OS clipboard** via `copy_markdown` + `navigator.clipboard.writeText` (fills `yankRegister`; paste-in `p`/`P` deferred).
 
 - **`NewBlockAbove` (`O`) uses `beforeId`, not a post-creation move walk.**
   `createBlock({ beforeId: anchor })` → `create_before` (floor-slot swap in core); never reintroduce the old create-at-tail + `moveBlockDown`-loop.
   `Cmd/Ctrl+Shift+Enter` is caret-aware in `BlockRow`'s keydown (col 0 → *before*, past col 0 → *below*); `stopImmediatePropagation` preempts the catalog's create-below binding.
 
 - **Block clipboard: view-mode cut/copy/paste of a whole block** (chords: [`docs/shortcuts.md`](../../docs/shortcuts.md)).
-  **Normal**-mode only; `appState.blockClipboard` = `{ kind: "cut", nodeId } | { kind: "copy", markdown }`, no `pageId` (backend resolves the page via `enclosing_page_id`).
+  **Normal**-mode only; `appState.blockClipboard` = `{ kind: "cut", nodeId } | { kind: "copy", markdown }` (backend resolves the page via `enclosing_page_id`).
   Cut is one identity-preserving `Op::Move` (`block::move_after`, cross-page, self-subtree rejected); copy duplicates via `paste_block_after` with fresh ids.
-
-- **Path to enable char-cursor ops.**
-  Add a visible Normal-mode caret in `<BlockRow />`, then move the 10 blocked handlers to real impls (separate PR).
 
 ### `Enter` outside a textarea (Normal mode)
 
@@ -301,9 +297,7 @@ With a block selected and no textarea focused (the DOM fallback puts the dispatc
 `Enter` resolves to the shared `OpenRefUnderCursor` action — but the desktop handler **always enters Insert on the selected block**.
 The one exception: when the selection sits on a **backlink row** (read-only), `Enter` opens the source page and lands the cursor on the referencing block.
 
-Why diverge from the TUI: the TUI has a char cursor so "open the ref under cursor" is well-defined.
-The desktop only has a selected block — approximating it as "first `[[ref]]` in the block" made ref-carrying blocks impossible to edit via `Enter`.
-On the desktop, **following a ref is the click on the token** (`onRefClick`); `Enter` means edit.
+Why diverge from the TUI: the TUI has a char cursor so "open the ref under cursor" is well-defined; the desktop only has a selected block, so **following a ref is the click on the token** (`onRefClick`) and `Enter` means edit.
 
 ### `:shortcode:` emoji autocomplete
 

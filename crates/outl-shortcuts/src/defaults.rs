@@ -500,6 +500,23 @@ pub fn default_bindings() -> Vec<Binding> {
             "Copy block ref handle",
         ),
         Binding::new(ch('v'), Normal, Action::EnterVisual, "Enter Visual mode"),
+        // Non-vim multi-select entry: `Shift+↓` / `Shift+↑` start a
+        // contiguous block selection (anchored at the current block)
+        // and grow it. Bound in Normal so the no-vim-mode user reaches
+        // it via the DOM "nothing focused" → Normal fallback; it flips
+        // the client into Visual, where the same chords keep extending.
+        Binding::new(
+            shift(Key::Down),
+            Normal,
+            Action::SelectRangeDown,
+            "Select range down",
+        ),
+        Binding::new(
+            shift(Key::Up),
+            Normal,
+            Action::SelectRangeUp,
+            "Select range up",
+        ),
         Binding::new(ch('u'), Normal, Action::Undo, "Undo"),
         Binding::new(ctrl('r'), Normal, Action::Redo, "Redo"),
         // OS-standard undo / redo chords (desktop). Deliberately
@@ -555,8 +572,67 @@ pub fn default_bindings() -> Vec<Binding> {
         Binding::new(key(Key::Esc), Visual, Action::ExitInsert, "Leave Visual"),
         Binding::new(ch('y'), Visual, Action::YankRange, "Yank range"),
         Binding::new(ch('d'), Visual, Action::DeleteRange, "Delete range"),
+        // `Delete` / `Backspace` delete the range too — the vim-free
+        // way to erase a multi-selection (a non-vim user never reaches
+        // for `d`). The TUI keeps `d` / `x`; these are the desktop's
+        // standard-keyboard spellings of the same batch delete.
+        Binding::new(
+            key(Key::Delete),
+            Visual,
+            Action::DeleteRange,
+            "Delete range (Delete)",
+        ),
+        Binding::new(
+            key(Key::Backspace),
+            Visual,
+            Action::DeleteRange,
+            "Delete range (Backspace)",
+        ),
         Binding::new(ch('j'), Visual, Action::SelectionDown, "Extend down"),
         Binding::new(ch('k'), Visual, Action::SelectionUp, "Extend up"),
+        // `Shift+↓` / `Shift+↑` keep extending once selection mode is
+        // active (the non-vim entry chord stays consistent inside the
+        // range).
+        Binding::new(
+            shift(Key::Down),
+            Visual,
+            Action::SelectRangeDown,
+            "Extend down (Shift+Down)",
+        ),
+        Binding::new(
+            shift(Key::Up),
+            Visual,
+            Action::SelectRangeUp,
+            "Extend up (Shift+Up)",
+        ),
+        // Reorder the whole range among its siblings. Mirrors the
+        // single-block `Cmd/Ctrl+Shift+↑/↓` (Normal) but acts on every
+        // block in the Visual range; dual-spelled per OS because the
+        // desktop adapter never rewrites `Cmd`↔`Ctrl`.
+        Binding::new(
+            shift_meta_key(Key::Up),
+            Visual,
+            Action::MoveVisualRangeUp,
+            "Move range up (Cmd+Shift+Up)",
+        ),
+        Binding::new(
+            shift_ctrl_key(Key::Up),
+            Visual,
+            Action::MoveVisualRangeUp,
+            "Move range up (Ctrl+Shift+Up)",
+        ),
+        Binding::new(
+            shift_meta_key(Key::Down),
+            Visual,
+            Action::MoveVisualRangeDown,
+            "Move range down (Cmd+Shift+Down)",
+        ),
+        Binding::new(
+            shift_ctrl_key(Key::Down),
+            Visual,
+            Action::MoveVisualRangeDown,
+            "Move range down (Ctrl+Shift+Down)",
+        ),
         // ── Overlay (picker / palette have their own keys; arrow + Enter + Esc) ──
         Binding::new(key(Key::Esc), Overlay, Action::ExitInsert, "Close overlay"),
         Binding::new(

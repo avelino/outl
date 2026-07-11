@@ -136,11 +136,18 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
   }
 
   /** Walk every block in the current Visual range and fire `op` for
-   *  each. Used by `>` / `<` so the multi-block indent ops share one
-   *  body. Range stays selected after the op (vim convention) so the
-   *  user can press `>` repeatedly. */
+   *  each. Used by `>` / `<` (indent) and `Cmd/Ctrl+Shift+↑/↓` (move)
+   *  so the multi-block ops share one body. Range stays selected after
+   *  the op (vim convention) so the user can repeat it — the anchor /
+   *  cursor are block ids, stable across the re-render.
+   *
+   *  `reverse` walks bottom-up: a move-**down** has to shift the last
+   *  block past the block below the range first, or an ascending walk
+   *  would drag each block over its own not-yet-moved neighbour. Indent
+   *  / move-up keep the default top-down order. */
   async function applyVisualBlockOp(
     op: (pageId: string, id: string) => Promise<PageView>,
+    reverse = false,
   ) {
     const pageId = appState.page?.id;
     if (!pageId) return;
@@ -153,12 +160,50 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
     const ids = flattenVisible(appState.outline);
     const loIdx = ids.indexOf(range.lo);
     const hiIdx = ids.indexOf(range.hi);
+    const targets = ids.slice(loIdx, hiIdx + 1);
+    if (reverse) targets.reverse();
     let lastView: PageView | undefined;
-    for (let i = loIdx; i <= hiIdx; i++) {
-      const view = await safeCall(op(pageId, ids[i]));
+    for (const id of targets) {
+      const view = await safeCall(op(pageId, id));
       if (view) lastView = view;
     }
     if (lastView) deps.applyView(lastView);
+  }
+
+  /** Enter (from Normal) or extend (already in Visual) a contiguous
+   *  block selection by one row, `dir` = +1 down / -1 up. The non-vim
+   *  multi-select path: `Shift+↓` / `Shift+↑` anchor at the current
+   *  block and grow the range. Stays inside the outline — unlike plain
+   *  `j` / `k`, it never crosses into the backlinks section, because a
+   *  batch op has nothing to do with a read-only backlink row. */
+  function extendVisualRange(dir: 1 | -1) {
+    if (appState.mode !== "vim-visual") {
+      const id = appState.selectedBlockId;
+      if (!id) return;
+      setAppState("visualAnchorId", id);
+      setAppState("mode", "vim-visual");
+    }
+    const cur = appState.selectedBlockId;
+    if (!cur) return;
+    const next =
+      dir === 1
+        ? nextVisibleId(cur, appState.outline)
+        : previousVisibleId(cur, appState.outline);
+    if (next) setAppState("selectedBlockId", next);
+  }
+
+  /** Capture the current range for `g v`, drop the anchor, and land
+   *  back in Normal. Shared by every Visual exit (`Esc`, `y`, `d`, the
+   *  toolbar's Done). */
+  function exitVisual() {
+    const range = visualRangeIds(
+      appState.visualAnchorId,
+      appState.selectedBlockId,
+      appState.outline,
+    );
+    if (range) setAppState("lastVisualRange", range);
+    setAppState("visualAnchorId", null);
+    setAppState("mode", "vim-normal");
   }
 
   /** Walk every block on the current page and set its `collapsed`
@@ -624,14 +669,7 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
       // (Visual mode has no focused textarea, so the blur is a no-op
       // anyway; the explicit return keeps the mode flip atomic).
       if (appState.mode === "vim-visual") {
-        const range = visualRangeIds(
-          appState.visualAnchorId,
-          appState.selectedBlockId,
-          appState.outline,
-        );
-        if (range) setAppState("lastVisualRange", range);
-        setAppState("visualAnchorId", null);
-        setAppState("mode", "vim-normal");
+        exitVisual();
         return;
       }
       const el = document.activeElement;
@@ -693,9 +731,7 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
         if (block) texts.push(block.text);
       }
       setAppState("yankRegister", texts);
-      setAppState("lastVisualRange", range);
-      setAppState("visualAnchorId", null);
-      setAppState("mode", "vim-normal");
+      exitVisual();
       // Copy the whole range as markdown; the backend drops any block
       // whose ancestor is also selected so a parent+child range doesn't
       // duplicate the child.
@@ -737,9 +773,7 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
       // Land selection on the block above the deleted range, or the
       // first block if the range was at the top.
       const prev = ids[Math.max(loIdx - 1, 0)];
-      setAppState("lastVisualRange", range);
-      setAppState("visualAnchorId", null);
-      setAppState("mode", "vim-normal");
+      exitVisual();
       setAppState("selectedBlockId", prev ?? null);
     },
     IndentVisualRange: async () => {
@@ -747,6 +781,27 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
     },
     OutdentVisualRange: async () => {
       await applyVisualBlockOp((pageId, id) => outdentBlock(pageId, id));
+    },
+    // `Cmd/Ctrl+Shift+↑` — drag the whole range up among its siblings.
+    // Top-down walk: the first block slides up past the block above the
+    // range, then each following block moves into the slot it vacated.
+    // Selection follows (block ids are stable) so the user can repeat.
+    MoveVisualRangeUp: async () => {
+      await applyVisualBlockOp((pageId, id) => moveBlockUp(pageId, id));
+    },
+    // `Cmd/Ctrl+Shift+↓` — same, downward. Bottom-up walk so the last
+    // block clears the block below the range before its neighbours move.
+    MoveVisualRangeDown: async () => {
+      await applyVisualBlockOp((pageId, id) => moveBlockDown(pageId, id), true);
+    },
+    // `Shift+↓` / `Shift+↑` — start (from Normal) or extend a contiguous
+    // selection. The non-vim multi-select entry; both chords keep
+    // extending once the client is in Visual.
+    SelectRangeDown: () => {
+      extendVisualRange(1);
+    },
+    SelectRangeUp: () => {
+      extendVisualRange(-1);
     },
 
     // ── Fold control over the whole page (zR / zM) ───────────────

@@ -2,7 +2,8 @@
 //! user can act on N blocks at once (delete, indent, outdent).
 
 use crate::outline_ops::{
-    delete_at_path, flat_count, indent_at_path, outdent_at_path, path_for_index,
+    delete_at_path, flat_count, indent_at_path, move_down_at_path, move_up_at_path,
+    outdent_at_path, path_for_index,
 };
 use crate::state::{App, Mode};
 
@@ -112,5 +113,146 @@ impl App {
             }
         }
         self.save();
+    }
+
+    /// Move every block in the Visual range up among its siblings,
+    /// keeping the range selected so the user can repeat. Ascending
+    /// order: the top block slides up past the block above the range,
+    /// then each following block moves into the slot the previous one
+    /// vacated, so the whole range shifts up by one. If the top block
+    /// can't move (it's already the first sibling) the op aborts before
+    /// the rest of the range scrambles against each other.
+    pub(crate) fn move_up_visual_range(&mut self) {
+        let Some((lo, hi)) = self.visual_range() else {
+            return;
+        };
+        self.snapshot_for_undo();
+        let mut moved = false;
+        for idx in lo..=hi {
+            let Some(path) = path_for_index(&self.page.blocks, idx) else {
+                continue;
+            };
+            if move_up_at_path(&mut self.page.blocks, &path).is_some() {
+                moved = true;
+            } else if idx == lo {
+                break;
+            }
+        }
+        if moved {
+            self.mode = Mode::Visual {
+                anchor: lo.saturating_sub(1),
+            };
+            self.selected = hi.saturating_sub(1);
+        }
+        self.save();
+    }
+
+    /// Move every block in the Visual range down among its siblings.
+    /// Descending order (mirror of `move_up_visual_range`): the bottom
+    /// block slides down past the block below the range first. Aborts
+    /// if the bottom block is already the last sibling.
+    pub(crate) fn move_down_visual_range(&mut self) {
+        let Some((lo, hi)) = self.visual_range() else {
+            return;
+        };
+        self.snapshot_for_undo();
+        let mut moved = false;
+        for idx in (lo..=hi).rev() {
+            let Some(path) = path_for_index(&self.page.blocks, idx) else {
+                continue;
+            };
+            if move_down_at_path(&mut self.page.blocks, &path).is_some() {
+                moved = true;
+            } else if idx == hi {
+                break;
+            }
+        }
+        if moved {
+            let max_idx = flat_count(&self.page.blocks).saturating_sub(1);
+            self.mode = Mode::Visual {
+                anchor: (lo + 1).min(max_idx),
+            };
+            self.selected = (hi + 1).min(max_idx);
+        }
+        self.save();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use outl_core::id::ActorId;
+    use outl_core::workspace::Workspace;
+    use outl_md::parse::OutlineNode;
+    use tempfile::TempDir;
+
+    fn leaf(text: &str) -> OutlineNode {
+        OutlineNode {
+            text: text.into(),
+            ..Default::default()
+        }
+    }
+
+    /// App seeded with four top-level sibling blocks (a, b, c, d) and a
+    /// Visual range over `anchor..=selected`.
+    fn app_with_range(anchor: usize, selected: usize) -> (App, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let actor = ActorId::new();
+        let ws = Workspace::open_in_memory(actor).unwrap();
+        let mut app = App::new(
+            dir.path().to_path_buf(),
+            ws,
+            actor,
+            crate::theme::default_theme(),
+            false,
+            outl_config::SyncConfig::default(),
+        )
+        .unwrap();
+        app.page.blocks = vec![leaf("a"), leaf("b"), leaf("c"), leaf("d")];
+        app.flat_len = 4;
+        app.selected = selected;
+        app.mode = Mode::Visual { anchor };
+        (app, dir)
+    }
+
+    fn texts(app: &App) -> Vec<String> {
+        app.page.blocks.iter().map(|b| b.text.clone()).collect()
+    }
+
+    #[test]
+    fn move_up_slides_the_whole_range_past_the_block_above() {
+        // Range {b, c}; the block above (a) drops below the range.
+        let (mut app, _dir) = app_with_range(1, 2);
+        app.move_up_visual_range();
+        assert_eq!(texts(&app), ["b", "c", "a", "d"]);
+        // Selection follows the range up one row.
+        assert_eq!(app.visual_range(), Some((0, 1)));
+    }
+
+    #[test]
+    fn move_down_slides_the_whole_range_past_the_block_below() {
+        // Range {b, c}; the block below (d) rises above the range.
+        let (mut app, _dir) = app_with_range(1, 2);
+        app.move_down_visual_range();
+        assert_eq!(texts(&app), ["a", "d", "b", "c"]);
+        assert_eq!(app.visual_range(), Some((2, 3)));
+    }
+
+    #[test]
+    fn move_up_is_a_no_op_when_the_range_is_already_at_the_top() {
+        // Range {a, b}; nothing above to slide past — order + selection
+        // stay put rather than scrambling the range against itself.
+        let (mut app, _dir) = app_with_range(0, 1);
+        app.move_up_visual_range();
+        assert_eq!(texts(&app), ["a", "b", "c", "d"]);
+        assert_eq!(app.visual_range(), Some((0, 1)));
+    }
+
+    #[test]
+    fn move_down_is_a_no_op_when_the_range_is_already_at_the_bottom() {
+        let (mut app, _dir) = app_with_range(2, 3);
+        app.move_down_visual_range();
+        assert_eq!(texts(&app), ["a", "b", "c", "d"]);
+        assert_eq!(app.visual_range(), Some((2, 3)));
     }
 }

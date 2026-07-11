@@ -263,6 +263,10 @@ export type Action =
   | { kind: "YankCurrentBlock" }
   | { kind: "YankRange" }
   | { kind: "DeleteRange" }
+  | { kind: "SelectRangeDown" }
+  | { kind: "SelectRangeUp" }
+  | { kind: "MoveVisualRangeUp" }
+  | { kind: "MoveVisualRangeDown" }
   | { kind: "RunCodeBlock" }
   | { kind: "Undo" }
   | { kind: "Redo" }
