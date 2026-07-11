@@ -7,6 +7,7 @@ import {
   indentBlock,
   instantiateTemplateAt,
   openExternalUrl,
+  openPageBySlug,
   openRef,
   outdentBlock,
   pasteMarkdown,
@@ -374,6 +375,10 @@ export function OutlineView() {
     onRefClick: handleRefClick,
     onTagClick: handleTagClick,
     onLinkClick: handleLinkClick,
+    onOpenPage: async (slug) => {
+      const view = await handleError(openPageBySlug(slug));
+      if (view) applyView(view);
+    },
   };
 
   async function addFirstBlock() {

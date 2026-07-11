@@ -317,8 +317,8 @@ Accept inserts the page title (or ISO slug for journals).
 
 The `((` counterpart of `[[page]]` (issue #116).
 Inside an open `((…))`, `BlockRow` shows `BlockSuggestPopup`, reusing `detectRefContext` (`kind: "block"`) / `applySuggestion` plus `search_blocks` (`outl_md::WorkspaceIndex::search_block_text`).
-Rows show snippet + slug; the pick inserts the **ref handle** (`((blk-XXXXXX))`), never the text; empty query lists the newest blocks; mobile registers the command for parity, popup unwired.
-`search_blocks` rebuilds the index from disk, so it's debounced ~150ms; caching it in `AppState` is a follow-up.
+Rows show snippet + slug; the pick inserts the **ref handle** (`((blk-XXXXXX))`), never the text; mobile registers the command for parity, popup unwired.
+`search_blocks` rebuilds the index from disk, so it's debounced ~150ms.
 
 ### Clicking external `[label](url)` links
 
@@ -328,13 +328,15 @@ which scheme-guards to `http(s)`/`mailto` and opens in the system browser via **
 the capability grants a scoped `opener:allow-open-url` for `http`/`https`/`mailto` in `capabilities/default.json`).
 Failures (malformed URL, disallowed scheme) land on the status line via `appState.lastError`.
 The `[[ref]]` / `#tag` click handlers are unchanged (they navigate the workspace, not the browser).
-The opener call lives in the shared wrapper — not a custom Tauri command — so mobile can opt in later by registering the same plugin and passing `onLinkClick`.
+The opener call lives in the shared wrapper (not a custom Tauri command), so mobile can opt in later.
 Backlink rows stay inert (the whole row is already a navigate-to-source button; nesting a second click target would conflict).
 
 ### `/template` slash entry
 
-The block-initial `/` menu lists native `template: <name>` rows (via `templateSlashCommands` in `lib/slash-commands.ts`, a `NATIVE_TEMPLATE_PLUGIN_ID` sentinel `PluginCommand`) that `OutlineView` intercepts to call `instantiateTemplateAt`.
+The block-initial `/` menu lists native `template: <name>` rows (`templateSlashCommands`, `lib/slash-commands.ts`) that `OutlineView` runs via `instantiateTemplateAt`.
 Contract + backend: [`docs/clients.md` → Structural templates](../../docs/clients.md#structural-templates).
+
+In a `call:<name>` fence, `CodeFenceView`'s `CALL:<NAME>` chip links to the template page — `onOpenPage`→`openPageBySlug` (exact, not `openRef`), slug via `listTemplates()`; unknown name = inert chip.
 
 ## Plugins
 

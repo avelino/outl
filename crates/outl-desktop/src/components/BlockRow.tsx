@@ -117,6 +117,11 @@ export interface BlockCallbacks {
   /** Ref / tag click handlers (forwarded to MarkdownInline). */
   onRefClick: (target: string) => void;
   onTagClick: (tag: string) => void;
+  /** Navigate to a page by its exact slug. Used by a `call:<name>` code
+   *  fence to jump to the template's page. Unlike `onRefClick` (→
+   *  `openRef`, which *creates* a page when the target doesn't resolve),
+   *  this is an exact `openPageBySlug` — no side effect on a miss. */
+  onOpenPage: (slug: string) => void;
   /** External `[label](url)` link click — opens in the system browser.
    *  Optional: contexts that keep links inert simply omit it (the
    *  renderer then draws a plain, non-interactive span). */
@@ -942,6 +947,7 @@ export function BlockRow(props: {
                             focusTextarea();
                           }}
                           onRun={() => props.cb.onRunCodeBlock(props.block.id)}
+                          onOpenPage={props.cb.onOpenPage}
                         />
                       ) : (
                         (() => {
@@ -1307,8 +1313,24 @@ function CodeFenceView(props: {
   body: string;
   onEdit: () => void;
   onRun: () => Promise<void>;
+  /** Navigate to a page by slug — wired for `call:<name>` fences so the
+   *  language chip links to the template's page. */
+  onOpenPage?: (slug: string) => void;
 }) {
   const [busy, setBusy] = createSignal(false);
+
+  // A `call:<name>` fence references a template page. Resolve its slug so
+  // the language chip can double as a link to that page. `null` for any
+  // non-`call:` fence (the resource never runs) or an unknown template
+  // name (the chip stays a plain label — no dead link).
+  const callName = createMemo(() => {
+    const lang = props.language.toLowerCase();
+    return lang.startsWith("call:") ? props.language.slice(5).trim() : null;
+  });
+  const [templateSlug] = createResource(callName, async (name) => {
+    const templates = await listTemplates().catch(() => []);
+    return templates.find((t) => t.name === name)?.slug ?? null;
+  });
 
   async function run() {
     setBusy(true);
@@ -1343,9 +1365,28 @@ function CodeFenceView(props: {
   return (
     <div class="rounded-md border border-(--color-outl-fg)/10 bg-(--color-outl-bg-elev)/60">
       <div class="flex items-center justify-between border-b border-(--color-outl-fg)/10 px-2 py-1">
-        <span class="font-mono text-[10px] uppercase opacity-60">
-          {props.language}
-        </span>
+        <Show
+          when={props.onOpenPage ? templateSlug() : null}
+          fallback={
+            <span class="font-mono text-[10px] uppercase opacity-60">
+              {props.language}
+            </span>
+          }
+        >
+          {(slug) => (
+            <button
+              type="button"
+              title={`Open template: ${callName()}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                props.onOpenPage?.(slug());
+              }}
+              class="cursor-pointer font-mono text-[10px] uppercase opacity-60 underline decoration-dotted underline-offset-2 hover:opacity-100"
+            >
+              {props.language}
+            </button>
+          )}
+        </Show>
         <Show
           when={match()}
           fallback={

@@ -2,6 +2,7 @@ import { render } from "solid-js/web";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BlockNode } from "@outl/shared/api/types";
+import { listTemplates } from "@outl/shared/api/commands";
 import { BlockRow, type BlockCallbacks } from "./BlockRow";
 import { setAppState } from "../lib/store";
 
@@ -25,6 +26,7 @@ vi.mock("@outl/shared/api/commands", () => ({
   searchEmojis: vi.fn().mockResolvedValue([]),
   searchPages: vi.fn().mockResolvedValue([]),
   searchPersons: vi.fn().mockResolvedValue([]),
+  listTemplates: vi.fn().mockResolvedValue([]),
 }));
 vi.mock("@outl/shared/plugins/transformer-registry", () => ({
   runTransform: vi.fn(),
@@ -62,6 +64,7 @@ function makeCb(over: Partial<BlockCallbacks> = {}): BlockCallbacks {
     onRunPluginCommand: vi.fn().mockResolvedValue(undefined),
     onRefClick: vi.fn(),
     onTagClick: vi.fn(),
+    onOpenPage: vi.fn(),
     ...over,
   };
 }
@@ -126,5 +129,67 @@ describe("BlockRow Enter key — #119", () => {
     await Promise.resolve();
 
     expect(cb.onEnter).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A `call:<name>` fence's language chip doubles as a link to the
+ * template's page: it resolves `<name> → slug` via `listTemplates`,
+ * turns the chip into a button on a match, and stays an inert label
+ * when no template owns the name. Navigation goes through
+ * `onOpenPage` (exact `openPageBySlug`), never `onRefClick`/`openRef`
+ * (which would *create* a page on a miss).
+ */
+function mountView(block: BlockNode, cb: BlockCallbacks): HTMLDivElement {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  dispose = render(
+    () => (
+      <BlockRow
+        block={block}
+        depth={0}
+        editingId={"someone-else"}
+        visualSet={null}
+        cb={cb}
+      />
+    ),
+    host,
+  );
+  return host;
+}
+
+describe("BlockRow call: fence → template link", () => {
+  it("renders the chip as a link that opens the template page", async () => {
+    vi.mocked(listTemplates).mockResolvedValue([
+      { name: "foo", slug: "templates/foo" },
+    ]);
+    const cb = makeCb();
+    const block = makeBlock("blk-c1", "```call:foo\nkey: val\n```");
+    const host = mountView(block, cb);
+
+    await vi.waitFor(() => {
+      if (!host.querySelector("button[title^='Open template']")) {
+        throw new Error("template link not rendered yet");
+      }
+    });
+
+    const link = host.querySelector(
+      "button[title^='Open template']",
+    ) as HTMLButtonElement;
+    link.click();
+    expect(cb.onOpenPage).toHaveBeenCalledWith("templates/foo");
+  });
+
+  it("leaves the chip inert when no template owns the name", async () => {
+    vi.mocked(listTemplates).mockResolvedValue([]);
+    const cb = makeCb();
+    const block = makeBlock("blk-c2", "```call:missing\nx\n```");
+    const host = mountView(block, cb);
+
+    // Let the (empty) resolve settle, then assert no link appeared.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(host.querySelector("button[title^='Open template']")).toBeNull();
+    expect(cb.onOpenPage).not.toHaveBeenCalled();
   });
 });
