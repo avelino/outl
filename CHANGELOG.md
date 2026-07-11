@@ -7,6 +7,12 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Added
 
+- **Multi-block batch operations, on the TUI and desktop (issue #23).**
+  The TUI's Visual mode (`V`) gains **reorder**: `Alt+↑` / `Alt+↓` drag the whole selection among its siblings (mirror of the single-block `Alt`+arrows in Normal), alongside the existing range delete / indent / outdent / yank.
+  On the desktop, multi-select no longer requires vim mode: **`Shift+↓` / `Shift+↑`** start and grow a contiguous block selection from anywhere (the non-vim entry), and a floating **batch toolbar** appears — `N selected` plus Indent, Outdent, Move up, Move down, Delete, and Done — so the range ops are reachable by mouse instead of only by chord.
+  The toolbar fires the **same** `action-handlers` the keyboard does, so button and chord can't drift; deleting a range that contains any block with nested children asks for confirmation first.
+  The range reorder (`Cmd/Ctrl+Shift+↑/↓` in Visual) loops the existing per-block move action, walking bottom-up for move-down so a block never drags over its own not-yet-moved neighbour; the selection follows because block ids are stable across the re-render.
+  All four new bindings live in the shared `outl-shortcuts` catalog (`SelectRange{Down,Up}`, `MoveVisualRange{Up,Down}`), so a future client inherits them.
 - **Template engine — reusable block structures and callable code blocks (issue #146).**
   Any page becomes a template the moment it gets a `template:: <name>` property; the page's outline is the template body, so templates are searchable, have backlinks, and sync like any other page — no special folder, no file-based config.
   Two invocation modes.

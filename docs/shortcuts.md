@@ -175,17 +175,23 @@ The TUI ships it natively; the desktop has only a selected block id, so the char
 
 ## Visual mode (range)
 
-TUI + desktop (vim on); mobile has no Visual equivalent yet.
+TUI + desktop; mobile has no Visual equivalent yet.
+
+On the desktop, `Shift+↑` / `Shift+↓` start (and keep growing) a contiguous selection **without** vim mode — the non-vim multi-select entry.
+It flips the client into Visual and pops a floating **batch toolbar** (`N selected` + Indent / Outdent / Move up / Move down / Delete / Done) so the range ops are reachable by mouse; the toolbar fires the same actions the chords do.
+Deleting a range that contains any block with nested children asks for confirmation first.
 
 | Action | TUI | Desktop |
 |---|---|---|
-| Extend selection down | `j` / `↓` | `j` / `↓` |
-| Extend selection up | `k` / `↑` | `k` / `↑` |
+| Start / extend selection down | `j` / `↓` | `Shift+↓` (any mode) · `j` / `↓` (vim) |
+| Start / extend selection up | `k` / `↑` | `Shift+↑` (any mode) · `k` / `↑` (vim) |
 | Yank range | `y` | `y` |
-| Delete range | `d` / `x` | `d` / `x` |
-| Indent range (vim `>`) | `Tab` / `>` | `>` |
-| Outdent range (vim `<`) | `Shift+Tab` / `<` | `<` |
-| Leave Visual (captures range so a follow-up `g v` restores it) | `Esc` | `Esc` |
+| Delete range (confirms if any block has children) | `d` / `x` | `d` / `x` · `Delete` / `Backspace` · toolbar **Delete** |
+| Indent range (vim `>`) | `Tab` / `>` | `>` · toolbar **Indent** |
+| Outdent range (vim `<`) | `Shift+Tab` / `<` | `<` · toolbar **Outdent** |
+| Move range up among siblings | `Alt+↑` | `Cmd/Ctrl+Shift+↑` · toolbar **↑** |
+| Move range down among siblings | `Alt+↓` | `Cmd/Ctrl+Shift+↓` · toolbar **↓** |
+| Leave Visual (captures range so a follow-up `g v` restores it) | `Esc` | `Esc` · toolbar **Done** |
 
 ---
 
