@@ -291,6 +291,19 @@ Every step is an `Op` through `Workspace::apply`, so running it on **any** clien
 Clients call it once at startup alongside `migrate_legacy_into_today`.
 Belt-and-suspenders: `find_by_slug` already resolves the same canonical winner deterministically, so the UI stops flickering even before the merge runs.
 
+### Doubled journal title repair (background)
+
+Page and journal roots get a **deterministic** id (`page_id_from_slug`), so two devices that create the same slug offline mint the same root and its `Op::Create` converges cleanly.
+Before the fix, each device also wrote the title straight into the root's Yrs text.
+Those two concurrent inserts at position 0 concatenated instead of converging — a `2026-06-25` journal opened offline on two devices ended up titled `2026-06-252026-06-25`.
+`open_or_create` now writes the title into a `title::` property instead (`Op::SetProp`, last-write-wins by HLC), and only when the title differs from the slug.
+A journal's title always equals its slug, so journals carry no `title::` property and no `title::` line lands in their `.md`.
+Regular pages created in-app now render `title:: <title>` at the top of their `.md`.
+`outl_actions::repair_doubled_journal_titles(ws, hlc)` cleans up journals corrupted before the fix.
+Any journal root whose text is its slug repeated two or more times gets that text cleared — an `Op`, so the repair converges to every device — and the title falls back to the slug.
+Idempotent, journal-only, and run on the **background** reconcile pass, not boot, since it scales with page count.
+Desktop's `spawn_background_reconcile` and mobile's `spawn_workspace_opener` both call it.
+
 ### Peer reachability indicator (P2P / iroh transport)
 
 When the iroh transport is running, the desktop / mobile "online / offline" dot reads `SyncTransport::peer_health()` — a reachability snapshot the transport fills from its **own** dials (boot connect, catch-up loop, gossip-triggered sync).

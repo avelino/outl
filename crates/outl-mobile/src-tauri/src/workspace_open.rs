@@ -145,6 +145,15 @@ pub(crate) fn spawn_workspace_opener(
         // that arrived without its sidecar, or files edited externally
         // in vim / VS Code.
         reconcile_orphan_md(&mut workspace, &hlc, &storage_root);
+        // Repair journal titles doubled by concurrent offline creation
+        // (two devices auto-created the same day's journal; each wrote the
+        // slug as the root's Yrs text and the concurrent inserts
+        // concatenated). Cheap no-op once clean; converges via the op log.
+        match outl_actions::repair_doubled_journal_titles(&mut workspace, &hlc) {
+            Ok(0) => {}
+            Ok(n) => info!("repaired {n} doubled journal title(s)"),
+            Err(e) => warn!("doubled-title repair: {e}"),
+        }
         *workspace_slot.lock() = Some(workspace);
         if let Err(e) = app.emit("workspace-ready", ()) {
             warn!("emit workspace-ready: {e}");

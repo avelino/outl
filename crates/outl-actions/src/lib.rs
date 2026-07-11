@@ -65,6 +65,7 @@ pub mod journal;
 pub mod outline;
 pub mod page;
 pub mod page_merge;
+pub mod page_repair_titles;
 pub mod paste;
 pub mod person;
 pub mod quote;
@@ -111,6 +112,7 @@ pub use page::{
     open_or_create as open_or_create_page, open_today, page_meta, read_text_prop, set_property,
     today, PageKind, PageMeta,
 };
+pub use page_repair_titles::repair_doubled_journal_titles;
 pub use paste::{
     looks_like_outline, normalize_external_syntax, paste_markdown, paste_plain, PasteAnchor,
     PasteOutcome,

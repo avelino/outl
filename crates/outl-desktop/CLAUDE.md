@@ -88,7 +88,7 @@ crates/outl-desktop/
         ├── settings.rs        # settings.json IO + tests
         ├── state.rs           # AppState + AppHost impl; wire DTOs re-exported from outl-tauri-shared
         ├── helpers.rs         # re-exports of outl_tauri_shared::helpers + desktop-only undo invalidation
-        ├── workspace_open.rs  # open_workspace_at + spawn_workspace_opener (over shared primitives)
+        ├── workspace_open.rs  # opener + background pass (also repairs doubled journal titles)
         ├── plugin_service.rs  # desktop shim: CLIENT id + capability set over outl_tauri_shared::PluginService
         ├── fs_watcher.rs      # notify + debouncer → peer-ops-changed
         └── commands/          # thin #[tauri::command] wrappers over outl_tauri_shared::commands

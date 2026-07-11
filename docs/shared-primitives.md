@@ -72,13 +72,14 @@ Every entry here routes through `Workspace::apply` — never build a `LogOp` fro
 
 | Intent | Use this | File |
 |---|---|---|
-| Page-property keys (constants — don't hardcode the strings) | `outl_actions::page::SLUG_KEY` / `KIND_KEY` / `TYPE_KEY` | `crates/outl-actions/src/page.rs` |
+| Page-property keys (constants — don't hardcode the strings) | `outl_actions::page::SLUG_KEY` / `KIND_KEY` / `TYPE_KEY` / `TITLE_KEY` | `crates/outl-actions/src/page.rs` |
 | Canonical `type::` value marking a page as a person (`@` mention autocomplete filter) | `outl_actions::page::PERSON_TYPE` | `crates/outl-actions/src/page.rs` |
 | Page metadata (slug, kind, title, **`page_type`**) for a node id | `outl_actions::page::page_meta` / `PageMeta` / `PageKind` | `crates/outl-actions/src/page.rs` |
 | Validate a slug for filesystem safety (`..`, `/`, `\`, control chars) | `outl_actions::page::is_valid_slug` | `crates/outl-actions/src/page.rs` |
 | Derive a **deterministic page/journal-root id** from slug (so every creation path — in-app, `outl-md` reconcile, desync recovery — converges on ONE root; the single owner) | `outl_core::NodeId::from_slug` (thin wrapper `outl_actions::page::page_id_from_slug`) | `crates/outl-core/src/id.rs` |
 | Find / list / create-if-missing pages (`find_by_slug` resolves a deterministic winner when a slug has >1 root, so a split-brain workspace stops flickering pre-merge) | `outl_actions::page::find_by_slug` / `list_all` / `open_or_create` | `crates/outl-actions/src/page.rs` |
 | Repair a split-brain workspace where a slug has >1 page/journal root (re-parents every child under the canonical root, trashes the emptied duplicates, all via `Op`s so it converges on every device; idempotent) | `outl_actions::merge_duplicate_slug_roots` (impl `outl_actions::page_merge`) | `crates/outl-actions/src/page_merge.rs` |
+| Repair journal titles doubled by concurrent offline creation (two devices minted the same deterministic root and each wrote the slug into the root's Yrs text, so the concurrent inserts concatenated into `"2026-06-252026-06-25"`; clears the text via `Op::Edit` so the title falls back to the slug; idempotent, journal-only) | `outl_actions::repair_doubled_journal_titles` (impl `outl_actions::page_repair_titles`) | `crates/outl-actions/src/page_repair_titles.rs` |
 | Delete a page (move root to `NodeId::trash()` via one `Op::Move`; whole subtree travels with it; returns `PageMeta` so callers can drop projections + navigate away; `ActionError::PageNotFound` when the slug doesn't resolve) | `outl_actions::page::delete` (re-exported as `outl_actions::delete_page`) | `crates/outl-actions/src/page.rs` |
 | Remove a page's `.md` + `.outl` from disk (the inverse of `apply_page_md_with_sidecar`; idempotent on missing files; pairs with `page::delete`) | `outl_actions::journal::remove_page_projection` (re-exported at crate root) | `crates/outl-actions/src/journal.rs` |
 | Open-or-create a page from a **human-typed name** (slugifies + keeps original as title, used when a `[[ref]]` / `#tag` / picker query may not be a valid slug) | `outl_actions::resolve::open_or_create_by_name` | `crates/outl-actions/src/resolve.rs` |

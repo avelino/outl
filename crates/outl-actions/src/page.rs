@@ -31,6 +31,16 @@ pub const SLUG_KEY: &str = "page-slug";
 /// Property key recording whether a page is a regular page or a
 /// journal.
 pub const KIND_KEY: &str = "page-kind";
+/// Property key holding a page's human-readable title.
+///
+/// The title lives in a **property** (`Op::SetProp`, last-write-wins by
+/// HLC) rather than the root node's Yrs text on purpose: with
+/// deterministic root ids two devices that create the same slug offline
+/// mint the same node, so writing the title into the root's text made two
+/// concurrent Yrs inserts concatenate (`"2026-06-252026-06-25"`). A
+/// property converges to a single value instead. See [`open_or_create`]
+/// and [`crate::page_repair_titles`].
+pub const TITLE_KEY: &str = "title";
 // `TYPE_KEY` / `PERSON_TYPE` / `search_persons` / `ensure_person_by_name`
 // live in the sibling `person` module so this file stays focused on the
 // page-model primitives (slug, kind, title, journal). The constants and
@@ -166,7 +176,7 @@ pub fn page_meta(workspace: &Workspace, id: NodeId) -> Option<PageMeta> {
     //   3. the slug — last resort so a title is never empty.
     // Reading `block_text` alone (the old behaviour) made every
     // ingested page surface its slug in pickers / autocomplete.
-    let title = match workspace.tree().property(id, "title") {
+    let title = match workspace.tree().property(id, TITLE_KEY) {
         Some(PropValue::Text(s)) if !s.trim().is_empty() => s.trim().to_string(),
         _ => workspace
             .block_text(id)
@@ -310,14 +320,15 @@ pub fn open_or_create(
     }
     let node_id = page_id_from_slug(slug);
     let position = position_for_new_last_child(workspace, NodeId::root());
-    let node = create_with_explicit_id(
-        workspace,
-        hlc,
-        node_id,
-        NodeId::root(),
-        position,
-        Some(title),
-    )?;
+    // Create the root with NO text. The title used to be written into the
+    // root's Yrs text, but with deterministic ids two devices that create
+    // the same slug offline mint the same node: the `Op::Create` converges
+    // to one root, yet each device's `edit_text(root, title)` is a
+    // concurrent Yrs insert at position 0, and Yrs concatenates them
+    // (`"2026-06-252026-06-25"`). The title now lives in the `title::`
+    // property below (`Op::SetProp`, last-write-wins by HLC), which
+    // converges to a single value under the same concurrency.
+    let node = create_with_explicit_id(workspace, hlc, node_id, NodeId::root(), position, None)?;
     set_prop(
         workspace,
         hlc,
@@ -332,6 +343,19 @@ pub fn open_or_create(
         KIND_KEY,
         PropValue::Text(kind.as_str().to_string()),
     )?;
+    // Store the title only when it carries information beyond the slug.
+    // Journals (`journal_title == slug`) fall through to `page_meta`'s slug
+    // fallback, so their `.md` never grows a redundant `title:: 2026-06-25`
+    // line.
+    if title != slug {
+        set_prop(
+            workspace,
+            hlc,
+            node,
+            TITLE_KEY,
+            PropValue::Text(title.to_string()),
+        )?;
+    }
     Ok(node)
 }
 

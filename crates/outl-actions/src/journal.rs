@@ -462,7 +462,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn render_page_md_outputs_children_only() {
+    fn render_page_md_outputs_title_prop_then_children() {
         let actor = ActorId::new();
         let hlc = HlcGenerator::new(actor);
         let mut ws = Workspace::open_in_memory(actor).unwrap();
@@ -470,8 +470,10 @@ mod tests {
         append_block(&mut ws, &hlc, Some(page), Some("first")).unwrap();
         append_block(&mut ws, &hlc, Some(page), Some("second")).unwrap();
 
+        // The title lives in the `title::` property (not the root's text),
+        // so it renders as a page property above the children.
         let md = render_page_md(&ws, page);
-        assert_eq!(md, "- first\n- second\n");
+        assert_eq!(md, "title:: Ideas\n\n- first\n- second\n");
     }
 
     /// Copy (`Cmd+C` in view mode) snapshots a block via
@@ -590,7 +592,9 @@ mod tests {
         let written = apply_all_pages_md(&ws, tmp.path()).unwrap();
         assert_eq!(written.len(), 1);
         let body = std::fs::read_to_string(&written[0]).unwrap();
-        assert_eq!(body, "- first idea\n");
+        // In-app pages store their title in the `title::` property (not the
+        // root's Yrs text — see `open_or_create`), so it renders at the top.
+        assert_eq!(body, "title:: Ideas\n\n- first idea\n");
     }
 
     /// Regression for https://github.com/avelino/outl/issues/120 —
@@ -627,7 +631,7 @@ mod tests {
         // The projected content must match the CRDT tree (not be empty).
         let body = std::fs::read_to_string(&path).unwrap();
         assert_eq!(
-            body, "- peer block\n",
+            body, "title:: Synced\n\n- peer block\n",
             "projected .md must contain the peer's block, not be blank"
         );
 
