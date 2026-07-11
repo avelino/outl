@@ -2,7 +2,7 @@
 //! user can act on N blocks at once (delete, indent, outdent).
 
 use crate::outline_ops::{
-    delete_at_path, flat_count, indent_at_path, move_down_at_path, move_up_at_path,
+    delete_at_path, flat_count, indent_at_path, move_down_at_path, move_up_at_path, node_at_path,
     outdent_at_path, path_for_index,
 };
 use crate::state::{App, Mode};
@@ -115,65 +115,80 @@ impl App {
         self.save();
     }
 
+    /// Does the block at `path` have a sibling after it? Used to detect
+    /// a blocked range reorder before paying for a snapshot + save.
+    fn has_next_sibling(&self, path: &[usize]) -> bool {
+        let Some((&last, parent)) = path.split_last() else {
+            return false;
+        };
+        let siblings = if parent.is_empty() {
+            &self.page.blocks
+        } else {
+            match node_at_path(&self.page.blocks, parent) {
+                Some(node) => &node.children,
+                None => return false,
+            }
+        };
+        last + 1 < siblings.len()
+    }
+
     /// Move every block in the Visual range up among its siblings,
     /// keeping the range selected so the user can repeat. Ascending
     /// order: the top block slides up past the block above the range,
     /// then each following block moves into the slot the previous one
-    /// vacated, so the whole range shifts up by one. If the top block
-    /// can't move (it's already the first sibling) the op aborts before
-    /// the rest of the range scrambles against each other.
+    /// vacated, so the whole range shifts up by one.
     pub(crate) fn move_up_visual_range(&mut self) {
         let Some((lo, hi)) = self.visual_range() else {
             return;
         };
+        // Bail before the expensive snapshot + save when the leading
+        // block is already the first sibling: the whole range is blocked,
+        // and `Alt+↑` at the top edge shouldn't churn undo/redo or disk.
+        let Some(lead) = path_for_index(&self.page.blocks, lo) else {
+            return;
+        };
+        if lead.last() == Some(&0) {
+            return;
+        }
         self.snapshot_for_undo();
-        let mut moved = false;
         for idx in lo..=hi {
-            let Some(path) = path_for_index(&self.page.blocks, idx) else {
-                continue;
-            };
-            if move_up_at_path(&mut self.page.blocks, &path).is_some() {
-                moved = true;
-            } else if idx == lo {
-                break;
+            if let Some(path) = path_for_index(&self.page.blocks, idx) {
+                let _ = move_up_at_path(&mut self.page.blocks, &path);
             }
         }
-        if moved {
-            self.mode = Mode::Visual {
-                anchor: lo.saturating_sub(1),
-            };
-            self.selected = hi.saturating_sub(1);
-        }
+        self.mode = Mode::Visual {
+            anchor: lo.saturating_sub(1),
+        };
+        self.selected = hi.saturating_sub(1);
         self.save();
     }
 
     /// Move every block in the Visual range down among its siblings.
     /// Descending order (mirror of `move_up_visual_range`): the bottom
-    /// block slides down past the block below the range first. Aborts
-    /// if the bottom block is already the last sibling.
+    /// block slides down past the block below the range first.
     pub(crate) fn move_down_visual_range(&mut self) {
         let Some((lo, hi)) = self.visual_range() else {
             return;
         };
+        // Same no-op guard as `move_up`, on the trailing edge: if the
+        // bottom block is already the last sibling the range can't move.
+        let Some(trail) = path_for_index(&self.page.blocks, hi) else {
+            return;
+        };
+        if !self.has_next_sibling(&trail) {
+            return;
+        }
         self.snapshot_for_undo();
-        let mut moved = false;
         for idx in (lo..=hi).rev() {
-            let Some(path) = path_for_index(&self.page.blocks, idx) else {
-                continue;
-            };
-            if move_down_at_path(&mut self.page.blocks, &path).is_some() {
-                moved = true;
-            } else if idx == hi {
-                break;
+            if let Some(path) = path_for_index(&self.page.blocks, idx) {
+                let _ = move_down_at_path(&mut self.page.blocks, &path);
             }
         }
-        if moved {
-            let max_idx = flat_count(&self.page.blocks).saturating_sub(1);
-            self.mode = Mode::Visual {
-                anchor: (lo + 1).min(max_idx),
-            };
-            self.selected = (hi + 1).min(max_idx);
-        }
+        let max_idx = flat_count(&self.page.blocks).saturating_sub(1);
+        self.mode = Mode::Visual {
+            anchor: (lo + 1).min(max_idx),
+        };
+        self.selected = (hi + 1).min(max_idx);
         self.save();
     }
 }
@@ -246,6 +261,8 @@ mod tests {
         app.move_up_visual_range();
         assert_eq!(texts(&app), ["a", "b", "c", "d"]);
         assert_eq!(app.visual_range(), Some((0, 1)));
+        // The no-op bails before snapshotting, so it never churns undo.
+        assert!(app.undo.is_empty());
     }
 
     #[test]
@@ -254,5 +271,6 @@ mod tests {
         app.move_down_visual_range();
         assert_eq!(texts(&app), ["a", "b", "c", "d"]);
         assert_eq!(app.visual_range(), Some((2, 3)));
+        assert!(app.undo.is_empty());
     }
 }

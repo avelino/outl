@@ -179,14 +179,14 @@ TUI + desktop; mobile has no Visual equivalent yet.
 
 On the desktop, `Shift+↑` / `Shift+↓` start (and keep growing) a contiguous selection **without** vim mode — the non-vim multi-select entry.
 It flips the client into Visual and pops a floating **batch toolbar** (`N selected` + Indent / Outdent / Move up / Move down / Delete / Done) so the range ops are reachable by mouse; the toolbar fires the same actions the chords do.
-Deleting a range that contains any block with nested children asks for confirmation first.
+Only the toolbar's **Delete** confirms before erasing a range that contains nested children; the keyboard delete (`d` / `x` / `Delete` / `Backspace`) and the TUI delete without a prompt, matching vim.
 
 | Action | TUI | Desktop |
 |---|---|---|
 | Start / extend selection down | `j` / `↓` | `Shift+↓` (any mode) · `j` / `↓` (vim) |
 | Start / extend selection up | `k` / `↑` | `Shift+↑` (any mode) · `k` / `↑` (vim) |
 | Yank range | `y` | `y` |
-| Delete range (confirms if any block has children) | `d` / `x` | `d` / `x` · `Delete` / `Backspace` · toolbar **Delete** |
+| Delete range (toolbar **Delete** confirms if a block has children; the keys don't) | `d` / `x` | `d` / `x` · `Delete` / `Backspace` · toolbar **Delete** |
 | Indent range (vim `>`) | `Tab` / `>` | `>` · toolbar **Indent** |
 | Outdent range (vim `<`) | `Shift+Tab` / `<` | `<` · toolbar **Outdent** |
 | Move range up among siblings | `Alt+↑` | `Cmd/Ctrl+Shift+↑` · toolbar **↑** |

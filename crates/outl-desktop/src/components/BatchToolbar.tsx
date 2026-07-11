@@ -65,15 +65,15 @@ export function BatchToolbar(props: { handlers: ActionHandlers }) {
           {count()} selected
         </span>
         <span class="mx-1 h-5 w-px bg-(--color-outl-border)" />
-        <BatchButton label="Indent" title="Indent range (Tab)" onClick={run("IndentVisualRange")} />
+        <BatchButton label="Indent" title="Indent range (>)" onClick={run("IndentVisualRange")} />
         <BatchButton
           label="Outdent"
-          title="Outdent range (Shift+Tab)"
+          title="Outdent range (<)"
           onClick={run("OutdentVisualRange")}
         />
         <BatchButton label="↑" title="Move range up (⌘⇧↑)" onClick={run("MoveVisualRangeUp")} />
         <BatchButton label="↓" title="Move range down (⌘⇧↓)" onClick={run("MoveVisualRangeDown")} />
-        <BatchButton label="Delete" title="Delete range (d)" onClick={onDelete} danger />
+        <BatchButton label="Delete" title="Delete range (Delete)" onClick={onDelete} danger />
         <span class="mx-1 h-5 w-px bg-(--color-outl-border)" />
         <BatchButton label="Done" title="Clear selection (Esc)" onClick={run("ExitInsert")} />
       </div>
@@ -91,6 +91,7 @@ function BatchButton(props: {
     <button
       type="button"
       title={props.title}
+      aria-label={props.title}
       onClick={props.onClick}
       class="rounded-md px-2 py-1 text-sm text-(--color-outl-fg) hover:bg-(--color-outl-accent)/[0.12]"
       classList={{
