@@ -7,8 +7,6 @@ use outl_actions::{
     PageKind, PageMeta,
 };
 
-use outl_core::id::NodeId;
-use outl_core::workspace::Workspace;
 use outl_md::index::WorkspaceIndex;
 use outl_md::{BlockEntry, BlockIndex};
 
@@ -155,7 +153,11 @@ pub fn open_today_journal<S: AppHost>(state: &S) -> Result<PageView, String> {
         open_today(ws, state.hlc()).map_err(|e| e.to_string())
     })?;
     with_ws(state, |ws| {
-        reproject_if_stale(ws, &root, id, "open_today_journal");
+        // Refresh the `.md` the view reads when a peer's ops moved the tree
+        // past the stale projection (issue #166); a no-op when in sync.
+        if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_stale(ws, &root, id) {
+            tracing::warn!("open_today_journal: reproject stale .md failed: {e}");
+        }
         build_page_view(ws, &root, id).map_err(|e| e.to_string())
     })
 }
@@ -167,21 +169,11 @@ pub fn open_journal_for<S: AppHost>(state: &S, slug: String) -> Result<PageView,
         open_journal(ws, state.hlc(), date).map_err(|e| e.to_string())
     })?;
     with_ws(state, |ws| {
-        reproject_if_stale(ws, &root, id, &slug);
+        if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_stale(ws, &root, id) {
+            tracing::warn!("open_journal_for: reproject stale .md failed for {slug}: {e}");
+        }
         build_page_view(ws, &root, id).map_err(|e| e.to_string())
     })
-}
-
-/// Refresh a page's `.md` before the view reads it, when the tree has moved
-/// past the on-disk projection (a peer's ops landed but the `.md` was never
-/// re-projected) or the `.md` is absent. A no-op when the page is already in
-/// sync, and never clobbers a pending external edit — see
-/// [`outl_actions::apply_page_md_with_sidecar_if_stale`]. Best-effort: a
-/// failed re-projection logs and the view falls back to whatever is on disk.
-fn reproject_if_stale(ws: &Workspace, root: &std::path::Path, id: NodeId, label: &str) {
-    if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_stale(ws, root, id) {
-        tracing::warn!("reproject stale .md failed for {label}: {e}");
-    }
 }
 
 /// The command name says "slug" for backward-compat with the frontend,
