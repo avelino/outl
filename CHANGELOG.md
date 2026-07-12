@@ -7,6 +7,13 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Fixed
 
+- **Opening a page with many backlinks is no longer slow (issue #169).**
+  A user with a template referenced from 760 places reported multi-second page opens.
+  The cause was `backlinks_for_page` being **quadratic**: it walks every block in the workspace and, per match, materializes the block's subtree — and both steps went through `children_of`, which rescans *every* node in the tree on each call (`Tree` stores only `node -> (parent, position)`, with no child index).
+  The walk now builds a `parent -> children` map in a single `O(n)` pass and threads it through the walk and the subtree projection, restoring `O(n)`.
+  In simulation (`crates/outl-actions/tests/bench_backlinks.rs`) the report's shape — 760 backlinks in a ~35k-block workspace — drops from **3.83 s to 41 ms** (~94×), with **no change to results** (the full backlinks test suite is the correctness oracle).
+  This is a pure internal refactor: `backlinks_for_page` / `project_outline` / `project_outline_node` keep their signatures and output; the index is scratch state rebuilt per call, never cached, so it can't go stale.
+
 - **Snapshot fast-boot now actually works in production, and can no longer drop a synced edit (issues #156, #128, #109).**
   The materialized-state snapshot that short-circuits full op-log replay on open was **inert in production**: the workspace wrote it to `<root>/.outl/snapshots` while the storage backend read it from `<root>/snapshots` (it derived the path from `ops_dir.parent()`, but production keeps the op log at `<root>/ops`, not `<root>/.outl/ops`).
   Writer and reader never met, so every boot silently fell back to a full replay — every existing test passed only because tests use `<root>/.outl/ops`, which makes the two paths coincide.
