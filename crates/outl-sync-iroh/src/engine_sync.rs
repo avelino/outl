@@ -155,9 +155,9 @@ fn ops_missing_for(
 /// kernel-local (it never syncs anyway) and the file is empty and recreated
 /// on demand, so losing it costs nothing.
 ///
-/// Acquisition blocks (`File::lock`), so it must run on a blocking thread —
-/// see `write_deduped_batch`'s `spawn_blocking` caller. Drop releases via the
-/// closed fd.
+/// Acquisition blocks (`fs2::lock_exclusive`, a blocking `flock(2)`), so it
+/// must run on a blocking thread — see `write_deduped_batch`'s `spawn_blocking`
+/// caller. Drop releases via the closed fd.
 struct OpsDirAppendLock {
     _file: std::fs::File,
 }

@@ -632,11 +632,13 @@ jobs:
   publish_release:
     name: Publish release
     needs: [prepare, build, build_desktop, build_desktop_linux, build_android]
-    # Android is best-effort: `!cancelled()` forces this `if` to evaluate
-    # even when `build_android` failed, and Android's result is absent
-    # from the conditions — so a broken Android build never blocks the
-    # (stable) desktop/CLI release, but when it succeeds the APK is
-    # already in the draft before we publish.
+    # Android is best-effort. GitHub auto-skips a job when a `needs` entry
+    # fails UNLESS its `if` contains a status-check function; `!cancelled()`
+    # is that function, so this job still evaluates when `build_android`
+    # fails. `build_android` is in `needs` (we wait for the APK to land in
+    # the draft) but ABSENT from the conditions below, so a broken Android
+    # build never blocks the (stable) desktop/CLI release — yet a green one
+    # is already uploaded before we flip the draft to published.
     if: >-
       !cancelled() &&
       needs.build.result == 'success' &&
