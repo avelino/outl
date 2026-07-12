@@ -784,9 +784,9 @@ impl Drop for App {
     /// is only a cache, so a failure is logged and swallowed — and it
     /// joins any in-flight background writer so we don't race the exit.
     fn drop(&mut self) {
+        self.workspace.wait_for_snapshots();
         if let Err(e) = self.workspace.save_snapshot() {
             tracing::warn!("snapshot flush on exit failed (non-fatal): {e}");
         }
-        self.workspace.wait_for_snapshots();
     }
 }
