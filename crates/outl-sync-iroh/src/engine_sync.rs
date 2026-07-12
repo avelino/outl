@@ -317,6 +317,29 @@ async fn ingest_received_ops(
     Ok(applied)
 }
 
+/// Hard ceiling on a single sync frame's body, enforced before allocating.
+///
+/// The 4-byte length prefix is attacker-controlled — a *paired* peer could be
+/// compromised or buggy (QUIC authenticates the stream, so this isn't an
+/// on-path attacker, but a bad peer is enough). Trusting it to size a `Vec` up
+/// front let a 4-byte `0xFFFFFFFF` force a ~4 GiB allocation — an instant OOM /
+/// iOS jetsam kill (issue #155). A full-actor-log resend (the gap-recovery
+/// fallback in `ops_missing_for`) is the largest legitimate frame, so the cap
+/// is generous; the incremental read in [`read_frame`] means we still only
+/// allocate as bytes actually arrive.
+const MAX_FRAME_BODY: usize = 256 * 1024 * 1024;
+
+/// Validate a frame's declared body length against [`MAX_FRAME_BODY`] before we
+/// act on it. Split out from [`read_frame`] so the ceiling is unit-testable
+/// without standing up a QUIC stream.
+fn checked_frame_body_len(prefix: [u8; 4]) -> Result<usize> {
+    let body_len = u32::from_be_bytes(prefix) as usize;
+    if body_len > MAX_FRAME_BODY {
+        anyhow::bail!("sync frame body too large: {body_len} bytes (max {MAX_FRAME_BODY})");
+    }
+    Ok(body_len)
+}
+
 /// Read one length-prefixed frame from a recv stream.
 ///
 /// Reads the 4-byte big-endian length prefix, then exactly that many body
@@ -329,12 +352,23 @@ async fn read_frame(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<u8>> {
     recv.read_exact(&mut prefix)
         .await
         .context("read frame length prefix")?;
-    let body_len = u32::from_be_bytes(prefix) as usize;
-    let mut frame = vec![0u8; 4 + body_len];
-    frame[..4].copy_from_slice(&prefix);
-    recv.read_exact(&mut frame[4..])
-        .await
-        .context("read frame body")?;
+    let body_len = checked_frame_body_len(prefix)?;
+    // Grow the buffer as bytes actually arrive rather than pre-sizing it to the
+    // (untrusted) declared length: a peer that lies about the length — or dies
+    // right after sending the prefix — then costs us only what it actually
+    // transmits, not a speculative multi-hundred-MiB allocation.
+    let mut frame = Vec::with_capacity(4 + body_len.min(64 * 1024));
+    frame.extend_from_slice(&prefix);
+    let mut remaining = body_len;
+    let mut chunk = vec![0u8; 64 * 1024];
+    while remaining > 0 {
+        let want = remaining.min(chunk.len());
+        recv.read_exact(&mut chunk[..want])
+            .await
+            .context("read frame body")?;
+        frame.extend_from_slice(&chunk[..want]);
+        remaining -= want;
+    }
     Ok(frame)
 }
 
@@ -635,5 +669,35 @@ impl SyncProtocolHandler {
         // closing here is the signal that the responder is done with the push.
         conn.close(0u32.into(), b"done");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #155 — a frame's declared length is attacker-controlled, so an oversized
+    /// claim must be rejected *before* it can size an allocation. Guards the
+    /// `0xFFFFFFFF` → ~4 GiB OOM as well as the exact cap boundary.
+    #[test]
+    fn frame_body_length_is_capped() {
+        // The 4-byte 0xFFFFFFFF prefix (the ~4 GiB OOM claim) is refused.
+        assert!(checked_frame_body_len([0xff, 0xff, 0xff, 0xff]).is_err());
+        // One byte over the ceiling is refused.
+        let over = (MAX_FRAME_BODY as u32) + 1;
+        assert!(checked_frame_body_len(over.to_be_bytes()).is_err());
+        // The ceiling itself, and anything under it, is accepted verbatim.
+        assert_eq!(
+            checked_frame_body_len((MAX_FRAME_BODY as u32).to_be_bytes()).expect("cap is allowed"),
+            MAX_FRAME_BODY
+        );
+        assert_eq!(
+            checked_frame_body_len(0u32.to_be_bytes()).expect("empty body is allowed"),
+            0
+        );
+        assert_eq!(
+            checked_frame_body_len(1234u32.to_be_bytes()).expect("small body is allowed"),
+            1234
+        );
     }
 }
