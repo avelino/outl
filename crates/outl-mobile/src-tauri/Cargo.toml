@@ -83,3 +83,16 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
     "NSString",
     "NSURL",
 ] }
+
+# Android JNI bootstrap for iroh (see `android_jni.rs`). iroh's relay client
+# verifies TLS certs through `rustls-platform-verifier` and reads system DNS
+# through `iroh-dns`/`hickory`; both call into the JVM and need a process-wide
+# JNI context that neither Tauri/wry nor `tao`'s `ndk_glue` installs. We prime
+# both globals from `MainActivity.onCreate` before iroh's first connection.
+# All three are already in the graph (transitive via iroh); pinned to the
+# resolved versions so no new tree lands. `jni` MUST match the version
+# `rustls-platform-verifier` uses (0.22) or the `Env`/`JObject` types differ.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22"
+ndk-context = "0.1"
+rustls-platform-verifier = "0.7"

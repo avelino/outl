@@ -37,7 +37,12 @@ impl PeersWriteLock {
             .truncate(false)
             .open(&lock_path)
             .with_context(|| format!("open peers lock {}", lock_path.display()))?;
-        file.lock()
+        // `fs2::lock_exclusive` (blocking `flock(2)` via libc), NOT
+        // `std::fs::File::lock()` — the std method is hardcoded to return
+        // `Unsupported` on Android (target_os = "android" is missing from its
+        // cfg gate), which broke pairing on-device. `outl-core` locks the same
+        // way.
+        fs2::FileExt::lock_exclusive(&file)
             .with_context(|| format!("flock peers lock {}", lock_path.display()))?;
         Ok(Self { _file: file })
     }

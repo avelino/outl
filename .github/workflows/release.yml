@@ -490,10 +490,158 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --clobber
 
+  build_android:
+    name: build Android (arm64 APK)
+    needs: [prepare, create_release]
+    if: needs.create_release.result == 'success'
+    runs-on: ubuntu-latest
+    # Optimized (release-build) APK, debug-signed, attached to the GitHub
+    # Release (no Google Play). Like iOS, the build is RELEASE (optimized);
+    # only the *signature* is a throwaway debug key — a real upload
+    # keystore + Play track are tracked in issue #171. Mirrors the iOS
+    # `mobile.yml` shape — Rust + Android target + NDK + Bun frontend +
+    # `cargo tauri android build`, version injected via `--config` (Tauri's
+    # mobile path does NOT fall back to Cargo.toml — see
+    # `crates/outl-mobile/CLAUDE.md`).
+    # A failure here never blocks the release: `publish_release` waits for
+    # this job but does not require its success (see its `if`).
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Install Rust toolchain (Android arm64 target)
+        run: |
+          rustup show
+          rustup target add aarch64-linux-android
+          rustup target list --installed
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        shell: bash
+        # Pin the same NDK the project builds against locally. Export both
+        # names Tauri/cargo-ndk look for so `cargo tauri android build`
+        # finds the toolchain without a local.properties.
+        run: |
+          sdkmanager --install "ndk;27.1.12297006"
+          NDK="${ANDROID_SDK_ROOT}/ndk/27.1.12297006"
+          echo "NDK_HOME=${NDK}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=${NDK}" >> "$GITHUB_ENV"
+
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "^2.0" --locked
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Patch workspace version to ${{ needs.prepare.outputs.version }}
+        shell: bash
+        # Same sed pass as the other build jobs (keeps the Rust crate
+        # version aligned). The APK's user-facing versionName comes from
+        # `--config` below, not from here.
+        run: |
+          BASE='${{ needs.prepare.outputs.base }}'
+          VERSION='${{ needs.prepare.outputs.version }}'
+          sed -i.bak "s|version = \"${BASE}\"|version = \"${VERSION}\"|g" Cargo.toml
+          rm Cargo.toml.bak
+
+      - name: Cache cargo (android)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-aarch64-linux-android-release-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Generate debug keystore
+        shell: bash
+        # No release keystore/secret yet (issue #171). We sign the
+        # optimized RELEASE APK with a throwaway Android debug key so it
+        # installs via sideload (Play rejects a debug key — fine, GitHub
+        # Release only). Same params as the SDK's stock
+        # `~/.android/debug.keystore`.
+        run: |
+          keytool -genkeypair -v \
+            -keystore "${RUNNER_TEMP}/debug.keystore" \
+            -storepass android -keypass android \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Build release APK (arm64)
+        working-directory: crates/outl-mobile
+        # RELEASE build (Rust optimized + stripped, R8/proguard) — NOT
+        # `--debug`, whose unoptimized `.so` + kept debug symbols balloon
+        # the APK past 1 GB. `--apk` skips the .aab. `--config` injects the
+        # marketing versionName (base version, sans `-beta.N`; the Release
+        # tag carries the full beta string). versionCode is Tauri's default
+        # derivation — fine for direct download; a monotonic scheme is only
+        # needed for Play (issue #171).
+        run: |
+          cargo tauri android build --target aarch64 --apk \
+            --config "{\"version\": \"${{ needs.prepare.outputs.base }}\"}"
+
+      - name: Sign + stage APK
+        shell: bash
+        # A release build with no signing config emits an *unsigned* APK;
+        # zipalign then debug-sign it with apksigner so it installs.
+        run: |
+          set -euo pipefail
+          SRC=$(find crates/outl-mobile/src-tauri/gen/android/app/build/outputs/apk \
+                  \( -name '*-release-unsigned.apk' -o -name '*-release.apk' \) | head -n1)
+          if [[ -z "${SRC}" ]]; then
+            echo "::error::no release APK produced (run produced:)"
+            find crates/outl-mobile/src-tauri/gen/android/app/build/outputs -type f -print
+            exit 1
+          fi
+          BT=$(ls -d "${ANDROID_SDK_ROOT}"/build-tools/* | sort -V | tail -n1)
+          "${BT}/zipalign" -f -p 4 "${SRC}" "${RUNNER_TEMP}/aligned.apk"
+          "${BT}/apksigner" sign \
+            --ks "${RUNNER_TEMP}/debug.keystore" \
+            --ks-pass pass:android --key-pass pass:android \
+            --ks-key-alias androiddebugkey \
+            --out outl-android-arm64.apk \
+            "${RUNNER_TEMP}/aligned.apk"
+          "${BT}/apksigner" verify outl-android-arm64.apk
+          shasum -a 256 outl-android-arm64.apk > outl-android-arm64.apk.sha256
+
+      - name: Upload APK to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG='${{ needs.prepare.outputs.tag }}'
+          gh release upload "${TAG}" \
+            outl-android-arm64.apk \
+            outl-android-arm64.apk.sha256 \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber
+
   publish_release:
     name: Publish release
-    needs: [prepare, build, build_desktop, build_desktop_linux]
-    if: needs.build.result == 'success' && needs.build_desktop.result == 'success' && needs.build_desktop_linux.result == 'success'
+    needs: [prepare, build, build_desktop, build_desktop_linux, build_android]
+    # Android is best-effort: `!cancelled()` forces this `if` to evaluate
+    # even when `build_android` failed, and Android's result is absent
+    # from the conditions — so a broken Android build never blocks the
+    # (stable) desktop/CLI release, but when it succeeds the APK is
+    # already in the draft before we publish.
+    if: >-
+      !cancelled() &&
+      needs.build.result == 'success' &&
+      needs.build_desktop.result == 'success' &&
+      needs.build_desktop_linux.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
