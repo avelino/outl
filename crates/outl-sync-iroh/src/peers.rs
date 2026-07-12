@@ -1,17 +1,18 @@
 //! Trusted peer store — read/written at `<workspace>/.outl/peers.json`.
 //!
 //! The paired-peer list belongs to the **graph** (workspace), not the OS:
-//! pairing device B into workspace X must not silently expose B to workspace Y
-//! on the same machine. The device *identity* (`identity.key`) stays global —
-//! one node id per device — but the trust list is per-workspace.
+//! pairing device B into workspace X must not silently expose B to workspace Y.
+//! The device *identity* (`identity.key`) stays global — one node id per
+//! device — but the trust list is per-workspace.
 
 use anyhow::{Context, Result};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-
 use tracing::{debug, warn};
+
+use crate::peers_lock::PeersWriteLock;
 
 /// One local IPv4 interface (address + netmask), used to decide whether a peer's
 /// stored direct addr shares a subnet with this machine — i.e. is reachable over
@@ -427,60 +428,82 @@ impl PeersStore {
         &self.path
     }
 
-    /// Add a peer and persist to disk.
+    /// Add a peer and persist to disk (dedup-replace by node_id).
     pub fn add(&mut self, entry: PeerEntry) -> Result<()> {
-        // Deduplicate by node_id.
-        self.inner.peers.retain(|p| p.node_id != entry.node_id);
-        self.inner.peers.push(entry);
-        self.save()
+        self.mutate_locked(|peers| {
+            peers.retain(|p| p.node_id != entry.node_id);
+            peers.push(entry);
+            true
+        })
     }
 
     /// Merge a batch of peers, adding **only** node_ids not already present, and
     /// persist once if anything changed. Returns the number of peers added.
-    ///
-    /// Unlike [`add`](Self::add), this never overwrites an existing entry: a
-    /// node_id already known keeps its current `PeerEntry` (its locally-captured
-    /// `endpoint_addr`, e.g. from direct pairing, may be fresher than a gossiped
-    /// one). This is the merge primitive membership auto-discovery uses — it only
-    /// ever *adds reachability* for peers already inside the mesh.
+    /// Unlike [`add`](Self::add), a known node_id keeps its current `PeerEntry`
+    /// (its locally-captured `endpoint_addr`, e.g. from direct pairing, may beat a
+    /// gossiped one) — the ADD-only primitive membership auto-discovery uses.
     pub fn merge_unknown(
         &mut self,
         incoming: impl IntoIterator<Item = PeerEntry>,
     ) -> Result<usize> {
+        let mut incoming: Vec<PeerEntry> = incoming.into_iter().collect();
         let mut added = 0usize;
-        for entry in incoming {
-            if self.inner.peers.iter().any(|p| p.node_id == entry.node_id) {
-                continue;
+        self.mutate_locked(|peers| {
+            for entry in incoming.drain(..) {
+                if peers.iter().any(|p| p.node_id == entry.node_id) {
+                    continue;
+                }
+                peers.push(entry);
+                added += 1;
             }
-            self.inner.peers.push(entry);
-            added += 1;
-        }
-        if added > 0 {
-            self.save()?;
-        }
+            added > 0
+        })?;
         Ok(added)
     }
 
     /// Remove a peer by node_id prefix. Returns true if found.
     pub fn remove(&mut self, node_id_prefix: &str) -> Result<bool> {
-        let before = self.inner.peers.len();
-        self.inner
-            .peers
-            .retain(|p| !p.node_id.starts_with(node_id_prefix));
-        let removed = self.inner.peers.len() < before;
-        if removed {
-            self.save()?;
-        }
+        let mut removed = false;
+        self.mutate_locked(|peers| {
+            let before = peers.len();
+            peers.retain(|p| !p.node_id.starts_with(node_id_prefix));
+            removed = peers.len() < before;
+            removed
+        })?;
         Ok(removed)
     }
 
-    fn save(&self) -> Result<()> {
+    /// Run a read-modify-write against `peers.json` atomically against every
+    /// other writer, in-process and cross-process (issue #160). Under the
+    /// [`PeersWriteLock`] flock this **re-reads the current on-disk file**, hands
+    /// the fresh list to `mutate`, and — if `mutate` reports a change — writes it
+    /// back atomically. Re-reading inside the lock is what closes the lost update:
+    /// the many writers (pairing, the 5s membership tick,
+    /// [`refresh_peer_direct_addr`], cross-process GUI/MCP/`outl sync`) each
+    /// `load_or_default` a possibly-stale snapshot, so applying to that snapshot
+    /// and truncate-writing clobbered a concurrent add. `self.inner` is refreshed
+    /// to the reconciled state either way.
+    fn mutate_locked(&mut self, mutate: impl FnOnce(&mut Vec<PeerEntry>) -> bool) -> Result<()> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        let _lock = PeersWriteLock::acquire(&self.path)?;
+
+        let mut file = if self.path.exists() {
+            let text = std::fs::read_to_string(&self.path)
+                .with_context(|| format!("read peers.json from {}", self.path.display()))?;
+            serde_json::from_str::<PeersFile>(&text).context("parse peers.json")?
+        } else {
+            PeersFile::default()
+        };
+
+        let changed = mutate(&mut file.peers);
+        self.inner = file;
+        if !changed {
+            return Ok(());
+        }
         let text = serde_json::to_string_pretty(&self.inner)?;
-        std::fs::write(&self.path, text)
-            .with_context(|| format!("write peers.json to {}", self.path.display()))
+        crate::peers_lock::atomic_write_json(&self.path, text.as_bytes())
     }
 }
 

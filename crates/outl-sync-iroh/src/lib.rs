@@ -42,6 +42,7 @@ mod health;
 mod identity;
 mod pairing;
 mod peers;
+mod peers_lock;
 mod protocol;
 mod status;
 

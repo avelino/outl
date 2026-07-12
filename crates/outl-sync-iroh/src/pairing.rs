@@ -66,6 +66,18 @@ use crate::protocol::PAIRING_ALPN;
 /// How long the host waits for an inbound pairing connection before giving up.
 const HOST_ACCEPT_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// How long a single handshake half (read the remote payload, exchange ours) may
+/// take once a connection is up, before we abort it (issue #159).
+///
+/// Without this, a peer that connects on [`PAIRING_ALPN`] and then sends nothing
+/// (or a truncated length prefix) parks `read_payload`'s `read_exact` forever,
+/// holding the pairing session — on the GUI path that means the armed host is
+/// stuck until [`HOST_ACCEPT_TIMEOUT`], never able to serve the real joiner. The
+/// exchange is a couple of small frames over an already-established QUIC stream,
+/// so a generous 30s is far more than a healthy peer needs and still bounds a
+/// stalled one.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// How long we wait for the endpoint to come "online" (a relay handshake
 /// completed) before generating the ticket / payload. `Endpoint::online`
 /// pends forever with no WAN/relay, so it MUST be wrapped in a timeout.
@@ -183,6 +195,45 @@ async fn read_payload(recv: &mut iroh::endpoint::RecvStream) -> Result<PairingPa
         .await
         .context("read payload body")?;
     serde_json::from_slice(&body).context("decode pairing payload")
+}
+
+/// Reject a pairing payload whose self-declared `node_id` does not match the
+/// connection's **authenticated** TLS identity (issue #159).
+///
+/// iroh authenticates the remote's [`iroh::EndpointId`] as part of the QUIC/TLS
+/// handshake (`conn.remote_id()` is not spoofable), but the `PairingPayload`
+/// carries a self-declared `node_id` that we would otherwise persist verbatim
+/// via [`PairingPayload::into_peer_entry`]. A malicious joiner could declare the
+/// node id of an *already-paired* device and, through `PeersStore::add`'s
+/// dedup-replace, overwrite that peer's stored address — making the legit device
+/// unreachable. Binding the persisted id to the authenticated one closes that.
+///
+/// TODO(#159): this only proves the connecting device controls the key it
+/// claims. It does NOT prove the ticket was issued to *this* joiner — a stronger
+/// guarantee needs a shared secret / proof-of-possession baked into the ticket,
+/// which is a larger protocol change tracked as a follow-up.
+fn verify_declared_identity(
+    conn: &iroh::endpoint::Connection,
+    payload: &PairingPayload,
+) -> Result<()> {
+    check_identity_match(conn.remote_id(), payload)
+}
+
+/// Pure core of [`verify_declared_identity`]: compare a payload's self-declared
+/// `node_id` against an already-authenticated [`iroh::EndpointId`]. Split from
+/// the `Connection` so it is unit-testable without standing up QUIC.
+fn check_identity_match(authenticated: iroh::EndpointId, payload: &PairingPayload) -> Result<()> {
+    let declared: iroh::EndpointId = payload
+        .node_id
+        .parse()
+        .context("pairing payload carried an unparseable node_id")?;
+    anyhow::ensure!(
+        declared == authenticated,
+        "pairing identity mismatch: peer declared node_id {} but the connection is authenticated as {} — aborting to prevent a peer-hijack (issue #159)",
+        declared.fmt_short(),
+        authenticated.fmt_short(),
+    );
+    Ok(())
 }
 
 /// Encode an [`EndpointAddr`] into a copy-pasteable ticket string.
@@ -336,8 +387,17 @@ pub(crate) async fn accept_host_handshake(
     let (mut send, mut recv) = conn.accept_bi().await.context("accept pairing bi stream")?;
 
     // The joiner speaks first: read their entry, then send ours (advertising our
-    // workspace id, which the joiner adopts).
-    let remote = read_payload(&mut recv).await?;
+    // workspace id, which the joiner adopts). Bound the read so a peer that opens
+    // the stream and then stalls can't hold the pairing session (issue #159).
+    let remote = tokio::time::timeout(HANDSHAKE_TIMEOUT, read_payload(&mut recv))
+        .await
+        .context("timed out reading the joiner's pairing payload")??;
+
+    // Reject a joiner whose declared node_id doesn't match its authenticated TLS
+    // identity BEFORE persisting — otherwise it could overwrite an existing
+    // peer's stored address and make that device unreachable (issue #159).
+    verify_declared_identity(conn, &remote)?;
+
     let ours = PairingPayload::from_local(identity, our_addr, alias, workspace_id);
     send.write_all(&encode_payload(&ours)?)
         .await
@@ -408,7 +468,18 @@ pub(crate) async fn run_join_handshake(
         .context("send our pairing payload")?;
     send.finish().context("finish pairing send")?;
 
-    let remote = read_payload(&mut recv).await?;
+    // Bound the read so a host that accepts the dial but never replies can't hang
+    // the joiner (issue #159).
+    let remote = tokio::time::timeout(HANDSHAKE_TIMEOUT, read_payload(&mut recv))
+        .await
+        .context("timed out reading the host's pairing payload")??;
+
+    // The host is the one we're persisting into peers.json here; verify its
+    // declared node_id matches the connection's authenticated identity so a
+    // man-in-the-middle host can't get us to store someone else's node id
+    // (issue #159).
+    verify_declared_identity(&conn, &remote)?;
+
     let remote_wid = remote.remote_workspace_id();
     let entry = remote.into_peer_entry();
 
@@ -535,5 +606,58 @@ mod tests {
             workspace_id: None,
         };
         assert_eq!(payload.remote_workspace_id(), None);
+    }
+
+    /// Build a `PairingPayload` that self-declares `node_id`.
+    fn payload_declaring(node_id: &str) -> PairingPayload {
+        PairingPayload {
+            node_id: node_id.to_string(),
+            alias: None,
+            relay_url: None,
+            endpoint_addr: None,
+            workspace_id: None,
+        }
+    }
+
+    /// Issue #159: a payload that self-declares the SAME node_id as the
+    /// connection's authenticated identity passes — the honest handshake.
+    #[test]
+    fn identity_match_accepts_when_declared_equals_authenticated() {
+        let authenticated = iroh::SecretKey::generate().public();
+        let payload = payload_declaring(&authenticated.to_string());
+        assert!(
+            check_identity_match(authenticated, &payload).is_ok(),
+            "a matching declared node_id must be accepted"
+        );
+    }
+
+    /// Issue #159 (the exploit): a malicious joiner authenticates as one key but
+    /// declares the node_id of an ALREADY-PAIRED device, aiming to overwrite that
+    /// peer's stored address via `PeersStore::add`'s dedup-replace and make it
+    /// unreachable. The mismatch MUST be rejected before any persist.
+    #[test]
+    fn identity_match_rejects_a_spoofed_peer_node_id() {
+        let authenticated = iroh::SecretKey::generate().public();
+        let victim = iroh::SecretKey::generate().public(); // an already-paired device
+        assert_ne!(authenticated, victim);
+        let payload = payload_declaring(&victim.to_string());
+        let err = check_identity_match(authenticated, &payload)
+            .expect_err("a spoofed node_id must be rejected");
+        assert!(
+            err.to_string().contains("identity mismatch"),
+            "error must name the identity mismatch, got: {err}"
+        );
+    }
+
+    /// A payload whose `node_id` isn't even a valid EndpointId is rejected (not
+    /// silently coerced) — the pre-#159 code fed it straight into `peers.json`.
+    #[test]
+    fn identity_match_rejects_an_unparseable_node_id() {
+        let authenticated = iroh::SecretKey::generate().public();
+        let payload = payload_declaring("not-a-real-node-id");
+        assert!(
+            check_identity_match(authenticated, &payload).is_err(),
+            "an unparseable declared node_id must be rejected"
+        );
     }
 }
