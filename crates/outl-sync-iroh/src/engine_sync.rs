@@ -356,17 +356,18 @@ async fn read_frame(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<u8>> {
     // Grow the buffer as bytes actually arrive rather than pre-sizing it to the
     // (untrusted) declared length: a peer that lies about the length — or dies
     // right after sending the prefix — then costs us only what it actually
-    // transmits, not a speculative multi-hundred-MiB allocation.
+    // transmits, not a speculative multi-hundred-MiB allocation. Read straight
+    // into the freshly-extended tail so there is no extra per-chunk copy.
     let mut frame = Vec::with_capacity(4 + body_len.min(64 * 1024));
     frame.extend_from_slice(&prefix);
     let mut remaining = body_len;
-    let mut chunk = vec![0u8; 64 * 1024];
     while remaining > 0 {
-        let want = remaining.min(chunk.len());
-        recv.read_exact(&mut chunk[..want])
+        let want = remaining.min(64 * 1024);
+        let start = frame.len();
+        frame.resize(start + want, 0);
+        recv.read_exact(&mut frame[start..])
             .await
             .context("read frame body")?;
-        frame.extend_from_slice(&chunk[..want]);
         remaining -= want;
     }
     Ok(frame)
