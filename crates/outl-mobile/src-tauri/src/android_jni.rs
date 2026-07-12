@@ -18,9 +18,17 @@
 //! globals exactly once, up front.
 
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use jni::objects::{JClass, JObject};
 use jni::{Env, EnvUnowned};
+
+/// Set once the globals are installed. `MainActivity.onCreate` can fire again
+/// (process/activity recreation after a background kill), and a second install
+/// would leak another global ref (`mem::forget` below) and re-seed
+/// `ndk_context`. Flipped only after a successful install, so a failed first
+/// attempt can still retry.
+static INSTALLED: AtomicBool = AtomicBool::new(false);
 
 /// JNI entry point invoked from `MainActivity` (`NativeSetup.install`).
 ///
@@ -47,6 +55,14 @@ pub extern "system" fn Java_app_outl_mobile_1app_NativeSetup_install<'local>(
 
 /// Install both JVM-backed globals iroh needs. Runs once at boot.
 fn install(env: &mut Env, context: JObject) -> Result<(), jni::errors::Error> {
+    // Idempotent: a repeated `onCreate` must not leak a second global ref or
+    // re-seed `ndk_context`. `rustls-platform-verifier` self-guards with a
+    // `OnceCell`, but our leak + `ndk_context` seed do not, so gate the whole
+    // body. Single-threaded (UI thread), so a plain load/store is enough.
+    if INSTALLED.load(Ordering::Acquire) {
+        return Ok(());
+    }
+
     // A stable reference to the `Application` context for `ndk_context`, which
     // stores raw pointers and expects the referent to outlive the process. The
     // global ref is intentionally leaked below (`mem::forget`) so it is never
@@ -73,6 +89,7 @@ fn install(env: &mut Env, context: JObject) -> Result<(), jni::errors::Error> {
     }
     std::mem::forget(ctx_global);
 
+    INSTALLED.store(true, Ordering::Release);
     tracing::info!("android JNI context installed (rustls-platform-verifier + ndk_context)");
     Ok(())
 }
