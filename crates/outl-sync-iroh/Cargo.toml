@@ -37,6 +37,11 @@ bytes = "1"
 # VPN / tunnel IPs captured at pairing time that would otherwise stall iroh's
 # multipath (`MultipathNotNegotiated`). See `PeerEntry::iroh_endpoint_addr`.
 if-addrs = "0.15"
+# Advisory file locks (peers.json + op-log append). Uses `flock(2)` via libc
+# directly, unlike `std::fs::File::lock()`, which is hardcoded to return
+# `Unsupported` on Android (target_os = "android" is absent from its cfg gate),
+# breaking pairing on-device. Same crate `outl-core` already locks with.
+fs2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

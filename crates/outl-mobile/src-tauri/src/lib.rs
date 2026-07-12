@@ -31,6 +31,10 @@
 //! workspace lands, Tauri emits a `workspace-ready` event the frontend
 //! can listen for to refresh proactively.
 
+// Android-only: primes the JVM-backed globals iroh's TLS verifier + DNS reader
+// need, via a JNI entry point `MainActivity.onCreate` calls before boot.
+#[cfg(target_os = "android")]
+mod android_jni;
 mod bg_sync;
 mod commands;
 mod iroh_sync;

@@ -172,7 +172,10 @@ impl OpsDirAppendLock {
             .truncate(false)
             .open(&path)
             .with_context(|| format!("open append lock {}", path.display()))?;
-        file.lock()
+        // `fs2::lock_exclusive` (blocking `flock(2)` via libc), NOT
+        // `std::fs::File::lock()`, which is hardcoded to return `Unsupported`
+        // on Android and would break inbound sync there. Same as `peers_lock`.
+        fs2::FileExt::lock_exclusive(&file)
             .with_context(|| format!("flock append lock {}", path.display()))?;
         Ok(Self { _file: file })
     }
