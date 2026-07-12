@@ -7,11 +7,11 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Fixed
 
-- **Opening a page with many backlinks is no longer slow (issue #169).**
+- **Opening a page with many backlinks is much faster (issue #169).**
   A user with a template referenced from 760 places reported multi-second page opens.
   The cause was `backlinks_for_page` being **quadratic**: it walks every block in the workspace and, per match, materializes the block's subtree — and both steps went through `children_of`, which rescans *every* node in the tree on each call (`Tree` stores only `node -> (parent, position)`, with no child index).
-  The walk now builds a `parent -> children` map in a single `O(n)` pass and threads it through the walk and the subtree projection, restoring `O(n)`.
-  In simulation (`crates/outl-actions/tests/bench_backlinks.rs`) the report's shape — 760 backlinks in a ~35k-block workspace — drops from **3.83 s to 41 ms** (~94×), with **no change to results** (the full backlinks test suite is the correctness oracle).
+  The walk now builds a `parent -> children` map once per call (one scan + per-parent sort; `O(n log n)` worst case) and threads it through the walk and subtree projection, eliminating the `O(n²)` rescans.
+  This still does a full workspace walk (no inverted index), but the report's shape — 760 backlinks in a ~35k-block workspace — drops from **3.83 s to 41 ms** (~94×), with **no change to results** (the full backlinks test suite is the correctness oracle).
   This is a pure internal refactor: `backlinks_for_page` / `project_outline` / `project_outline_node` keep their signatures and output; the index is scratch state rebuilt per call, never cached, so it can't go stale.
 
 - **Snapshot fast-boot now actually works in production, and can no longer drop a synced edit (issues #156, #128, #109).**
