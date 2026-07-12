@@ -7,6 +7,8 @@ use outl_actions::{
     PageKind, PageMeta,
 };
 
+use outl_core::id::NodeId;
+use outl_core::workspace::Workspace;
 use outl_md::index::WorkspaceIndex;
 use outl_md::{BlockEntry, BlockIndex};
 
@@ -153,6 +155,7 @@ pub fn open_today_journal<S: AppHost>(state: &S) -> Result<PageView, String> {
         open_today(ws, state.hlc()).map_err(|e| e.to_string())
     })?;
     with_ws(state, |ws| {
+        reproject_if_stale(ws, &root, id, "open_today_journal");
         build_page_view(ws, &root, id).map_err(|e| e.to_string())
     })
 }
@@ -164,8 +167,21 @@ pub fn open_journal_for<S: AppHost>(state: &S, slug: String) -> Result<PageView,
         open_journal(ws, state.hlc(), date).map_err(|e| e.to_string())
     })?;
     with_ws(state, |ws| {
+        reproject_if_stale(ws, &root, id, &slug);
         build_page_view(ws, &root, id).map_err(|e| e.to_string())
     })
+}
+
+/// Refresh a page's `.md` before the view reads it, when the tree has moved
+/// past the on-disk projection (a peer's ops landed but the `.md` was never
+/// re-projected) or the `.md` is absent. A no-op when the page is already in
+/// sync, and never clobbers a pending external edit — see
+/// [`outl_actions::apply_page_md_with_sidecar_if_stale`]. Best-effort: a
+/// failed re-projection logs and the view falls back to whatever is on disk.
+fn reproject_if_stale(ws: &Workspace, root: &std::path::Path, id: NodeId, label: &str) {
+    if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_stale(ws, root, id) {
+        tracing::warn!("reproject stale .md failed for {label}: {e}");
+    }
 }
 
 /// The command name says "slug" for backward-compat with the frontend,
@@ -198,7 +214,7 @@ pub fn open_page_by_slug<S: AppHost>(state: &S, slug: String) -> Result<PageView
         })?,
     };
     with_ws_mut(state, |ws| {
-        if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_absent(ws, &root, id) {
+        if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_stale(ws, &root, id) {
             tracing::warn!("open_page_by_slug: apply_page_md_with_sidecar failed for {slug}: {e}");
         }
         Ok(())
@@ -260,7 +276,7 @@ pub fn open_ref<S: AppHost>(
         open_or_create_by_ref(ws, state.hlc(), &target).map_err(|e| e.to_string())
     })?;
     with_ws_mut(state, |ws| {
-        if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_absent(ws, &root, id) {
+        if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_stale(ws, &root, id) {
             // Non-fatal: the op log already has the mutation; the `.md`
             // projection will be retried on the next save / by the
             // orphan scanner on the next boot. Surface both to the local

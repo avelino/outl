@@ -250,6 +250,64 @@ pub fn apply_page_md_with_sidecar_if_absent(
     apply_page_md_with_sidecar(workspace, root, page_root).map(Some)
 }
 
+/// Like [`apply_page_md_with_sidecar`], but writes **only when the on-disk
+/// `.md` is missing or stale relative to the tree**.
+///
+/// This is the re-projection counterpart to
+/// [`apply_page_md_with_sidecar_if_absent`]: that one only covers an *absent*
+/// `.md` (a page synced into the tree but never projected here — issue #120).
+/// It leaves a page **projected empty before its content synced** stale
+/// forever: the file then exists, so the `_if_absent` guard skips it, and the
+/// view — which reads the `.md` via [`crate::outline::read_page_outline`] —
+/// keeps rendering blank even though the tree holds the blocks. That is the
+/// "day created on one device shows empty on another" bug.
+///
+/// Three cases:
+/// - `.md` absent → project it (subsumes `_if_absent`, issue #120).
+/// - `.md` present and a **faithful projection** (its hash matches the
+///   sidecar's `last_synced_hash`, i.e. no unreconciled external edit) but the
+///   tree now renders to something different → re-project it. This is the sync
+///   case the bug lives in.
+/// - `.md` present but **not** matching its sidecar → an external edit is
+///   pending; leave it untouched (`.md → tree` reconcile owns that), so this
+///   never clobbers a hand-edited file.
+///
+/// Only writes on a real change, so it does not churn the sidecar's
+/// `last_synced_at` on a page already in sync.
+///
+/// Returns `Some(path)` when it (re)projected, `None` when it left disk alone.
+pub fn apply_page_md_with_sidecar_if_stale(
+    workspace: &Workspace,
+    root: &Path,
+    page_root: NodeId,
+) -> Result<Option<PathBuf>, ActionError> {
+    let meta = page_meta(workspace, page_root)
+        .ok_or_else(|| ActionError::NotInTree(page_root.to_string()))?;
+    let path = page_md_path(root, &meta);
+    let Ok(disk) = std::fs::read_to_string(&path) else {
+        // Absent (or unreadable) → project it (issue #120).
+        return apply_page_md_with_sidecar(workspace, root, page_root).map(Some);
+    };
+    let disk_hash = file_hash(&disk);
+    // Only re-project a file that is a faithful projection of the tree its
+    // sidecar was built from. A `.md` whose hash no longer matches its sidecar
+    // carries an external edit — that is the orphan reconcile's job
+    // (`.md → tree`); re-projecting here would clobber it.
+    let sidecar_path = sidecar_path_for(&path);
+    let faithful = outl_md::sidecar::read(&sidecar_path)
+        .map(|sc| sc.last_synced_hash == disk_hash)
+        .unwrap_or(false);
+    if !faithful {
+        return Ok(None);
+    }
+    // The tree has moved past the projection iff rendering it now differs from
+    // what is on disk.
+    if file_hash(&render_page_md(workspace, page_root)) == disk_hash {
+        return Ok(None);
+    }
+    apply_page_md_with_sidecar(workspace, root, page_root).map(Some)
+}
+
 /// Construct a sidecar that lines up with the `.md` we just rendered
 /// from the workspace. Walks the page subtree in DFS preorder — the
 /// same order [`render_page_md`] emits — so every block's index in
@@ -474,6 +532,96 @@ mod tests {
         // so it renders as a page property above the children.
         let md = render_page_md(&ws, page);
         assert_eq!(md, "title:: Ideas\n\n- first\n- second\n");
+    }
+
+    /// Build a page projected while it held `initial`, then return the
+    /// `(workspace, hlc, root, page_id, md_path)` so a test can drive the
+    /// stale-projection scenarios. The `TempDir` is returned to keep it alive.
+    fn projected_page(initial: &str) -> (TempDir, Workspace, HlcGenerator, NodeId, PathBuf) {
+        let tmp = TempDir::new().unwrap();
+        let actor = ActorId::new();
+        let hlc = HlcGenerator::new(actor);
+        let mut ws = Workspace::open_in_memory(actor).unwrap();
+        let page = open_or_create(&mut ws, &hlc, "notes", "Notes", PageKind::Page).unwrap();
+        append_block(&mut ws, &hlc, Some(page), Some(initial)).unwrap();
+        apply_page_md_with_sidecar(&ws, tmp.path(), page).unwrap();
+        let md_path = page_md_path(tmp.path(), &page_meta(&ws, page).unwrap());
+        (tmp, ws, hlc, page, md_path)
+    }
+
+    /// The reported bug: a peer's op lands in the TREE, but the already-present
+    /// `.md` the view reads is never re-projected, so the page renders empty.
+    /// `_if_stale` must detect the tree ran ahead and re-project.
+    #[test]
+    fn if_stale_reprojects_when_tree_ran_ahead_of_the_md() {
+        let (tmp, mut ws, hlc, page, md_path) = projected_page("first");
+        assert!(std::fs::read_to_string(&md_path).unwrap().contains("first"));
+
+        // A synced-in block enters the tree; nothing re-projects the `.md`.
+        append_block(&mut ws, &hlc, Some(page), Some("synced-in")).unwrap();
+        assert!(!std::fs::read_to_string(&md_path)
+            .unwrap()
+            .contains("synced-in"));
+
+        let wrote = apply_page_md_with_sidecar_if_stale(&ws, tmp.path(), page).unwrap();
+        assert!(
+            wrote.is_some(),
+            "a tree ahead of its .md must be re-projected"
+        );
+        let md = std::fs::read_to_string(&md_path).unwrap();
+        assert!(
+            md.contains("first") && md.contains("synced-in"),
+            "re-projection must carry the synced-in block: {md:?}"
+        );
+    }
+
+    /// An in-sync page must NOT be re-projected — otherwise every nav churns the
+    /// sidecar's `last_synced_at` and floods sync (the reason `_if_absent`
+    /// existed in the first place).
+    #[test]
+    fn if_stale_is_a_noop_when_the_md_matches_the_tree() {
+        let (tmp, ws, _hlc, page, md_path) = projected_page("first");
+        let before = std::fs::read_to_string(&md_path).unwrap();
+        let wrote = apply_page_md_with_sidecar_if_stale(&ws, tmp.path(), page).unwrap();
+        assert!(wrote.is_none(), "an in-sync page must not be re-projected");
+        assert_eq!(std::fs::read_to_string(&md_path).unwrap(), before);
+    }
+
+    /// Absent `.md` (a peer synced the page into the tree but it was never
+    /// projected here) → project it. Subsumes `_if_absent` (issue #120).
+    #[test]
+    fn if_stale_projects_a_page_whose_md_is_absent() {
+        let tmp = TempDir::new().unwrap();
+        let actor = ActorId::new();
+        let hlc = HlcGenerator::new(actor);
+        let mut ws = Workspace::open_in_memory(actor).unwrap();
+        let page = open_or_create(&mut ws, &hlc, "notes", "Notes", PageKind::Page).unwrap();
+        append_block(&mut ws, &hlc, Some(page), Some("first")).unwrap();
+        let md_path = page_md_path(tmp.path(), &page_meta(&ws, page).unwrap());
+        assert!(!md_path.exists());
+
+        let wrote = apply_page_md_with_sidecar_if_stale(&ws, tmp.path(), page).unwrap();
+        assert!(wrote.is_some());
+        assert!(std::fs::read_to_string(&md_path).unwrap().contains("first"));
+    }
+
+    /// A `.md` whose hash no longer matches its sidecar carries an unreconciled
+    /// external edit — `_if_stale` must leave it for the `.md → tree` reconcile,
+    /// never clobber it with a tree re-projection.
+    #[test]
+    fn if_stale_never_clobbers_an_external_edit() {
+        let (tmp, ws, _hlc, page, md_path) = projected_page("first");
+        std::fs::write(&md_path, "- hand edited externally\n").unwrap();
+
+        let wrote = apply_page_md_with_sidecar_if_stale(&ws, tmp.path(), page).unwrap();
+        assert!(
+            wrote.is_none(),
+            "an externally-edited .md must not be clobbered"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&md_path).unwrap(),
+            "- hand edited externally\n"
+        );
     }
 
     /// Copy (`Cmd+C` in view mode) snapshots a block via
