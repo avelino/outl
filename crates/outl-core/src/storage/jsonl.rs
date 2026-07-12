@@ -643,34 +643,6 @@ fn read_log_record<R: BufRead>(reader: &mut R, buf: &mut Vec<u8>) -> std::io::Re
     }
 }
 
-/// Whether `path`'s last byte is a newline, used by `append_op` to detect a
-/// torn tail before appending. A missing or empty file counts as "ends with a
-/// newline" (there is nothing to separate our write from).
-fn ends_with_newline(path: &std::path::Path) -> Result<bool, StorageError> {
-    let mut file = match File::open(path) {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(true),
-        Err(e) => {
-            return Err(StorageError::Backend(format!(
-                "open {}: {e}",
-                path.display()
-            )))
-        }
-    };
-    let len = file
-        .seek(SeekFrom::End(0))
-        .map_err(|e| StorageError::Backend(format!("seek {}: {e}", path.display())))?;
-    if len == 0 {
-        return Ok(true);
-    }
-    file.seek(SeekFrom::End(-1))
-        .map_err(|e| StorageError::Backend(format!("seek {}: {e}", path.display())))?;
-    let mut last = [0u8; 1];
-    file.read_exact(&mut last)
-        .map_err(|e| StorageError::Backend(format!("read {}: {e}", path.display())))?;
-    Ok(last[0] == b'\n')
-}
-
 fn op_touches_node(op: &Op, id: NodeId) -> bool {
     match op {
         Op::Move { node, .. }
@@ -717,14 +689,26 @@ impl Storage for JsonlStorage {
 
         let line = serde_json::to_string(op).map_err(|e| StorageError::Serialize(e.to_string()))?;
         let path = self.own_ops_path();
-        // Capture the byte offset where this op's line will land BEFORE
-        // opening the file in append mode. POSIX `O_APPEND` (set by
-        // `OpenOptions::append(true)`) does not update the file offset
-        // for `stream_position()` until after the next write, so reading
-        // `stream_position()` post-open would return 0 every time.
-        // `metadata.len()` is the current end-of-file, which is the
-        // offset we are about to write at.
-        let offset = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        // Open the file once (read + append): the single handle serves the
+        // offset probe, the torn-tail check, and the write — instead of a
+        // separate `metadata` stat plus a read-only open before the append
+        // open. `O_APPEND` sends every write to EOF regardless of the read
+        // cursor, so seeking back to read the last byte can't disturb where our
+        // op lands. append_op is the SINGLE writer for its own actor file
+        // (guarded by `ActorWriteLock`), so there is no concurrent-writer
+        // TOCTOU between the tail check and the write.
+        let mut file = OpenOptions::new()
+            .read(true)
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| StorageError::Backend(format!("open {}: {e}", path.display())))?;
+        // Byte offset where this op's line will land = current EOF. `O_APPEND`
+        // leaves `stream_position()` at 0 until the first write, so seek to the
+        // end explicitly to read it.
+        let mut offset = file
+            .seek(SeekFrom::End(0))
+            .map_err(|e| StorageError::Backend(format!("seek {}: {e}", path.display())))?;
         // Torn-tail self-heal. If the file doesn't already end in a newline, a
         // previous append was cut off mid-line (crash / power loss / iOS
         // jetsam), leaving a partial record with no terminator. Appending our
@@ -732,23 +716,27 @@ impl Storage for JsonlStorage {
         // (`{"ts":…partial{"ts":…ours}`); the reader can't split a torn prefix
         // from a good op, so BOTH would be lost. Close the torn line with a
         // newline first, so our op lands as its own parseable record.
-        let needs_separator = offset > 0 && !ends_with_newline(&path)?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|e| StorageError::Backend(format!("open {}: {e}", path.display())))?;
+        let needs_separator = if offset > 0 {
+            file.seek(SeekFrom::End(-1))
+                .map_err(|e| StorageError::Backend(format!("seek {}: {e}", path.display())))?;
+            let mut last = [0u8; 1];
+            file.read_exact(&mut last)
+                .map_err(|e| StorageError::Backend(format!("read {}: {e}", path.display())))?;
+            last[0] != b'\n'
+        } else {
+            false
+        };
         if needs_separator {
             writeln!(file)
                 .map_err(|e| StorageError::Backend(format!("heal tail {}: {e}", path.display())))?;
+            // Our op's JSON now starts one byte later; the offset index must
+            // point at the JSON, not the healing newline.
+            offset += 1;
         }
         writeln!(file, "{line}")
             .map_err(|e| StorageError::Backend(format!("write {}: {e}", path.display())))?;
         file.sync_all()
             .map_err(|e| StorageError::Backend(format!("fsync {}: {e}", path.display())))?;
-        // Our op's JSON starts one byte later when a separator was inserted;
-        // the offset index must point at the JSON, not the healing newline.
-        let offset = if needs_separator { offset + 1 } else { offset };
 
         // Mirror into both indexes (in-memory + sidecar append). Sidecar
         // failures are best-effort — the index is a cache, a missing
