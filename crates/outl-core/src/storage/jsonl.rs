@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 use lru::LruCache;
@@ -301,9 +301,18 @@ impl JsonlStorage {
                     continue;
                 }
             };
-            let file_actor = parse_actor_from_ops_filename(&name).ok_or_else(|| {
-                StorageError::Backend(format!("ops filename lacks actor: {name}"))
-            })?;
+            let file_actor = match parse_actor_from_ops_filename(&name) {
+                Some(actor) => actor,
+                None => {
+                    // A file-sync tool's conflict copy — `ops-<id> 2.jsonl`
+                    // (iCloud) or `ops-<id>.sync-conflict-*.jsonl` (Syncthing)
+                    // — matches the `ops-*.jsonl` shape but carries no valid
+                    // actor id. Skip it and keep going: one stray file next to
+                    // the real logs must never fail the whole workspace open.
+                    warn!("skipping ops file with unparseable actor id: {name}");
+                    continue;
+                }
+            };
 
             let mut lines_read = 0usize;
             let mut ops_parsed = 0usize;
@@ -311,26 +320,27 @@ impl JsonlStorage {
             let mut rebuilt_node = NodeIndex::new();
             let mut offset: u64 = 0;
             let mut reader = BufReader::new(file);
-            let mut buf = String::new();
+            let mut buf: Vec<u8> = Vec::new();
             loop {
                 let start = offset;
-                buf.clear();
-                let n = match reader.read_line(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => n,
+                let record = match read_log_record(&mut reader, &mut buf) {
+                    Ok(r) => r,
                     Err(e) => {
                         warn!("io error {}:{}: {e}", path.display(), lines_read + 1);
                         break;
                     }
                 };
-                lines_read += 1;
-                let trimmed = buf.trim();
-                if trimmed.is_empty() {
-                    offset += n as u64;
-                    continue;
-                }
-                match parse_log_line(trimmed) {
-                    Ok(ops) => {
+                match record {
+                    RecordRead::Eof => break,
+                    RecordRead::Skip { consumed, reason } => {
+                        lines_read += 1;
+                        if let Some(reason) = reason {
+                            warn!("skipping {}:{}: {reason}", path.display(), lines_read);
+                        }
+                        offset += consumed;
+                    }
+                    RecordRead::Ops { consumed, ops } => {
+                        lines_read += 1;
                         if ops.len() > 1 {
                             warn!(
                                 "recovered {} glued ops on {}:{} (concatenated JSON with no \
@@ -348,10 +358,9 @@ impl JsonlStorage {
                         }
                         ops_parsed += ops.len();
                         all.extend(ops);
+                        offset += consumed;
                     }
-                    Err(e) => warn!("parse {}:{}: {e}", path.display(), lines_read),
                 }
-                offset += n as u64;
             }
             // Persist both sidecars next to the .jsonl.
             let hlc_path = ActorIndex::sidecar_path(&self.ops_dir, file_actor);
@@ -423,27 +432,28 @@ impl JsonlStorage {
 
         let mut offset: u64 = 0;
         let mut reader = BufReader::new(file);
-        let mut buf = String::new();
+        let mut buf: Vec<u8> = Vec::new();
         let mut lines_read = 0usize;
         loop {
             let start = offset;
-            buf.clear();
-            let n = match reader.read_line(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => n,
+            let record = match read_log_record(&mut reader, &mut buf) {
+                Ok(r) => r,
                 Err(e) => {
                     warn!("io error {}:{}: {e}", path.display(), lines_read + 1);
                     break;
                 }
             };
-            lines_read += 1;
-            let trimmed = buf.trim();
-            if trimmed.is_empty() {
-                offset += n as u64;
-                continue;
-            }
-            match parse_log_line(trimmed) {
-                Ok(ops) => {
+            match record {
+                RecordRead::Eof => break,
+                RecordRead::Skip { consumed, reason } => {
+                    lines_read += 1;
+                    if let Some(reason) = reason {
+                        warn!("skipping {}:{}: {reason}", path.display(), lines_read);
+                    }
+                    offset += consumed;
+                }
+                RecordRead::Ops { consumed, ops } => {
+                    lines_read += 1;
                     for op in &ops {
                         rebuilt_hlc.insert(op.ts, start);
                         if let Some(node) = op_node(&op.op) {
@@ -451,10 +461,9 @@ impl JsonlStorage {
                         }
                     }
                     all.extend(ops);
+                    offset += consumed;
                 }
-                Err(e) => warn!("parse {}:{}: {e}", path.display(), lines_read),
             }
-            offset += n as u64;
         }
 
         let own_dir = self.own_ops_dir();
@@ -579,6 +588,89 @@ fn parse_log_line(raw: &str) -> Result<Vec<LogOp>, serde_json::Error> {
     Ok(ops)
 }
 
+/// One physical record read from an op-log file, tolerant of the ways a
+/// synced or crash-interrupted `.jsonl` can be malformed.
+enum RecordRead {
+    /// Clean end of file.
+    Eof,
+    /// A parsed record (one op, or several recovered from a glued line) and
+    /// the number of bytes it spanned on disk.
+    Ops { consumed: u64, ops: Vec<LogOp> },
+    /// A byte span carrying no usable op — a blank line, non-UTF8 bytes (a
+    /// partial sync can leave them mid-file), or JSON that didn't parse. The
+    /// span length is still reported so the caller keeps a correct offset and
+    /// reads the *next* record instead of aborting the whole file. `reason` is
+    /// `Some` for a real defect (worth a warning), `None` for a benign blank.
+    Skip {
+        consumed: u64,
+        reason: Option<String>,
+    },
+}
+
+/// Read one newline-delimited record, never failing on encoding.
+///
+/// Unlike [`BufRead::read_line`], this reads raw bytes via `read_until`, so a
+/// non-UTF8 byte in the middle of a file does not abort the read — it is
+/// surfaced as a skippable record. Only a genuine device I/O error returns
+/// `Err`. This is what lets one corrupt line (torn tail, partial sync) cost a
+/// single record instead of every op after it in the file.
+fn read_log_record<R: BufRead>(reader: &mut R, buf: &mut Vec<u8>) -> std::io::Result<RecordRead> {
+    buf.clear();
+    let n = reader.read_until(b'\n', buf)?;
+    if n == 0 {
+        return Ok(RecordRead::Eof);
+    }
+    let consumed = n as u64;
+    let Ok(text) = std::str::from_utf8(buf) else {
+        return Ok(RecordRead::Skip {
+            consumed,
+            reason: Some("non-UTF8 bytes".to_string()),
+        });
+    };
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Ok(RecordRead::Skip {
+            consumed,
+            reason: None,
+        });
+    }
+    match parse_log_line(trimmed) {
+        Ok(ops) => Ok(RecordRead::Ops { consumed, ops }),
+        Err(e) => Ok(RecordRead::Skip {
+            consumed,
+            reason: Some(e.to_string()),
+        }),
+    }
+}
+
+/// Whether `path`'s last byte is a newline, used by `append_op` to detect a
+/// torn tail before appending. A missing or empty file counts as "ends with a
+/// newline" (there is nothing to separate our write from).
+fn ends_with_newline(path: &std::path::Path) -> Result<bool, StorageError> {
+    let mut file = match File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(e) => {
+            return Err(StorageError::Backend(format!(
+                "open {}: {e}",
+                path.display()
+            )))
+        }
+    };
+    let len = file
+        .seek(SeekFrom::End(0))
+        .map_err(|e| StorageError::Backend(format!("seek {}: {e}", path.display())))?;
+    if len == 0 {
+        return Ok(true);
+    }
+    file.seek(SeekFrom::End(-1))
+        .map_err(|e| StorageError::Backend(format!("seek {}: {e}", path.display())))?;
+    let mut last = [0u8; 1];
+    file.read_exact(&mut last)
+        .map_err(|e| StorageError::Backend(format!("read {}: {e}", path.display())))?;
+    Ok(last[0] == b'\n')
+}
+
 fn op_touches_node(op: &Op, id: NodeId) -> bool {
     match op {
         Op::Move { node, .. }
@@ -633,15 +725,30 @@ impl Storage for JsonlStorage {
         // `metadata.len()` is the current end-of-file, which is the
         // offset we are about to write at.
         let offset = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        // Torn-tail self-heal. If the file doesn't already end in a newline, a
+        // previous append was cut off mid-line (crash / power loss / iOS
+        // jetsam), leaving a partial record with no terminator. Appending our
+        // op straight after would glue our JSON onto that fragment
+        // (`{"ts":…partial{"ts":…ours}`); the reader can't split a torn prefix
+        // from a good op, so BOTH would be lost. Close the torn line with a
+        // newline first, so our op lands as its own parseable record.
+        let needs_separator = offset > 0 && !ends_with_newline(&path)?;
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
             .map_err(|e| StorageError::Backend(format!("open {}: {e}", path.display())))?;
+        if needs_separator {
+            writeln!(file)
+                .map_err(|e| StorageError::Backend(format!("heal tail {}: {e}", path.display())))?;
+        }
         writeln!(file, "{line}")
             .map_err(|e| StorageError::Backend(format!("write {}: {e}", path.display())))?;
         file.sync_all()
             .map_err(|e| StorageError::Backend(format!("fsync {}: {e}", path.display())))?;
+        // Our op's JSON starts one byte later when a separator was inserted;
+        // the offset index must point at the JSON, not the healing newline.
+        let offset = if needs_separator { offset + 1 } else { offset };
 
         // Mirror into both indexes (in-memory + sidecar append). Sidecar
         // failures are best-effort — the index is a cache, a missing
