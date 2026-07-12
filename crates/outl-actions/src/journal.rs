@@ -213,13 +213,24 @@ pub fn apply_page_md_with_sidecar(
     let meta = page_meta(workspace, page_root)
         .ok_or_else(|| ActionError::NotInTree(page_root.to_string()))?;
     let md = render_page_md(workspace, page_root);
-    let path = page_md_path(root, &meta);
-    write_md_atomic(&path, &md)?;
+    write_page_projection(workspace, root, page_root, &meta, &md)
+}
 
-    let sidecar = build_sidecar(workspace, page_root, &md);
-    let sidecar_path = sidecar_path_for(&path);
-    outl_md::sidecar::write(&sidecar_path, &sidecar)?;
-
+/// Write an already-rendered page `md` to its `.md` and rebuild the matching
+/// sidecar from the same tree. Split out of [`apply_page_md_with_sidecar`] so a
+/// caller that already rendered the page (to detect a stale projection) reuses
+/// that string instead of rendering it a second time.
+fn write_page_projection(
+    workspace: &Workspace,
+    root: &Path,
+    page_root: NodeId,
+    meta: &PageMeta,
+    md: &str,
+) -> Result<PathBuf, ActionError> {
+    let path = page_md_path(root, meta);
+    write_md_atomic(&path, md)?;
+    let sidecar = build_sidecar(workspace, page_root, md);
+    outl_md::sidecar::write(&sidecar_path_for(&path), &sidecar)?;
     Ok(path)
 }
 
@@ -284,9 +295,16 @@ pub fn apply_page_md_with_sidecar_if_stale(
     let meta = page_meta(workspace, page_root)
         .ok_or_else(|| ActionError::NotInTree(page_root.to_string()))?;
     let path = page_md_path(root, &meta);
-    let Ok(disk) = std::fs::read_to_string(&path) else {
-        // Absent (or unreadable) → project it (issue #120).
-        return apply_page_md_with_sidecar(workspace, root, page_root).map(Some);
+    let disk = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Genuinely absent → project it (issue #120).
+            return apply_page_md_with_sidecar(workspace, root, page_root).map(Some);
+        }
+        // Present but unreadable (permissions, non-UTF8, …): do NOT treat as
+        // absent — re-projecting would clobber a file that may hold an external
+        // edit. Surface the error; the caller logs and leaves the file alone.
+        Err(e) => return Err(e.into()),
     };
     let disk_hash = file_hash(&disk);
     // Only re-project a file that is a faithful projection of the tree its
@@ -301,11 +319,12 @@ pub fn apply_page_md_with_sidecar_if_stale(
         return Ok(None);
     }
     // The tree has moved past the projection iff rendering it now differs from
-    // what is on disk.
-    if file_hash(&render_page_md(workspace, page_root)) == disk_hash {
+    // what is on disk. Render once and reuse it for the write below.
+    let rendered = render_page_md(workspace, page_root);
+    if file_hash(&rendered) == disk_hash {
         return Ok(None);
     }
-    apply_page_md_with_sidecar(workspace, root, page_root).map(Some)
+    write_page_projection(workspace, root, page_root, &meta, &rendered).map(Some)
 }
 
 /// Construct a sidecar that lines up with the `.md` we just rendered
@@ -622,6 +641,23 @@ mod tests {
             std::fs::read_to_string(&md_path).unwrap(),
             "- hand edited externally\n"
         );
+    }
+
+    /// A present-but-unreadable `.md` (non-UTF8 bytes here — `read_to_string`
+    /// fails with `InvalidData`, not `NotFound`) must NOT be treated as absent
+    /// and re-projected; that would clobber a file that may hold real content.
+    /// It surfaces the I/O error and leaves the bytes untouched.
+    #[test]
+    fn if_stale_does_not_clobber_an_unreadable_md() {
+        let (tmp, ws, _hlc, page, md_path) = projected_page("first");
+        std::fs::write(&md_path, [0xff, 0xfe, 0x00]).unwrap();
+
+        let result = apply_page_md_with_sidecar_if_stale(&ws, tmp.path(), page);
+        assert!(
+            result.is_err(),
+            "an unreadable .md must surface an error, not be clobbered"
+        );
+        assert_eq!(std::fs::read(&md_path).unwrap(), vec![0xff, 0xfe, 0x00]);
     }
 
     /// Copy (`Cmd+C` in view mode) snapshots a block via
