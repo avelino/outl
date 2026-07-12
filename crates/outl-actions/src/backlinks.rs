@@ -15,17 +15,18 @@
 //! backlinks cache — that earlier duplication was the bug that made
 //! self-references invisible on one surface but not the other.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use outl_core::fractional::Fractional;
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
 use serde::{Serialize, Serializer};
 
 use crate::journal::page_md_path;
-use crate::outline::{project_outline_node, OutlineNode};
+use crate::outline::{project_outline_node_indexed, ChildrenIndex, OutlineNode};
 use crate::page::{page_meta, PageMeta};
 use crate::todo::{split_todo, TodoState};
-use crate::tree::children_of;
 
 /// One backlink reference from a source block to a target page.
 ///
@@ -100,13 +101,50 @@ where
 /// its `source_path` (the `.md` of the page the source block lives
 /// in).
 pub fn backlinks_for_target(workspace: &Workspace, root: &Path, target: &str) -> Vec<Backlink> {
-    collect_backlinks(workspace, root, &TargetMatcher::refs(target))
+    let index = build_children_index(workspace);
+    collect_backlinks(workspace, root, &TargetMatcher::refs(target), &index)
+}
+
+/// Build a `parent -> children (in fractional order)` map in a single
+/// `O(n)` pass over the tree.
+///
+/// The walk visits every block in the workspace and, for each match,
+/// materialises its subtree. Both steps used to go through
+/// [`children_of`], which **rescans every node** on each call (`Tree`
+/// stores only `node -> (parent, position)`, with no child index) —
+/// making the whole pass `O(n²)`. Building this map once and threading
+/// it through the walk + [`project_outline_node_indexed`] brings it back
+/// to `O(n)`. Rebuilt per `backlinks_for_page` call, so it never goes
+/// stale: it is a scratch accelerator, not cached state.
+fn build_children_index(workspace: &Workspace) -> ChildrenIndex {
+    let mut grouped: HashMap<NodeId, Vec<(NodeId, Fractional)>> = HashMap::new();
+    for (id, parent, pos) in workspace.tree().iter_nodes() {
+        grouped.entry(parent).or_default().push((id, pos.clone()));
+    }
+    grouped
+        .into_iter()
+        .map(|(parent, mut kids)| {
+            kids.sort_by(|a, b| a.1.cmp(&b.1));
+            (parent, kids.into_iter().map(|(id, _)| id).collect())
+        })
+        .collect()
 }
 
 /// Walk every page's blocks and collect the ones `matcher` accepts.
-fn collect_backlinks(workspace: &Workspace, root: &Path, matcher: &TargetMatcher) -> Vec<Backlink> {
+/// `index` is the shared `parent -> children` map (see
+/// [`build_children_index`]); pages are the children of
+/// [`NodeId::root`].
+fn collect_backlinks(
+    workspace: &Workspace,
+    root: &Path,
+    matcher: &TargetMatcher,
+    index: &ChildrenIndex,
+) -> Vec<Backlink> {
     let mut out: Vec<Backlink> = Vec::new();
-    for (page_id, _) in children_of(workspace, NodeId::root()) {
+    let Some(pages) = index.get(&NodeId::root()) else {
+        return out;
+    };
+    for &page_id in pages {
         let Some(meta) = page_meta(workspace, page_id) else {
             continue;
         };
@@ -120,6 +158,7 @@ fn collect_backlinks(workspace: &Workspace, root: &Path, matcher: &TargetMatcher
             &mut path,
             matcher,
             &mut out,
+            index,
         );
     }
     out
@@ -224,34 +263,35 @@ fn template_name_of(workspace: &Workspace, meta: &PageMeta) -> Option<String> {
 /// Without scanning the alias, every mention of `@avelino` would fall
 /// off the person's backlinks panel.
 pub fn backlinks_for_page(workspace: &Workspace, root: &Path, meta: &PageMeta) -> Vec<Backlink> {
-    let mut acc = backlinks_for_target(workspace, root, &meta.slug);
-    let mut push = |extra: Vec<Backlink>| {
-        for link in extra {
+    // Build the `parent -> children` index once and reuse it across every
+    // channel below, so a template page (up to four scans) still walks the
+    // tree a single logical time instead of rebuilding the accelerator per
+    // target.
+    let index = build_children_index(workspace);
+    let mut acc: Vec<Backlink> = Vec::new();
+    let mut add = |matcher: TargetMatcher| {
+        for link in collect_backlinks(workspace, root, &matcher, &index) {
             if !acc.iter().any(|l| l.block_id == link.block_id) {
                 acc.push(link);
             }
         }
     };
+
+    add(TargetMatcher::refs(&meta.slug));
     if meta.title != meta.slug {
-        push(backlinks_for_target(workspace, root, &meta.title));
+        add(TargetMatcher::refs(&meta.title));
     }
     if meta.page_type.as_deref() == Some(crate::person::PERSON_TYPE) {
-        let at_slug = format!("@{}", meta.slug);
-        push(backlinks_for_target(workspace, root, &at_slug));
+        add(TargetMatcher::refs(&format!("@{}", meta.slug)));
         if meta.title != meta.slug {
-            let at_title = format!("@{}", meta.title);
-            push(backlinks_for_target(workspace, root, &at_title));
+            add(TargetMatcher::refs(&format!("@{}", meta.title)));
         }
     }
-    // When this page is a template, also surface where it was rendered
-    // (`call:<name>` fences) or instantiated (`from-template:: <slug>`).
-    // These aren't `[[refs]]`, so the plain text scan above misses them.
+    // A template page also surfaces where it was rendered (`call:<name>`
+    // fences) or instantiated (`from-template:: <slug>`) — neither is a
+    // `[[ref]]`, so the scans above miss them.
     if let Some(name) = template_name_of(workspace, meta) {
-        push(collect_backlinks(
-            workspace,
-            root,
-            &TargetMatcher::template(&meta.slug, &name),
-        ));
+        add(TargetMatcher::template(&meta.slug, &name));
     }
     acc
 }
@@ -268,13 +308,17 @@ fn walk_inside_page(
     path: &mut Vec<usize>,
     matcher: &TargetMatcher,
     out: &mut Vec<Backlink>,
+    index: &ChildrenIndex,
 ) {
-    for (idx, (child_id, _)) in children_of(workspace, parent).into_iter().enumerate() {
+    let Some(children) = index.get(&parent) else {
+        return;
+    };
+    for (idx, child_id) in children.iter().copied().enumerate() {
         path.push(idx);
         let text = workspace.block_text(child_id).unwrap_or_default();
         if matcher.matches(workspace, child_id, &text) {
             let (todo, body) = split_todo(&text);
-            let source_block = project_outline_node(workspace, child_id);
+            let source_block = project_outline_node_indexed(workspace, child_id, index);
             out.push(Backlink {
                 block_id: child_id.to_string(),
                 block_text: body.to_string(),
@@ -285,7 +329,16 @@ fn walk_inside_page(
                 source_path: Some(source_path.to_path_buf()),
             });
         }
-        walk_inside_page(workspace, child_id, meta, source_path, path, matcher, out);
+        walk_inside_page(
+            workspace,
+            child_id,
+            meta,
+            source_path,
+            path,
+            matcher,
+            out,
+            index,
+        );
         path.pop();
     }
 }

@@ -7,6 +7,7 @@
 //! [`project_outline`] variant stays around for tools that need to
 //! materialise straight from the op log (e.g. doctor, debug dumps).
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr;
 
@@ -102,24 +103,24 @@ pub fn flat_index_for_block(outline: &[OutlineNode], target: NodeId) -> Option<u
 /// its children and properties, instead of forcing the caller to
 /// reach back into the workspace per backlink.
 pub fn project_outline_node(workspace: &Workspace, node: NodeId) -> OutlineNode {
-    let raw = workspace.block_text(node).unwrap_or_default();
-    let (todo, body) = split_todo(&raw);
-    let mut properties: Vec<(String, String)> = workspace
-        .tree()
-        .properties_of(node)
-        .map(|(k, v)| (k.to_string(), prop_value_to_string(v)))
-        .collect();
-    properties.sort_by(|a, b| a.0.cmp(&b.0));
-    let tokens = outl_md::tokenize_owned(body);
-    OutlineNode {
-        id: node.to_string(),
-        text: body.to_string(),
-        todo,
-        collapsed: workspace.tree().is_collapsed(node),
-        properties,
-        tokens,
-        children: project_outline(workspace, node),
-    }
+    project_node(workspace, node, None)
+}
+
+/// Same shape as [`project_outline_node`], but resolves children through
+/// a pre-built `parent -> children` index instead of [`children_of`].
+///
+/// [`children_of`] rescans **every** node in the workspace on each call,
+/// so projecting a subtree with it is `O(subtree × total-nodes)`. The
+/// backlinks builder materialises hundreds of source blocks per pass and
+/// builds the index once (see [`crate::backlinks`]), turning that into
+/// `O(subtree)`. A parent missing from `index` means "no children" — the
+/// same result [`children_of`] would give for a leaf.
+pub(crate) fn project_outline_node_indexed(
+    workspace: &Workspace,
+    node: NodeId,
+    index: &ChildrenIndex,
+) -> OutlineNode {
+    project_node(workspace, node, Some(index))
 }
 use outl_md::parse::OutlineNode as ParsedOutlineNode;
 use outl_md::sidecar::SidecarBlock;
@@ -199,32 +200,69 @@ where
     }
 }
 
+/// A pre-built `parent -> children (in fractional order)` map.
+///
+/// Built once and reused across a whole traversal so recursive
+/// projection / walking doesn't pay [`children_of`]'s per-call
+/// `O(total-nodes)` scan. See [`crate::backlinks`] for the builder and
+/// why the naive walk was quadratic without it.
+pub(crate) type ChildrenIndex = HashMap<NodeId, Vec<NodeId>>;
+
 /// Walk the workspace tree starting from `parent` and return the
 /// outline below it. `NodeId::root()` is the usual starting point.
 pub fn project_outline(workspace: &Workspace, parent: NodeId) -> Vec<OutlineNode> {
-    children_of(workspace, parent)
-        .into_iter()
-        .map(|(id, _)| {
-            let raw = workspace.block_text(id).unwrap_or_default();
-            let (todo, body) = split_todo(&raw);
-            let mut properties: Vec<(String, String)> = workspace
-                .tree()
-                .properties_of(id)
-                .map(|(k, v)| (k.to_string(), prop_value_to_string(v)))
-                .collect();
-            properties.sort_by(|a, b| a.0.cmp(&b.0));
-            let tokens = outl_md::tokenize_owned(body);
-            OutlineNode {
-                id: id.to_string(),
-                text: body.to_string(),
-                todo,
-                collapsed: workspace.tree().is_collapsed(id),
-                properties,
-                tokens,
-                children: project_outline(workspace, id),
-            }
-        })
-        .collect()
+    project_children(workspace, parent, None)
+}
+
+/// Project the outline below `parent`. With `Some(index)` children are
+/// resolved in `O(children)`; with `None` through [`children_of`]
+/// (`O(total-nodes)` per level — fine for a one-off read, quadratic for
+/// a full-workspace walk). Shared by [`project_outline`] and the
+/// backlinks builder.
+fn project_children(
+    workspace: &Workspace,
+    parent: NodeId,
+    index: Option<&ChildrenIndex>,
+) -> Vec<OutlineNode> {
+    match index {
+        Some(idx) => idx
+            .get(&parent)
+            .map(|kids| {
+                kids.iter()
+                    .map(|&child| project_node(workspace, child, index))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        None => children_of(workspace, parent)
+            .into_iter()
+            .map(|(child, _)| project_node(workspace, child, None))
+            .collect(),
+    }
+}
+
+/// Build one [`OutlineNode`] for `node` — body, todo, properties,
+/// tokens, and its subtree. Shared core behind [`project_outline`],
+/// [`project_outline_node`], and [`project_outline_node_indexed`]; the
+/// only difference between them is how children are resolved (`index`).
+fn project_node(workspace: &Workspace, node: NodeId, index: Option<&ChildrenIndex>) -> OutlineNode {
+    let raw = workspace.block_text(node).unwrap_or_default();
+    let (todo, body) = split_todo(&raw);
+    let mut properties: Vec<(String, String)> = workspace
+        .tree()
+        .properties_of(node)
+        .map(|(k, v)| (k.to_string(), prop_value_to_string(v)))
+        .collect();
+    properties.sort_by(|a, b| a.0.cmp(&b.0));
+    let tokens = outl_md::tokenize_owned(body);
+    OutlineNode {
+        id: node.to_string(),
+        text: body.to_string(),
+        todo,
+        collapsed: workspace.tree().is_collapsed(node),
+        properties,
+        tokens,
+        children: project_children(workspace, node, index),
+    }
 }
 
 /// Read the page's `.md`, parse it, attach `NodeId`s from the sidecar,
