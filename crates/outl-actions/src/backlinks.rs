@@ -105,17 +105,18 @@ pub fn backlinks_for_target(workspace: &Workspace, root: &Path, target: &str) ->
     collect_backlinks(workspace, root, &TargetMatcher::refs(target), &index)
 }
 
-/// Build a `parent -> children (in fractional order)` map in a single
-/// `O(n)` pass over the tree.
+/// Build a `parent -> children (in fractional order)` map once per
+/// backlinks pass (one scan + per-parent sort; `O(n log n)` worst case).
 ///
 /// The walk visits every block in the workspace and, for each match,
 /// materialises its subtree. Both steps used to go through
 /// [`children_of`], which **rescans every node** on each call (`Tree`
 /// stores only `node -> (parent, position)`, with no child index) —
 /// making the whole pass `O(n²)`. Building this map once and threading
-/// it through the walk + [`project_outline_node_indexed`] brings it back
-/// to `O(n)`. Rebuilt per `backlinks_for_page` call, so it never goes
-/// stale: it is a scratch accelerator, not cached state.
+/// it through the walk + [`project_outline_node_indexed`] eliminates the
+/// `O(n²)` rescans (the remaining cost is one full walk + sorting).
+/// Rebuilt per `backlinks_for_page` call, so it never goes stale: it is a
+/// scratch accelerator, not cached state.
 fn build_children_index(workspace: &Workspace) -> ChildrenIndex {
     let mut grouped: HashMap<NodeId, Vec<(NodeId, Fractional)>> = HashMap::new();
     for (id, parent, pos) in workspace.tree().iter_nodes() {
