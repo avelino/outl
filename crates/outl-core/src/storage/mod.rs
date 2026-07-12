@@ -7,7 +7,7 @@
 use crate::hlc::Hlc;
 use crate::id::{ActorId, NodeId};
 use crate::op::LogOp;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
 
 pub mod index;
@@ -102,20 +102,6 @@ pub enum StorageError {
     MissingOp(String),
 }
 
-/// An opaque on-disk snapshot of materialized workspace state.
-///
-/// Storage treats `bytes` as a black box — it does not know (or need to
-/// know) the layout. `Workspace` is the single owner of the format: it
-/// serializes the materialized tree + block text via bincode and hands
-/// the buffer to `Storage` for persistence. See `snapshot.rs` for the
-/// typed shape (`SnapshotBody`) and the boot contract.
-#[derive(Debug, Default, Clone)]
-pub struct Snapshot {
-    /// Serialized snapshot body; format owned by the caller of
-    /// `save_snapshot`, not by `Storage`.
-    pub bytes: Vec<u8>,
-}
-
 /// Storage backend trait.
 ///
 /// Implementations: [`JsonlStorage`] (one file per actor, the only
@@ -140,20 +126,31 @@ pub trait Storage: Send + Sync {
     /// Return all ops in HLC order.
     fn all_ops(&self) -> Result<Vec<LogOp>, StorageError>;
 
-    /// Persist a snapshot for faster startup.
-    fn save_snapshot(&mut self, snapshot: &Snapshot) -> Result<(), StorageError>;
-
-    /// Load the most recent snapshot, if any.
-    fn load_snapshot(&self) -> Result<Option<Snapshot>, StorageError>;
-
-    /// HLC cutoff of the snapshot currently on disk, if any.
+    /// Return every op that a snapshot with the given per-actor `cutoff`
+    /// has **not** yet folded into its materialized state, in HLC order.
     ///
-    /// Used by `Workspace` to decide whether the snapshot is worth
-    /// loading on boot and how many ops to replay after it
-    /// (`ops_since(cutoff)`). Default `None` covers in-memory backends
-    /// and any future backend that has no snapshot yet.
-    fn snapshot_cutoff(&self) -> Result<Option<Hlc>, StorageError> {
-        Ok(None)
+    /// An op qualifies when its HLC is strictly greater than the cutoff
+    /// recorded for **its own actor**, or when its actor is absent from
+    /// `cutoff` entirely (that actor was unseen when the snapshot was
+    /// taken, so all of its ops are still pending). This is the per-actor
+    /// generalization of [`Self::ops_since`] and the delta the boot path
+    /// replays on top of a [`crate::snapshot::SnapshotBody`].
+    ///
+    /// Default impl filters [`Self::all_ops`]; backends may override for
+    /// efficiency. Correctness — never dropping a low-HLC op from a
+    /// lagging peer — lives here, not in the override.
+    fn ops_since_per_actor(
+        &self,
+        cutoff: &BTreeMap<ActorId, Hlc>,
+    ) -> Result<Vec<LogOp>, StorageError> {
+        Ok(self
+            .all_ops()?
+            .into_iter()
+            .filter(|op| match cutoff.get(&op.actor) {
+                Some(c) => op.ts > *c,
+                None => true,
+            })
+            .collect())
     }
 
     /// Shrink (or grow) the in-memory op cache to hold at most `cap`

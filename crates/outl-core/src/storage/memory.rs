@@ -15,13 +15,16 @@ use std::collections::HashMap;
 use crate::hlc::Hlc;
 use crate::id::{ActorId, NodeId};
 use crate::op::{LogOp, Op};
-use crate::storage::{Snapshot, Storage, StorageError};
+use crate::storage::{Storage, StorageError};
 
-/// In-memory op log + snapshot slot.
+/// In-memory op log.
+///
+/// Holds no snapshot: snapshots are a local boot cache owned by
+/// `Workspace` and written straight to `<root>/.outl/snapshots`, so an
+/// in-memory workspace (`root = None`) simply never snapshots.
 #[derive(Debug, Default)]
 pub struct MemoryStorage {
     ops: Vec<LogOp>,
-    snapshot: Option<Snapshot>,
 }
 
 impl MemoryStorage {
@@ -103,15 +106,6 @@ impl Storage for MemoryStorage {
     fn all_ops(&self) -> Result<Vec<LogOp>, StorageError> {
         Ok(self.sorted_ops())
     }
-
-    fn save_snapshot(&mut self, snapshot: &Snapshot) -> Result<(), StorageError> {
-        self.snapshot = Some(snapshot.clone());
-        Ok(())
-    }
-
-    fn load_snapshot(&self) -> Result<Option<Snapshot>, StorageError> {
-        Ok(self.snapshot.clone())
-    }
 }
 
 #[cfg(test)]
@@ -161,16 +155,5 @@ mod tests {
         let after_a = s.ops_since(a.ts).unwrap();
         assert_eq!(after_a.len(), 1);
         assert_eq!(after_a[0].ts, b.ts);
-    }
-
-    #[test]
-    fn snapshot_round_trip() {
-        let mut s = MemoryStorage::new();
-        assert!(s.load_snapshot().unwrap().is_none());
-        s.save_snapshot(&Snapshot {
-            bytes: vec![1, 2, 3],
-        })
-        .unwrap();
-        assert_eq!(s.load_snapshot().unwrap().unwrap().bytes, vec![1, 2, 3]);
     }
 }

@@ -101,7 +101,8 @@ pub fn open(path: &Path) -> Result<WsCtx, ApiError> {
     // CLI is ephemeral: every command opens, mutates, exits. Writing a
     // snapshot here would race with the long-lived TUI/desktop/mobile
     // that own the workspace, and snapshots already pay back at boot
-    // via `load_snapshot`. So opt out — read, don't write.
+    // (`Workspace::open_with_storage` reads one via `snapshot::read_from_disk`
+    // regardless of this policy). So opt out — read, don't write (#109).
     workspace.set_snapshot_policy(false, 0);
     // Register per-page shards if the workspace has been migrated
     // (RFC #137 Phase B). No-op for legacy Global workspaces.

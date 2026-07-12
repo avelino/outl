@@ -774,3 +774,19 @@ pub(crate) struct App {
     /// here, so the user always sees and edits the real fence source.
     pub(crate) transform_cache: HashMap<NodeId, String>,
 }
+
+impl Drop for App {
+    /// Flush a materialized-state snapshot on shutdown so the next open
+    /// (this TUI, the CLI, or a peer client sharing the workspace) boots
+    /// from it instead of replaying the entire op log (#109). This is the
+    /// only path that guarantees a snapshot for a workspace that never
+    /// crosses the in-band background threshold. Best-effort — a snapshot
+    /// is only a cache, so a failure is logged and swallowed — and it
+    /// joins any in-flight background writer so we don't race the exit.
+    fn drop(&mut self) {
+        if let Err(e) = self.workspace.save_snapshot() {
+            tracing::warn!("snapshot flush on exit failed (non-fatal): {e}");
+        }
+        self.workspace.wait_for_snapshots();
+    }
+}

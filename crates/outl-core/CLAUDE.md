@@ -32,6 +32,22 @@ Treat every change as production-bound.
     Dedup-by-op-id makes re-reading a recovered op harmless.
     See `docs/storage.md` → Concurrency / Failure modes.
 - Domain models: `Workspace`, `Page`, `Journal`, `Block`, `Property`, `Tag`
+- Materialized-state **snapshot** boot cache (`snapshot.rs`): a projection of the tree + block text that short-circuits full op-log replay on boot (#109/#128).
+  It is **not** a `Storage` responsibility — the snapshot is a *local* cache and is written straight to `<root>/.outl/snapshots/snap-<actor>.bin` (never on the file-sync surface, never through the op log).
+  `Workspace` is the single owner: it reads via `snapshot::read_from_disk` on boot and writes via `snapshot::write_to_disk` (both the synchronous `save_snapshot` and the background threshold writer).
+  The op log stays the source of truth — a missing / stale / corrupt snapshot is silently ignored and boot falls back to a full replay, so the snapshot can never corrupt state.
+  `<root>/ops/` (the op log) is deliberately **not** a dotfile because it must sync; `<root>/.outl/snapshots/` deliberately **is**, because it must not.
+  The replay cutoff is a **per-actor vector clock** (`SnapshotBody.cutoff: BTreeMap<ActorId, Hlc>`), never a single global HLC — boot replays, per actor, every op above that actor's mark plus every op of an actor the snapshot never saw.
+  A single global cutoff silently drops a low-HLC op from a lagging peer delivered after the snapshot (#156 Half 2); the delta comes from `Storage::ops_since_per_actor`.
+
+### Snapshot dir has exactly one owner — the `Workspace`, keyed off `root`
+
+The snapshot directory is derived **only** from the workspace `root` (`<root>/.outl/snapshots`), never from the storage's `ops_dir`.
+This was a real bug (#156): `JsonlStorage` used to derive its own `ops_dir.parent()/snapshots`.
+But production passes `ops_dir = <root>/ops` (not `<root>/.outl/ops`), so the storage read `<root>/snapshots` while the background writer wrote `<root>/.outl/snapshots`.
+They never met: snapshot boot was inert in production, while every test (which used `<root>/.outl/ops`) passed.
+The fix removed snapshot I/O from the `Storage` trait entirely: storage owns the op log, the workspace owns the snapshot cache, and there is now a single path derivation.
+Never re-add `save_snapshot` / `load_snapshot` to `Storage` — that reintroduces the two-owners divergence.
 
 ### Block text is two-tier, not one live `Doc` per block
 

@@ -79,6 +79,13 @@ pub fn open_workspace_at(
     // from disk via the offset index.
     workspace.apply_lru_cap(lru_cap);
 
+    // Snapshot boot-cache policy (#128/#109): as a long-lived client the
+    // GUI writes background snapshots so the next open (this app, the CLI,
+    // or a peer) boots from one instead of replaying the whole op log.
+    // Defaults (enabled, 10k) unless `[snapshot]` overrides them.
+    let snap_cfg = outl_config::load().snapshot;
+    workspace.set_snapshot_policy(snap_cfg.enabled, snap_cfg.op_threshold);
+
     Ok(workspace)
 }
 

@@ -25,16 +25,18 @@ pub trait Storage: Send + Sync {
     /// Return all ops in HLC order. Used for full replay on open.
     fn all_ops(&self) -> Result<Vec<LogOp>, StorageError>;
 
-    /// Persist a snapshot of materialized state for faster startup.
-    fn save_snapshot(&mut self, snapshot: &Snapshot) -> Result<(), StorageError>;
-
-    /// Load the most recent snapshot, if any.
-    fn load_snapshot(&self) -> Result<Option<Snapshot>, StorageError>;
+    /// Per-actor delta for snapshot boot: every op whose HLC is above the
+    /// cutoff of its OWN actor (or whose actor is absent from the map).
+    /// Default impl filters `all_ops`; backends may override for speed.
+    fn ops_since_per_actor(
+        &self,
+        cutoff: &BTreeMap<ActorId, Hlc>,
+    ) -> Result<Vec<LogOp>, StorageError>;
 }
 ```
 
-`Snapshot` is opaque bytes (format owned by the impl).
-It's an optimization: at startup we load the snapshot then replay ops appended after it.
+Snapshots are **not** a `Storage` responsibility — see [Snapshot strategy](#snapshot-strategy).
+The op log is all `Storage` owns.
 
 `StorageError` is the storage trait's typed error (`thiserror`).
 
@@ -104,7 +106,7 @@ The synced surface is `ops/` plus the `.md` / `.outl` (sidecar) projection.
 
 ## The test double: MemoryStorage
 
-`MemoryStorage` is a pure `Vec<LogOp>` + snapshot slot, no disk.
+`MemoryStorage` is a pure `Vec<LogOp>`, no disk (and no snapshot — an in-memory workspace has no `root` to cache under).
 Used by:
 
 - `Workspace::open_in_memory` — when a caller wants a workspace that never touches the filesystem.
@@ -172,15 +174,28 @@ Tracked: <https://github.com/avelino/outl/issues/1>.
 
 ## Snapshot strategy
 
-After every N ops (default 1000), take a snapshot:
+A snapshot is a **local boot cache** — a projection of the materialized tree + block text that short-circuits full op-log replay on open (#109/#128).
+It is owned by `Workspace`, **not** by `Storage`: `Storage` owns the op log, and the snapshot is written straight to `<root>/.outl/snapshots/snap-<actor>.bin`, never through the backend.
 
-1. Serialize the materialized tree to bytes.
-2. `save_snapshot` persists it.
-3. Future startup: `load_snapshot` returns the latest; replay only ops past it.
+Why `<root>/.outl/snapshots` and not next to `ops/`?
+The op log at `<root>/ops` must sync (iCloud / Syncthing), so it is deliberately not a dotfile.
+The snapshot must **not** sync — it is a per-device cache — so it lives under the dotted `.outl/`.
+Deriving the snapshot dir from the storage's `ops_dir` was the #156 bug.
+Production passes `ops_dir = <root>/ops`, so the reader looked in `<root>/snapshots` while the writer used `<root>/.outl/snapshots`, and boot was silently inert.
+The workspace `root` is now the single source of the snapshot dir.
 
-Snapshots are optional.
-A workspace with no snapshot replays the full log.
-Implement when the log gets noticeably slow — not before.
+Boot + delta:
+
+1. `snapshot::read_from_disk` loads the body; a missing / stale / corrupt snapshot is silently ignored and boot falls back to a full replay (the op log is the source of truth — the snapshot can never corrupt state).
+2. Hydrate the tree + block text from the body.
+3. Replay the **per-actor delta**: for each actor `A`, every op with `hlc > cutoff[A]`, plus every op of an actor absent from the cutoff (unseen when the snapshot was taken).
+
+The cutoff is a per-actor vector clock (`BTreeMap<ActorId, Hlc>`), not a single global HLC.
+A single cutoff tracks only the snapshotting actor's high-water mark, so a legitimately-low-HLC op from a lagging peer delivered after the snapshot would fall below it and vanish from the tree though it's durably in storage (#156).
+Per-actor, each op is compared against its own actor's mark, and because an actor's HLCs are monotonic the boundary is exact — no drop, no double-apply (idempotency covers the equal-HLC boundary).
+
+Writing is driven by `Workspace::set_snapshot_policy(enabled, op_threshold)` (in-band background writer, off the calling thread) and `Workspace::save_snapshot` (synchronous, on graceful shutdown).
+Snapshots are optional: a workspace with none replays the full log.
 
 ---
 
@@ -199,7 +214,8 @@ Implement when the log gets noticeably slow — not before.
 ## What is **not** here anymore
 
 Pre-0.5.0, outl shipped a second persistent backend: `SqliteStorage` (`.outl/log.db`, WAL mode).
-It was the default for local-only workspaces and the source of an entire class of "writes go through but vanish on the other client" bugs — `outl-cli` opened it via SQLite, `outl-tui` and mobile followed `config.toml` and opened JSONL on the same workspace, the two backends diverged silently.
+It was the default for local-only workspaces and the source of an entire class of "writes go through but vanish on the other client" bugs.
+`outl-cli` opened it via SQLite, `outl-tui` and mobile followed `config.toml` and opened JSONL on the same workspace, and the two backends diverged silently.
 
 0.5.0 dropped SQLite entirely.
 There is one persistent backend.
