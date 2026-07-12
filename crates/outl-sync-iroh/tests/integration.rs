@@ -252,6 +252,7 @@ async fn bidirectional_delta_sync() {
         shared_wid(),
         actor_b,
         b_ready_tx,
+        &[id_a.node_id()],
     );
 
     // A is the initiator: bind an endpoint and run the real delta_sync against
@@ -339,6 +340,7 @@ async fn offline_catchup() {
         shared_wid(),
         actor_b,
         b_ready_tx,
+        &[id_a.node_id()],
     );
 
     // Now A writes extra ops *while B is up but not yet connected to A*.
@@ -424,6 +426,7 @@ async fn mesh_line_transitive_propagation() {
         shared_wid(),
         actor_b,
         b_ready_tx,
+        &[id_a.node_id()],
     );
 
     let (c_ready_tx, _c_ready_rx) = mpsc::channel::<()>();
@@ -437,6 +440,7 @@ async fn mesh_line_transitive_propagation() {
         shared_wid(),
         actor_c,
         c_ready_tx,
+        &[id_b.node_id()],
     );
 
     // Link B↔C first: B (using its own endpoint as initiator) syncs with C, so
@@ -551,6 +555,7 @@ async fn membership_auto_discovery_then_direct_sync() {
         shared_wid(),
         actor_c,
         c_ready_tx,
+        &[id_a.node_id()],
     );
 
     // B "knows" C: write C's full loopback EndpointAddr into B's peers.json,
@@ -712,6 +717,7 @@ async fn delta_sync_rejects_mismatched_workspace_id() {
         WorkspaceId::from_raw("BBB00000000000000000000000000"),
         actor_b,
         b_ready_tx,
+        &[id_a.node_id()],
     );
 
     let (a_ready_tx, _a_ready_rx) = mpsc::channel::<()>();

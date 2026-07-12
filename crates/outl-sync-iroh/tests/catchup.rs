@@ -69,6 +69,7 @@ async fn catch_up_syncs_peer_paired_after_boot() {
         shared_wid(),
         actor_a,
         a_ready_tx,
+        &[id_b.node_id()],
     );
 
     // B brings its catch-up loop up FIRST, with an empty peer list. The shared
@@ -179,6 +180,7 @@ async fn catch_up_redials_after_workspace_id_change() {
         shared_wid(),
         actor_a,
         a_ready_tx,
+        &[id_b.node_id()],
     );
 
     let ep_b = test_support::bind_sync_endpoint(&id_b)
@@ -303,6 +305,7 @@ async fn catch_up_resyncs_peer_after_interval() {
         shared_wid(),
         actor_a,
         a_ready_tx,
+        &[id_b.node_id()],
     );
 
     let ep_b = test_support::bind_sync_endpoint(&id_b)

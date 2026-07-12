@@ -571,6 +571,38 @@ impl SyncProtocolHandler {
             return Ok(());
         }
 
+        // Reject a peer that is NOT (or is no longer) an approved device for this
+        // workspace. The workspace_id check above only proves the peer THINKS it
+        // belongs here — a device removed from `peers.json` still knows the id, so
+        // without this it would keep pulling history and pushing edits (issue #158
+        // "removing a paired device doesn't revoke its access"). Read `peers.json`
+        // fresh at serve time (not at boot) — the loop reloads it each tick and it
+        // can change while running, so a `peer remove` takes effect on the next
+        // connection instead of after a restart.
+        let remote_id = conn.remote_id().to_string();
+        let peers_path = crate::peers::workspace_peers_path(&self.workspace_root);
+        let authorized = match crate::peers::PeersStore::load_or_default(&peers_path) {
+            Ok(store) => store.list().iter().any(|p| p.node_id == remote_id),
+            Err(e) => {
+                // Fail CLOSED: if the peer list can't be read we can't prove the
+                // peer is approved, so reject rather than fall back to open access.
+                warn!(
+                    peer = %conn.remote_id().fmt_short(),
+                    "rejecting sync: peers.json unreadable ({e:#})"
+                );
+                conn.close(4u32.into(), b"unknown-peer");
+                return Ok(());
+            }
+        };
+        if !authorized {
+            warn!(
+                peer = %conn.remote_id().fmt_short(),
+                "rejecting sync from an unknown / revoked peer (not in peers.json)"
+            );
+            conn.close(4u32.into(), b"unknown-peer");
+            return Ok(());
+        }
+
         let ops_dir = self.workspace_root.join("ops");
 
         // 2. send our own vector clock so the initiator can compute its push.

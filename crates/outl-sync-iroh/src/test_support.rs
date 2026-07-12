@@ -25,8 +25,33 @@ use outl_core::WorkspaceId;
 
 use crate::engine::{delta_sync, SyncProtocolHandler};
 use crate::engine_catchup::run_catch_up;
-use crate::peers::PeerEntry;
+use crate::peers::{workspace_peers_path, PeerEntry, PeersStore};
 use crate::protocol::SYNC_ALPN;
+
+/// Authorize `peer` as an approved device for the responder rooted at
+/// `workspace_root`, by writing a minimal [`PeerEntry`] into its
+/// `<root>/.outl/peers.json` — the same file real pairing writes.
+///
+/// The production `SyncProtocolHandler::serve` rejects any connection whose
+/// `remote_id()` is not in `peers.json` (issue #158). The loopback tests stand
+/// up two endpoints and sync them as a *paired* workspace, so each responder
+/// must know the initiator(s) it's expected to serve. Call this for every
+/// initiator node id before (or after) `spawn_responder`; a node id absent from
+/// this list is treated as unknown/revoked and refused, which is exactly what
+/// the security check tests assert.
+pub fn authorize_peer(workspace_root: &Path, peer: iroh::EndpointId) {
+    let path = workspace_peers_path(workspace_root);
+    let mut store = PeersStore::load_or_default(&path).expect("load peers store");
+    store
+        .add(PeerEntry {
+            node_id: peer.to_string(),
+            alias: None,
+            relay_url: None,
+            endpoint_addr: None,
+            added_at: "2026-01-01T00:00:00Z".to_string(),
+        })
+        .expect("authorize peer in peers.json");
+}
 
 /// Bind a sync-ALPN endpoint with the given identity, exactly like the
 /// transport's `run_iroh` does.
@@ -98,6 +123,13 @@ pub fn spawn_half_responder(endpoint: iroh::Endpoint) -> Router {
 
 /// Mount the production `SyncProtocolHandler` on a `Router` and return it.
 ///
+/// `authorized_peers` is seeded into the responder's `peers.json` before the
+/// handler goes up, mirroring a real paired relationship: the production serve
+/// side refuses any connection whose `remote_id()` is not an approved peer
+/// (issue #158). Pass every initiator node id the responder is expected to
+/// serve; pass an empty slice to stand up a responder that trusts nobody (used
+/// by the revocation regression test to prove an unknown peer is rejected).
+///
 /// Keep the returned `Router` alive for as long as the responder must accept
 /// connections; drop it (or call `shutdown()`) to stop serving.
 pub fn spawn_responder(
@@ -106,7 +138,11 @@ pub fn spawn_responder(
     workspace_id: WorkspaceId,
     actor: ActorId,
     peer_ready_tx: std::sync::mpsc::Sender<()>,
+    authorized_peers: &[iroh::EndpointId],
 ) -> Router {
+    for peer in authorized_peers {
+        authorize_peer(&workspace_root, *peer);
+    }
     Router::builder(endpoint)
         .accept(
             SYNC_ALPN,

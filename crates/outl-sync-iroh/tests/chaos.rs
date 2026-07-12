@@ -97,6 +97,10 @@ async fn concurrent_writers_never_corrupt_op_log() {
         shared_wid(),
         actor_r,
         r_ready_tx,
+        // Writers are minted inside the loop below; each authorizes itself against
+        // R via `authorize_peer` right before it dials (spawn-time slice can't
+        // name identities that don't exist yet).
+        &[],
     );
 
     // Author ONE canonical batch for the victim actor, then hand each writer a
@@ -132,6 +136,9 @@ async fn concurrent_writers_never_corrupt_op_log() {
     for w in order {
         let dir_w = tempfile::tempdir().expect("writer tempdir");
         let id_w = fresh_identity(dir_w.path(), &format!("w{w}"));
+        // Authorize this freshly-minted writer against R before it dials in
+        // (issue #158: R refuses any peer not in its peers.json).
+        test_support::authorize_peer(dir_r.path(), id_w.node_id());
         let actor_w = ActorId::new(); // distinct device identity per writer
                                       // This writer holds the first (w+1)*ops_per_writer ops of the canonical
                                       // victim log — a dense prefix. The longest prefix carries the full set.
@@ -251,6 +258,7 @@ async fn reordered_and_duplicated_delivery_converges() {
         shared_wid(),
         actor_a,
         ta,
+        &[id_b.node_id(), id_c.node_id()],
     );
     let _router_b = test_support::spawn_responder(
         ep_b.clone(),
@@ -258,6 +266,7 @@ async fn reordered_and_duplicated_delivery_converges() {
         shared_wid(),
         actor_b,
         tb,
+        &[id_a.node_id(), id_c.node_id()],
     );
     let _router_c = test_support::spawn_responder(
         ep_c.clone(),
@@ -265,6 +274,7 @@ async fn reordered_and_duplicated_delivery_converges() {
         shared_wid(),
         actor_c,
         tc,
+        &[id_a.node_id(), id_b.node_id()],
     );
 
     // The directed pairs that, run enough times in any order, fully connect the
@@ -384,6 +394,7 @@ async fn partition_then_heal_under_load() {
         shared_wid(),
         actor_a,
         ta,
+        &[id_b.node_id(), id_c.node_id()],
     );
     let _router_c = test_support::spawn_responder(
         ep_c.clone(),
@@ -391,6 +402,7 @@ async fn partition_then_heal_under_load() {
         shared_wid(),
         actor_c,
         tc,
+        &[id_a.node_id()],
     );
 
     // While B is partitioned, A and C make MANY more edits and reconcile A↔C
@@ -448,6 +460,9 @@ async fn partition_then_heal_under_load() {
         shared_wid(),
         actor_b,
         tb,
+        // No one dials B in this test: B only ever initiates (heal → A). It's a
+        // responder purely for symmetry, so it authorizes nobody.
+        &[],
     );
 
     // B initiates against A: bidirectional delta-sync pulls A+C into B and pushes
@@ -549,6 +564,9 @@ async fn fan_out_to_many_peers_converges_without_double_dial() {
         shared_wid(),
         actor_hub,
         hub_tx,
+        // Peers are minted in the loop below; each authorizes itself against the
+        // hub before it dials (issue #158).
+        &[],
     );
 
     let mut handles = Vec::new();
@@ -557,6 +575,8 @@ async fn fan_out_to_many_peers_converges_without_double_dial() {
     for p in 0..n_peers {
         let dir_p = tempfile::tempdir().expect("peer tempdir");
         let id_p = fresh_identity(dir_p.path(), &format!("p{p}"));
+        // Authorize this peer against the hub before it dials in.
+        test_support::authorize_peer(dir_hub.path(), id_p.node_id());
         let actor_p = ActorId::new();
         let nodes = seed_ops(dir_p.path(), actor_p, 4);
         for n in &nodes {
@@ -674,6 +694,9 @@ async fn concurrent_inbound_dials_on_single_endpoint_stay_clean() {
         shared_wid(),
         actor_hub,
         hub_tx,
+        // Inbound dialers are minted in the loop below; each authorizes itself
+        // against the hub before it dials in (issue #158).
+        &[],
     );
 
     // A separate "outbound target" the hub will dial out to, concurrently with
@@ -694,6 +717,8 @@ async fn concurrent_inbound_dials_on_single_endpoint_stay_clean() {
         shared_wid(),
         actor_out,
         out_tx,
+        // The hub dials OUT to this responder concurrently with its inbound storm.
+        &[id_hub.node_id()],
     );
 
     // Several inbound dialers, each with its own disjoint batch, all targeting
@@ -709,6 +734,8 @@ async fn concurrent_inbound_dials_on_single_endpoint_stay_clean() {
     for w in inbound_order {
         let dir_w = tempfile::tempdir().expect("inbound tempdir");
         let id_w = fresh_identity(dir_w.path(), &format!("in{w}"));
+        // Authorize this inbound dialer against the hub before it dials in.
+        test_support::authorize_peer(dir_hub.path(), id_w.node_id());
         let actor_w = ActorId::new();
         let nodes = seed_ops(dir_w.path(), actor_w, 3);
         for n in &nodes {

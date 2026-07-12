@@ -37,8 +37,8 @@ Devices live at different paths (desktop `~/outl-p2p`, mobile `…/app.outl.mobi
 - **Gossip topic.**
   `workspace_topic_id` = `blake3(workspace_id)`, so two devices on the same workspace land on the same topic regardless of path.
 - **Sync request.**
-  `SyncRequest.workspace_id` carries the id, and the serve side (`SyncProtocolHandler::serve`) **validates it against the local id and rejects a mismatch** (`workspace-mismatch` close).
-  Genuinely-different workspaces never cross-merge op logs; legit same-workspace peers (now sharing an id) pass.
+  `SyncRequest.workspace_id` carries the id; `SyncProtocolHandler::serve` **validates it against the local id** (`workspace-mismatch` close) **and checks `remote_id()` is in `peers.json`** (read fresh per connection; `unknown-peer` close).
+  Issue #158: the id only proves the peer thinks it belongs; a removed device still knows it, so revocation needs the peer check.
 - **Pairing makes the joiner adopt the host's id.**
   The handshake `PairingPayload` carries each side's id; the **host keeps** its id and the **joiner adopts** it *before* the immediate post-pair `delta_sync` fires.
   Adoption is **persist-first**: `adopt_workspace_id` writes the host's id to `.outl/workspace-id` and only then flips the in-memory handle; a failed disk write does NOT adopt (retry-safe).
@@ -72,8 +72,7 @@ The nuance (verified against the iroh 1.0.0 source — `endpoint.rs::same_endpoi
 
 **Why the route is single:** a second endpoint registering the same secret key *replaces* the active client in the relay's `DashMap<EndpointId, ClientState>`.
 All inbound datagrams then route to the newcomer and the original silently stops receiving (`endpoint.rs::same_endpoint_id_relay` asserts this).
-If the newcomer doesn't accept `SYNC_ALPN`, the dialer gets `quinn` `CONNECTION_REFUSED` — the "connection refused, nothing syncs" bug.
-It was produced by a transient status-probe (or the GUI's old pairing endpoint) stealing the route ("Another endpoint connected with the same endpoint id" in relay logs).
+If the newcomer doesn't accept `SYNC_ALPN`, the dialer gets `quinn` `CONNECTION_REFUSED` — the "connection refused, nothing syncs" bug (a transient status-probe or the GUI's old pairing endpoint stealing the route).
 
 **Three call sites, three rules:**
 
@@ -214,9 +213,10 @@ Shared seed/read/wait helpers stay in `tests/common/mod.rs` (read-only); saga-sp
 | 3. Workspace identity = stable id, not path (topic) | `same_workspace_id_yields_same_topic_across_paths` (pre-existing) | `tests/integration.rs` |
 | 3. Workspace identity = stable id, not path (END-TO-END sync) | `different_paths_same_workspace_id_sync_as_one` (two devices at different paths, same id, converge) | `tests/regression.rs` |
 | 3. Mismatched ids are rejected | `delta_sync_rejects_mismatched_workspace_id` (pre-existing) | `tests/integration.rs` |
+| 3b. Removed/unknown peer denied (issue #158) | `removed_peer_is_denied_sync` | `tests/regression.rs` |
 | 4. Pairing adoption (joiner adopts host id, syncs as one) | `gui_pairing_over_live_sync_endpoint` (pre-existing; asserts adopted id persisted in both peers.json) | `tests/integration.rs` |
 | 5. Single endpoint per identity (pair AND sync over the live sync endpoint, no relay hijack) | `gui_pairing_over_live_sync_endpoint` (pre-existing; pairing rides the live sync endpoint, no second bind) | `tests/integration.rs` |
-| 6. Reachability resolution + off-LAN/IPv6 direct-addr filter (issue #133) | `iroh_endpoint_addr_*` + `is_reachable_lan_ipv4_*` (keep on-LAN IPv4, drop IPv6 + stale VPN IPs, fall back to stored/bare/corrupt) | `src/peers.rs` `#[cfg(test)]` |
+| 6. Reachability resolution + off-LAN/IPv6 direct-addr filter (issue #133) | `iroh_endpoint_addr_*` + `is_reachable_lan_ipv4_*` (keep on-LAN IPv4, drop IPv6 + stale VPN IPs, fall back stored/bare/corrupt) | `src/peers.rs` |
 | 7. Bidirectional push materializes on BOTH sides AND fires BOTH reload signals | `bidirectional_sync_fires_reload_signal_on_both_sides` (set convergence + `peer_ready_tx` on initiator AND responder) | `tests/regression.rs` |
 | 7. (set-convergence half) both sides hold all ops | `bidirectional_delta_sync` (pre-existing) | `tests/integration.rs` |
 | 8. Membership merge is ADD-only (never clobber a local entry, drop self, drop undialable) | `merge_unknown_never_clobbers_a_known_entry` + `merge_skips_self` / `merge_adds_unknown_and_dedups_known` / `merge_skips_unreachable_peer` | `src/peers.rs`, `src/engine_membership.rs` `#[cfg(test)]` |
@@ -350,7 +350,6 @@ On an **accepted** inbound connection, `serve()` reads the live remote socket of
 That rewrites the stored `endpoint_addr` to *only* that socket + the known relay, so the next catch-up dial uses the fresh route without a re-pair.
 Conservative: it only touches an **already-paired** peer (unknown node id → no-op, never added), and returns `false` with no write when the stored addr is already that socket.
 Regression: `refresh_peer_direct_addr_replaces_stale_keeps_relay_and_is_idempotent`.
-Local mDNS (issue #149) is the follow-up for a peer that never dials us.
 
 ## STOPGAP: IPv4-only bind (iroh 1.0.0 multipath workaround)
 
