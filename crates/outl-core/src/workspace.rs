@@ -160,13 +160,21 @@ impl Workspace {
     /// since its cutoff. Returns `Ok(false)` when there's nothing to
     /// load (so the caller falls through to [`Self::boot_from_full_replay`]).
     fn boot_from_snapshot(&mut self) -> Result<bool, WorkspaceError> {
-        let snap = match self.storage.load_snapshot()? {
-            Some(s) => s,
+        // Snapshots are a local boot cache owned by the workspace, read
+        // straight from `<root>/.outl/snapshots` — not routed through the
+        // storage backend (the op log). An in-memory workspace
+        // (`root = None`) has nowhere to read from, so it never boots
+        // from snapshot.
+        let snapshots_dir = match &self.snapshots_dir {
+            Some(d) => d.clone(),
             None => return Ok(false),
         };
-        let body = match SnapshotBody::decode(&snap.bytes) {
-            Ok(b) => b,
+        let body = match snapshot::read_from_disk(&snapshots_dir, self.actor) {
+            Ok(Some(b)) => b,
+            Ok(None) => return Ok(false),
             Err(e) => {
+                // Corrupt / stale / unreadable snapshot is never fatal —
+                // it's a cache. Fall back to a full op-log replay.
                 warn!("snapshot unusable, falling back to full replay: {e}");
                 return Ok(false);
             }
@@ -184,10 +192,12 @@ impl Workspace {
         );
         self.content = ContentStore::from_text_map(body.block_text.into_iter().collect());
 
-        // Replay only the ops the snapshot hasn't seen yet. `Edit` ops
-        // in this delta will be re-materialized in the loop below; the
-        // rest of the snapshot's text is still authoritative.
-        let delta = self.ops_since_combined(body.hlc_cutoff)?;
+        // Replay only the ops the snapshot hasn't seen yet — per actor,
+        // so a low-HLC op from an actor the snapshot never saw isn't
+        // dropped below another actor's high-water mark (#156). `Edit`
+        // ops in this delta will be re-materialized in the loop below;
+        // the rest of the snapshot's text is still authoritative.
+        let delta = self.ops_since_per_actor_combined(&body.cutoff)?;
         let mut edited_in_delta: HashSet<NodeId> = HashSet::new();
         for op in delta {
             if let Op::Edit { node, .. } = &op.op {
@@ -230,9 +240,9 @@ impl Workspace {
         }
 
         debug!(
-            "booted from snapshot (cutoff {}, {} nodes, {} delta ops, {rematerialized_count} \
-             nodes re-materialized)",
-            body.hlc_cutoff.physical_ms,
+            "booted from snapshot ({} actors in cutoff, {} nodes, {} delta ops, \
+             {rematerialized_count} nodes re-materialized)",
+            body.cutoff.len(),
             self.tree.node_count(),
             self.log.len(),
         );
@@ -384,25 +394,26 @@ impl Workspace {
         Ok(())
     }
 
-    /// Build a `SnapshotBody` from the current materialized state and
-    /// hand it to a worker thread that runs [`snapshot::write_to_disk`].
-    /// Non-blocking: the encode + fsync + rename happen off the calling
-    /// thread. If the body can't be built (e.g. empty log) we no-op.
-    fn spawn_background_snapshot(&mut self) {
-        let cutoff = match self.log.last() {
-            Some(l) => l.ts,
-            None => return,
-        };
-        let snapshots_dir = match &self.snapshots_dir {
-            Some(p) => p.clone(),
-            None => return,
-        };
+    /// Assemble a [`SnapshotBody`] from the current materialized state,
+    /// or `None` when nothing is persisted yet. Single builder for both
+    /// the background [`Self::spawn_background_snapshot`] and the
+    /// synchronous [`Self::save_snapshot`] paths so the cutoff and the
+    /// serialized shape can never drift between them.
+    ///
+    /// The cutoff is the per-actor high-water mark across **all** storage
+    /// (global + per-page shards), so the snapshot records exactly which
+    /// of each actor's ops its materialized state already folds in.
+    fn build_snapshot_body(&self) -> Result<Option<SnapshotBody>, WorkspaceError> {
+        let cutoff = self.last_ts_per_actor_combined()?;
+        if cutoff.is_empty() {
+            return Ok(None);
+        }
         let (nodes, properties, collapsed) = self.tree.snapshot_parts();
         // Convert to BTreeMap/BTreeSet for canonical (order-stable)
         // serialization — see `snapshot::SnapshotBody` for why.
-        let body = SnapshotBody::from_parts(
+        Ok(Some(SnapshotBody::from_parts(
             self.actor,
-            cutoff,
+            cutoff.into_iter().collect(),
             nodes.iter().map(|(k, v)| (*k, v.clone())).collect(),
             properties
                 .iter()
@@ -414,7 +425,26 @@ impl Workspace {
                 .iter()
                 .map(|(k, v)| (*k, v.clone()))
                 .collect(),
-        );
+        )))
+    }
+
+    /// Build a `SnapshotBody` from the current materialized state and
+    /// hand it to a worker thread that runs [`snapshot::write_to_disk`].
+    /// Non-blocking: the encode + fsync + rename happen off the calling
+    /// thread. If the body can't be built (e.g. empty log) we no-op.
+    fn spawn_background_snapshot(&mut self) {
+        let snapshots_dir = match &self.snapshots_dir {
+            Some(p) => p.clone(),
+            None => return,
+        };
+        let body = match self.build_snapshot_body() {
+            Ok(Some(b)) => b,
+            Ok(None) => return,
+            Err(e) => {
+                warn!("skipping background snapshot (cutoff read failed): {e}");
+                return;
+            }
+        };
 
         let handle = std::thread::Builder::new()
             .name(format!("outl-snapshot-{}", self.actor))
@@ -467,41 +497,31 @@ impl Workspace {
     /// about to drop the workspace anyway and don't care that the write
     /// blocks). For the in-band path, [`Self::apply`] spawns a worker
     /// thread that calls the same writer without blocking the caller.
+    /// Both paths write straight to `<root>/.outl/snapshots` via
+    /// [`snapshot::write_to_disk`]; the snapshot is a local boot cache,
+    /// never routed through the storage backend (the op log).
     ///
     /// A no-op (returns `Ok(())`) when the log is empty — there's
     /// nothing worth snapshotting and a zero-cutoff snapshot would
-    /// force the next boot to re-replay everything anyway.
+    /// force the next boot to re-replay everything anyway — or when the
+    /// workspace has no root (`open_in_memory`), which has nowhere to
+    /// write.
     pub fn save_snapshot(&mut self) -> Result<(), WorkspaceError> {
-        let cutoff = match self.log.last() {
-            Some(l) => l.ts,
+        let snapshots_dir = match &self.snapshots_dir {
+            Some(d) => d.clone(),
             None => return Ok(()),
         };
-        let (nodes, properties, collapsed) = self.tree.snapshot_parts();
-        let body = SnapshotBody::from_parts(
-            self.actor,
-            cutoff,
-            nodes.iter().map(|(k, v)| (*k, v.clone())).collect(),
-            properties
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-            collapsed.iter().copied().collect(),
-            self.content
-                .text_map()
-                .iter()
-                .map(|(k, v)| (*k, v.clone()))
-                .collect(),
-        );
-        let bytes = body.encode().map_err(|e| {
-            WorkspaceError::Storage(StorageError::Backend(format!("snapshot encode: {e}")))
+        let body = match self.build_snapshot_body()? {
+            Some(b) => b,
+            None => return Ok(()),
+        };
+        snapshot::write_to_disk(&snapshots_dir, &body).map_err(|e| {
+            WorkspaceError::Storage(StorageError::Backend(format!("snapshot write: {e}")))
         })?;
-        self.storage
-            .save_snapshot(&crate::storage::Snapshot { bytes })?;
         debug!(
-            "snapshot saved at cutoff {} ({} nodes, {} properties)",
-            cutoff.physical_ms,
-            nodes.len(),
-            properties.len()
+            "snapshot saved ({} actors in cutoff, {} nodes)",
+            body.cutoff.len(),
+            body.nodes.len(),
         );
         Ok(())
     }
@@ -613,11 +633,16 @@ impl Workspace {
         Ok(all)
     }
 
-    /// Merge ops with HLC > `ts` from every storage.
-    fn ops_since_combined(&self, ts: crate::hlc::Hlc) -> Result<Vec<LogOp>, StorageError> {
-        let mut all = self.storage.ops_since(ts)?;
+    /// Merge the per-actor delta (see [`Storage::ops_since_per_actor`])
+    /// from every storage, sorted by HLC. The snapshot boot path replays
+    /// this on top of the snapshot body.
+    fn ops_since_per_actor_combined(
+        &self,
+        cutoff: &std::collections::BTreeMap<ActorId, crate::hlc::Hlc>,
+    ) -> Result<Vec<LogOp>, StorageError> {
+        let mut all = self.storage.ops_since_per_actor(cutoff)?;
         for s in self.page_storages.values() {
-            all.extend(s.ops_since(ts)?);
+            all.extend(s.ops_since_per_actor(cutoff)?);
         }
         all.sort_by_key(|op| op.ts);
         all.dedup_by_key(|op| op.ts);
@@ -635,8 +660,8 @@ impl Workspace {
         Ok(all)
     }
 
-    /// Merge `last_ts_per_actor` from every storage.
-    #[allow(dead_code)]
+    /// Merge `last_ts_per_actor` from every storage — the per-actor
+    /// high-water mark used as the snapshot cutoff.
     fn last_ts_per_actor_combined(
         &self,
     ) -> Result<HashMap<ActorId, crate::hlc::Hlc>, StorageError> {

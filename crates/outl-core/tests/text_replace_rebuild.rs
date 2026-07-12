@@ -44,7 +44,7 @@ fn reedit_after_snapshot_matches_full_replay() {
     let mut ws = Workspace::open_with_storage(
         actor,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
-        None,
+        Some(tmp.path().to_path_buf()),
     )
     .unwrap();
     let n = NodeId::new();
@@ -74,7 +74,7 @@ fn reedit_after_snapshot_matches_full_replay() {
     let mut ws2 = Workspace::open_with_storage(
         actor,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
-        None,
+        Some(tmp.path().to_path_buf()),
     )
     .unwrap();
     assert_eq!(ws2.block_text(n).as_deref(), Some("hello"));
@@ -94,7 +94,7 @@ fn reedit_after_snapshot_matches_full_replay() {
     let from_snapshot = Workspace::open_with_storage(
         actor,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
-        None,
+        Some(tmp.path().to_path_buf()),
     )
     .unwrap();
 
@@ -103,7 +103,7 @@ fn reedit_after_snapshot_matches_full_replay() {
     let from_full = Workspace::open_with_storage(
         actor,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
-        None,
+        Some(tmp.path().to_path_buf()),
     )
     .unwrap();
 
@@ -133,7 +133,7 @@ fn three_edits_across_sessions() {
     let mut ws = Workspace::open_with_storage(
         actor,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
-        None,
+        Some(tmp.path().to_path_buf()),
     )
     .unwrap();
     let n = NodeId::new();
@@ -166,7 +166,7 @@ fn three_edits_across_sessions() {
     let mut ws2 = Workspace::open_with_storage(
         actor,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
-        None,
+        Some(tmp.path().to_path_buf()),
     )
     .unwrap();
     assert_eq!(ws2.block_text(n).as_deref(), Some("gamma"));
@@ -188,7 +188,7 @@ fn three_edits_across_sessions() {
     let ws3 = Workspace::open_with_storage(
         actor,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
-        None,
+        Some(tmp.path().to_path_buf()),
     )
     .unwrap();
     assert_eq!(
@@ -215,7 +215,7 @@ fn multi_actor_edit_converges_on_replay() {
     let mut ws_a = Workspace::open_with_storage(
         actor_a,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor_a).unwrap()),
-        None,
+        Some(tmp.path().to_path_buf()),
     )
     .unwrap();
     let n = NodeId::new();
@@ -244,7 +244,7 @@ fn multi_actor_edit_converges_on_replay() {
     let mut ws_b = Workspace::open_with_storage(
         actor_b,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor_b).unwrap()),
-        None,
+        Some(tmp.path().to_path_buf()),
     )
     .unwrap();
     assert_eq!(ws_b.block_text(n).as_deref(), Some("from A"));
@@ -264,7 +264,7 @@ fn multi_actor_edit_converges_on_replay() {
     let ws = Workspace::open_with_storage(
         actor_a,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor_a).unwrap()),
-        None,
+        Some(tmp.path().to_path_buf()),
     )
     .unwrap();
     // The two actors edit with independent HLC generators, so which write

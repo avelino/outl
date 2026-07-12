@@ -363,6 +363,13 @@ fn open_workspace(
     }
     // Shed cold history AFTER the materialized tree is complete.
     ws.apply_lru_cap(lru_cap);
+    // Snapshot boot-cache policy (#128/#109): a long-lived client writes
+    // background snapshots so the next open boots from one instead of
+    // replaying the whole op log. `Drop for App` also flushes a final
+    // snapshot on exit. Defaults (enabled, 10k) unless `[snapshot]`
+    // overrides them.
+    let snap_cfg = outl_config::load().snapshot;
+    ws.set_snapshot_policy(snap_cfg.enabled, snap_cfg.op_threshold);
     Ok((ws, actor, cfg, lock, actor_lock))
 }
 

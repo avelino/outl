@@ -5,6 +5,21 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ## [Unreleased]
 
+### Fixed
+
+- **Snapshot fast-boot now actually works in production, and can no longer drop a synced edit (issues #156, #128, #109).**
+  The materialized-state snapshot that short-circuits full op-log replay on open was **inert in production**: the workspace wrote it to `<root>/.outl/snapshots` while the storage backend read it from `<root>/snapshots` (it derived the path from `ops_dir.parent()`, but production keeps the op log at `<root>/ops`, not `<root>/.outl/ops`).
+  Writer and reader never met, so every boot silently fell back to a full replay — every existing test passed only because tests use `<root>/.outl/ops`, which makes the two paths coincide.
+  Snapshot I/O is now owned entirely by `Workspace` (read/write straight to `<root>/.outl/snapshots`, keyed off the workspace `root`) and was removed from the `Storage` trait, so there is a single path derivation and the two-owners divergence can't recur.
+  Naïvely fixing only the path would have armed a **silent data-loss bug**: the replay cutoff was a single global HLC, so a legitimately-low-HLC op from a lagging or offline peer, delivered after the snapshot, sat below the cutoff and vanished from the tree even though it was durably in storage.
+  The cutoff is now a **per-actor vector clock** — boot replays, for each actor, every op above that actor's own high-water mark plus every op of an actor the snapshot never saw — so no concurrent write is ever dropped (snapshot boot stays observationally identical to a full replay, guarded by the convergence property suite).
+  The long-lived clients (TUI, desktop, mobile) now enable the snapshot policy from `outl.toml` on open and flush a final snapshot on graceful shutdown, so the CLI's next invocation boots from it instead of replaying the entire op log (#109).
+
+### Changed
+
+- **`crates/outl-core/src/storage/jsonl.rs` split into cohesive modules (issue #161).**
+  The op-log backend (1189 lines, past the file-size guard's hard limit) is now `storage/jsonl/{mod,read,append,tests}.rs`, each comfortably under 600 lines, with no logic or public-surface change.
+
 ## [0.8.0] — 2026-07-11
 
 ### Added
