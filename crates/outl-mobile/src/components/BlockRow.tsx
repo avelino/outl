@@ -287,12 +287,9 @@ function BlockBody(props: {
       />
 
       {(() => {
-        // Quote chrome wraps **bullet + body** via the shared
-        // `<QuoteWrap />` so the left border lands *before* the
-        // checkbox — TUI parity, where `│ ☐ body` reads as "this is
-        // a quoted task" instead of "a task whose body happens to be
-        // a quote". The CollapseTriangle stays outside so the gutter
-        // chrome isn't double-boxed.
+        // Keep the list marker outside the quote chrome so a quote is
+        // visually the body of a normal outline block. The
+        // CollapseTriangle also stays outside the chrome.
         const bullet = (
           <BulletOrCheckbox
             todo={props.editing ? null : props.block.todo}
@@ -382,14 +379,16 @@ function BlockBody(props: {
         // JIT discovers them at build time — the shared `<QuoteWrap />`
         // just composes the conditional `class=` attribute.
         return (
-          <QuoteWrap
-            quoted={isBlockQuoted(props.block.text)}
-            baseClass="flex min-w-0 flex-1 items-start gap-2.5"
-            chromeClass="rounded-r-md border-l-2 border-(--color-ios-text-secondary)/40 bg-(--color-ios-text-secondary)/[0.05] pl-2 dark:border-(--color-iosd-text-secondary)/40 dark:bg-(--color-iosd-text-secondary)/[0.07]"
-          >
+          <>
             {bullet}
-            {bodyDiv}
-          </QuoteWrap>
+            <QuoteWrap
+              quoted={isBlockQuoted(props.block.text)}
+              baseClass="flex min-w-0 flex-1"
+              chromeClass="rounded-r-md border-l-2 border-(--color-ios-text-secondary)/40 bg-(--color-ios-text-secondary)/[0.05] pl-2 dark:border-(--color-iosd-text-secondary)/40 dark:bg-(--color-iosd-text-secondary)/[0.07]"
+            >
+              {bodyDiv}
+            </QuoteWrap>
+          </>
         );
       })()}
     </div>

@@ -889,15 +889,8 @@ export function BlockRow(props: {
           )}
         </button>
 
-        {/*
-         * Quote chrome wraps **bullet + body** via the shared
-         * `<QuoteWrap />` so the left border lands *before* the
-         * checkbox — TUI parity, where `│ ☐ body` reads as "this is
-         * a quoted task" instead of "a task whose body happens to be
-         * a quote". When the block isn't quoted the wrapper degrades
-         * to a plain flex container, so non-quoted rows render
-         * byte-identical.
-         */}
+        {/* The list marker stays outside quote chrome so a quoted body
+          * remains an ordinary outline block. */}
         {(() => {
           const bullet = (
             <button
@@ -1052,14 +1045,16 @@ export function BlockRow(props: {
           // JIT discovers them at build time — the shared
           // `<QuoteWrap />` just composes the conditional `class=`.
           return (
-            <QuoteWrap
-              quoted={isBlockQuoted(props.block.text)}
-              baseClass="flex min-w-0 flex-1 items-start"
-              chromeClass="rounded-r-md border-l-2 border-(--color-outl-fg-dimmer)/50 bg-(--color-outl-fg-dimmer)/[0.06] pl-2"
-            >
+            <>
               {bullet}
-              {body}
-            </QuoteWrap>
+              <QuoteWrap
+                quoted={isBlockQuoted(props.block.text)}
+                baseClass="flex min-w-0 flex-1"
+                chromeClass="rounded-r-md border-l-2 border-(--color-outl-fg-dimmer)/50 bg-(--color-outl-fg-dimmer)/[0.06] pl-2"
+              >
+                {body}
+              </QuoteWrap>
+            </>
           );
         })()}
       </div>

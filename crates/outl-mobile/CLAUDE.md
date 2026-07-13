@@ -194,7 +194,7 @@ Backlink rows stay inert: the whole row is already a tap-to-source button.
 ## Blockquote chrome
 
 A `"> "`-prefixed block gets a left border + ~5% tint, right-rounded, body full-colour (refs / bold / tags keep their palette).
-The chrome envelops **both `<BulletOrCheckbox />` and the body** (`│ ☐ body`, TUI order); `<CollapseTriangle />` stays outside; a non-quoted block degrades to a plain flex container (byte-identical).
+The outline bullet and `<CollapseTriangle />` stay outside the quote chrome; a non-quoted block degrades to a plain flex container (byte-identical).
 Detection is `splitQuote` + `stripQuoteFromTokens` (`@outl/shared/markdown`, mirror of `outl_actions::quote::split_quote`) so the `> ` isn't rendered twice; it composes with the TODO/DONE checkbox.
 Toggling: `toggleQuote(id)` → `toggle_quote` → `outl_actions::block::toggle_quote` (no TS string surgery).
 Full convention (three-surface parity): [`docs/clients.md` → Blockquote convention](../../docs/clients.md#blockquote-convention).

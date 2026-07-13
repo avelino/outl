@@ -132,6 +132,18 @@ describe("BlockRow Enter key — #119", () => {
   });
 });
 
+describe("BlockRow blockquote chrome — #140", () => {
+  it("keeps the outline bullet outside the quoted body", () => {
+    const host = mountView(makeBlock("blk-quote", "> quoted"), makeCb());
+    const bullet = host.querySelector("button[aria-label='Mark as TODO']");
+    const quote = host.querySelector(".border-l-2");
+
+    expect(bullet).not.toBeNull();
+    expect(quote).not.toBeNull();
+    expect(quote?.contains(bullet)).toBe(false);
+  });
+});
+
 /**
  * A `call:<name>` fence's language chip doubles as a link to the
  * template's page: it resolves `<name> → slug` via `listTemplates`,

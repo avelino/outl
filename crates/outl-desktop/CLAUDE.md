@@ -142,7 +142,7 @@ The backend `delete_page` Tauri command is the shared `outl_tauri_shared::comman
 
 ## Blockquote chrome
 
-A `"> "`-prefixed block renders with a left border + ~6% tint, right-rounded, body full-colour; the chrome wraps **both bullet and body** (`│ ☐ body`, TUI order).
+A `"> "`-prefixed block renders with a left border + ~6% tint, right-rounded, body full-colour; the outline bullet stays outside the quote chrome.
 Detection is `splitQuote` + `stripQuoteFromTokens`; toggling routes `toggleQuote` → `toggle_quote` → `outl_actions::block::toggle_quote`.
 Full convention: [`docs/clients.md` → Blockquote convention](../../docs/clients.md#blockquote-convention).
 

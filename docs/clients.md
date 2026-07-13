@@ -219,6 +219,7 @@ Composition with TODO/DONE follows a canonical order: `"TODO > body"` (task stat
 Both `toggle_quote` and `cycle_todo` peel both prefixes off and re-emit in canonical order — an externally authored `"> TODO foo"` gets normalised to `"TODO > foo"` on the first toggle from a client.
 Multi-line quote bodies keep the `> ` on every continuation line so the `.md` stays a valid CommonMark blockquote.
 Children of a quoted block are **not** implicitly quoted — the marker lives on the block, not on its subtree.
+GUI clients render the outline bullet outside the quote chrome, so the quote is visually the body's content rather than a nested list item.
 Inline tokens (`**bold**`, `[[ref]]`, `#tag`, `((blk-…))`) continue to tokenize **inside** the body — the wrapper is transparent.
 
 ## Keyboard accessory bar (mobile)

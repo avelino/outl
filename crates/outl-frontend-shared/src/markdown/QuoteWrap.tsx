@@ -3,13 +3,12 @@ import type { JSX } from "solid-js";
 import { splitQuote } from "./quote";
 
 /**
- * Wraps a `bullet + body` pair with the blockquote chrome when the
- * block is quoted, or with a plain flex container otherwise.
+ * Wraps a quoted block's body with blockquote chrome, or with a plain
+ * flex container otherwise.
  *
  * Why this lives in `@outl/shared`: mobile and desktop both render
- * `BlockRow` rows where the chrome must sit **outside** the bullet
- * (so the left border lands as `│ ☐ body`, matching the TUI). The
- * *structure* is identical between the two clients; only the theme
+ * `BlockRow` rows where the list bullet stays **outside** the quote
+ * chrome. The *structure* is identical between the two clients; only the theme
  * tokens differ (iOS vs desktop palette). Pulling the conditional
  * wrapper here eliminates the if/else duplication while keeping
  * Tailwind classes as literals in the caller — required for the JIT
@@ -38,9 +37,8 @@ export interface QuoteWrapProps {
   quoted: boolean;
   /**
    * Tailwind classes applied to the wrapper at all times. Must keep
-   * the row's flex layout (`flex min-w-0 flex-1 items-start ...`)
-   * so the bullet + body keep stacking correctly when the block is
-   * not quoted.
+   * the row's flex layout (`flex min-w-0 flex-1 items-start ...`) so
+   * the body keeps its width when the block is not quoted.
    */
   baseClass: string;
   /**
