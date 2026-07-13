@@ -178,6 +178,11 @@ enum Command {
         #[command(subcommand)]
         sub: cmd::tag::TagCommand,
     },
+    /// Template operations (list, apply, resolve callable).
+    Template {
+        #[command(subcommand)]
+        sub: cmd::template::TemplateCommand,
+    },
     /// Render a page in a target format (hugo / md / json).
     Export {
         #[command(subcommand)]
@@ -328,6 +333,10 @@ fn main() -> Result<()> {
         Some(Command::Tag { sub }) => {
             let p = resolve_path(cli.workspace.as_ref(), None)?;
             std::process::exit(cmd::tag::run(&sub, &p));
+        }
+        Some(Command::Template { sub }) => {
+            let p = resolve_path(cli.workspace.as_ref(), None)?;
+            std::process::exit(cmd::template::run(&sub, &p));
         }
         Some(Command::Export { sub, to }) => {
             let p = resolve_path(cli.workspace.as_ref(), None)?;
@@ -482,8 +491,9 @@ fn run_sync(path: &std::path::Path) -> anyhow::Result<()> {
         return Ok(());
     }
     let identity = outl_sync_iroh::IrohIdentity::load_or_generate(&outl_dir.join("identity.key"))?;
-    // `[sync] relay_url` from the global config: `None` (or empty) keeps iroh's
-    // n0 default relay, `Some(url)` points the sync endpoint at a custom relay.
+    // `[sync] relay_url` from the global config: `None` (or empty) uses outl's
+    // default relay (`use1-1.relay.avelino.outl.iroh.link`), `Some(url)` points the sync endpoint at
+    // a different relay.
     let relay_url = outl_config::load().sync.relay_url().map(str::to_string);
     let transport = outl_sync_iroh::IrohSyncTransport::new(identity, peers, relay_url);
 

@@ -44,7 +44,10 @@ The CLI/TUI/MCP read the device actor from `config.toml`, so pointing them at a 
 ### Lifecycle / one-shot
 
 - `outl` — open TUI in current directory (also `outl tui [<path>]`).
-- `outl init <path>` — scaffold a workspace (pages/, journals/, templates/, .outl/).
+- `outl init <path>` — scaffold a workspace (pages/, journals/, .outl/).
+  Seeds `templates/journal` as a **page** (`template:: journal`), not a `templates/journal.md` file (issue #146).
+  A legacy file, if present, migrates into the page body best-effort.
+  Opening today's journal then auto-instantiates it.
 - `outl serve [<path>] [--once]` — run file watcher; `--once` reconciles every `.md` and exits (smoke tests, scripting).
 - `outl doctor [<path>]` — integrity check (sidecars, orphan block refs, **parser warnings** from non-dialect `.md` content).
   Read-only.
@@ -88,6 +91,12 @@ Each handler returns a `serde_json::Value` so the same code path serves both the
 - `outl backlinks page|block|embed`
 - `outl tag list|pages`
 - `outl prop set|get|list`
+- `outl template list|apply|resolve|run` — template pages.
+  `list` finds every page with a non-empty `template::` property.
+  `apply` instantiates a structural template under a target block.
+  `resolve` returns a callable template's code block + declared params.
+  `run` executes a callable template: inject params, run through the shared `run_callable_block` path, write the `> **result:**` subtree under `--block`.
+  `apply`/`run` reject a `--block` that belongs to a page other than `--page` (`INVALID_ARG`).
 - `outl export hugo|md|json`
 - `outl batch [--ops=<JSON|->]` — runs a list of write ops in one workspace session (stop-on-first-error, returns `failed_at` / `applied` on the partial outcome)
 - `outl workspace info`
@@ -164,6 +173,7 @@ src/
 │   ├── backlinks.rs       # outl backlinks …
 │   ├── tag.rs             # outl tag …
 │   ├── prop.rs            # outl prop …
+│   ├── template.rs        # outl template …
 │   ├── batch.rs           # outl batch
 │   └── workspace_info.rs  # outl workspace info
 └── mcp/

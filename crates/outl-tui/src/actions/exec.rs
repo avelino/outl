@@ -6,9 +6,93 @@
 //! in-memory AST picks up the newly inserted/updated result child.
 
 use crate::state::{App, Mode};
+use outl_actions::{parse_call_invocation, run_callable_block};
+use outl_core::id::NodeId;
 use outl_md::parse::OutlineNode;
+use std::time::Duration;
 
 impl App {
+    /// Check if the block at `idx` is a `call:<template>` fence.
+    /// If so, run it through the shared callable-template path and
+    /// insert the result as a `> **result:**` subblock. Returns `true`
+    /// when handled (caller should skip normal exec).
+    fn maybe_run_call_block(&mut self, idx: usize) -> bool {
+        let mut cursor = 0usize;
+        let block = find_block_at_flat(&self.page.blocks, idx, &mut cursor).cloned();
+        let Some(block) = block else {
+            return false;
+        };
+        let Some((name, params)) = parse_call_invocation(&block.text) else {
+            return false;
+        };
+        let anchor = self.id_by_flat.get(idx).copied().unwrap_or(NodeId::root());
+
+        match self.run_callable_template(&name, &params, anchor) {
+            Ok(dur) => self.status = format!("ran call:{name} ({}ms)", dur.as_millis()),
+            Err(e) => self.status = format!("call: {e}"),
+        }
+        true
+    }
+
+    /// Run callable template `name` with `params`, attaching the result
+    /// under `anchor`, then reproject + reload the page.
+    ///
+    /// Both the `call:<name>` fence (`gx`) and the `/template <name> k=v`
+    /// slash command wrap this. The execution itself lives in
+    /// [`outl_actions::run_callable_block`] (shared with the desktop);
+    /// the TUI only owns the reproject + AST reload afterwards.
+    pub(crate) fn run_callable_template(
+        &mut self,
+        name: &str,
+        params: &[(String, String)],
+        anchor: NodeId,
+    ) -> Result<Duration, String> {
+        let out = run_callable_block(
+            &mut self.workspace,
+            &self.hlc,
+            &self.exec_registry,
+            name,
+            params,
+            anchor,
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Re-render the page projection, then reload the AST.
+        if let Some(root) = self.workspace.root.clone() {
+            let slug = self.current_slug();
+            if let Some(page_id) = outl_actions::find_by_slug(&self.workspace, &slug) {
+                let _ = outl_actions::apply_page_md_with_sidecar(&self.workspace, &root, page_id);
+            }
+        }
+        self.load_current();
+        Ok(out.duration)
+    }
+
+    /// Re-run the block at `path` if it is a `call:<name>` fence, so its
+    /// `> **result:**` stays fresh after the user edits the params.
+    /// A no-op for every other block. Called on Insert commit.
+    pub(crate) fn rerun_call_block_at(&mut self, path: &[usize]) {
+        let slug = self.current_slug();
+        let Some(page_id) = outl_actions::find_by_slug(&self.workspace, &slug) else {
+            return;
+        };
+        let Some(node) =
+            crate::actions::paste::resolve_node_id_at_path(&self.workspace, page_id, path)
+        else {
+            return;
+        };
+        let Some(text) = self.workspace.block_text(node) else {
+            return;
+        };
+        let Some((name, params)) = outl_actions::parse_call_invocation(&text) else {
+            return;
+        };
+        match self.run_callable_template(&name, &params, node) {
+            Ok(dur) => self.status = format!("ran call:{name} ({}ms)", dur.as_millis()),
+            Err(e) => self.status = format!("call: {e}"),
+        }
+    }
+
     /// Run the code block under the current selection through
     /// [`outl_exec`]. The result lands as a `> **result:**` subblock
     /// (or replaces an existing one), the `.md` is rewritten, and the
@@ -18,11 +102,24 @@ impl App {
         let idx = self.selected;
         let orphans = self.orphans_log.clone();
 
-        // Commit any in-flight Insert first — otherwise the user's
-        // latest edits aren't on disk yet and the runtime would see
-        // stale source.
         if matches!(self.mode, Mode::Insert { .. }) {
             self.commit_insert();
+        }
+
+        // Skip auto-run runtimes on manual `gx` — they execute
+        // automatically on page load and after every save. Running
+        // them manually provides no additional value.
+        let auto_run_langs = self.collect_auto_run_langs();
+        if self.block_flat_is_auto_run_lang(idx, &auto_run_langs) {
+            self.status = "query blocks auto-run — no manual execution needed".into();
+            return;
+        }
+
+        // Intercept `call:<template>` blocks — resolve the template,
+        // inject params from the YAML-ish body, execute via the
+        // template's runtime, and insert the result.
+        if self.maybe_run_call_block(idx) {
+            return;
         }
 
         match outl_exec::run_block_at_index(
@@ -40,41 +137,35 @@ impl App {
                             format!("ran {} in {}ms", report.language, out.duration.as_millis());
                     }
                     Err(e) => {
-                        // Infrastructure failure (rustc missing, timeout,
-                        // OOM, sandbox couldn't load the wasm). Multi-line
-                        // and detailed — show it in the modal so the
-                        // whole message lands on screen instead of being
-                        // truncated to one row.
                         let title = format!("{} runtime error", report.language);
                         self.show_error(title, format!("{e}"));
                     }
                 }
-                // Reparse — the `.md` now has the result subblock (or
-                // an error message embedded inside it) and we need it
-                // in the in-memory AST.
                 self.load_current();
             }
             Err(e) => {
-                // Couldn't even start: bad block, unknown language,
-                // failed read/write. Same modal treatment.
                 self.show_error("run failed", format!("{e}"));
             }
         }
     }
 
-    /// Run every block on the current page that has an `auto-run::`
-    /// property and whose source has changed since the last execution.
+    /// Run every block on the current page that either:
+    /// - carries an `auto-run::` property (cache-aware), or
+    /// - uses a runtime whose `auto_run()` returns `true` (always
+    ///   re-runs — results depend on workspace state, not the fence
+    ///   body).
     ///
-    /// Called after each `load_current`. Cache-aware via SHA-256 of
-    /// the fence body (vs `source-hash::` stamped on the result
-    /// subblock), so navigating away and back is a no-op when nothing
-    /// changed.
+    /// Called after each `load_current` and after each `save()`.
     pub(crate) fn run_auto_run_blocks(&mut self) {
-        // Collect candidate flat indices upfront so we don't fight
-        // the borrow checker mid-mutation.
+        let auto_run_langs = self.collect_auto_run_langs();
         let mut targets: Vec<usize> = Vec::new();
         let mut cursor = 0usize;
-        collect_auto_run_targets(&self.page.blocks, &mut cursor, &mut targets);
+        collect_auto_run_targets(
+            &self.page.blocks,
+            &auto_run_langs,
+            &mut cursor,
+            &mut targets,
+        );
         if targets.is_empty() {
             return;
         }
@@ -84,42 +175,118 @@ impl App {
         let mut ran = 0usize;
 
         for idx in targets {
-            match outl_exec::run_block_at_index_if_source_changed(
-                &mut self.workspace,
-                &self.hlc,
-                &path,
-                idx,
-                &self.exec_registry,
-                Some(&orphans),
-            ) {
+            // For runtimes with auto_run() == true, bypass the
+            // source-hash cache: query results depend on workspace
+            // state, not the fence body. For blocks with just the
+            // auto-run:: property (no auto_run runtime), keep the
+            // cache so navigation is cheap.
+            let force = self.block_flat_is_auto_run_lang(idx, &auto_run_langs);
+            let result = if force {
+                outl_exec::run_block_at_index(
+                    &mut self.workspace,
+                    &self.hlc,
+                    &path,
+                    idx,
+                    &self.exec_registry,
+                    Some(&orphans),
+                )
+                .map(Some)
+            } else {
+                outl_exec::run_block_at_index_if_source_changed(
+                    &mut self.workspace,
+                    &self.hlc,
+                    &path,
+                    idx,
+                    &self.exec_registry,
+                    Some(&orphans),
+                )
+            };
+            match result {
                 Ok(Some(_report)) => ran += 1,
-                Ok(None) => {} // cache hit; nothing to say
+                Ok(None) => {}
                 Err(e) => {
-                    // Don't show modal during auto-run — the user
-                    // didn't ask for this, surfacing a popup on
-                    // page-open would be jarring. Status line only.
                     self.status = format!("auto-run skipped block {idx}: {e}");
                 }
             }
         }
 
         if ran > 0 {
-            // Reparse so the AST picks up new/updated result subblocks.
             self.load_current_no_autorun();
             self.status = format!("auto-ran {ran} block{}", if ran == 1 { "" } else { "s" });
         }
     }
+
+    /// Build the set of fence languages whose runtime declares
+    /// `auto_run() == true`.
+    fn collect_auto_run_langs(&self) -> Vec<String> {
+        self.exec_registry
+            .languages()
+            .filter(|lang| {
+                self.exec_registry
+                    .get(lang)
+                    .map(|r| r.auto_run())
+                    .unwrap_or(false)
+            })
+            .map(String::from)
+            .collect()
+    }
+
+    /// Check whether the block at `flat_idx` uses a fence language
+    /// whose runtime has `auto_run() == true`.
+    fn block_flat_is_auto_run_lang(&self, flat_idx: usize, langs: &[String]) -> bool {
+        let mut cursor = 0usize;
+        let block = find_block_at_flat(&self.page.blocks, flat_idx, &mut cursor);
+        let Some(b) = block else {
+            return false;
+        };
+        let Some(parts) = outl_exec::extract_fence(&b.text) else {
+            return false;
+        };
+        let canonical = outl_md::lang::canonical(&parts.language).unwrap_or(&parts.language);
+        langs.iter().any(|l| l == canonical)
+    }
 }
 
-/// DFS-preorder walk collecting flat indices of blocks that carry an
-/// `auto-run::` property. Mirrors `block_at_flat_index_mut` in
-/// `outl-exec` so coordinates line up.
-fn collect_auto_run_targets(blocks: &[OutlineNode], cursor: &mut usize, out: &mut Vec<usize>) {
+/// DFS-preorder walk collecting flat indices of blocks that should
+/// auto-run: either they carry the `auto-run::` property, or their
+/// fence language is in `auto_run_langs`.
+fn collect_auto_run_targets(
+    blocks: &[OutlineNode],
+    auto_run_langs: &[String],
+    cursor: &mut usize,
+    out: &mut Vec<usize>,
+) {
     for b in blocks {
-        if b.properties.iter().any(|(k, _)| k == "auto-run") {
+        let has_prop = b.properties.iter().any(|(k, _)| k == "auto-run");
+        let is_auto_lang = if let Some(parts) = outl_exec::extract_fence(&b.text) {
+            let canonical = outl_md::lang::canonical(&parts.language).unwrap_or(&parts.language);
+            auto_run_langs.iter().any(|l| l == canonical)
+        } else {
+            false
+        };
+        if has_prop || is_auto_lang {
             out.push(*cursor);
         }
         *cursor += 1;
-        collect_auto_run_targets(&b.children, cursor, out);
+        collect_auto_run_targets(&b.children, auto_run_langs, cursor, out);
     }
+}
+
+/// Find the block at `target_idx` in DFS preorder. Returns `None` if
+/// out of range.
+fn find_block_at_flat<'a>(
+    blocks: &'a [OutlineNode],
+    target_idx: usize,
+    cursor: &mut usize,
+) -> Option<&'a OutlineNode> {
+    for b in blocks {
+        if *cursor == target_idx {
+            return Some(b);
+        }
+        *cursor += 1;
+        if let Some(found) = find_block_at_flat(&b.children, target_idx, cursor) {
+            return Some(found);
+        }
+    }
+    None
 }

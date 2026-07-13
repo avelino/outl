@@ -50,7 +50,10 @@ vi.mock("./api", () => ({
 
 import {
   copyBlockMarkdown,
+  deleteBlock,
   moveBlockAfter,
+  moveBlockDown,
+  moveBlockUp,
   openRef,
   pasteBlockAfter,
 } from "@outl/shared/api/commands";
@@ -76,6 +79,7 @@ function pageView(): PageView {
     page: { id: "pg-source", slug: "source", title: "Source", kind: "page" },
     outline: [],
     backlinks: [],
+    backlinks_order: "newest",
   };
 }
 
@@ -314,5 +318,133 @@ describe("block clipboard (cut / copy / paste)", () => {
 
     expect(moveBlockAfter).not.toHaveBeenCalled();
     expect(applyView).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Multi-select batch ops (issue #23).
+ *
+ * The desktop reaches a contiguous block range two ways — vim's `V`
+ * and the non-vim `Shift+↑/↓` entry — and both land in the same
+ * `vim-visual` selection state. These tests pin the non-vim entry
+ * (`SelectRange*`) and the batch reorder (`MoveVisualRange*`) that the
+ * `<BatchToolbar />` and the keyboard both fire.
+ */
+describe("multi-select batch ops (#23)", () => {
+  const applyView = vi.fn();
+  const setError = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setAppState({
+      page: { id: "pg-1", slug: "today", title: "Today", kind: "journal" },
+      outline: [
+        block("blk-a", "a"),
+        block("blk-b", "b"),
+        block("blk-c", "c"),
+        block("blk-d", "d"),
+      ],
+      backlinks: [],
+      selectedBlockId: null,
+      selectedBacklinkBlockId: null,
+      editingBlockId: null,
+      visualAnchorId: null,
+      mode: "normal",
+    });
+  });
+
+  it("Shift+Down (SelectRangeDown) from Normal anchors and extends into Visual", () => {
+    setAppState("selectedBlockId", "blk-b");
+
+    const handlers = buildHandlers({ applyView, setError });
+    handlers.SelectRangeDown?.();
+
+    expect(appState.mode).toBe("vim-visual");
+    expect(appState.visualAnchorId).toBe("blk-b");
+    expect(appState.selectedBlockId).toBe("blk-c");
+  });
+
+  it("a second SelectRangeDown keeps the anchor and grows the range", () => {
+    setAppState("selectedBlockId", "blk-b");
+
+    const handlers = buildHandlers({ applyView, setError });
+    handlers.SelectRangeDown?.();
+    handlers.SelectRangeDown?.();
+
+    expect(appState.visualAnchorId).toBe("blk-b");
+    expect(appState.selectedBlockId).toBe("blk-d");
+  });
+
+  it("SelectRangeUp extends upward without crossing into backlinks", () => {
+    setAppState("selectedBlockId", "blk-c");
+
+    const handlers = buildHandlers({ applyView, setError });
+    handlers.SelectRangeUp?.();
+
+    expect(appState.mode).toBe("vim-visual");
+    expect(appState.visualAnchorId).toBe("blk-c");
+    expect(appState.selectedBlockId).toBe("blk-b");
+  });
+
+  it("MoveVisualRangeUp moves every block in the range top-down", async () => {
+    setAppState({
+      mode: "vim-visual",
+      visualAnchorId: "blk-b",
+      selectedBlockId: "blk-c",
+    });
+
+    const handlers = buildHandlers({ applyView, setError });
+    await handlers.MoveVisualRangeUp?.();
+
+    expect(vi.mocked(moveBlockUp).mock.calls).toEqual([
+      ["pg-1", "blk-b"],
+      ["pg-1", "blk-c"],
+    ]);
+    expect(moveBlockDown).not.toHaveBeenCalled();
+  });
+
+  it("DeleteRange erases every selected line bottom-up and leaves Visual", async () => {
+    vi.mocked(deleteBlock).mockResolvedValue({
+      page: { id: "pg-1", slug: "today", title: "Today", kind: "journal" },
+      outline: [block("blk-a", "a"), block("blk-d", "d")],
+      backlinks: [],
+      backlinks_order: "newest",
+    });
+    setAppState({
+      mode: "vim-visual",
+      visualAnchorId: "blk-b",
+      selectedBlockId: "blk-c",
+    });
+
+    const handlers = buildHandlers({ applyView, setError });
+    await handlers.DeleteRange?.();
+
+    // Bottom-up so a parent's move-to-trash can't strand a targeted child.
+    expect(vi.mocked(deleteBlock).mock.calls).toEqual([
+      ["pg-1", "blk-c"],
+      ["pg-1", "blk-b"],
+    ]);
+    // Selection lands above the erased range and Visual is cleared.
+    expect(appState.mode).toBe("vim-normal");
+    expect(appState.visualAnchorId).toBeNull();
+    expect(appState.selectedBlockId).toBe("blk-a");
+  });
+
+  it("MoveVisualRangeDown moves every block in the range bottom-up", async () => {
+    setAppState({
+      mode: "vim-visual",
+      visualAnchorId: "blk-b",
+      selectedBlockId: "blk-c",
+    });
+
+    const handlers = buildHandlers({ applyView, setError });
+    await handlers.MoveVisualRangeDown?.();
+
+    // Bottom-up: the last block clears the block below the range first.
+    expect(vi.mocked(moveBlockDown).mock.calls).toEqual([
+      ["pg-1", "blk-c"],
+      ["pg-1", "blk-b"],
+    ]);
+    expect(moveBlockUp).not.toHaveBeenCalled();
   });
 });

@@ -5,8 +5,50 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ## [Unreleased]
 
+### Fixed
+
+- **Opening a page with many backlinks is much faster (issue #169).**
+  A user with a template referenced from 760 places reported multi-second page opens.
+  The cause was `backlinks_for_page` being **quadratic**: it walks every block in the workspace and, per match, materializes the block's subtree — and both steps went through `children_of`, which rescans *every* node in the tree on each call (`Tree` stores only `node -> (parent, position)`, with no child index).
+  The walk now builds a `parent -> children` map once per call (one scan + per-parent sort; `O(n log n)` worst case) and threads it through the walk and subtree projection, eliminating the `O(n²)` rescans.
+  This still does a full workspace walk (no inverted index), but the report's shape — 760 backlinks in a ~35k-block workspace — drops from **3.83 s to 41 ms** (~94×), with **no change to results** (the full backlinks test suite is the correctness oracle).
+  This is a pure internal refactor: `backlinks_for_page` / `project_outline` / `project_outline_node` keep their signatures and output; the index is scratch state rebuilt per call, never cached, so it can't go stale.
+
+- **Snapshot fast-boot now actually works in production, and can no longer drop a synced edit (issues #156, #128, #109).**
+  The materialized-state snapshot that short-circuits full op-log replay on open was **inert in production**: the workspace wrote it to `<root>/.outl/snapshots` while the storage backend read it from `<root>/snapshots` (it derived the path from `ops_dir.parent()`, but production keeps the op log at `<root>/ops`, not `<root>/.outl/ops`).
+  Writer and reader never met, so every boot silently fell back to a full replay — every existing test passed only because tests use `<root>/.outl/ops`, which makes the two paths coincide.
+  Snapshot I/O is now owned entirely by `Workspace` (read/write straight to `<root>/.outl/snapshots`, keyed off the workspace `root`) and was removed from the `Storage` trait, so there is a single path derivation and the two-owners divergence can't recur.
+  Naïvely fixing only the path would have armed a **silent data-loss bug**: the replay cutoff was a single global HLC, so a legitimately-low-HLC op from a lagging or offline peer, delivered after the snapshot, sat below the cutoff and vanished from the tree even though it was durably in storage.
+  The cutoff is now a **per-actor vector clock** — boot replays, for each actor, every op above that actor's own high-water mark plus every op of an actor the snapshot never saw — so no concurrent write is ever dropped (snapshot boot stays observationally identical to a full replay, guarded by the convergence property suite).
+  The long-lived clients (TUI, desktop, mobile) now enable the snapshot policy from `outl.toml` on open and flush a final snapshot on graceful shutdown, so the CLI's next invocation boots from it instead of replaying the entire op log (#109).
+
+### Changed
+
+- **`crates/outl-core/src/storage/jsonl.rs` split into cohesive modules (issue #161).**
+  The op-log backend (1189 lines, past the file-size guard's hard limit) is now `storage/jsonl/{mod,read,append,tests}.rs`, each comfortably under 600 lines, with no logic or public-surface change.
+
+## [0.8.0] — 2026-07-11
+
 ### Added
 
+- **Multi-block batch operations, on the TUI and desktop (issue #23).**
+  The TUI's Visual mode (`V`) gains **reorder**: `Alt+↑` / `Alt+↓` drag the whole selection among its siblings (mirror of the single-block `Alt`+arrows in Normal), alongside the existing range delete / indent / outdent / yank.
+  On the desktop, multi-select no longer requires vim mode: **`Shift+↓` / `Shift+↑`** start and grow a contiguous block selection from anywhere (the non-vim entry), and a floating **batch toolbar** appears — `N selected` plus Indent, Outdent, Move up, Move down, Delete, and Done — so the range ops are reachable by mouse instead of only by chord.
+  The toolbar fires the **same** `action-handlers` the keyboard does, so button and chord can't drift; only the toolbar's Delete confirms before erasing a range with nested children (the keyboard delete and the TUI erase without a prompt, matching vim).
+  The range reorder (`Cmd/Ctrl+Shift+↑/↓` in Visual) loops the existing per-block move action, walking bottom-up for move-down so a block never drags over its own not-yet-moved neighbour; the selection follows because block ids are stable across the re-render.
+  All four new bindings live in the shared `outl-shortcuts` catalog (`SelectRange{Down,Up}`, `MoveVisualRange{Up,Down}`), so a future client inherits them.
+- **Template engine — reusable block structures and callable code blocks (issue #146).**
+  Any page becomes a template the moment it gets a `template:: <name>` property; the page's outline is the template body, so templates are searchable, have backlinks, and sync like any other page — no special folder, no file-based config.
+  Two invocation modes.
+  **Structural** (`/template <name>` in the TUI, `outl template apply <name> --page <slug>` on the CLI, `outl_template_apply` over MCP) deep-copies the template's subtree under the target block, minting fresh `NodeId`s and op-log entries, and substitutes the built-in variables `{{date}}`, `{{today}}`, `{{yesterday}}`, `{{tomorrow}}`, `{{page}}`, and `{{time}}` in the block text.
+  **Callable** (a ` ```call:<name> ` fence, run with `gx` in the TUI or the Run action on desktop) resolves the named template's code block, injects the `params::` declared on the call block, and executes it through the existing `outl-exec` runtimes — Roam's `{{roam/render}}` without a ClojureScript runtime.
+  Callable execution lives once in `outl_actions::run_callable_block` and is intercepted inside the shared `run_code_block` action, so the desktop and mobile Run paths get `call:` fences for free instead of erroring "no runtime for `call:<name>`".
+  On the GUI clients a `call:<name>` fence now renders as a proper code block (with a language chip and Run button) — the shared `detectFence` info-string pattern accepts the `:` so the block is no longer left as raw ```` ``` ```` text, and its `key: value` params are syntax-highlighted (as YAML) instead of rendering flat.
+  Finishing an edit on a `call:<name>` block re-runs it automatically, so the `> **result:**` reflects the freshly-typed params without a manual `gx` / Run — on the TUI (Insert commit) and both GUI clients (the shared `edit_block` command).
+  **Every template page shows where it was used.** The template page's backlinks panel now lists every block that rendered it (a `call:<name>` fence) or instantiated it (`from-template:: <slug>`), so you jump from a template to its call sites with no hand-written `[[link]]` — the matcher reads the fence and the provenance property directly, not just plain `[[refs]]`.
+  **The daily journal is now a template too.** `outl init` creates a `templates/journal` page (`template:: journal`) instead of a `templates/journal.md` file, and opening a fresh daily note stamps that template automatically — the built-in variables resolve against the daily's date. Existing customized `templates/journal.md` bodies migrate into the page on `init` (best-effort).
+  Callable params are injected as JSON (`serde_json`), so a value containing a quote can't break — or inject into — the generated program, and the language is canonicalized so `py`/`python3`/`node` aliases still receive the params prelude. Built-in date/time tokens resolve through the workspace clock (honouring `[calendar] timezone`), matching the journal date instead of reading UTC in containers.
+  The engine lives once in `outl_actions::template` and every client wraps it (TUI, CLI, MCP), so the semantics stay identical across surfaces.
 - **Paste with formatting now brings rich clipboard formatting across (bold, italic, links, lists) on the GUI clients.**
   Copying a formatted message — a Slack post, a Google Doc paragraph, a Notion block, a Gmail draft — puts the bold/italic/links/lists on the clipboard's `text/html` flavour; the `text/plain` flavour is stripped of them.
   The desktop and mobile paste used to read only `text/plain`, so a pasted Slack message arrived flat.
@@ -33,7 +75,35 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
   Default `false`, and deliberately so — capturing the mouse disables the terminal's own text selection (selecting a URL, copying a single word), which is muscle memory for many terminal users.
   The keyboard yank copies markdown to the clipboard regardless of this flag.
 
+### Changed
+
+- **P2P sync now defaults to outl's dedicated relay (`use1-1.relay.avelino.outl.iroh.link`) instead of the shared n0 public pool.**
+  The relay only ever sees end-to-end-encrypted bytes (never your notes), but it *can* observe coordination metadata — which two devices sync, and when.
+  Defaulting to a dedicated, outl-scoped relay endpoint (hosted on n0 infra under our `*.iroh.link` namespace) is the first step toward a fully outl-owned relay; n0's shared relays remain the documented fallback (a malformed `[sync] relay_url` degrades to them rather than failing the bind).
+  No action needed — a device with an empty / omitted `[sync] relay_url` picks it up automatically. Point `relay_url` at any `iroh-relay` to override. See `docs/relay.md` (the vanity `relay.outl.app` name is on the roadmap, pending TLS).
+
 ### Fixed
+
+- **Template footguns from the issue #146 release audit.**
+  Three sharp edges in the template engine (issue #146) are fixed.
+  **Callable vs structural dispatch now keys off the presence of a runnable code block**, not on whether `params::` is declared — a callable template with a code block but no `params::` used to be misrouted as structural, so its ` ```lang…``` ` fence got deep-copied as literal text instead of executing; it now runs (with an empty `params`).
+  **Duplicate template names are visible** — when two pages share a `template:: <name>`, resolution still picks the first in tree order but now logs a `tracing::warn!`, and `list_templates` flags the collision on each `TemplateEntry` (`duplicate`) so a client can surface it.
+  **Plugin-instantiated templates honour the target page's date** — the host derived `{{date}}` from *today* even on a journal page (`page_date: None`); it now derives it from the target slug, matching the CLI/TUI path.
+- **P2P sync no longer reports a false "sync ok" that silently drops a device's edits.**
+  A desktop-initiated delta-sync logged `catch-up: sync ok` as soon as it finished *writing* its push — never confirming the peer durably *ingested* it.
+  Over a lossy desktop → mobile path (a backgrounded iPhone / carrier NAT), the connection could tear down cleanly for the initiator while the mobile never persisted the pushed ops, so a page edited on the desktop stayed empty on the phone even though sync claimed success.
+  The responder already closes the stream with a `done` sentinel **only after** a durable ingest; the initiator now **requires** that sentinel before reporting success (a lost close on an otherwise-successful ingest just costs a harmless, deduped re-push).
+  Regression: `initiator_reports_failure_when_responder_never_confirms_ingest`.
+- **Sync connect no longer stalls ~30s on a stale peer address, and self-heals when a device moves networks.**
+  iroh 1.0.0's QUIC multipath opens a path to every stored address at once and wedges ~30s on a dead one; a peer's old on-LAN IP (still in `peers.json` after it moved Wi-Fi / went cellular) passed the subnet filter and stalled every catch-up tick.
+  Each connect attempt is now bounded by a timeout, and a stalled/failed direct dial falls back to a **bare-node-id** dial so iroh's relay + discovery resolves the peer's *current* address instead of retrying the dead one forever.
+  On top of that, when a peer dials *in* directly, outl reads the live socket off the connection and rewrites the stored address to it (dropping the stale one), so the next outbound dial uses the fresh route with no re-pair — the stored address self-heals the moment the peer reconnects.
+- **Mobile stops flip-flopping a page between two devices' states on the sync poll.**
+  The mobile's routine reload (every ~3s) ran the orphan-`.md` reconcile + desync-recovery **inline** — operations that *mutate* the op log (md → ops). On a page being edited on two devices while sync ingested peer ops, the desync-recovery false-positived on the racing read and minted fresh ops each poll, so the page oscillated between the desktop's and the phone's versions (and briefly flashed an empty "0 ops" state).
+  Reconcile/recovery is a **boot** concern (a stable moment, no concurrent ingest); iroh peers ship *ops*, not `.md`, so a routine reload only needs to re-materialize the op log. The reload is now a pure re-read — orphan `.md` recovery still runs once at boot — and the reload no longer clobbers real content with a transient empty read.
+- **Callable-template results stop churning the op log and oscillating across devices.**
+  The `> **result:**` subtree was deleted and recreated on every run with fresh node ids, so two devices running the same `call:` block fought a delete/recreate war (each deleting the other's result), bloating the op log into the thousands and flip-flopping the page between the two devices' outputs.
+  The result now uses a **deterministic node id derived from the call block** and updates in place, so re-runs are idempotent and two devices converge on one result (last write wins per line) instead of competing subtrees.
 
 - **iroh sync survives restrictive networks — custom-CA proxies and post-VPN stale peer addrs (issue #133).**
   Two blockers that stopped Mac ↔ iOS sync on corporate / VPN networks are fixed in code.

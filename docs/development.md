@@ -398,6 +398,18 @@ The iCloud peer-file watcher is the canonical pattern: predicate logic lives in 
 
 Always re-read `crates/outl-mobile/CLAUDE.md` § "Peer-file materialisation" before touching `main.mm` or the watcher — that section spells out the iCloud race that two lines of code prevent.
 
+### Add a code-block runtime (`outl-exec`)
+
+1. Add a `lang-<name>` feature in `crates/outl-exec/Cargo.toml`.
+2. Create `crates/outl-exec/src/runtimes/<name>.rs` — one struct + `impl Runtime`.
+   Use `echo.rs` as the simplest template, or `query.rs` for the full pattern (workspace access + embed output + auto-run).
+3. Register in `RuntimeRegistry::with_builtins` behind the feature.
+4. Add aliases to `KNOWN_ALIASES` in `crates/outl-md/src/lang.rs` **and** the TS mirror `crates/outl-frontend-shared/src/highlight/aliases.ts` (same commit — the `doc-sync-guard` hook checks this).
+5. If the runtime returns `OutputFormat::Embeds`, the orchestrator already handles it — no UI change needed.
+6. If the runtime should auto-run, override `auto_run()` to return `true`.
+7. Document the DSL in `docs/markdown-format.md` § Query code blocks (or create a new section for non-query runtimes).
+8. Read `crates/outl-exec/CLAUDE.md` for the full surface and "what this crate does NOT own".
+
 ---
 
 ## 7. Debugging

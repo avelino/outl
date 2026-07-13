@@ -82,11 +82,16 @@ pub fn build_page_view(
             nodes: Vec::new(),
             warnings: Vec::new(),
         });
-    let backlinks = backlinks_for_page(workspace, storage_root, &meta);
+    let mut backlinks = backlinks_for_page(workspace, storage_root, &meta);
+    // Order per the user's `[display] backlinks_order` (issue #142).
+    // The config read is negligible next to the `.md` read above.
+    let backlinks_order = outl_config::load().display.backlinks_order;
+    outl_actions::sort_backlinks(&mut backlinks, backlinks_order.newest_first());
     Ok(PageView {
         page: meta,
         outline: page_outline.nodes,
         backlinks,
+        backlinks_order,
         warnings: page_outline.warnings,
     })
 }

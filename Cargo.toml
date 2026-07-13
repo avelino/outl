@@ -19,7 +19,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT"
@@ -30,17 +30,17 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Internal crates
-outl-core = { path = "crates/outl-core", version = "0.7.0" }
-outl-md = { path = "crates/outl-md", version = "0.7.0" }
-outl-actions = { path = "crates/outl-actions", version = "0.7.0" }
-outl-sync-iroh = { path = "crates/outl-sync-iroh", version = "0.7.0" }
-outl-config = { path = "crates/outl-config", version = "0.7.0" }
-outl-exec = { path = "crates/outl-exec", version = "0.7.0" }
-outl-plugins = { path = "crates/outl-plugins", version = "0.7.0" }
-outl-shortcuts = { path = "crates/outl-shortcuts", version = "0.7.0" }
-outl-theme = { path = "crates/outl-theme", version = "0.7.0" }
-outl-tauri-shared = { path = "crates/outl-tauri-shared", version = "0.7.0" }
-outl-tui = { path = "crates/outl-tui", version = "0.7.0" }
+outl-core = { path = "crates/outl-core", version = "0.8.0" }
+outl-md = { path = "crates/outl-md", version = "0.8.0" }
+outl-actions = { path = "crates/outl-actions", version = "0.8.0" }
+outl-sync-iroh = { path = "crates/outl-sync-iroh", version = "0.8.0" }
+outl-config = { path = "crates/outl-config", version = "0.8.0" }
+outl-exec = { path = "crates/outl-exec", version = "0.8.0" }
+outl-plugins = { path = "crates/outl-plugins", version = "0.8.0" }
+outl-shortcuts = { path = "crates/outl-shortcuts", version = "0.8.0" }
+outl-theme = { path = "crates/outl-theme", version = "0.8.0" }
+outl-tauri-shared = { path = "crates/outl-tauri-shared", version = "0.8.0" }
+outl-tui = { path = "crates/outl-tui", version = "0.8.0" }
 
 # IDs and time
 ulid = { version = "1", features = ["serde"] }
@@ -104,7 +104,7 @@ fs2 = "0.4"
 
 # Concurrency
 parking_lot = "0.12"
-lru = "0.12"
+lru = "0.18"
 
 # Misc
 sha2 = "0.11"

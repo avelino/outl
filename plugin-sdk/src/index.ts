@@ -220,6 +220,27 @@ export interface Page {
 }
 
 /**
+ * Template namespace. `list` needs `read-page`; `instantiate` needs `write-page`.
+ * See [Templates](../docs/templates.md) for the full guide.
+ */
+export interface TemplateApi {
+  /** List every template in the workspace. */
+  list(): Promise<Template[]>;
+  /** Instantiate a structural template under a target block. */
+  instantiate(name: string, targetBlockId: BlockId): Promise<void>;
+}
+
+/** A template as the host hands it to a plugin (read projection). */
+export interface Template {
+  /** Invocation name (the value of `template::`). */
+  name: string;
+  /** Page slug. */
+  slug: PageSlug;
+  /** Declared parameter names (empty for structural templates). */
+  params?: string[];
+}
+
+/**
  * Command namespace. No permission gate — commands are declared up front in
  * `plugin.json` under `contributes.commands`, and the id passed here must match
  * one of them. The handler is fired by a slash menu or a keybinding.
@@ -302,6 +323,7 @@ export interface PluginContext {
   ops: OpsApi;
   blocks: BlocksApi;
   page: PageApi;
+  template: TemplateApi;
   commands: CommandsApi;
   config: ConfigApi;
   content: ContentApi;

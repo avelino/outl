@@ -114,7 +114,12 @@ impl App {
         let Some(meta) = outl_actions::page_meta(&self.workspace, id) else {
             return Vec::new();
         };
-        outl_actions::backlinks_for_page(&self.workspace, &self.workspace_root, &meta)
+        let mut links =
+            outl_actions::backlinks_for_page(&self.workspace, &self.workspace_root, &meta);
+        // Order per the user's preference (issue #142); cached by the
+        // caller so this runs once per view, not per frame.
+        outl_actions::sort_backlinks(&mut links, self.backlinks_newest_first);
+        links
     }
 
     /// Convenience: backlinks for the currently-opened page/journal.
@@ -159,6 +164,32 @@ impl App {
     /// view switches. Cheap (just sets the `Option` to `None`).
     pub(crate) fn invalidate_backlinks_cache(&self) {
         *self.backlinks_cache.borrow_mut() = None;
+    }
+
+    /// Flip the backlinks list direction (newest ⇄ oldest, issue #142),
+    /// drop the cache so the next render re-sorts, and persist the new
+    /// direction to `~/.config/outl/config.toml` so it survives a
+    /// restart. Persistence is best-effort — a write failure only shows
+    /// in the status line, the in-session flip still takes effect.
+    pub(crate) fn toggle_backlinks_order(&mut self) {
+        self.backlinks_newest_first = !self.backlinks_newest_first;
+        self.invalidate_backlinks_cache();
+
+        let mut cfg = outl_config::load();
+        cfg.display.backlinks_order = if self.backlinks_newest_first {
+            outl_config::BacklinksOrder::Newest
+        } else {
+            outl_config::BacklinksOrder::Oldest
+        };
+        let label = if self.backlinks_newest_first {
+            "newest first"
+        } else {
+            "oldest first"
+        };
+        self.status = match outl_config::save(&cfg) {
+            Ok(()) => format!("backlinks: {label}"),
+            Err(e) => format!("backlinks: {label} (not saved: {e})"),
+        };
     }
 
     pub(crate) fn go_today(&mut self) -> Result<()> {

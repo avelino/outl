@@ -22,6 +22,7 @@ pub(crate) fn handle_overlay_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         Some(Overlay::Search(_)) => handle_search_overlay_key(app, key),
         Some(Overlay::Command(_)) => handle_command_overlay_key(app, key),
         Some(Overlay::Slash(_)) => handle_slash_overlay_key(app, key),
+        Some(Overlay::TemplatePicker(_)) => handle_template_picker_key(app, key),
         Some(Overlay::Error(_)) => {
             // Modal error popup: any key dismisses. Special-case Ctrl+C
             // so it still quits the whole TUI.
@@ -165,4 +166,37 @@ fn handle_slash_overlay_key(app: &mut App, key: KeyEvent) -> Result<bool> {
 fn run_command(app: &mut App, line: &str) -> Result<bool> {
     let registry = app.command_registry.clone();
     registry.dispatch(app, line)
+}
+
+fn handle_template_picker_key(app: &mut App, key: KeyEvent) -> Result<bool> {
+    match key.code {
+        KeyCode::Esc => app.overlay = None,
+        KeyCode::Enter => return app.accept_template_picker(),
+        KeyCode::Up => {
+            if let Some(Overlay::TemplatePicker(ref mut tp)) = app.overlay {
+                tp.selected = tp.selected.saturating_sub(1);
+            }
+        }
+        KeyCode::Down => {
+            if let Some(Overlay::TemplatePicker(ref mut tp)) = app.overlay {
+                if tp.selected + 1 < tp.filtered.len() {
+                    tp.selected += 1;
+                }
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(Overlay::TemplatePicker(ref mut tp)) = app.overlay {
+                tp.query.pop();
+            }
+            app.refresh_template_picker();
+        }
+        KeyCode::Char(c) => {
+            if let Some(Overlay::TemplatePicker(ref mut tp)) = app.overlay {
+                tp.query.push(c);
+            }
+            app.refresh_template_picker();
+        }
+        _ => {}
+    }
+    Ok(false)
 }

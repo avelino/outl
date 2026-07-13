@@ -28,6 +28,8 @@ pub struct ReadModel {
     pub blocks: Vec<BlockView>,
     /// Every page (and journal) by slug.
     pub pages: Vec<PageView>,
+    /// Every template (pages with a non-empty `template::` property).
+    pub templates: Vec<TemplateView>,
     /// The op currently being dispatched, when inside an `onOp` turn.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub op: Option<LogOpView>,
@@ -57,6 +59,18 @@ pub struct PageView {
     pub title: String,
     /// `"page"` or `"journal"`.
     pub kind: String,
+}
+
+/// A template page as the JS side sees it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateView {
+    /// Invocation name (the value of `template::`).
+    pub name: String,
+    /// Page slug.
+    pub slug: String,
+    /// Declared parameter names (empty for structural templates).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub params: Vec<String>,
 }
 
 /// The op being dispatched to `onOp`, projected to a stable JS shape. This is a
@@ -123,6 +137,13 @@ pub enum HostIntent {
     EnsurePage {
         /// Page slug to create.
         slug: String,
+    },
+    /// Instantiate a structural template under a target block.
+    InstantiateTemplate {
+        /// Template invocation name.
+        name: String,
+        /// Target block id to instantiate under.
+        under: String,
     },
 }
 

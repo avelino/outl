@@ -38,6 +38,11 @@ pub struct PageView {
     pub page: PageMeta,
     pub outline: Vec<OutlineNode>,
     pub backlinks: Vec<Backlink>,
+    /// Direction `backlinks` was sorted in (`[display] backlinks_order`,
+    /// issue #142). Carried on the view so a client's direction toggle
+    /// shows the right arrow at boot without a separate settings read.
+    /// Serialises as `"newest"` / `"oldest"`.
+    pub backlinks_order: outl_config::BacklinksOrder,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<outl_md::ParseWarning>,
 }
@@ -55,6 +60,26 @@ pub struct BlockHit {
     pub text: String,
     /// Slug of the page hosting the block, for context.
     pub source_slug: String,
+}
+
+/// One structural template surfaced by `list_templates` — the `/template`
+/// picker in every GUI client. Mirrors the invocation `name` (what the
+/// user picks) and the `slug` of the page that defines the body.
+///
+/// Deliberately narrower than `outl_actions::TemplateEntry`: the GUIs
+/// only need the name (label) + slug (secondary label / dedupe key);
+/// `page_id` and `params` are backend detail the pick doesn't carry.
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplateDto {
+    /// Invocation name (the value of the page's `template::` property).
+    pub name: String,
+    /// Slug of the page that defines the template.
+    pub slug: String,
+    /// `true` when another page shares this `template:: <name>` — the
+    /// picker surfaces it so the user knows a duplicate silently
+    /// shadows the rest (resolution picks the first in tree order).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub duplicate: bool,
 }
 
 /// Reply for `create_block`. Pairs the refreshed [`PageView`] with the

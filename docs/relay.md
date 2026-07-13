@@ -1,13 +1,13 @@
 # Relay & NAT traversal
 
 This page explains the one piece of the [iroh P2P transport](sync.md) that *isn't* peer-to-peer: the relay.
-It's the part people get nervous about — "wait, my notes go through a server?" — so it's worth being precise about what a relay does, what it can see, what it can't, and why outl will eventually run its own at `relay.outl.app`.
+It's the part people get nervous about — "wait, my notes go through a server?" — so it's worth being precise about what a relay does, what it can see, what it can't, and which relay outl uses by default.
 
 If you just want the short version:
 
 > The relay helps two devices behind NAT find each other and, when they can't connect directly, forwards their **already-encrypted** bytes.
 > It never sees your notes.
-> Today outl uses the public relays operated by [n0][n0] (iroh's authors); running our own is on the roadmap, and the config is already wired for it.
+> outl defaults to its own dedicated relay at `use1-1.relay.avelino.outl.iroh.link`; the public relays operated by [n0][n0] (iroh's authors) stay as the documented fallback, and the config lets you point anywhere. (`relay.outl.app` is a friendlier alias we're bringing online — see the roadmap note below.)
 
 ---
 
@@ -28,10 +28,10 @@ iroh's flavor:
    You saw this in your own log:
 
    ```
-   INFO endpoint{id=35c8fc38bf}:relay-actor: home is now relay https://use1-1.relay.n0.iroh.link./, was None
+   INFO endpoint{id=35c8fc38bf}:relay-actor: home is now relay https://use1-1.relay.avelino.outl.iroh.link./, was None
    ```
 
-   That endpoint just told a public n0 relay "I'm reachable here."
+   That endpoint just told the relay — outl's own by default — "I'm reachable here."
 
 2. **Hole punching** — using the relay to exchange addresses and timing, the two peers fire packets at each other's NATs simultaneously, punching a path open.
    When it works (it usually does), they get a **direct** QUIC connection and the relay drops out of the data path entirely.
@@ -51,8 +51,8 @@ This is the part that decides whether a relay is a privacy problem.
 **The relay cannot read your notes.**
 Every iroh connection is end-to-end encrypted with QUIC + TLS 1.3, keyed to the peers' identities.
 The relay forwards opaque ciphertext.
-It has no key, so a relay — n0's or yours — sees encrypted bytes and nothing else.
-This is true *today*, on the public n0 relays, with no extra work.
+It has no key, so a relay — outl's, n0's, or yours — sees encrypted bytes and nothing else.
+This is true on any relay, with no extra work.
 
 **The relay can see metadata.**
 Specifically, when traffic is relayed it observes:
@@ -70,105 +70,86 @@ And after a successful hole punch, even that shrinks: the data goes peer-to-peer
 
 ---
 
-## Today: n0's public relays
+## The default: outl's dedicated relay
 
-Out of the box, with `[sync] transport = "iroh"`, outl uses the relay infrastructure run by [n0][n0], the team that builds iroh.
-Zero setup, works immediately, which is exactly what you want while the P2P transport is proving itself in beta.
+Out of the box, with `[sync] transport = "iroh"`, outl registers against a **dedicated** relay at `use1-1.relay.avelino.outl.iroh.link` — outl's own hostname under the `*.iroh.link` namespace, not the shared n0 public pool.
+Zero setup, works immediately, and it's a named endpoint we control instead of best-effort shared infra.
 
-The tradeoff is the one the table above describes: **n0 is a third party that can observe sync metadata.**
-Not content — metadata.
-For most people, most of the time, that's a fine default and the same trust model as using anyone's STUN/TURN/DERP servers.
-
-But "a third party can observe when your devices talk" sits awkwardly next to outl's whole reason for existing: *your data, your machines, no provider in the loop.*
-We removed the iCloud dependency to stop trusting Apple with your sync; leaning permanently on n0 for the coordination layer just swaps one third party for another at a different point in the stack.
-
-That's why running our own relay is on the roadmap — not because n0's relays are untrustworthy, but because **"no third party, by default" is the product.**
+Why a dedicated relay rather than the shared pool: **whoever runs the relay can observe sync metadata** — not content, metadata (see the table above).
+A dedicated endpoint is the first step toward outl's reason for existing (*your data, your machines, no provider in the loop*); the roadmap below closes the rest of the gap.
+n0's shared relays remain the documented fallback, not the front door.
 
 ---
 
-## Roadmap: `relay.outl.app`
+## Roadmap: `relay.outl.app` on our own box
 
-The plan is to run an outl-operated relay at `relay.outl.app` and make it the default for the iroh transport.
+Today's default relay is **hosted on n0's relay infrastructure** (the `*.iroh.link` domain), just under an outl-scoped hostname.
+That already buys a dedicated, named endpoint — but the coordination metadata still transits n0's servers.
+The end state is a relay **outl runs**, fronted by the vanity `relay.outl.app` with our own TLS cert, so the metadata path leaves third-party infra entirely.
 
-**What it buys**
+**What owning the box buys**
 
-- **Independence from n0.**
-  Their public relays are best-effort, no SLA.
-  A product that ships sync can't depend on infra it doesn't control being up, unthrottled, and free forever.
 - **Metadata sovereignty.**
-  The "who syncs with whom, and when" metadata stops going to a third party.
-  It goes to *us* — and we publish what we log (ideally: nothing persistent).
-  Same spirit as owning the relay instead of renting trust.
-- **Region & latency.**
-  A relay close to the user base lowers coordination latency.
-  (Less important than it sounds, since most traffic ends up direct, but it helps first contact and the fallback path.)
+  The "who syncs with whom, and when" metadata stops transiting anyone else's servers — it goes to a box we run, logging (ideally) nothing persistent.
+- **Independence + SLA.**
+  A product that ships sync can't lean forever on infra it doesn't control being up, unthrottled, and free.
 - **The domain is already ours.**
-  `outl.app` is owned; `relay.outl.app` is a DNS record and a box.
+  `outl.app` is owned; `relay.outl.app` is a DNS record and a box away.
 
 **What it does *not* buy**
 
 - **Not more content privacy.**
-  Content is already E2E encrypted on n0's relays.
-  Running our own changes *who sees metadata*, not *whether content is private*.
-  If a page reaches a relay in the clear, that's a bug, not a relay feature — it never happens.
+  Content is already E2E encrypted on *any* relay (ours, n0's, or yours).
+  Owning the box changes *who sees metadata*, not *whether content is private*.
 - **Not full self-hosting on its own.**
-  iroh has *two* services: the **relay** (NAT traversal + fallback) and **discovery** (mapping an endpoint ID to its current addresses, via pkarr / a DNS server).
-  `relay.outl.app` covers the relay.
-  Endpoint discovery is a separate service; self-hosting that too is a later step.
+  iroh has *two* services: the **relay** (NAT traversal + fallback) and **discovery** (endpoint ID → current addresses).
+  A self-hosted `relay.outl.app` covers the relay; endpoint discovery is a separate, later step.
   Relay is the 80/20.
 
-**When**
-
-Not now.
-The structure is ready (see below), but a relay is an always-on service — a VPS, TLS certs, monitoring, bandwidth, uptime.
-That's ops overhead that buys nothing while the beta has a handful of users and n0's relays work fine for validating the sync itself.
-
-The trigger to actually stand it up is one of:
-
-- real users depend on sync and n0's best-effort relays become a liability, or
-- n0 starts rate-limiting / gets flaky, or
-- "no third party in your sync, by default" becomes a marketing/product line we want to make literally true.
+TLS is the current blocker for the vanity name: `relay.outl.app` must present a cert valid for `relay.outl.app`, and a CNAME to the n0 host serves the wrong cert (→ `NotValidForName`).
+Until that's sorted (self-host + Let's Encrypt, or a Cloudflare-proxied cert), the default stays the working `*.iroh.link` hostname.
 
 ---
 
-## It's already a config flip
+## Relay config
 
-None of this needs a code change when the day comes — the wiring is already in place.
-The iroh transport reads the relay URL from config and binds the long-lived sync endpoint against it:
+The relay URL is a config value; the iroh transport reads it and binds the long-lived sync endpoint against it:
 
 ```toml
 [sync]
 transport = "iroh"
-relay_url = "https://relay.outl.app"   # empty / omitted = n0 default relays
+relay_url = "https://use1-1.relay.avelino.outl.iroh.link"   # this is the default; empty / omitted uses it too
 ```
 
-Leave `relay_url` empty and you get n0's public relays (today's default).
-Point it at `relay.outl.app` once it's up, and that endpoint uses our relay for home registration, hole-punch coordination, and fallback.
+Leave `relay_url` empty (or omit it) and you get outl's dedicated relay — that's the built-in default.
+Point it at any other `iroh-relay` URL to override, and that endpoint uses your relay for home registration, hole-punch coordination, and fallback.
 
 How it threads through: each client reads `[sync] relay_url` from the global config and passes it to `IrohSyncTransport::new`, which hands it to the endpoint builder (`bind::n0_builder_ipv4_only`).
-`None` (or empty) keeps iroh's `presets::N0` relay; `Some(url)` swaps in `RelayMode::Custom`.
-A malformed URL logs a warning and falls back to the n0 default rather than failing the bind, so a typo degrades gracefully instead of taking sync down.
-Only the long-lived **sync** endpoint honors the custom relay today; the short-lived pairing / status / test endpoints stay on the n0 default (a custom-relay deployment cares about convergence, which the sync endpoint owns).
+An empty / `None` value resolves to the built-in `DEFAULT_RELAY_URL` (`https://use1-1.relay.avelino.outl.iroh.link`); a non-empty value swaps in that `RelayMode::Custom` relay.
+A malformed URL logs a warning and falls back to iroh's `presets::N0` (n0) relay rather than failing the bind, so a typo degrades gracefully instead of taking sync down.
+Every endpoint (the long-lived **sync** endpoint plus the short-lived pairing / status / test endpoints) resolves the same default, so a device coordinates through one relay end to end.
 
-iroh also supports **mixing**: you can run your own relay *and* keep n0's as a fallback.
-outl's current wiring sets a single custom relay (`RelayMode::Custom` with one URL).
-Broadening that to a custom-plus-n0 list is a one-line change in `bind::n0_builder_ipv4_only` if we want it, so standing up `relay.outl.app` doesn't have to be a single point of failure on day one.
+iroh also supports **mixing**: an endpoint can register a relay *and* keep another as a fallback.
+outl's current wiring sets a single relay (`RelayMode::Custom` with one URL — the dedicated `*.iroh.link` host by default).
+Broadening that to a relay-plus-n0 list is a one-line change in `bind::n0_builder_ipv4_only` if we want it, so the default relay doesn't have to be a single point of failure.
 
 ---
 
-## Self-hosting a relay (when we get there)
+## Self-hosting your own relay
 
-For completeness, the shape of standing one up — this is the future-us checklist, not something you need today:
+The default is outl's dedicated relay, but nothing stops you from running your own — point `[sync] relay_url` at it and that device coordinates through your box instead.
+This is also the path to a fully outl-owned `relay.outl.app` (see the roadmap above).
+The shape of standing one up:
 
 1. **Run `iroh-relay`** on a small always-on VPS.
    It's the relay server binary from the iroh project; one process, modest resources for op-log-sized traffic.
 2. **DNS.**
-   Point `relay.outl.app` (A / AAAA) at the box.
+   Point your relay hostname (A / AAAA) at the box.
 3. **TLS.**
-   The relay terminates HTTPS; use ACME / Let's Encrypt for certs so the relay URL is `https://relay.outl.app`.
+   The relay terminates HTTPS; use ACME / Let's Encrypt for certs so the relay URL is `https://<your-host>`.
    (Confirm the exact `iroh-relay` flags against the current iroh release — the relay server's config surface moves faster than this doc.)
 4. **Config.**
-   Ship `relay_url = "https://relay.outl.app"` as the default in the iroh transport, keeping n0 as documented fallback.
+   Set `relay_url = "https://<your-host>"` in `[sync]` on every device that should use it.
 5. **(Later) Discovery.**
    Stand up endpoint discovery (pkarr publisher / DNS) for full independence from n0's name resolution, not just its relays.
 

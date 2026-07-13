@@ -1,17 +1,18 @@
 //! The block-matching algorithm that reconstructs IDs after an external
 //! edit to a `.md` file.
 //!
-//! Today the algorithm implements levels 1 and 3 from `docs/markdown-format.md`:
+//! Today the algorithm implements:
 //!
 //! - **Level 1** — `content_hash` exact match. Preserves the ID.
+//! - **Level 1.5 (positional fallback)** — same DFS index + same indent.
+//!   Preserves the ID when a block's text is edited without structural
+//!   changes. This is what keeps `((blk-…))` refs and `!((blk-…))`
+//!   embeds stable across text edits.
 //! - **Level 3** — no match. New ULID assigned for new blocks; old blocks
 //!   without a match become orphans (caller moves them to `TRASH_ROOT`).
 //!
 //! Level 2 (Levenshtein similarity > 80%) requires retaining the old text
 //! verbatim, which the sidecar doesn't store. It's not yet implemented.
-//! Until then, heavy edits silently lose the block ID — but the block
-//! **never disappears**: it shows up as an orphan and goes through
-//! `outl reconcile`.
 
 use crate::parse::OutlineNode;
 use crate::sidecar::{content_hash, SidecarBlock};
@@ -104,6 +105,30 @@ pub fn match_blocks(
     }
 
     // Pass 2 (reserved for level 2 — similarity-based, not yet implemented).
+
+    // Pass 1.5: positional fallback. For each unmatched new block at
+    // index `i`, if `old_blocks[i]` exists, is unused, and has the
+    // same indent, match them. This preserves the NodeId when a
+    // block's text is edited without structural changes (no blocks
+    // added, removed, or moved). Without this, every text edit would
+    // mint a fresh NodeId + ref_handle, breaking all `((blk-…))` refs
+    // and `!((blk-…))` embeds pointing at the edited block.
+    //
+    // Only runs when the flat block count matches — if blocks were
+    // inserted or deleted, DFS indices shift and positional matching
+    // would assign the wrong NodeId.
+    if flat.len() == old_blocks.len() {
+        for (i, maybe_id) in found.iter_mut().enumerate() {
+            if maybe_id.is_some() {
+                continue;
+            }
+            let old = &old_blocks[i];
+            if !used.contains(&old.id) && old.indent == flat[i].indent {
+                *maybe_id = Some(old.id);
+                used.insert(old.id);
+            }
+        }
+    }
 
     // Final pass: level 3 for the remainder.
     for (i, maybe_id) in found.iter().enumerate() {
@@ -226,17 +251,47 @@ mod tests {
     }
 
     #[test]
-    fn heavy_edit_loses_id_and_orphans_old() {
-        // Block text completely changed → hash differs → no match.
-        let md = "- totally different content here\n";
+    fn text_edit_preserves_id_via_positional_fallback() {
+        // Block text changed but position (DFS index) and indent are
+        // the same → positional fallback preserves the NodeId.
+        // Without this, every text edit would mint a fresh NodeId,
+        // breaking all ((blk-…)) refs and !((blk-…)) embeds.
+        let md = "- TODO buy groceries\n";
         let new_ast = parse(md);
         let id = NodeId::new();
-        let old = vec![sidecar_block(id, "original wording", 1, 0)];
+        let old = vec![sidecar_block(id, "TODO buy milk", 1, 0)];
 
         let (matches, orphans) = match_blocks(&new_ast.blocks, &old);
         assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].old_id, Some(id));
+        assert!(orphans.is_empty());
+    }
+
+    #[test]
+    fn insert_shift_prevents_false_positional_match() {
+        // Inserting a block before an existing one shifts DFS indices,
+        // so positional fallback can't match the shifted block. The
+        // inserted block gets a new ID (level 3); the existing block
+        // still matches by hash (level 1).
+        let md = "- new block\n- original\n";
+        let new_ast = parse(md);
+        let id = NodeId::new();
+        let old = vec![sidecar_block(id, "original", 1, 0)];
+
+        let (matches, orphans) = match_blocks(&new_ast.blocks, &old);
+        assert_eq!(matches.len(), 2);
+        // new[0] = "new block" — no hash match, positional fallback tries
+        // old[0] = "original" → same indent, but "original" will be hash-
+        // matched to new[1] first, so it's already `used`. Thus new[0]
+        // falls through to level 3.
+        // Actually wait — hash matching happens in pass 1 before
+        // positional fallback. So "original" at new[1] hash-matches
+        // old[0]. Then positional fallback for new[0] finds old[0]
+        // already used → no match → level 3. Correct!
         assert_eq!(matches[0].old_id, None);
         assert_eq!(matches[0].level, MatchLevel::Low);
-        assert_eq!(orphans, vec![id]);
+        assert_eq!(matches[1].old_id, Some(id));
+        assert_eq!(matches[1].level, MatchLevel::High);
+        assert!(orphans.is_empty());
     }
 }

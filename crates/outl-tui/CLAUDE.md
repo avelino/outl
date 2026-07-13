@@ -10,7 +10,7 @@ That's the spec; don't change it.
 - Two modes: `Normal` (navigate, block ops) and `Insert` (edit a single block's text).
 - Quick switcher (`Ctrl+P`) for fuzzy page/journal jumping.
 - Outline panel for current page with inline visible cursor.
-- Inline backlinks rendered below the outline (`B` toggles, `j/k` crosses the separator).
+- Inline backlinks rendered below the outline (`B` toggles, `j/k` crosses the separator, `Ctrl+O` flips the sort direction).
 - Block references and embeds: `((blk-XXXXXX))` resolves to the source block's text + page icon.
   `!((blk-XXXXXX))` (when the block contains a single embed token) expands the source block **and its children** read-only below the carrying block.
   `Enter` on either form opens the source page and lands the cursor on the referenced block.
@@ -59,6 +59,12 @@ This section captures only the **architectural / TUI-specific behaviour** a cont
 - **Visual range captures top-level roots only.**
   When yank (`y`), delete (`d`), or `Esc` exits Visual, `remember_visual_range` walks the selected ids and drops any id whose ancestor is also in the selection (it already comes inside the ancestor's subtree via `copy_markdown`).
   This prevents the same block appearing twice in the copied markdown when a parent and child are both in the Visual range.
+- **`Ctrl+O` toggles the backlinks sort direction.**
+  Flips `App::backlinks_newest_first`, invalidates the backlinks cache, and persists the choice to `[display] backlinks_order` in `~/.config/outl/config.toml`.
+  Same pure-display-preference policy as `theme.preset` — it never converges between devices.
+  The panel header shows the current direction (`↓ newest (^O)` / `↑ oldest (^O)`).
+  Read once at boot in `runtime.rs` and set post-construction on `App` (mirrors `mouse_capture`'s wiring).
+  Ordering itself runs through `outl_actions::sort_backlinks` in `App::compute_backlinks_for_slug`, the same function the desktop and mobile clients call.
 - **Mouse capture (opt-in).**
   Set `[tui] mouse_capture = true` in `~/.config/outl/config.toml` to enable `Event::Mouse` handling (`actions/mouse.rs`).
   When active: the scroll wheel moves the outline selection, a click selects the block under the pointer, and a drag selects a range — on button release the range is yanked as markdown to the OS clipboard (same arboard + OSC 52 dual path as `y`).
@@ -78,6 +84,9 @@ This section captures only the **architectural / TUI-specific behaviour** a cont
 - **Sidebar intercept.** With the sidebar open (`\` / `Ctrl+E`), `j` / `k` move the row selection, `Tab` cycles the section (Today / Pinned / Recent / Calendar), and `Enter` opens the focused page. `d` on a **regular page** arms a `delete page '<title>'? y/n` confirmation in the status line (`App::pending_sidebar_delete: Option<PendingSidebarDelete>`); `y` / `Y` confirms and runs `outl_actions::delete_page` + `remove_page_projection` + `spawn_index_rebuild`, navigates to today if the deleted page was current, and announces to peers. Any other key cancels (and is swallowed, matching the `pending_input_op` contract). Calendar rows are a no-op, and journals pinned/recent are excluded — only regular pages can be deleted from the sidebar. The `g d` chord (Normal mode) routes through the same confirmation flow via `App::delete_page_from_chord`: with the sidebar focused it delegates to `sidebar_delete_current`, otherwise it arms the confirmation against the current page (refusing journals).
 - **Visual range capture.**
   Every Visual exit (`Esc`, `y`, `d`) routes through `remember_visual_range` so `g v` can restore the last range.
+- **Visual range reorder (`Alt+↑` / `Alt+↓`).**
+  `move_{up,down}_visual_range` drag the whole selection among its siblings — mirror of the single-block `Alt`+arrows in Normal (the plain arrows extend the range, so `Alt` is what separates reorder from grow).
+  They loop `move_{up,down}_at_path` (`lo→hi` for up, `hi→lo` for down) and follow the selection one row; if the leading block can't move (already first/last sibling) the op aborts before the rest of the range scrambles against itself.
 
 ## Insert mode
 

@@ -101,6 +101,12 @@ export interface Settings {
    * `Settings.sync_transport` and the `[sync] transport` config key.
    */
   sync_transport: string;
+  /**
+   * Backlinks list direction: `"newest"` (default) or `"oldest"`
+   * (issue #142). Read-only in the Settings modal — the backlinks
+   * toggle writes it via `set_backlinks_order`.
+   */
+  backlinks_order: string;
 }
 
 /**
@@ -263,6 +269,10 @@ export type Action =
   | { kind: "YankCurrentBlock" }
   | { kind: "YankRange" }
   | { kind: "DeleteRange" }
+  | { kind: "SelectRangeDown" }
+  | { kind: "SelectRangeUp" }
+  | { kind: "MoveVisualRangeUp" }
+  | { kind: "MoveVisualRangeDown" }
   | { kind: "RunCodeBlock" }
   | { kind: "Undo" }
   | { kind: "Redo" }

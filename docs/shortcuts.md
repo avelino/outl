@@ -37,6 +37,7 @@ If a row below disagrees with what you observe in the app, **the code is right a
 | Next journal day | `]` | `Cmd/Ctrl+]` | swipe left |
 | Toggle sidebar | `Ctrl+E` | `Cmd/Ctrl+Shift+E` | _(single pane)_ |
 | Toggle backlinks panel | `Ctrl+B` | `Cmd/Ctrl+Shift+B` | inline below outline |
+| Toggle backlinks order (newest/oldest) | `Ctrl+O` | direction button in the backlinks header | direction button in the backlinks header |
 | Open settings | _via `:settings`_ | `Cmd/Ctrl+,` | gear icon |
 | Toggle help overlay | `?` | `Cmd/Ctrl+/` | help button |
 | Quit | `q q` (chord) / `Z Z` (vim alias) / `Ctrl+C` | `Cmd/Ctrl+Q` (OS) | — |
@@ -175,17 +176,23 @@ The TUI ships it natively; the desktop has only a selected block id, so the char
 
 ## Visual mode (range)
 
-TUI + desktop (vim on); mobile has no Visual equivalent yet.
+TUI + desktop; mobile has no Visual equivalent yet.
+
+On the desktop, `Shift+↑` / `Shift+↓` start (and keep growing) a contiguous selection **without** vim mode — the non-vim multi-select entry.
+It flips the client into Visual and pops a floating **batch toolbar** (`N selected` + Indent / Outdent / Move up / Move down / Delete / Done) so the range ops are reachable by mouse; the toolbar fires the same actions the chords do.
+Only the toolbar's **Delete** confirms before erasing a range that contains nested children; the keyboard delete (`d` / `x` / `Delete` / `Backspace`) and the TUI delete without a prompt, matching vim.
 
 | Action | TUI | Desktop |
 |---|---|---|
-| Extend selection down | `j` / `↓` | `j` / `↓` |
-| Extend selection up | `k` / `↑` | `k` / `↑` |
+| Start / extend selection down | `j` / `↓` | `Shift+↓` (any mode) · `j` / `↓` (vim) |
+| Start / extend selection up | `k` / `↑` | `Shift+↑` (any mode) · `k` / `↑` (vim) |
 | Yank range | `y` | `y` |
-| Delete range | `d` / `x` | `d` / `x` |
-| Indent range (vim `>`) | `Tab` / `>` | `>` |
-| Outdent range (vim `<`) | `Shift+Tab` / `<` | `<` |
-| Leave Visual (captures range so a follow-up `g v` restores it) | `Esc` | `Esc` |
+| Delete range (toolbar **Delete** confirms if a block has children; the keys don't) | `d` / `x` | `d` / `x` · `Delete` / `Backspace` · toolbar **Delete** |
+| Indent range (vim `>`) | `Tab` / `>` | `>` · toolbar **Indent** |
+| Outdent range (vim `<`) | `Shift+Tab` / `<` | `<` · toolbar **Outdent** |
+| Move range up among siblings | `Alt+↑` | `Cmd/Ctrl+Shift+↑` · toolbar **↑** |
+| Move range down among siblings | `Alt+↓` | `Cmd/Ctrl+Shift+↓` · toolbar **↓** |
+| Leave Visual (captures range so a follow-up `g v` restores it) | `Esc` | `Esc` · toolbar **Done** |
 
 ---
 

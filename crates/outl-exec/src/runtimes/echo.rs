@@ -10,7 +10,7 @@
 
 use std::time::Instant;
 
-use crate::runtime::{ExecContext, ExecError, ExecOutput, ExitStatus, Runtime};
+use crate::runtime::{ExecContext, ExecError, ExecOutput, ExitStatus, OutputFormat, Runtime};
 
 /// See module docs.
 pub struct EchoRuntime;
@@ -27,6 +27,7 @@ impl Runtime for EchoRuntime {
             stderr: String::new(),
             duration: start.elapsed(),
             exit: ExitStatus::Ok,
+            format: OutputFormat::Text,
         })
     }
 }

@@ -19,8 +19,8 @@
 //! let peers = PeersStore::load_or_default(
 //!     &outl_sync_iroh::workspace_peers_path(&workspace_root)
 //! ).unwrap();
-//! // `relay_url`: `None` uses iroh's n0 default relay; `Some(url)` (from
-//! // `[sync] relay_url` in the user config) points the endpoint at a custom one.
+//! // `relay_url`: `None` uses outl's default relay (`use1-1.relay.avelino.outl.iroh.link`); `Some(url)`
+//! // (from `[sync] relay_url` in the user config) points the endpoint at a custom one.
 //! let transport = IrohSyncTransport::new(identity, peers, None);
 //! let engine = SyncEngine::with_transport(workspace_root, actor, Box::new(transport));
 //! let (tx, rx) = mpsc::channel();
@@ -42,6 +42,7 @@ mod health;
 mod identity;
 mod pairing;
 mod peers;
+mod peers_lock;
 mod protocol;
 mod status;
 

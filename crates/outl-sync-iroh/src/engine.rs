@@ -45,9 +45,10 @@ pub struct IrohSyncTransport {
     peers: Arc<Mutex<PeersStore>>,
     /// Relay URL for the sync endpoint, from `[sync] relay_url` in the user
     /// config. `None` (or empty, normalized to `None` by `SyncConfig::relay_url`)
-    /// keeps iroh's n0 default relay; `Some(url)` swaps in a custom relay via
-    /// [`crate::bind::n0_builder_ipv4_only`]. Only the long-lived sync endpoint
-    /// honors it; pairing / status / test endpoints stay on the n0 default.
+    /// uses outl's default relay (`use1-1.relay.avelino.outl.iroh.link`); `Some(url)` swaps in a
+    /// different relay via [`crate::bind::n0_builder_ipv4_only`]. Only the
+    /// long-lived sync endpoint threads it; pairing / status / test endpoints
+    /// pass `None` and resolve the same `use1-1.relay.avelino.outl.iroh.link` default.
     relay_url: Option<String>,
     /// Sender used to trigger graceful shutdown.
     shutdown_tx: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
@@ -170,8 +171,9 @@ impl IrohSyncTransport {
     /// Create a new transport. Call `SyncTransport::start` to activate it.
     ///
     /// `relay_url` comes from `[sync] relay_url` in the user config
-    /// (`outl_config::SyncConfig::relay_url`). `None` keeps iroh's n0 default
-    /// relay; `Some(url)` points the long-lived sync endpoint at a custom relay.
+    /// (`outl_config::SyncConfig::relay_url`). `None` uses outl's default relay
+    /// (`use1-1.relay.avelino.outl.iroh.link`); `Some(url)` points the long-lived sync endpoint at a
+    /// different relay.
     pub fn new(identity: IrohIdentity, peers: PeersStore, relay_url: Option<String>) -> Self {
         Self {
             identity: Arc::new(identity),
@@ -437,9 +439,9 @@ async fn run_iroh(
     // fallback fix. See `crate::bind`.
     //
     // `relay_url` (from `[sync] relay_url`) selects the relay this long-lived
-    // endpoint registers with: `None` keeps the n0 default, `Some(url)` swaps
-    // in a custom relay. This is the only endpoint that honors it — pairing /
-    // status / test endpoints stay on n0.
+    // endpoint registers with: `None` uses outl's `use1-1.relay.avelino.outl.iroh.link` default,
+    // `Some(url)` swaps in a different relay. Pairing / status / test endpoints
+    // pass `None` and resolve the same default.
     let endpoint = crate::bind::n0_builder_ipv4_only(relay_url.as_deref())
         .secret_key(identity.secret_key().clone())
         .alpns(vec![SYNC_ALPN.to_vec(), PAIRING_ALPN.to_vec()])

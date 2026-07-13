@@ -5,13 +5,17 @@ import {
   deleteBlock,
   editBlock,
   indentBlock,
+  instantiateTemplateAt,
   openExternalUrl,
+  openPageBySlug,
   openRef,
   outdentBlock,
   pasteMarkdown,
   pastePlain,
   pluginRun,
   pluginSyncHooks,
+  resolveEmbeds,
+  runAutoRunBlocks,
   runCodeBlock,
   setBlockCollapsed,
   toggleTodo,
@@ -22,6 +26,7 @@ import type { PageView } from "@outl/shared/api/types";
 import { ParseWarningsBanner } from "@outl/shared/warnings";
 import { journalSlugToDate } from "@outl/shared/journal";
 import { visualRangeSet } from "@outl/shared/outline";
+import { NATIVE_TEMPLATE_PLUGIN_ID } from "../lib/slash-commands";
 import { playPluginViews } from "../lib/plugin-views";
 import { appState, setAppState } from "../lib/store";
 import { BlockRow, type BlockCallbacks } from "./BlockRow";
@@ -109,6 +114,45 @@ export function OutlineView() {
       backlinks: view.backlinks,
       parseWarnings: view.warnings ?? [],
     });
+    // Auto-run query blocks after page load / commit, then re-resolve
+    // embeds with the updated outline.
+    void runAutoRunBlocks(view.page.id)
+      .then((reply) => {
+        if (reply.ran > 0) {
+          const updated = reply.view;
+          setAppState({
+            page: updated.page,
+            outline: updated.outline,
+            backlinks: updated.backlinks,
+            parseWarnings: updated.warnings ?? [],
+          });
+          void resolvePageEmbeds(updated.outline);
+        }
+      })
+      .catch(() => {});
+    // Resolve embeds on the initial page view.
+    void resolvePageEmbeds(view.outline);
+  }
+
+  /** Collect unique embed handles from the outline and batch-resolve. */
+  function resolvePageEmbeds(outline: import("@outl/shared/api/types").BlockNode[]) {
+    const handleSet = new Set<string>();
+    const walk = (nodes: import("@outl/shared/api/types").BlockNode[]) => {
+      for (const n of nodes) {
+        for (const tok of n.tokens) {
+          if (tok.kind === "embed" && tok.value) handleSet.add(tok.value);
+        }
+        if (n.children.length > 0) walk(n.children);
+      }
+    };
+    walk(outline);
+    if (handleSet.size === 0) return;
+    const handles = [...handleSet];
+    void resolveEmbeds(handles)
+      .then((map) => {
+        setAppState("embeds", map);
+      })
+      .catch(() => {});
   }
 
   /**
@@ -141,6 +185,27 @@ export function OutlineView() {
     }
   }
 
+  /**
+   * Persist the in-flight textarea draft into the workspace before a
+   * paste splices at `caret`. The caret is measured against the draft
+   * (`textarea.value`), but the backend splices against
+   * `host_text_for_caret` — if the user typed since the last commit,
+   * the two diverge and the paste lands at the wrong offset. Mobile
+   * does the same in `Journal.handlePasteMarkdown`. No-op when the
+   * block isn't the one being edited (a paste from a click without an
+   * open editor). Edit mode is left untouched (`editBlock` doesn't flip
+   * `editingBlockId`), so the user keeps typing after a plain paste.
+   */
+  async function flushDraftBeforePaste(
+    pageId: string,
+    id: string,
+    hostText: string,
+  ) {
+    if (editingId() !== id) return;
+    const committed = await handleError(editBlock(pageId, id, hostText));
+    if (committed) applyView(committed);
+  }
+
   async function handleRefClick(target: string) {
     const view = await handleError(openRef(target));
     if (view) applyView(view);
@@ -168,6 +233,23 @@ export function OutlineView() {
       setEditingId(id);
     },
     onRunPluginCommand: async (pluginId, commandId) => {
+      // Native `/template <name>`: instantiate the structural template
+      // under the block the slash was typed in (or the current
+      // selection). Intercepted here because it reuses the slash popup
+      // but is a core feature, not a plugin — `commandId` is the
+      // template name (see `templateSlashCommands`).
+      if (pluginId === NATIVE_TEMPLATE_PLUGIN_ID) {
+        const target = appState.selectedBlockId;
+        if (!target) {
+          setAppState("lastError", "select a block to insert a template");
+          return;
+        }
+        const view = await handleError(
+          instantiateTemplateAt(commandId, target),
+        );
+        if (view) applyView(view);
+        return;
+      }
       // Same dispatch the `⧉` PluginPalette runs: surface the command's
       // notifications / errors on the status line, re-render from the
       // returned view, and play any `ui-render` overlays.
@@ -266,15 +348,17 @@ export function OutlineView() {
       const view = await handleError(setBlockCollapsed(pageId, id, collapsed));
       if (view) applyView(view);
     },
-    onPasteMarkdown: async (id, caret, text) => {
+    onPasteMarkdown: async (id, caret, text, hostText) => {
       const pageId = appState.page?.id;
       if (!pageId) return;
+      await flushDraftBeforePaste(pageId, id, hostText);
       const view = await handleError(pasteMarkdown(pageId, id, caret, text));
       if (view) applyView(view);
     },
-    onPastePlain: async (id, caret, text) => {
+    onPastePlain: async (id, caret, text, hostText) => {
       const pageId = appState.page?.id;
       if (!pageId) return;
+      await flushDraftBeforePaste(pageId, id, hostText);
       const view = await handleError(pastePlain(pageId, id, caret, text));
       if (view) applyView(view);
     },
@@ -291,6 +375,10 @@ export function OutlineView() {
     onRefClick: handleRefClick,
     onTagClick: handleTagClick,
     onLinkClick: handleLinkClick,
+    onOpenPage: async (slug) => {
+      const view = await handleError(openPageBySlug(slug));
+      if (view) applyView(view);
+    },
   };
 
   async function addFirstBlock() {

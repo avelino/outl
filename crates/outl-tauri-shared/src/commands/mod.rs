@@ -22,3 +22,4 @@ pub mod exec;
 pub mod page;
 pub mod peers;
 pub mod plugin;
+pub mod template;

@@ -2,6 +2,11 @@ import { For, JSX, Show } from "solid-js";
 
 import type { InlineToken } from "../api/types";
 
+export type EmbedMap = Record<
+  string,
+  { handle: string; text: string; page_slug: string; status: string | null }
+>;
+
 /**
  * Render a block's pre-tokenized inline markdown.
  *
@@ -54,6 +59,9 @@ interface MarkdownInlineProps {
    * argument is the raw `href`. When omitted the link renders as inert
    * text (mobile / backlink contexts that don't open URLs yet). */
   onLinkClick?: (href: string) => void;
+  /** Resolved embed content keyed by handle. When present, `embed`
+   *  tokens render the source block's text instead of a chip. */
+  embeds?: EmbedMap;
 }
 
 export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
@@ -234,12 +242,27 @@ export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
                 {tok.value}
               </span>
             );
-          case "embed":
+          case "embed": {
+            const resolved = props.embeds?.[tok.value];
+            if (resolved) {
+              const mark =
+                resolved.status === "done"
+                  ? "✓ "
+                  : resolved.status === "todo"
+                    ? "☐ "
+                    : "";
+              return (
+                <span class="rounded bg-(--color-ios-accent)/8 px-1 py-0.5 text-[13px] text-(--color-ios-text) dark:bg-(--color-iosd-accent)/10 dark:text-(--color-iosd-text)">
+                  ↳ {mark}{resolved.text}
+                </span>
+              );
+            }
             return (
               <span class="rounded bg-(--color-ios-accent)/12 px-1 font-mono text-[13px] text-(--color-ios-accent) dark:bg-(--color-iosd-accent)/20 dark:text-(--color-iosd-accent)">
                 !{tok.value}
               </span>
             );
+          }
           case "emoji":
             // The backend's catalog gate guarantees `glyph` is set on
             // every Emoji token. Defensive fall-back: if a peer ever

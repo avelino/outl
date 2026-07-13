@@ -1,11 +1,12 @@
 //! When a block's text changes substantially, the hash no longer matches
-//! the sidecar entry. The matcher (level 1 + level 3 only today) treats
-//! this as a delete + new block. The orphan must show up — never silent
-//! loss.
+//! the sidecar entry. The positional fallback (pass 1.5) catches this
+//! case when the block is at the same DFS index with the same indent,
+//! preserving the NodeId — so `((blk-…))` refs and `!((blk-…))` embeds
+//! stay stable across edits.
 //!
-//! Level 2 (similarity > 80%) and the warning path in `.outl/orphans.log`
-//! are not yet implemented. Until then this test documents the
-//! conservative-but-safe behavior.
+//! When blocks are inserted or deleted, the DFS indices shift and
+//! positional fallback can't help — the block falls through to level 3
+//! (new ID) and the old ID surfaces as an orphan.
 
 use outl_core::id::NodeId;
 use outl_md::matching::{match_blocks, MatchLevel};
@@ -13,7 +14,7 @@ use outl_md::parse::parse;
 use outl_md::sidecar::{content_hash, derive_ref_handle, SidecarBlock};
 
 #[test]
-fn heavy_edit_orphans_old_id_and_creates_new() {
+fn heavy_edit_preserves_id_via_positional_fallback() {
     let id = NodeId::new();
     let old = vec![SidecarBlock {
         id,
@@ -28,9 +29,12 @@ fn heavy_edit_orphans_old_id_and_creates_new() {
     let (matches, orphans) = match_blocks(&ast.blocks, &old);
 
     assert_eq!(matches.len(), 1);
-    assert_eq!(matches[0].old_id, None);
-    assert_eq!(matches[0].level, MatchLevel::Low);
-    assert_eq!(orphans, vec![id], "the old id must surface as an orphan");
+    assert_eq!(
+        matches[0].old_id,
+        Some(id),
+        "positional fallback must preserve the NodeId on text edit"
+    );
+    assert!(orphans.is_empty(), "no orphan on same-position edit");
 }
 
 #[test]

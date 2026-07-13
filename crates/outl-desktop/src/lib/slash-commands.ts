@@ -1,4 +1,32 @@
-import type { PluginCommand } from "@outl/shared/api/types";
+import type { PluginCommand, TemplateDto } from "@outl/shared/api/types";
+
+/**
+ * Reserved `plugin_id` for the native `/template <name>` slash entries.
+ * Structural templates ship in the core (reachable via TUI/CLI/MCP), so
+ * they must appear in the desktop slash menu WITHOUT a plugin. We reuse
+ * the plugin-command popup by injecting synthetic {@link PluginCommand}
+ * rows under this sentinel; `OutlineView`'s `onRunPluginCommand`
+ * intercepts it and calls `instantiateTemplateAt` instead of `pluginRun`.
+ * A real plugin can never claim this id (it isn't a loadable plugin
+ * directory), so there's no collision.
+ */
+export const NATIVE_TEMPLATE_PLUGIN_ID = "@outl/template";
+
+/**
+ * Project the workspace's structural templates onto synthetic
+ * {@link PluginCommand} rows for the slash menu. `command_id` carries the
+ * template's invocation name (what `instantiateTemplateAt` needs);
+ * `title` is a friendly label. Empty when the workspace has no template.
+ */
+export function templateSlashCommands(
+  templates: TemplateDto[],
+): PluginCommand[] {
+  return templates.map((t) => ({
+    plugin_id: NATIVE_TEMPLATE_PLUGIN_ID,
+    command_id: t.name,
+    title: `template: ${t.name}${t.duplicate ? " (duplicate name)" : ""}`,
+  }));
+}
 
 /**
  * Rank plugin commands for the inline `/` slash menu against a query.

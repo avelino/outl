@@ -153,6 +153,11 @@ pub fn open_today_journal<S: AppHost>(state: &S) -> Result<PageView, String> {
         open_today(ws, state.hlc()).map_err(|e| e.to_string())
     })?;
     with_ws(state, |ws| {
+        // Refresh the `.md` the view reads when a peer's ops moved the tree
+        // past the stale projection (issue #166); a no-op when in sync.
+        if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_stale(ws, &root, id) {
+            tracing::warn!("open_today_journal: reproject stale .md failed: {e}");
+        }
         build_page_view(ws, &root, id).map_err(|e| e.to_string())
     })
 }
@@ -164,6 +169,9 @@ pub fn open_journal_for<S: AppHost>(state: &S, slug: String) -> Result<PageView,
         open_journal(ws, state.hlc(), date).map_err(|e| e.to_string())
     })?;
     with_ws(state, |ws| {
+        if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_stale(ws, &root, id) {
+            tracing::warn!("open_journal_for: reproject stale .md failed for {slug}: {e}");
+        }
         build_page_view(ws, &root, id).map_err(|e| e.to_string())
     })
 }
@@ -198,12 +206,41 @@ pub fn open_page_by_slug<S: AppHost>(state: &S, slug: String) -> Result<PageView
         })?,
     };
     with_ws_mut(state, |ws| {
-        if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_absent(ws, &root, id) {
+        if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_stale(ws, &root, id) {
             tracing::warn!("open_page_by_slug: apply_page_md_with_sidecar failed for {slug}: {e}");
         }
         Ok(())
     })?;
     with_ws(state, |ws| {
+        build_page_view(ws, &root, id).map_err(|e| e.to_string())
+    })
+}
+
+/// Persist the backlinks-list direction (`[display] backlinks_order`,
+/// issue #142) and return `slug`'s view re-sorted under the new order.
+///
+/// A pure display preference — it lives in `config.toml`, never the op
+/// log, and does not converge between devices (same policy as the
+/// theme). `build_page_view` re-reads the preference and applies
+/// `sort_backlinks`, so the returned `PageView` already reflects the
+/// flip; the frontend just swaps it in. Unknown `order` values fall
+/// back to `newest` rather than erroring — a UI toggle can't produce
+/// anything else.
+pub fn set_backlinks_order<S: AppHost>(
+    state: &S,
+    order: String,
+    slug: String,
+) -> Result<PageView, String> {
+    let mut cfg = outl_config::load();
+    cfg.display.backlinks_order = match order.as_str() {
+        "oldest" => outl_config::BacklinksOrder::Oldest,
+        _ => outl_config::BacklinksOrder::Newest,
+    };
+    outl_config::save(&cfg).map_err(|e| e.to_string())?;
+
+    let root = state.storage_root()?;
+    with_ws(state, |ws| {
+        let id = find_by_slug(ws, &slug).ok_or_else(|| format!("page not found: {slug}"))?;
         build_page_view(ws, &root, id).map_err(|e| e.to_string())
     })
 }
@@ -231,7 +268,7 @@ pub fn open_ref<S: AppHost>(
         open_or_create_by_ref(ws, state.hlc(), &target).map_err(|e| e.to_string())
     })?;
     with_ws_mut(state, |ws| {
-        if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_absent(ws, &root, id) {
+        if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_stale(ws, &root, id) {
             // Non-fatal: the op log already has the mutation; the `.md`
             // projection will be retried on the next save / by the
             // orphan scanner on the next boot. Surface both to the local

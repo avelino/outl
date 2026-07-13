@@ -1,4 +1,4 @@
-import { Show, onCleanup, onMount } from "solid-js";
+import { Show, createSignal, onCleanup, onMount } from "solid-js";
 
 import {
   openJournalFor,
@@ -17,9 +17,10 @@ import {
   onWorkspaceReady,
 } from "../lib/events";
 import type { DeepLinkNavigate } from "../lib/events";
-import { installShortcuts } from "../lib/shortcuts";
+import { installShortcuts, type ActionHandlers } from "../lib/shortcuts";
 import { loadTransformers } from "@outl/shared/plugins/transformer-registry";
 import { buildHandlers } from "../lib/action-handlers";
+import { BatchToolbar } from "./BatchToolbar";
 import { Sidebar } from "./Sidebar";
 import { OutlineView } from "./OutlineView";
 import { Picker } from "./Picker";
@@ -44,6 +45,11 @@ import { ErrorToast } from "./ErrorToast";
  * `Cmd/Ctrl+Shift+E` toggles the sidebar.
  */
 export function AppShell() {
+  // The dispatcher's handler map, lifted into a signal so the
+  // `<BatchToolbar />` can fire the very same batch ops the keyboard
+  // does (built in `onMount`, so `null` until the shell wires up).
+  const [handlers, setHandlers] = createSignal<ActionHandlers | null>(null);
+
   function applyView(view: PageView) {
     setAppState({
       page: view.page,
@@ -159,6 +165,7 @@ export function AppShell() {
     }
 
     const handlers = buildHandlers({ applyView, setError });
+    setHandlers(handlers);
     const unbindShortcuts = await installShortcuts(handlers);
     onCleanup(unbindShortcuts);
 
@@ -218,6 +225,9 @@ export function AppShell() {
         <OutlineView />
       </div>
 
+      <Show when={handlers()}>
+        {(h) => <BatchToolbar handlers={h()} />}
+      </Show>
       <ChromeToggleBar />
       <Picker onPicked={applyView} />
       <PluginMarketplace />

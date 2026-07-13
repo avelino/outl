@@ -16,11 +16,17 @@
 //! Making this async + `spawn_blocking` to release the mutex earlier is
 //! tracked in the desktop polish backlog.
 
-use outl_actions::{run_code_block as action_run_code_block, ExecOutputDto, RunCodeBlockOutcome};
+use outl_actions::{
+    page_meta as page_meta_action, read_page_outline_with_workspace,
+    run_code_block as action_run_code_block, ExecOutputDto, RunCodeBlockOutcome,
+};
+use outl_exec::{extract_fence, run_block_at_index};
+use outl_md::lang;
 use serde::Serialize;
+use std::collections::HashMap;
 use tracing::warn;
 
-use crate::helpers::{build_page_view, parse_node_id, with_ws_mut};
+use crate::helpers::{build_page_view, parse_node_id, with_ws, with_ws_mut};
 use crate::host::AppHost;
 use crate::state::PageView;
 
@@ -72,4 +78,134 @@ pub fn run_code_block<S: AppHost>(
             view,
         })
     })
+}
+
+/// Wire reply for `run_auto_run_blocks`.
+#[derive(Debug, Clone, Serialize)]
+pub struct AutoRunReply {
+    /// How many blocks were executed.
+    pub ran: usize,
+    /// Refreshed view after running query blocks.
+    pub view: PageView,
+}
+
+/// Resolve a batch of embed handles (`blk-XXXXXX`) to their source
+/// content. Used by the frontend to expand `!((blk-…))` blocks.
+/// Wire reply for `resolve_embeds`.
+#[derive(Debug, Clone, Serialize)]
+pub struct EmbedContent {
+    pub handle: String,
+    pub text: String,
+    pub page_slug: String,
+    /// `"todo"`, `"done"`, or `None` when the block is not a task.
+    pub status: Option<String>,
+}
+
+/// Sweep the current page for blocks whose fence language has
+/// `auto_run() == true` (query blocks) and execute them. Returns the
+/// refreshed [`PageView`].
+pub fn run_auto_run_blocks<S: AppHost>(state: &S, page_id: String) -> Result<AutoRunReply, String> {
+    let root = state.storage_root()?;
+    let page = parse_node_id(&page_id)?;
+    let registry = state.exec_registry();
+
+    let auto_run_langs: Vec<String> = registry
+        .languages()
+        .filter(|lang| registry.get(lang).map(|r| r.auto_run()).unwrap_or(false))
+        .map(String::from)
+        .collect();
+
+    if auto_run_langs.is_empty() {
+        let view = with_ws(state, |ws| {
+            build_page_view(ws, &root, page).map_err(|e| e.to_string())
+        })?;
+        return Ok(AutoRunReply { ran: 0, view });
+    }
+
+    let ran = with_ws_mut(state, |ws| {
+        let meta =
+            page_meta_action(ws, page).ok_or_else(|| format!("page not found: {page_id}"))?;
+        let outline =
+            read_page_outline_with_workspace(&root, &meta, ws).map_err(|e| e.to_string())?;
+
+        let mut targets: Vec<usize> = Vec::new();
+        let mut cursor = 0usize;
+        collect_auto_run_flat_indices(&outline.nodes, &auto_run_langs, &mut cursor, &mut targets);
+
+        let md_path = outl_actions::journal::page_md_path(&root, &meta);
+        let hlc = state.hlc();
+        let mut count = 0usize;
+        for idx in targets {
+            if let Err(e) = run_block_at_index(
+                ws,
+                hlc,
+                &md_path,
+                idx,
+                &registry,
+                Some(&root.join(".outl").join("orphans.log")),
+            ) {
+                warn!("auto-run block {idx} failed: {e}");
+            } else {
+                count += 1;
+            }
+        }
+        Ok(count)
+    })?;
+
+    let view = with_ws(state, |ws| {
+        build_page_view(ws, &root, page).map_err(|e| e.to_string())
+    })?;
+    Ok(AutoRunReply { ran, view })
+}
+
+/// Batch-resolve embed handles to their source content.
+pub fn resolve_embeds<S: AppHost>(
+    state: &S,
+    handles: Vec<String>,
+) -> Result<HashMap<String, EmbedContent>, String> {
+    let root = state.storage_root()?;
+    let index = outl_md::index::WorkspaceIndex::build(&root);
+    let mut result = HashMap::new();
+    for handle in &handles {
+        if let Some(entry) = index.resolve_block_ref(handle) {
+            let (status, text) = split_todo_prefix(&entry.text);
+            result.insert(
+                handle.clone(),
+                EmbedContent {
+                    handle: entry.ref_handle.clone(),
+                    text,
+                    page_slug: entry.source_slug.clone(),
+                    status,
+                },
+            );
+        }
+    }
+    Ok(result)
+}
+
+/// Split `"TODO body"` / `"DONE body"` into `(Some("todo"|"done"), "body")`,
+/// reusing the canonical `outl_actions::split_todo` so TODO encoding
+/// stays consistent.
+fn split_todo_prefix(raw: &str) -> (Option<String>, String) {
+    let (state, body) = outl_actions::split_todo(raw);
+    let status = state.map(|s| s.as_str().to_lowercase());
+    (status, body.into())
+}
+
+fn collect_auto_run_flat_indices(
+    blocks: &[outl_actions::OutlineNode],
+    auto_run_langs: &[String],
+    cursor: &mut usize,
+    out: &mut Vec<usize>,
+) {
+    for b in blocks {
+        if let Some(parts) = extract_fence(&b.text) {
+            let canonical = lang::canonical(&parts.language).unwrap_or(&parts.language);
+            if auto_run_langs.iter().any(|l| l == canonical) {
+                out.push(*cursor);
+            }
+        }
+        *cursor += 1;
+        collect_auto_run_flat_indices(&b.children, auto_run_langs, cursor, out);
+    }
 }

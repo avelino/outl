@@ -20,7 +20,6 @@ use outl_core::op::{LogOp, Op};
 use outl_core::property::PropValue;
 use outl_core::workspace::Workspace;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 use crate::block::create_with_explicit_id;
 use crate::dates::{journal_slug, journal_title};
@@ -32,6 +31,16 @@ pub const SLUG_KEY: &str = "page-slug";
 /// Property key recording whether a page is a regular page or a
 /// journal.
 pub const KIND_KEY: &str = "page-kind";
+/// Property key holding a page's human-readable title.
+///
+/// The title lives in a **property** (`Op::SetProp`, last-write-wins by
+/// HLC) rather than the root node's Yrs text on purpose: with
+/// deterministic root ids two devices that create the same slug offline
+/// mint the same node, so writing the title into the root's text made two
+/// concurrent Yrs inserts concatenate (`"2026-06-252026-06-25"`). A
+/// property converges to a single value instead. See [`open_or_create`]
+/// and [`crate::page_repair_titles`].
+pub const TITLE_KEY: &str = "title";
 // `TYPE_KEY` / `PERSON_TYPE` / `search_persons` / `ensure_person_by_name`
 // live in the sibling `person` module so this file stays focused on the
 // page-model primitives (slug, kind, title, journal). The constants and
@@ -112,16 +121,31 @@ fn is_false(b: &bool) -> bool {
 }
 
 /// Look up a page by slug. Returns the page root [`NodeId`] when found.
+///
+/// When the split-brain bug (see [`merge_duplicate_slug_roots`]) has
+/// left **more than one** root carrying the same slug, this picks a
+/// deterministic winner so every device — and every read before the
+/// merge repair runs — resolves to the *same* root and the UI stops
+/// flickering: the root whose id equals [`page_id_from_slug`] if one is
+/// present, otherwise the numerically smallest [`NodeId`]. The
+/// single-match fast path is unchanged.
 pub fn find_by_slug(workspace: &Workspace, slug: &str) -> Option<NodeId> {
-    children_of(workspace, NodeId::root())
-        .into_iter()
-        .find_map(|(id, _)| {
-            let prop = workspace.tree().property(id, SLUG_KEY)?;
-            match prop {
-                PropValue::Text(s) if s == slug => Some(id),
-                _ => None,
-            }
-        })
+    let canonical = page_id_from_slug(slug);
+    let mut best: Option<NodeId> = None;
+    for (id, _) in children_of(workspace, NodeId::root()) {
+        match workspace.tree().property(id, SLUG_KEY) {
+            Some(PropValue::Text(s)) if s == slug => {}
+            _ => continue,
+        }
+        if id == canonical {
+            return Some(id);
+        }
+        best = Some(match best {
+            Some(current) if current <= id => current,
+            _ => id,
+        });
+    }
+    best
 }
 
 /// List every page in the workspace, sorted by slug.
@@ -152,7 +176,7 @@ pub fn page_meta(workspace: &Workspace, id: NodeId) -> Option<PageMeta> {
     //   3. the slug — last resort so a title is never empty.
     // Reading `block_text` alone (the old behaviour) made every
     // ingested page surface its slug in pickers / autocomplete.
-    let title = match workspace.tree().property(id, "title") {
+    let title = match workspace.tree().property(id, TITLE_KEY) {
         Some(PropValue::Text(s)) if !s.trim().is_empty() => s.trim().to_string(),
         _ => workspace
             .block_text(id)
@@ -226,14 +250,14 @@ fn is_truthy(value: &str) -> bool {
 /// payload. The constant prefix avoids accidental collisions with any
 /// other content-derived id scheme that might enter the workspace
 /// later. Output is deterministic and stable across releases.
+///
+/// The derivation itself lives in `outl_core::id::NodeId::from_slug` so
+/// the three page-root creation paths — in-app `open_or_create`,
+/// `outl_md::reconcile` of an external `.md`, and `desync` recovery —
+/// share one owner and cannot drift into minting different ids for the
+/// same slug (the split-brain that had two roots claim `2026-07-10`).
 pub fn page_id_from_slug(slug: &str) -> NodeId {
-    let mut h = Sha256::new();
-    h.update(b"outl-page:");
-    h.update(slug.as_bytes());
-    let digest = h.finalize();
-    let mut bytes = [0u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    NodeId(ulid::Ulid::from_bytes(bytes))
+    NodeId::from_slug(slug)
 }
 
 /// Whether `slug` is safe to use as a single path component for the
@@ -296,14 +320,15 @@ pub fn open_or_create(
     }
     let node_id = page_id_from_slug(slug);
     let position = position_for_new_last_child(workspace, NodeId::root());
-    let node = create_with_explicit_id(
-        workspace,
-        hlc,
-        node_id,
-        NodeId::root(),
-        position,
-        Some(title),
-    )?;
+    // Create the root with NO text. The title used to be written into the
+    // root's Yrs text, but with deterministic ids two devices that create
+    // the same slug offline mint the same node: the `Op::Create` converges
+    // to one root, yet each device's `edit_text(root, title)` is a
+    // concurrent Yrs insert at position 0, and Yrs concatenates them
+    // (`"2026-06-252026-06-25"`). The title now lives in the `title::`
+    // property below (`Op::SetProp`, last-write-wins by HLC), which
+    // converges to a single value under the same concurrency.
+    let node = create_with_explicit_id(workspace, hlc, node_id, NodeId::root(), position, None)?;
     set_prop(
         workspace,
         hlc,
@@ -318,6 +343,19 @@ pub fn open_or_create(
         KIND_KEY,
         PropValue::Text(kind.as_str().to_string()),
     )?;
+    // Store the title only when it carries information beyond the slug.
+    // Journals (`journal_title == slug`) fall through to `page_meta`'s slug
+    // fallback, so their `.md` never grows a redundant `title:: 2026-06-25`
+    // line.
+    if title != slug {
+        set_prop(
+            workspace,
+            hlc,
+            node,
+            TITLE_KEY,
+            PropValue::Text(title.to_string()),
+        )?;
+    }
     Ok(node)
 }
 
@@ -349,6 +387,12 @@ pub fn delete(
     crate::block::delete(workspace, hlc, id)?;
     Ok(meta)
 }
+
+// `merge_duplicate_slug_roots` (split-brain repair for duplicate slug
+// roots) lives in the sibling `page_merge` module and is re-exported at
+// the crate root via `lib.rs`. The `#[cfg(test)]` battery for it stays
+// below, next to the rest of the page-model tests.
+pub use crate::page_merge::merge_duplicate_slug_roots;
 
 // resolution ladder live in the sibling `resolve` module; `person`
 // owns the `type:: person` policy. Both are re-exported at the crate
@@ -442,18 +486,48 @@ pub fn open_today(workspace: &mut Workspace, hlc: &HlcGenerator) -> Result<NodeI
 }
 
 /// Open the journal page for `date`, creating it if needed.
+///
+/// When the daily note is created fresh **and** the workspace defines a
+/// `journal` template (a page with `template:: journal`), its outline is
+/// stamped into the new note automatically — the property-based
+/// successor to the old `templates/journal.md` seed. The stamp is
+/// best-effort (a broken template never blocks opening today) and
+/// untraced: every daily comes from the same template, so a
+/// `from-template::` marker would be pure noise on every note.
 pub fn open_journal(
     workspace: &mut Workspace,
     hlc: &HlcGenerator,
     date: NaiveDate,
 ) -> Result<NodeId, ActionError> {
-    open_or_create(
+    let slug = journal_slug(date);
+    // An existing journal is returned as-is — never re-stamp it.
+    if let Some(id) = find_by_slug(workspace, &slug) {
+        return Ok(id);
+    }
+    let id = open_or_create(
         workspace,
         hlc,
-        &journal_slug(date),
+        &slug,
         &journal_title(date),
         PageKind::Journal,
+    )?;
+    if crate::template::list::find_template_by_name(
+        workspace,
+        crate::template::JOURNAL_TEMPLATE_NAME,
     )
+    .is_some()
+    {
+        let _ = crate::template::instantiate::instantiate_template_traced(
+            workspace,
+            hlc,
+            crate::template::JOURNAL_TEMPLATE_NAME,
+            id,
+            &slug,
+            Some(date),
+            false,
+        );
+    }
+    Ok(id)
 }
 
 /// Sweep any legacy children of [`NodeId::root`] that aren't pages
@@ -531,6 +605,62 @@ mod tests {
         assert_eq!(pages[0].slug, "ideas");
         assert_eq!(pages[0].title, "Ideas");
         assert_eq!(pages[0].kind, PageKind::Page);
+    }
+
+    /// Define a `journal` template page with one body block.
+    fn make_journal_template(w: &mut Workspace, hlc: &HlcGenerator) {
+        let tpl = open_or_create(w, hlc, "templates-journal", "journal", PageKind::Page).unwrap();
+        set_property(
+            w,
+            hlc,
+            tpl,
+            crate::template::TEMPLATE_KEY,
+            Some(PropValue::Text(
+                crate::template::JOURNAL_TEMPLATE_NAME.into(),
+            )),
+        )
+        .unwrap();
+        append_block(w, hlc, Some(tpl), Some("**Standup:**")).unwrap();
+    }
+
+    #[test]
+    fn open_journal_stamps_template_on_fresh_daily() {
+        let (mut w, hlc) = ws();
+        make_journal_template(&mut w, &hlc);
+        let date = NaiveDate::from_ymd_opt(2026, 7, 9).unwrap();
+        let j = open_journal(&mut w, &hlc, date).unwrap();
+        let bodies: Vec<String> = children_of(&w, j)
+            .into_iter()
+            .filter_map(|(id, _)| w.block_text(id))
+            .collect();
+        assert!(
+            bodies.iter().any(|t| t == "**Standup:**"),
+            "fresh daily should carry the journal template body"
+        );
+    }
+
+    #[test]
+    fn open_journal_does_not_restamp_existing_daily() {
+        let (mut w, hlc) = ws();
+        make_journal_template(&mut w, &hlc);
+        let date = NaiveDate::from_ymd_opt(2026, 7, 9).unwrap();
+        let first = open_journal(&mut w, &hlc, date).unwrap();
+        let count_after_first = children_of(&w, first).len();
+        // Re-opening the same daily must return it as-is, never re-stamp.
+        let second = open_journal(&mut w, &hlc, date).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(children_of(&w, second).len(), count_after_first);
+    }
+
+    #[test]
+    fn open_journal_without_template_is_empty() {
+        let (mut w, hlc) = ws();
+        let date = NaiveDate::from_ymd_opt(2026, 7, 9).unwrap();
+        let j = open_journal(&mut w, &hlc, date).unwrap();
+        assert!(
+            children_of(&w, j).is_empty(),
+            "no journal template → empty daily"
+        );
     }
 
     // Resolution of user-typed names / ref targets (`open_or_create_by_name`,
@@ -633,6 +763,132 @@ mod tests {
         let (mut w, hlc) = ws();
         let err = delete(&mut w, &hlc, "never-existed").unwrap_err();
         assert!(matches!(err, ActionError::PageNotFound(s) if s == "never-existed"));
+    }
+
+    /// Mint a SECOND root for `slug` with a fresh (non-deterministic)
+    /// id — the split-brain shape the merge repairs. Returns its id.
+    fn spawn_duplicate_root(
+        w: &mut Workspace,
+        hlc: &HlcGenerator,
+        slug: &str,
+        kind: PageKind,
+    ) -> NodeId {
+        let dup_id = NodeId(ulid::Ulid::new());
+        let pos = position_for_new_last_child(w, NodeId::root());
+        create_with_explicit_id(w, hlc, dup_id, NodeId::root(), pos, Some(slug)).unwrap();
+        set_prop(w, hlc, dup_id, SLUG_KEY, PropValue::Text(slug.to_string())).unwrap();
+        set_prop(
+            w,
+            hlc,
+            dup_id,
+            KIND_KEY,
+            PropValue::Text(kind.as_str().to_string()),
+        )
+        .unwrap();
+        dup_id
+    }
+
+    #[test]
+    fn merge_duplicate_slug_roots_consolidates_two_journal_roots() {
+        let (mut w, hlc) = ws();
+        let slug = "2026-07-10";
+        // Canonical root via the normal path (deterministic id) + one child.
+        let canonical =
+            open_or_create(&mut w, &hlc, slug, "2026-07-10", PageKind::Journal).unwrap();
+        assert_eq!(canonical, page_id_from_slug(slug));
+        let c0 = append_block(&mut w, &hlc, Some(canonical), Some("canonical child")).unwrap();
+
+        // Second root, same slug, fresh id, its own two children.
+        let dup = spawn_duplicate_root(&mut w, &hlc, slug, PageKind::Journal);
+        let d0 = append_block(&mut w, &hlc, Some(dup), Some("dup child 1")).unwrap();
+        let d1 = append_block(&mut w, &hlc, Some(dup), Some("dup child 2")).unwrap();
+
+        let merged = merge_duplicate_slug_roots(&mut w, &hlc).unwrap();
+        assert_eq!(merged, 1, "exactly one duplicate root merged");
+
+        // Only the canonical root remains for the slug.
+        let remaining: Vec<NodeId> = children_of(&w, NodeId::root())
+            .into_iter()
+            .filter(|(id, _)| {
+                matches!(
+                    w.tree().property(*id, SLUG_KEY),
+                    Some(PropValue::Text(s)) if s == slug
+                )
+            })
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(remaining, vec![canonical]);
+
+        // Canonical holds ALL children from both roots, dup's order preserved
+        // and appended after the canonical's own child.
+        let kids: Vec<NodeId> = children_of(&w, canonical)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(kids, vec![c0, d0, d1], "no child lost, order preserved");
+
+        // The emptied duplicate is trashed.
+        assert_eq!(w.tree().parent(dup), Some(NodeId::trash()));
+        // find_by_slug now resolves to the single survivor.
+        assert_eq!(find_by_slug(&w, slug), Some(canonical));
+    }
+
+    #[test]
+    fn merge_duplicate_slug_roots_is_idempotent_and_noop_when_clean() {
+        let (mut w, hlc) = ws();
+        // Clean workspace: nothing to merge.
+        assert_eq!(merge_duplicate_slug_roots(&mut w, &hlc).unwrap(), 0);
+
+        let slug = "ideas";
+        open_or_create(&mut w, &hlc, slug, "Ideas", PageKind::Page).unwrap();
+        let dup = spawn_duplicate_root(&mut w, &hlc, slug, PageKind::Page);
+        append_block(&mut w, &hlc, Some(dup), Some("stray")).unwrap();
+
+        // First run merges the duplicate.
+        assert_eq!(merge_duplicate_slug_roots(&mut w, &hlc).unwrap(), 1);
+        // Second run is a no-op: the workspace is clean again.
+        assert_eq!(merge_duplicate_slug_roots(&mut w, &hlc).unwrap(), 0);
+    }
+
+    /// Mint the canonical root for `slug` directly (deterministic id),
+    /// bypassing `open_or_create`'s `find_by_slug` short-circuit — which
+    /// would otherwise return an already-present duplicate.
+    fn spawn_canonical_root(
+        w: &mut Workspace,
+        hlc: &HlcGenerator,
+        slug: &str,
+        kind: PageKind,
+    ) -> NodeId {
+        let id = page_id_from_slug(slug);
+        let pos = position_for_new_last_child(w, NodeId::root());
+        create_with_explicit_id(w, hlc, id, NodeId::root(), pos, Some(slug)).unwrap();
+        set_prop(w, hlc, id, SLUG_KEY, PropValue::Text(slug.to_string())).unwrap();
+        set_prop(
+            w,
+            hlc,
+            id,
+            KIND_KEY,
+            PropValue::Text(kind.as_str().to_string()),
+        )
+        .unwrap();
+        id
+    }
+
+    #[test]
+    fn find_by_slug_is_deterministic_with_duplicate_roots() {
+        let (mut w, hlc) = ws();
+        let slug = "2026-07-10";
+        // Duplicate root FIRST (would win a naive "first match"), then the
+        // canonical deterministic-id root minted directly (bypassing the
+        // `open_or_create` short-circuit that would return the dup).
+        let dup = spawn_duplicate_root(&mut w, &hlc, slug, PageKind::Journal);
+        let canonical = spawn_canonical_root(&mut w, &hlc, slug, PageKind::Journal);
+        assert_eq!(canonical, page_id_from_slug(slug));
+        assert_ne!(dup, canonical);
+
+        // Deterministic: always the canonical id, stable across repeated calls.
+        assert_eq!(find_by_slug(&w, slug), Some(canonical));
+        assert_eq!(find_by_slug(&w, slug), Some(canonical));
     }
 
     // Person-typed page tests (`type:: person`, `@` mention resolution,

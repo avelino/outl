@@ -40,6 +40,12 @@ Use it when you want the literal characters — a code snippet, a block of text 
 
 Mobile has no without-formatting chord; every mobile paste is with formatting.
 
+## Pasting inside a code block
+
+When the block you are editing is a fenced code block (a `` ``` `` block), **every** paste is literal — the same as paste-without-formatting — regardless of the chord you use.
+A multi-line or outline-shaped clipboard is spliced in verbatim, with its line breaks intact, instead of being converted into sibling blocks (which would tear the fence apart and strand the closing `` ``` `` on its own line).
+This holds on both GUI clients (desktop and mobile), because the guard lives next to the shared `choosePasteRoute` decision.
+
 ## Under the hood
 
 The behaviour is shared across clients so it stays identical everywhere:
@@ -50,4 +56,6 @@ The behaviour is shared across clients so it stays identical everywhere:
 - **`outl_actions::paste_plain`** — without-formatting: raw text as one block, no normalisation or splitting.
 
 The TUI reads the OS clipboard directly (`arboard`) and runs the same `outl_actions` pipeline; it has no `text/html` flavour to convert, so rich-clipboard conversion is a GUI-only capability.
+On the desktop, paste-without-formatting (`Cmd/Ctrl+Shift+V`) reads the clipboard through the Tauri clipboard-manager plugin (backend `arboard`), not `navigator.clipboard.readText()`.
+The macOS webview gates that web API behind a native "Paste" permission button when it is called outside a real paste gesture, so the plugin read is what makes the chord work.
 See the [Shared primitives catalog](shared-primitives.md) for where each piece lives.

@@ -165,7 +165,7 @@ A handful of the common aliases:
 | `md` | `markdown` | |
 | `c++`, `cxx`, `cc`, `cpp` | `cpp` | |
 | `cs`, `c#` | `csharp` | |
-| `clj` | `clojure` | |
+| `query`, `tasks` | `query` | Maps to the `query` runtime — workspace queries as code blocks (see [Query code blocks](#query-code-blocks) below). |
 
 The full table lives in `crates/outl-md/src/lang.rs::KNOWN_ALIASES`; the TS mirror is `crates/outl-frontend-shared/src/highlight/aliases.ts`.
 Add a row in both files in the same commit — the `doc-sync-guard` hook treats this as a shortcut-level change and refuses the edit otherwise.
@@ -182,6 +182,13 @@ The TUI renders fences as monospace text without syntax colouring today; the pla
 [`outl_md::lang::canonical`]: ../crates/outl-md/src/lang.rs
 [`@outl/shared/highlight::canonical`]: ../crates/outl-frontend-shared/src/highlight/aliases.ts
 [hljs-common]: https://github.com/highlightjs/highlight.js/blob/main/src/index.js
+
+#### Query code blocks
+
+A ` ```query ` fence runs a declarative DSL against the workspace and renders matching blocks as **live embed references**.
+Query blocks auto-run on every page load — no `gx` or `auto-run::` needed.
+
+Full syntax reference, examples, and architecture: [Query code blocks](query.md).
 
 ### Block properties
 
@@ -208,7 +215,7 @@ The third line (`- this is a regular child block`) is a real child.
 | `((blk-XXXXXX))` | Block reference — renders as the source block's text, links to it |
 | `!((blk-XXXXXX))` | Block embed — renders the source block expanded with its subtree |
 | `:shortcode:` | GitHub gemoji shortcode — renders as the unicode glyph (`:tada:` → 🎉) |
-| `{{query: ...}}` | Saved query (not yet implemented — parse as opaque) |
+| `{{query: ...}}` | Inline query token (legacy — parsed as opaque; use ` ```query ` code blocks instead, see [Query code blocks](#query-code-blocks) below) |
 | `**bold**`, `*italic*` / `_italic_`, `` `code` `` | Standard CommonMark (underscore emphasis rules apply — see below) |
 
 #### Underscore emphasis and intra-word identifiers

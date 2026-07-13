@@ -179,6 +179,16 @@ pub enum Action {
     YankRange,
     /// Delete the visual range.
     DeleteRange,
+    /// Extend (or start, from Normal mode) the selection one block down.
+    /// The non-vim multi-select entry: `Shift+Down` anchors at the
+    /// current block if no range is active, then grows it downward.
+    SelectRangeDown,
+    /// Extend (or start) the selection one block up (`Shift+Up`).
+    SelectRangeUp,
+    /// Move every block in the Visual range up among its siblings.
+    MoveVisualRangeUp,
+    /// Move every block in the Visual range down among its siblings.
+    MoveVisualRangeDown,
 
     // ── code execution ───────────────────────────────────────────
     /// Run the code block under the cursor through `outl-exec`.

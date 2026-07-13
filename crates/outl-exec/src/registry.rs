@@ -47,6 +47,8 @@ impl RuntimeRegistry {
         r.register(runtimes::lua::LuaRuntime);
         #[cfg(feature = "lang-rust")]
         r.register(runtimes::rust::RustRuntime::default());
+        #[cfg(feature = "lang-query")]
+        r.register(runtimes::query::QueryRuntime);
         r
     }
 

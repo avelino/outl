@@ -18,6 +18,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import type {
+  BacklinksOrder,
   CreateBlockReply,
   PageMeta,
   PageView,
@@ -31,6 +32,7 @@ import type {
   PluginTransformResult,
   RegistryItem,
   RunCodeBlockReply,
+  TemplateDto,
   WorkspaceSummary,
 } from "./types";
 
@@ -178,6 +180,56 @@ export function resolveRef(target: string): Promise<PageMeta | null> {
  */
 export function deletePage(slug: string): Promise<PageView> {
   return invoke<PageView>("delete_page", { slug });
+}
+
+/**
+ * Persist the backlinks-list direction (issue #142) and get `slug`'s
+ * view back re-sorted under it. A pure display preference — it lives in
+ * `config.toml`, never the op log, so it does not converge between
+ * devices (same policy as the theme). The returned `PageView` already
+ * reflects the new order; the caller just swaps it into its store.
+ */
+export function setBacklinksOrder(
+  order: BacklinksOrder,
+  slug: string,
+): Promise<PageView> {
+  return invoke<PageView>("set_backlinks_order", { order, slug });
+}
+
+// ---------------------------------------------------------------------------
+// Structural templates
+// ---------------------------------------------------------------------------
+
+/**
+ * List every structural template defined in the workspace, sorted by
+ * invocation name. A template is any page with a non-empty `template::`
+ * property. Powers the desktop `/template` slash picker and the mobile
+ * template sheet. Wraps `list_templates_cmd` (the `_cmd` suffix on the
+ * Rust side avoids a name clash with the `outl_actions::list_templates`
+ * re-export in each client's command glob).
+ */
+export function listTemplates(): Promise<TemplateDto[]> {
+  return invoke<TemplateDto[]>("list_templates_cmd");
+}
+
+/**
+ * Deep-copy the template `name` under `targetBlockId`, applying built-in
+ * variable substitution (`{{date}}`, `{{page}}`, …) and stamping
+ * `from-template:: <slug>` on each root clone. Returns a refreshed
+ * {@link PageView} of the target block's enclosing page so the caller
+ * `applyView`s it in one round-trip.
+ *
+ * Rejects (string error → toast) on an unknown template name or a stale
+ * block id — nothing is created on a miss.
+ */
+export function instantiateTemplateAt(
+  name: string,
+  targetBlockId: string,
+): Promise<PageView> {
+  return invoke<PageView>("instantiate_template_at", {
+    name,
+    targetBlock: targetBlockId,
+  });
 }
 
 export function workspaceStats(): Promise<WorkspaceSummary> {
@@ -392,6 +444,30 @@ export function runCodeBlock(
   blockId: string,
 ): Promise<RunCodeBlockReply> {
   return invoke<RunCodeBlockReply>("run_code_block", { pageId, blockId });
+}
+
+/**
+ * Sweep the page for query blocks (runtimes with `auto_run() == true`)
+ * and execute them. Returns the refreshed `PageView`.
+ */
+export function runAutoRunBlocks(
+  pageId: string,
+): Promise<{ ran: number; view: PageView }> {
+  return invoke<{ ran: number; view: PageView }>("run_auto_run_blocks", {
+    pageId,
+  });
+}
+
+/**
+ * Batch-resolve embed handles (`blk-XXXXXX`) to their source content.
+ * Returns a map from handle to `{ handle, text, page_slug }`.
+ */
+export function resolveEmbeds(
+  handles: string[],
+): Promise<Record<string, { handle: string; text: string; page_slug: string; status: string | null }>> {
+  return invoke<
+    Record<string, { handle: string; text: string; page_slug: string; status: string | null }>
+  >("resolve_embeds", { handles });
 }
 
 /**

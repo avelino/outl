@@ -29,9 +29,9 @@ use crate::language::extract_fence;
 use crate::registry::RuntimeRegistry;
 use crate::result_block::{
     render_result_body, result_source_hash, source_hash, upsert_result_child,
-    upsert_result_child_with_hash,
+    upsert_result_child_with_hash, upsert_result_embeds, RESULT_MARKER,
 };
-use crate::runtime::{ExecContext, ExecError, ExecOutput};
+use crate::runtime::{ExecContext, ExecError, ExecOutput, OutputFormat};
 
 /// Default per-run timeout. UIs can override by building an
 /// [`ExecContext`] manually and going around this helper.
@@ -158,8 +158,17 @@ pub fn run_block_at_index(
 
     // 6. Render result, upsert (without source hash — manual `gx` is
     // always meant to refresh).
-    let body = render_result_body(result.as_ref());
-    upsert_result_child(block, body);
+    match result.as_ref() {
+        Ok(o) if o.format == OutputFormat::Embeds => {
+            let embeds: Vec<&str> = o.stdout.lines().filter(|l| !l.is_empty()).collect();
+            let header = format!("{RESULT_MARKER} ({} blocks)", embeds.len());
+            upsert_result_embeds(block, header, &embeds);
+        }
+        _ => {
+            let body = render_result_body(result.as_ref());
+            upsert_result_child(block, body);
+        }
+    }
 
     // 7. Persist + reconcile.
     let rendered = render(&page);
@@ -230,8 +239,17 @@ pub fn run_block_at_index_if_source_changed(
     };
     let result = runtime.execute(&body, &ctx);
 
-    let body_md = render_result_body(result.as_ref());
-    upsert_result_child_with_hash(block, body_md, &want_hash);
+    match result.as_ref() {
+        Ok(o) if o.format == OutputFormat::Embeds => {
+            let embeds: Vec<&str> = o.stdout.lines().filter(|l| !l.is_empty()).collect();
+            let header = format!("{RESULT_MARKER} ({} blocks)", embeds.len());
+            upsert_result_embeds(block, header, &embeds);
+        }
+        _ => {
+            let body_md = render_result_body(result.as_ref());
+            upsert_result_child_with_hash(block, body_md, &want_hash);
+        }
+    }
 
     let rendered = render(&page);
     outl_md::write_atomic(md_path, rendered.as_bytes()).map_err(|source| RunError::Write {

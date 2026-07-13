@@ -37,8 +37,8 @@ Devices live at different paths (desktop `~/outl-p2p`, mobile `…/app.outl.mobi
 - **Gossip topic.**
   `workspace_topic_id` = `blake3(workspace_id)`, so two devices on the same workspace land on the same topic regardless of path.
 - **Sync request.**
-  `SyncRequest.workspace_id` carries the id, and the serve side (`SyncProtocolHandler::serve`) **validates it against the local id and rejects a mismatch** (`workspace-mismatch` close).
-  Genuinely-different workspaces never cross-merge op logs; legit same-workspace peers (now sharing an id) pass.
+  `SyncRequest.workspace_id` carries the id; `SyncProtocolHandler::serve` **validates it against the local id** (`workspace-mismatch` close) **and checks `remote_id()` is in `peers.json`** (read fresh per connection; `unknown-peer` close).
+  Issue #158: the id only proves the peer thinks it belongs; a removed device still knows it, so revocation needs the peer check.
 - **Pairing makes the joiner adopt the host's id.**
   The handshake `PairingPayload` carries each side's id; the **host keeps** its id and the **joiner adopts** it *before* the immediate post-pair `delta_sync` fires.
   Adoption is **persist-first**: `adopt_workspace_id` writes the host's id to `.outl/workspace-id` and only then flips the in-memory handle; a failed disk write does NOT adopt (retry-safe).
@@ -72,8 +72,7 @@ The nuance (verified against the iroh 1.0.0 source — `endpoint.rs::same_endpoi
 
 **Why the route is single:** a second endpoint registering the same secret key *replaces* the active client in the relay's `DashMap<EndpointId, ClientState>`.
 All inbound datagrams then route to the newcomer and the original silently stops receiving (`endpoint.rs::same_endpoint_id_relay` asserts this).
-If the newcomer doesn't accept `SYNC_ALPN`, the dialer gets `quinn` `CONNECTION_REFUSED` — the "connection refused, nothing syncs" bug.
-It was produced by a transient status-probe (or the GUI's old pairing endpoint) stealing the route ("Another endpoint connected with the same endpoint id" in relay logs).
+If the newcomer doesn't accept `SYNC_ALPN`, the dialer gets `quinn` `CONNECTION_REFUSED` — the "connection refused, nothing syncs" bug (a transient status-probe or the GUI's old pairing endpoint stealing the route).
 
 **Three call sites, three rules:**
 
@@ -214,9 +213,10 @@ Shared seed/read/wait helpers stay in `tests/common/mod.rs` (read-only); saga-sp
 | 3. Workspace identity = stable id, not path (topic) | `same_workspace_id_yields_same_topic_across_paths` (pre-existing) | `tests/integration.rs` |
 | 3. Workspace identity = stable id, not path (END-TO-END sync) | `different_paths_same_workspace_id_sync_as_one` (two devices at different paths, same id, converge) | `tests/regression.rs` |
 | 3. Mismatched ids are rejected | `delta_sync_rejects_mismatched_workspace_id` (pre-existing) | `tests/integration.rs` |
+| 3b. Removed/unknown peer denied (issue #158) | `removed_peer_is_denied_sync` | `tests/regression.rs` |
 | 4. Pairing adoption (joiner adopts host id, syncs as one) | `gui_pairing_over_live_sync_endpoint` (pre-existing; asserts adopted id persisted in both peers.json) | `tests/integration.rs` |
 | 5. Single endpoint per identity (pair AND sync over the live sync endpoint, no relay hijack) | `gui_pairing_over_live_sync_endpoint` (pre-existing; pairing rides the live sync endpoint, no second bind) | `tests/integration.rs` |
-| 6. Reachability resolution + off-LAN/IPv6 direct-addr filter (issue #133) | `iroh_endpoint_addr_*` + `is_reachable_lan_ipv4_*` (keep on-LAN IPv4, drop IPv6 + stale VPN IPs, fall back to stored/bare/corrupt) | `src/peers.rs` `#[cfg(test)]` |
+| 6. Reachability resolution + off-LAN/IPv6 direct-addr filter (issue #133) | `iroh_endpoint_addr_*` + `is_reachable_lan_ipv4_*` (keep on-LAN IPv4, drop IPv6 + stale VPN IPs, fall back stored/bare/corrupt) | `src/peers.rs` |
 | 7. Bidirectional push materializes on BOTH sides AND fires BOTH reload signals | `bidirectional_sync_fires_reload_signal_on_both_sides` (set convergence + `peer_ready_tx` on initiator AND responder) | `tests/regression.rs` |
 | 7. (set-convergence half) both sides hold all ops | `bidirectional_delta_sync` (pre-existing) | `tests/integration.rs` |
 | 8. Membership merge is ADD-only (never clobber a local entry, drop self, drop undialable) | `merge_unknown_never_clobbers_a_known_entry` + `merge_skips_self` / `merge_adds_unknown_and_dedups_known` / `merge_skips_unreachable_peer` | `src/peers.rs`, `src/engine_membership.rs` `#[cfg(test)]` |
@@ -336,9 +336,7 @@ It awaits `endpoint.online()` under a mandatory 5s timeout (pends forever with n
 
 **Resolution order** (`PeerEntry::iroh_endpoint_addr`): stored `endpoint_addr` → keep the relay + the **on-LAN IPv4** direct addrs, **drop IPv6** and **drop off-LAN IPv4**; else id + `relay_url`; else bare id.
 A corrupt `endpoint_addr` logs a warning and falls through, never failing the dial.
-
-**Why not relay-only:** it dropped all direct addrs, so a flaky relay broke even same-WiFi sync.
-Keeping on-LAN IPv4 direct fixes it (IPv6 + off-LAN IPv4 dropped — a dead one stalls multipath).
+Not relay-only (a flaky relay would break same-WiFi sync) and not all-addrs (a dead IPv6/off-LAN direct stalls multipath) — keeping only on-LAN IPv4 direct + relay is the balance.
 
 **Off-LAN IPv4 drop (issue #133):** a VPN-paired peer stores tunnel IPs (`10.x`, `100.x`, WAN) beside its LAN addr, stalling iroh's multipath on the dead ones.
 `iroh_endpoint_addr` keeps only IPv4 on a **local** subnet (`is_reachable_lan_ipv4` + `if-addrs`; injectable `iroh_endpoint_addr_with_ifaces`), fail-open on error.
@@ -347,33 +345,32 @@ Keeping on-LAN IPv4 direct fixes it (IPv6 + off-LAN IPv4 dropped — a dead one 
 
 Ticket codec == `endpoint_addr` codec (`peers::encode_endpoint_addr` / `decode_endpoint_addr`); `encode_ticket` / `decode_ticket` delegate to it — a pairing ticket IS a `PeerEntry.endpoint_addr`.
 
+**Self-heal on inbound connect (`peers::refresh_peer_direct_addr`):** a stored addr goes stale when a peer's DHCP lease moves, and a stale direct addr stalls multipath like an off-LAN one.
+On an **accepted** inbound connection, `serve()` reads the live remote socket off `Connection::paths()` (`TransportAddr::Ip`) and calls `refresh_peer_direct_addr(root, node_id, sock)`.
+That rewrites the stored `endpoint_addr` to *only* that socket + the known relay, so the next catch-up dial uses the fresh route without a re-pair.
+Conservative: it only touches an **already-paired** peer (unknown node id → no-op, never added), and returns `false` with no write when the stored addr is already that socket.
+Regression: `refresh_peer_direct_addr_replaces_stale_keeps_relay_and_is_idempotent`.
+
 ## STOPGAP: IPv4-only bind (iroh 1.0.0 multipath workaround)
 
-**All four endpoints bind IPv4-only.**
-This is a temporary workaround for an iroh 1.0.0 bug, owned by the `bind` module (`bind::n0_builder_ipv4_only`).
+**All four endpoints bind IPv4-only** — a temporary workaround for an iroh 1.0.0 bug, owned by the `bind` module (`bind::n0_builder_ipv4_only`).
 
-**The bug:** iroh 1.0.0's QUIC-multipath opens paths to **all** of a peer's candidate addresses concurrently.
-A dead global IPv6 direct addr ("No route to host" on a LAN-only device) then stalls the whole connect/accept (`PTO expired`, `MultipathNotNegotiated`, ~30s timeout) instead of converging on the working LAN-IPv4 or relay path.
-There is no public knob to disable multipath (`max_concurrent_multipath_paths` clamps to >= 9; `path_selector` is unstable and only picks among already-opened paths), and downgrade is blocked — `iroh-gossip 0.101.0` requires `iroh = "1"`.
+**The bug + fix (full rationale in the `bind` module docs).**
+iroh 1.0.0 multipath opens paths to **all** of a peer's candidate addrs at once, so a dead global IPv6 direct addr stalls the whole connect/accept (`MultipathNotNegotiated`, ~30s) instead of converging on the working LAN-IPv4/relay path.
+The fix binds an **IPv4-only** socket (`clear_ip_transports().bind_addr("0.0.0.0:0")`) so the endpoint never advertises a global IPv6 direct addr; the relay transport is kept, so **LAN-IPv4 direct + relay fallback both survive**.
 
-**The fix (Option A):** bind an **IPv4-only** UDP socket via `Endpoint::builder(presets::N0).clear_ip_transports().bind_addr("0.0.0.0:0")`.
-The endpoint then never discovers/advertises a global IPv6 direct addr, so neither the dial side nor the accept side ever opens a dead IPv6 path.
-`clear_ip_transports` only drops the IP transports; the `presets::N0` relay transport stays, so **LAN-IPv4 direct + n0 relay fallback are both preserved**.
-By default the builder pre-binds both `0.0.0.0` and `[::]`; `clear` + `bind_addr` re-adds IPv4 only (see iroh-1.0.0 `Builder::bind_addr` / `clear_ip_transports`).
+Every endpoint goes through `bind::n0_builder_ipv4_only` so dial and accept stay consistent — `run_iroh`, `bind_pairing_endpoint`, `probe_peers`, `bind_sync_endpoint`.
+Dropping IPv6 on only one side would let the other advertise a dead path.
 
-Every endpoint goes through `bind::n0_builder_ipv4_only` so the dial and accept sides stay consistent — `run_iroh` (engine), `bind_pairing_endpoint` (pairing), `probe_peers` (status), and `bind_sync_endpoint` (test_support).
-Dropping IPv6 on only one side would let the other still advertise a dead path.
+### Configurable relay (default: outl's own)
 
-### Configurable relay (default n0)
+`n0_builder_ipv4_only(relay_url: Option<&str>)` picks the relay on top of the IPv4-only STOPGAP.
+Default is outl's own dedicated relay, `DEFAULT_RELAY_URL` (`use1-1.relay.avelino.outl.iroh.link`, via `RelayMode::custom`) — the n0 public relay proved slow/unreachable on some networks.
+A non-empty `[sync] relay_url` overrides it; a parse error falls back to `presets::N0` with a warning.
+Only the long-lived **sync** endpoint threads it (`run_iroh` ← `IrohSyncTransport::new` ← `outl_config::load().sync.relay_url()`); pairing/status/test pass `None`.
+See `docs/relay.md` / `docs/config.md`.
 
-`n0_builder_ipv4_only(relay_url: Option<&str>)` selects the relay on top of the IPv4-only STOPGAP (orthogonal — `clear_ip_transports` drops only IP *direct* transports, never the relay).
-`None` keeps the `presets::N0` relay (n0 default, common path); `Some(url)` swaps in `RelayMode::custom([url.parse::<RelayUrl>()?])`, falling back to n0 with a warning on a parse error.
-Only the long-lived **sync** endpoint threads it — `run_iroh` passes its `relay_url` (from `IrohSyncTransport::new`) to the bind; pairing/status/test pass `None`.
-Each client reads `outl_config::load().sync.relay_url()` and passes it to `new`; see `docs/relay.md` / `docs/config.md`.
-
-**Revert condition:** delete the `bind` module once iroh > 1.0.0 ships the multipath fallback fix (a stalled path no longer blocks convergence on a healthy path).
-Then let every call site go back to the plain dual-stack `Endpoint::builder(presets::N0)` builder.
-Track iroh > 1.0.0.
+**Revert condition:** delete the `bind` module once iroh > 1.0.0 ships the multipath fallback fix, and let every call site go back to the plain dual-stack `Endpoint::builder(presets::N0)` builder (details in the module docs).
 
 ## iroh 1.0.0 API notes (load-bearing)
 

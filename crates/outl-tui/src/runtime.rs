@@ -106,6 +106,9 @@ pub fn run_with_theme_override(path: &Path, theme_override: Option<&str>) -> Res
     outl_actions::clock::init(global_cfg.calendar.timezone.as_deref());
     let theme = resolve_theme(theme_override, &cfg, &global_cfg);
     let sync_cfg = global_cfg.sync.clone();
+    // Backlinks list direction (issue #142). Read once at boot; the
+    // `Ctrl+O` toggle persists changes back to `config.toml`.
+    let backlinks_newest_first = global_cfg.display.backlinks_order.newest_first();
     // `shared_workspace` gates the peer-sync threads (iroh transport + the
     // filesystem poller). JsonlStorage is the ONLY persistent backend
     // (sqlite was removed in 0.5.0), so a workspace is shareable unless its
@@ -176,6 +179,7 @@ pub fn run_with_theme_override(path: &Path, theme_override: Option<&str>) -> Res
         theme,
         shared_workspace,
         sync_cfg,
+        backlinks_newest_first,
     );
 
     if enhanced_keys {
@@ -359,9 +363,20 @@ fn open_workspace(
     }
     // Shed cold history AFTER the materialized tree is complete.
     ws.apply_lru_cap(lru_cap);
+    // Snapshot boot-cache policy (#128/#109): a long-lived client writes
+    // background snapshots so the next open boots from one instead of
+    // replaying the whole op log. `Drop for App` also flushes a final
+    // snapshot on exit. Defaults (enabled, 10k) unless `[snapshot]`
+    // overrides them.
+    let snap_cfg = outl_config::load().snapshot;
+    ws.set_snapshot_policy(snap_cfg.enabled, snap_cfg.op_threshold);
     Ok((ws, actor, cfg, lock, actor_lock))
 }
 
+// Private startup orchestrator — the "too many arguments" ergonomics
+// lint doesn't apply to a one-call setup seam; each arg is a distinct
+// boot input threaded from `run`.
+#[allow(clippy::too_many_arguments)]
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     workspace_root: PathBuf,
@@ -370,6 +385,7 @@ fn event_loop(
     theme: Theme,
     shared_workspace: bool,
     sync_cfg: outl_config::SyncConfig,
+    backlinks_newest_first: bool,
 ) -> Result<()> {
     let mut app = App::new(
         workspace_root,
@@ -379,6 +395,10 @@ fn event_loop(
         shared_workspace,
         sync_cfg,
     )?;
+    // Apply the persisted backlinks direction (issue #142); the field
+    // only feeds the render path, so setting it post-construction is
+    // enough and keeps it out of `App::new`'s already-long signature.
+    app.backlinks_newest_first = backlinks_newest_first;
     loop {
         // Pick up the background index build if it finished since the
         // last frame. Non-blocking; costs ~one channel try_recv.

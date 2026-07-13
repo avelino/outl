@@ -308,6 +308,7 @@ The `doc-keeper` agent runs at the end of a feature to catch what slipped throug
 | Storage trait surface, `JsonlStorage` / `MemoryStorage` test contract | `docs/development.md` § 5 ("What to mock and what not to") + `docs/storage.md` + `outl-core/CLAUDE.md` |
 | New `Action` variant in `outl-shortcuts` / new keybinding / chord rebound | `docs/shortcuts.md` (the row that ships to users) + `outl-shortcuts/src/{action.rs,defaults.rs}` + every client's dispatcher (`outl-tui/src/input/*.rs`, `outl-desktop/src/lib/{shortcuts.ts,action-handlers.ts}`) + `outl-desktop/src/lib/api.ts` (TS mirror of the `Action` union — no codegen) |
 | New helper / DTO promoted into `outl-core` / `outl-md` / `outl-actions` (anything that should be reused across clients) | `docs/shared-primitives.md` + mirror at `.github/copilot-instructions.md` §5.1 |
+| New code-block runtime in `outl-exec`, new fence language, or `OutputFormat`/`auto_run` change | `docs/markdown-format.md` § Query code blocks + `crates/outl-exec/CLAUDE.md` + alias table in `crates/outl-md/src/lang.rs` and TS mirror |
 
 When in doubt: **if a contributor's first 30 minutes with the repo would land them on outdated guidance, update the doc.** That's the bar.
 
@@ -340,6 +341,7 @@ Map of canonical homes (extend as new ones are minted):
 | `outl` CLI subcommands + JSON envelope | [`docs/cli.md`](cli.md) | `outl-cli/CLAUDE.md` |
 | TUI manual (modes, overlays, visual conventions) | [`docs/tui.md`](tui.md) | `outl-tui/CLAUDE.md` |
 | Outl markdown dialect + sidecar spec | [`docs/markdown-format.md`](markdown-format.md) | `outl-md/CLAUDE.md` |
+| Query code block DSL + syntax | [`docs/markdown-format.md`](markdown-format.md) § Query code blocks | `outl-exec/CLAUDE.md` |
 | CRDT algorithm + invariants | [`docs/crdt.md`](crdt.md) | `outl-core/CLAUDE.md` |
 | Storage trait + JSONL backend | [`docs/storage.md`](storage.md) | `outl-core/CLAUDE.md` |
 | Sync model (iCloud / Syncthing / iroh roadmap) | [`docs/sync.md`](sync.md) | `outl-mobile/CLAUDE.md`, `outl-desktop/CLAUDE.md` |

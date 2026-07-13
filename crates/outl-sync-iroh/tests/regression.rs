@@ -81,6 +81,7 @@ async fn far_future_hlc_op_is_skipped_on_ingest() {
         shared_wid(),
         actor_b,
         b_ready_tx,
+        &[id_a.node_id()],
     );
 
     let (a_ready_tx, _a_ready_rx) = mpsc::channel::<()>();
@@ -167,6 +168,7 @@ async fn different_paths_same_workspace_id_sync_as_one() {
         wid.clone(),
         actor_b,
         b_ready_tx,
+        &[id_a.node_id()],
     );
 
     let (a_ready_tx, _a_ready_rx) = mpsc::channel::<()>();
@@ -233,6 +235,7 @@ async fn bidirectional_sync_fires_reload_signal_on_both_sides() {
         shared_wid(),
         actor_b,
         b_ready_tx,
+        &[id_a.node_id()],
     );
 
     // Initiator side: keep the rx to prove the initiator fired its signal too.
@@ -326,6 +329,7 @@ async fn concurrent_appends_never_glue_ops_on_the_responder() {
         shared_wid(),
         actor_resp,
         resp_ready_tx,
+        &[id_a.node_id(), id_b.node_id()],
     );
 
     let ep_a = test_support::bind_sync_endpoint(&id_a)
@@ -542,8 +546,14 @@ async fn sync_a_into_b(dir_a: &Path, dir_b: &Path, actor_a: ActorId, actor_b: Ac
         .await
         .expect("bind B endpoint");
     let b_addr = ep_b.addr();
-    let _router_b =
-        test_support::spawn_responder(ep_b, dir_b.to_path_buf(), shared_wid(), actor_b, b_ready_tx);
+    let _router_b = test_support::spawn_responder(
+        ep_b,
+        dir_b.to_path_buf(),
+        shared_wid(),
+        actor_b,
+        b_ready_tx,
+        &[id_a.node_id()],
+    );
 
     let (a_ready_tx, _a_ready_rx) = mpsc::channel::<()>();
     let ep_a = test_support::bind_sync_endpoint(&id_a)
@@ -686,4 +696,189 @@ fn assert_no_glued_lines(workspace_root: &Path) {
         checked += 1;
     }
     assert!(checked > 0, "expected at least one ops file to inspect");
+}
+
+/// Fix: `delta_sync` must NOT report success when the responder never
+/// confirms durable ingest.
+///
+/// A suspended-iPhone / carrier-NAT-drop peer can complete the exchange
+/// (the connection tears down cleanly for the initiator) yet never
+/// persist the pushed ops. Before this fix, the initiator discarded the
+/// close reason and returned `Ok(())`, logging "catch-up: sync ok" while
+/// the peer stayed empty — the desktop→mobile "synced ok but nothing
+/// arrived" bug. The responder now signals durable ingest with a
+/// `close(0, "done")`; the initiator requires it.
+#[tokio::test(flavor = "multi_thread")]
+async fn initiator_reports_failure_when_responder_never_confirms_ingest() {
+    let dir_a = tempfile::tempdir().expect("A tempdir");
+    let dir_b = tempfile::tempdir().expect("B tempdir");
+    let actor_a = ActorId::new();
+    seed_ops(dir_a.path(), actor_a, 3);
+
+    let id_a = fresh_identity(dir_a.path(), "a");
+    let id_b = fresh_identity(dir_b.path(), "b");
+
+    // B is a half-responder: full exchange, but it closes WITHOUT the
+    // "done" durable-ingest sentinel.
+    let ep_b = test_support::bind_sync_endpoint(&id_b)
+        .await
+        .expect("bind B endpoint");
+    let b_addr = ep_b.addr();
+    let _router_b = test_support::spawn_half_responder(ep_b);
+
+    let (a_ready_tx, _a_ready_rx) = mpsc::channel::<()>();
+    let ep_a = test_support::bind_sync_endpoint(&id_a)
+        .await
+        .expect("bind A endpoint");
+
+    let result = tokio::time::timeout(
+        STEP_TIMEOUT,
+        test_support::run_delta_sync(
+            &ep_a,
+            b_addr,
+            dir_a.path(),
+            &shared_wid(),
+            actor_a,
+            a_ready_tx,
+        ),
+    )
+    .await
+    .expect("delta_sync did not finish within the step timeout");
+
+    assert!(
+        result.is_err(),
+        "delta_sync must report failure when the responder never confirms \
+         durable ingest (no `done` close), not a false success"
+    );
+}
+
+/// Issue #158 — removing a paired device must actually revoke its sync access.
+///
+/// The serve side used to accept any peer that presented the right
+/// `workspace_id`, never checking whether the connecting device was still an
+/// APPROVED peer in `peers.json`. A device removed via `peer remove` (dropped
+/// from `peers.json`) kept syncing: it could still pull the full history and
+/// push edits. This proves the serve-side authorization check:
+///
+/// 1. **Known peer accepted** — with A in B's `peers.json`, the sync converges
+///    (both hold all ops), so the check never breaks a legitimate paired peer.
+/// 2. **Removed peer rejected** — after A is removed from B's `peers.json`, a
+///    fresh sync from A is REFUSED (`delta_sync` errors on the `unknown-peer`
+///    close) and B ingests NONE of A's newly-authored ops.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn removed_peer_is_denied_sync() {
+    use outl_sync_iroh::{workspace_peers_path, PeersStore};
+
+    let dir_a = tempfile::tempdir().expect("A tempdir");
+    let dir_b = tempfile::tempdir().expect("B tempdir");
+
+    let actor_a = ActorId::new();
+    let actor_b = ActorId::new();
+
+    // A and B each seed their own ops; B is the responder.
+    let a_first = seed_ops(dir_a.path(), actor_a, 2);
+    let b_nodes = seed_ops(dir_b.path(), actor_b, 1);
+
+    let id_a = fresh_identity(dir_a.path(), "a");
+    let id_b = fresh_identity(dir_b.path(), "b");
+
+    let (b_ready_tx, _b_ready_rx) = mpsc::channel::<()>();
+    let ep_b = test_support::bind_sync_endpoint(&id_b)
+        .await
+        .expect("bind B endpoint");
+    let b_addr = ep_b.addr();
+    // A is an APPROVED peer of B at first (real paired relationship).
+    let _router_b = test_support::spawn_responder(
+        ep_b,
+        dir_b.path().to_path_buf(),
+        shared_wid(),
+        actor_b,
+        b_ready_tx,
+        &[id_a.node_id()],
+    );
+
+    let ep_a = test_support::bind_sync_endpoint(&id_a)
+        .await
+        .expect("bind A endpoint");
+
+    // (1) Known peer: the sync must succeed and both sides converge.
+    let (a_ready_tx, _a_ready_rx) = mpsc::channel::<()>();
+    tokio::time::timeout(
+        STEP_TIMEOUT,
+        test_support::run_delta_sync(
+            &ep_a,
+            b_addr.clone(),
+            dir_a.path(),
+            &shared_wid(),
+            actor_a,
+            a_ready_tx,
+        ),
+    )
+    .await
+    .expect("delta sync timed out")
+    .expect("an approved peer must sync successfully");
+
+    let converged: BTreeSet<String> = a_first
+        .iter()
+        .chain(b_nodes.iter())
+        .map(|n| n.to_string())
+        .collect();
+    assert!(
+        wait_until(STEP_TIMEOUT, || {
+            disk_has_all_nodes(dir_b.path(), actor_b, &converged)
+        }),
+        "an approved peer's ops must reach the responder"
+    );
+
+    // Revoke A: remove it from B's peers.json, exactly like `peer remove` does.
+    {
+        let path = workspace_peers_path(dir_b.path());
+        let mut store = PeersStore::load_or_default(&path).expect("load B peers");
+        assert!(
+            store
+                .remove(&id_a.node_id().to_string())
+                .expect("remove A from B peers"),
+            "A must have been an approved peer before removal"
+        );
+        assert!(
+            store.list().is_empty(),
+            "B's peer list is empty after revoking A"
+        );
+    }
+
+    // A authors NEW ops after being revoked — these must NOT reach B.
+    let a_after_revoke = seed_ops(dir_a.path(), actor_a, 2);
+
+    // (2) Removed peer: the sync must be REJECTED (unknown-peer close → the
+    // initiator's durable-ingest confirmation never comes, so it errors).
+    let (a_ready_tx2, _a_ready_rx2) = mpsc::channel::<()>();
+    let result = tokio::time::timeout(
+        STEP_TIMEOUT,
+        test_support::run_delta_sync(
+            &ep_a,
+            b_addr,
+            dir_a.path(),
+            &shared_wid(),
+            actor_a,
+            a_ready_tx2,
+        ),
+    )
+    .await
+    .expect("delta sync did not finish within the step timeout");
+    assert!(
+        result.is_err(),
+        "a revoked peer's sync must be refused, not silently succeed"
+    );
+
+    // B must NOT have ingested any of A's post-revocation ops.
+    let b_nodes_on_disk: BTreeSet<String> = created_nodes_on_disk(dir_b.path(), actor_b)
+        .into_iter()
+        .map(|(_actor, node)| node)
+        .collect();
+    for revoked in &a_after_revoke {
+        assert!(
+            !b_nodes_on_disk.contains(&revoked.to_string()),
+            "B must reject ops from a revoked peer (leaked {revoked})"
+        );
+    }
 }

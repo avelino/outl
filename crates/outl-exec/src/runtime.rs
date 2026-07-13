@@ -30,6 +30,20 @@ pub trait Runtime: Send + Sync {
     /// ran but crashed); returning `Err` signals an infrastructure
     /// error (timeout, OOM, missing toolchain).
     fn execute(&self, source: &str, ctx: &ExecContext) -> Result<ExecOutput, ExecError>;
+
+    /// Whether blocks using this runtime should auto-run on every
+    /// page load **without** requiring the `auto-run::` block
+    /// property.
+    ///
+    /// Auto-run runtimes are also **excluded from manual `gx`
+    /// execution** — their results depend on external state (the
+    /// workspace, not just the fence body), so a manual re-run
+    /// provides no additional value over the automatic one.
+    ///
+    /// Default: `false`. The `query` runtime returns `true`.
+    fn auto_run(&self) -> bool {
+        false
+    }
 }
 
 /// Context passed to every execution.
@@ -74,6 +88,9 @@ pub struct ExecOutput {
     pub duration: Duration,
     /// How it ended.
     pub exit: ExitStatus,
+    /// How the orchestrator should render this output into the
+    /// result subblock. See [`OutputFormat`].
+    pub format: OutputFormat,
 }
 
 /// How a run terminated.
@@ -87,6 +104,29 @@ pub enum ExitStatus {
     /// Runtime trapped (panic, division by zero, etc). Message is
     /// runtime-specific.
     Trap(String),
+}
+
+/// How the orchestrator should render [`ExecOutput`] into a result
+/// subblock.
+///
+/// `Text` (the default) feeds `stdout` through
+/// [`render_result_body`](crate::result_block::render_result_body),
+/// producing the classic `> **result:** …` single child.
+///
+/// `Embeds` tells the orchestrator to split `stdout` into one embed
+/// reference per line and render each as a child bullet, so the result
+/// block becomes a **live view** of the referenced blocks. Used by
+/// the `query` runtime: results are `!((blk-XXXXXX))` references, not
+/// copies, so toggling a TODO on the original block is reflected
+/// everywhere it appears.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum OutputFormat {
+    /// Single result child with stdout as inline code or fenced block.
+    #[default]
+    Text,
+    /// One child per non-empty stdout line, each rendered as a bullet.
+    /// Lines are expected to be embed references (`!((blk-…))`).
+    Embeds,
 }
 
 /// Infrastructure-level errors.

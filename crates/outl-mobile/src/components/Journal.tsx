@@ -39,6 +39,7 @@ import {
   searchEmojis,
   searchPages,
   searchPersons,
+  setBacklinksOrder,
   setBlockCollapsed,
   syncNow,
   todaySlug,
@@ -97,6 +98,7 @@ import { haptic } from "../lib/haptics";
 import { BacklinksSection } from "./BacklinksSection";
 import { BlockContextMenu, type BlockContextAction } from "./BlockContextMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { TemplateSheet } from "./TemplateSheet";
 import { Toast } from "./Toast";
 
 export function Journal() {
@@ -138,6 +140,11 @@ export function Journal() {
   const [contextMenuBlockId, setContextMenuBlockId] = createSignal<
     string | null
   >(null);
+  // Block the template picker instantiates under. Set from the block
+  // long-press menu ("Insert template"); `null` keeps the sheet closed.
+  const [templateBlockId, setTemplateBlockId] = createSignal<string | null>(
+    null,
+  );
   const [syncing, setSyncing] = createSignal(false);
   // PRIMARY sync signal: is at least one iroh peer reachable right now?
   // Polled from the transport's own dial outcomes (`peerStatus()` →
@@ -193,6 +200,12 @@ export function Journal() {
     // "keyboard mode".
     ghostInput?.focus({ preventScroll: true });
   }
+
+  // Monotonic reload generation. Every async reload path captures this at
+  // start; a reload whose generation is no longer the latest is a stale read
+  // that must NOT clobber a newer one (the mobile "flicker" was an unguarded
+  // slow reload applying an older op-log state after a fresh one landed).
+  let reloadGen = 0;
 
   function applyView(v: PageView) {
     setView(v);
@@ -570,20 +583,16 @@ export function Journal() {
         // reset the textarea. The ops are already on disk; the next idle
         // workspace-ready (or the user committing) picks them up.
         if (editingId()) return;
-        const v = view();
-        if (!v) {
+        if (!view()) {
           await loadTodayWithRetry();
           return;
         }
-        try {
-          const next =
-            v.page.kind === "journal"
-              ? await openJournalFor(v.page.slug)
-              : await openPageBySlug(v.page.slug);
-          applyView(next);
-        } catch {
-          // ignore — next user interaction will refresh
-        }
+        // Route through the guarded reload path (re-materialize the op log +
+        // change / empty / generation guards) instead of applying a raw
+        // `openJournalFor` on the possibly-stale in-memory workspace. That
+        // unguarded apply — firing on every peer-ops write — is what flipped
+        // the page back to an older op-log state (the flicker).
+        await pullAndReload({ background: true });
       });
     });
   }
@@ -937,6 +946,7 @@ export function Journal() {
     // yanks the textarea out from under the user. The foreground paths (button,
     // app open, resume) always apply and show the spinner.
     const bg = opts?.background ?? false;
+    const gen = ++reloadGen;
     if (!bg) setSyncing(true);
     await withError(syncNow);
     await withError(reloadWorkspace);
@@ -947,9 +957,29 @@ export function Journal() {
           ? await withError(() => openJournalFor(cur.page.slug))
           : await withError(() => openPageBySlug(cur.page.slug));
       if (next) {
+        // A reload that comes back EMPTY while we already have content is
+        // a transient partial read — the op log is mid-ingest / being
+        // re-indexed by an inbound sync, not a real "everything was
+        // deleted". Never clobber real content with it; the next poll
+        // re-reads the settled log. This is what produced the "flip to
+        // an empty page (0 ops)" flicker on the 3s poll.
+        const clobbersContentWithEmpty =
+          next.outline.length === 0 && cur.outline.length > 0;
         const changed =
           JSON.stringify(next.outline) !== JSON.stringify(cur.outline);
-        if ((!bg || changed) && !editingId()) applyView(next);
+        // A newer reload started while our (possibly slow `syncNow`) read was
+        // in flight — it read a fresher op log, so applying ours now would flip
+        // the page back to the older state. That out-of-order apply is the
+        // flicker; drop the superseded read.
+        const superseded = gen !== reloadGen;
+        if (
+          !superseded &&
+          !clobbersContentWithEmpty &&
+          (!bg || changed) &&
+          !editingId()
+        ) {
+          applyView(next);
+        }
       }
     }
     // Re-read the dot off the fresh dial outcomes the force-sync produced.
@@ -1414,6 +1444,18 @@ export function Journal() {
         >
           <BacklinksSection
             backlinks={view()!.backlinks}
+            order={view()!.backlinks_order}
+            onToggleOrder={async () => {
+              const v = view();
+              if (!v) return;
+              haptic("light");
+              const next =
+                v.backlinks_order === "newest" ? "oldest" : "newest";
+              const updated = await withError(() =>
+                setBacklinksOrder(next, v.page.slug),
+              );
+              if (updated) applyView(updated);
+            }}
             onJump={async (link) => {
               if (!link.source_page) return;
               haptic("light");
@@ -1549,6 +1591,7 @@ export function Journal() {
             toggleTodo: handleToggleTodo,
             delete: handleDelete,
             runCode: handleRunCodeBlock,
+            insertTemplate: (id) => setTemplateBlockId(id),
             copy: async (id) => {
               // Copy the block as clean outl markdown (its subtree
               // included) — the inverse of paste, so it re-pastes into
@@ -1564,6 +1607,13 @@ export function Journal() {
             },
           },
         )}
+      />
+
+      <TemplateSheet
+        blockId={templateBlockId()}
+        onClose={() => setTemplateBlockId(null)}
+        onMessage={(text) => setError(text)}
+        onView={(v) => applyView(v)}
       />
 
     </div>
@@ -1697,6 +1747,7 @@ function buildContextActions(
     toggleTodo: (id: string) => void;
     delete: (id: string) => void;
     runCode: (id: string) => void;
+    insertTemplate: (id: string) => void;
     copy: (id: string) => void;
   },
 ): BlockContextAction[] {
@@ -1757,6 +1808,14 @@ function buildContextActions(
       iconPath:
         "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2 M9 2h6a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z",
       onSelect: () => handlers.copy(blockId),
+    },
+    {
+      id: "insertTemplate",
+      label: "Insert template",
+      // "doc.on.doc"-style stacked pages — reads as "stamp a template".
+      iconPath:
+        "M9 3H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4 M15 7h4a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2z",
+      onSelect: () => handlers.insertTemplate(blockId),
     },
     {
       id: "indent",

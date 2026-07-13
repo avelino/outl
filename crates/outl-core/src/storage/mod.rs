@@ -7,7 +7,7 @@
 use crate::hlc::Hlc;
 use crate::id::{ActorId, NodeId};
 use crate::op::LogOp;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
 
 pub mod index;
@@ -19,6 +19,35 @@ pub use index::{ActorIndex, OffsetIndex};
 pub use jsonl::JsonlStorage;
 pub use memory::MemoryStorage;
 pub use node_index::{ActorNodeIndex, NodeIndex};
+
+/// Atomically replace `path`'s contents. Creates a unique temp — the per-write
+/// ULID suffix avoids the ENOENT race when two reindex passes for the same
+/// actor write concurrently (both write the same content, last rename wins) —
+/// lets `write_body` stream the lines into it, fsyncs, then renames over
+/// `path`, removing the temp on a failed rename. Shared by `ActorIndex::save`
+/// and `ActorNodeIndex::save`.
+fn write_atomic(
+    path: &std::path::Path,
+    write_body: impl FnOnce(&mut std::fs::File, &std::path::Path) -> Result<(), StorageError>,
+) -> Result<(), StorageError> {
+    let tmp = path.with_extension(format!("idx.tmp.{}", ulid::Ulid::new()));
+    let mut file = std::fs::File::create(&tmp)
+        .map_err(|e| StorageError::Backend(format!("create {}: {e}", tmp.display())))?;
+    write_body(&mut file, &tmp)?;
+    file.sync_all()
+        .map_err(|e| StorageError::Backend(format!("fsync {}: {e}", tmp.display())))?;
+    drop(file);
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        // Never leave an orphan temp behind on a failed rename.
+        let _ = std::fs::remove_file(&tmp);
+        return Err(StorageError::Backend(format!(
+            "rename {} -> {}: {e}",
+            tmp.display(),
+            path.display()
+        )));
+    }
+    Ok(())
+}
 
 /// Which page a storage backend is responsible for.
 ///
@@ -73,20 +102,6 @@ pub enum StorageError {
     MissingOp(String),
 }
 
-/// An opaque on-disk snapshot of materialized workspace state.
-///
-/// Storage treats `bytes` as a black box — it does not know (or need to
-/// know) the layout. `Workspace` is the single owner of the format: it
-/// serializes the materialized tree + block text via bincode and hands
-/// the buffer to `Storage` for persistence. See `snapshot.rs` for the
-/// typed shape (`SnapshotBody`) and the boot contract.
-#[derive(Debug, Default, Clone)]
-pub struct Snapshot {
-    /// Serialized snapshot body; format owned by the caller of
-    /// `save_snapshot`, not by `Storage`.
-    pub bytes: Vec<u8>,
-}
-
 /// Storage backend trait.
 ///
 /// Implementations: [`JsonlStorage`] (one file per actor, the only
@@ -111,20 +126,31 @@ pub trait Storage: Send + Sync {
     /// Return all ops in HLC order.
     fn all_ops(&self) -> Result<Vec<LogOp>, StorageError>;
 
-    /// Persist a snapshot for faster startup.
-    fn save_snapshot(&mut self, snapshot: &Snapshot) -> Result<(), StorageError>;
-
-    /// Load the most recent snapshot, if any.
-    fn load_snapshot(&self) -> Result<Option<Snapshot>, StorageError>;
-
-    /// HLC cutoff of the snapshot currently on disk, if any.
+    /// Return every op that a snapshot with the given per-actor `cutoff`
+    /// has **not** yet folded into its materialized state, in HLC order.
     ///
-    /// Used by `Workspace` to decide whether the snapshot is worth
-    /// loading on boot and how many ops to replay after it
-    /// (`ops_since(cutoff)`). Default `None` covers in-memory backends
-    /// and any future backend that has no snapshot yet.
-    fn snapshot_cutoff(&self) -> Result<Option<Hlc>, StorageError> {
-        Ok(None)
+    /// An op qualifies when its HLC is strictly greater than the cutoff
+    /// recorded for **its own actor**, or when its actor is absent from
+    /// `cutoff` entirely (that actor was unseen when the snapshot was
+    /// taken, so all of its ops are still pending). This is the per-actor
+    /// generalization of [`Self::ops_since`] and the delta the boot path
+    /// replays on top of a [`crate::snapshot::SnapshotBody`].
+    ///
+    /// Default impl filters [`Self::all_ops`]; backends may override for
+    /// efficiency. Correctness — never dropping a low-HLC op from a
+    /// lagging peer — lives here, not in the override.
+    fn ops_since_per_actor(
+        &self,
+        cutoff: &BTreeMap<ActorId, Hlc>,
+    ) -> Result<Vec<LogOp>, StorageError> {
+        Ok(self
+            .all_ops()?
+            .into_iter()
+            .filter(|op| match cutoff.get(&op.actor) {
+                Some(c) => op.ts > *c,
+                None => true,
+            })
+            .collect())
     }
 
     /// Shrink (or grow) the in-memory op cache to hold at most `cap`

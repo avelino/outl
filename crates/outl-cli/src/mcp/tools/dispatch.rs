@@ -18,13 +18,14 @@ use serde_json::{json, Value};
 use crate::cmd::{
     backlinks as bl_cmd, batch as batch_cmd, block as block_cmd, daily as daily_cmd,
     doctor as doctor_cmd, export_v2 as exp_cmd, page as page_cmd, prop as prop_cmd,
-    query as query_cmd, search as search_cmd, tag as tag_cmd, workspace_info as wi_cmd,
+    query as query_cmd, search as search_cmd, tag as tag_cmd, template as tpl_cmd,
+    workspace_info as wi_cmd,
 };
 use crate::mcp::protocol::JsonRpcError;
 use crate::mcp::{tool_error_payload, tool_success_payload, ServerCtx};
 use crate::output::ApiError;
 
-use super::{opt_str, require_str};
+use super::{opt_params, opt_str, require_str};
 
 /// Tool names that mutate the workspace. After a successful call we
 /// invalidate the cached `WorkspaceIndex` so subsequent read-only
@@ -54,6 +55,7 @@ const MUTATING: &[&str] = &[
     "outl_daily_append",
     "outl_page_prop_set",
     "outl_batch",
+    "outl_template_apply",
 ];
 
 /// Dispatch a `tools/call` request to the correct handler.
@@ -332,6 +334,26 @@ fn run_tool(name: &str, args: &Value, ctx: &Arc<ServerCtx>) -> Result<Value, Api
         // --- workspace ---
         "outl_workspace_info" => ctx.with_workspace(|wc| Ok(wi_cmd::info(wc))),
         "outl_workspace_doctor" => doctor_cmd::collect_in_session_json(&ctx.workspace_path),
+
+        // --- templates ---
+        "outl_template_list" => ctx.with_workspace(|wc| tpl_cmd::list(wc)),
+        "outl_template_apply" => {
+            let name = require_str(args, "name")?.to_string();
+            let page = require_str(args, "page")?.to_string();
+            let block = opt_str(args, "block").map(str::to_string);
+            ctx.with_workspace(|wc| tpl_cmd::apply(wc, &name, &page, block.as_deref()))
+        }
+        "outl_template_resolve" => {
+            let name = require_str(args, "name")?.to_string();
+            ctx.with_workspace(|wc| tpl_cmd::resolve(wc, &name))
+        }
+        "outl_template_run" => {
+            let name = require_str(args, "name")?.to_string();
+            let page = require_str(args, "page")?.to_string();
+            let block = require_str(args, "block")?.to_string();
+            let params = opt_params(args);
+            ctx.with_workspace(|wc| tpl_cmd::run_template(wc, &name, &page, &block, &params))
+        }
 
         other => Err(ApiError::new(
             crate::output::codes::INVALID_ARG,

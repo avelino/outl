@@ -19,15 +19,16 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Write as _;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
-use iroh::endpoint::Connection;
+use iroh::endpoint::{Connection, ConnectionError};
 use iroh::protocol::{AcceptError, ProtocolHandler};
 use outl_core::hlc::Hlc;
 use outl_core::id::ActorId;
 use outl_core::storage::{JsonlStorage, Storage};
 use outl_core::{LogOp, WorkspaceId};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::engine::{AppendLock, SharedWorkspaceId};
 use crate::protocol::{
@@ -154,9 +155,9 @@ fn ops_missing_for(
 /// kernel-local (it never syncs anyway) and the file is empty and recreated
 /// on demand, so losing it costs nothing.
 ///
-/// Acquisition blocks (`File::lock`), so it must run on a blocking thread —
-/// see `write_deduped_batch`'s `spawn_blocking` caller. Drop releases via the
-/// closed fd.
+/// Acquisition blocks (`fs2::lock_exclusive`, a blocking `flock(2)`), so it
+/// must run on a blocking thread — see `write_deduped_batch`'s `spawn_blocking`
+/// caller. Drop releases via the closed fd.
 struct OpsDirAppendLock {
     _file: std::fs::File,
 }
@@ -171,7 +172,10 @@ impl OpsDirAppendLock {
             .truncate(false)
             .open(&path)
             .with_context(|| format!("open append lock {}", path.display()))?;
-        file.lock()
+        // `fs2::lock_exclusive` (blocking `flock(2)` via libc), NOT
+        // `std::fs::File::lock()`, which is hardcoded to return `Unsupported`
+        // on Android and would break inbound sync there. Same as `peers_lock`.
+        fs2::FileExt::lock_exclusive(&file)
             .with_context(|| format!("flock append lock {}", path.display()))?;
         Ok(Self { _file: file })
     }
@@ -316,6 +320,29 @@ async fn ingest_received_ops(
     Ok(applied)
 }
 
+/// Hard ceiling on a single sync frame's body, enforced before allocating.
+///
+/// The 4-byte length prefix is attacker-controlled — a *paired* peer could be
+/// compromised or buggy (QUIC authenticates the stream, so this isn't an
+/// on-path attacker, but a bad peer is enough). Trusting it to size a `Vec` up
+/// front let a 4-byte `0xFFFFFFFF` force a ~4 GiB allocation — an instant OOM /
+/// iOS jetsam kill (issue #155). A full-actor-log resend (the gap-recovery
+/// fallback in `ops_missing_for`) is the largest legitimate frame, so the cap
+/// is generous; the incremental read in [`read_frame`] means we still only
+/// allocate as bytes actually arrive.
+const MAX_FRAME_BODY: usize = 256 * 1024 * 1024;
+
+/// Validate a frame's declared body length against [`MAX_FRAME_BODY`] before we
+/// act on it. Split out from [`read_frame`] so the ceiling is unit-testable
+/// without standing up a QUIC stream.
+fn checked_frame_body_len(prefix: [u8; 4]) -> Result<usize> {
+    let body_len = u32::from_be_bytes(prefix) as usize;
+    if body_len > MAX_FRAME_BODY {
+        anyhow::bail!("sync frame body too large: {body_len} bytes (max {MAX_FRAME_BODY})");
+    }
+    Ok(body_len)
+}
+
 /// Read one length-prefixed frame from a recv stream.
 ///
 /// Reads the 4-byte big-endian length prefix, then exactly that many body
@@ -328,12 +355,24 @@ async fn read_frame(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<u8>> {
     recv.read_exact(&mut prefix)
         .await
         .context("read frame length prefix")?;
-    let body_len = u32::from_be_bytes(prefix) as usize;
-    let mut frame = vec![0u8; 4 + body_len];
-    frame[..4].copy_from_slice(&prefix);
-    recv.read_exact(&mut frame[4..])
-        .await
-        .context("read frame body")?;
+    let body_len = checked_frame_body_len(prefix)?;
+    // Grow the buffer as bytes actually arrive rather than pre-sizing it to the
+    // (untrusted) declared length: a peer that lies about the length — or dies
+    // right after sending the prefix — then costs us only what it actually
+    // transmits, not a speculative multi-hundred-MiB allocation. Read straight
+    // into the freshly-extended tail so there is no extra per-chunk copy.
+    let mut frame = Vec::with_capacity(4 + body_len.min(64 * 1024));
+    frame.extend_from_slice(&prefix);
+    let mut remaining = body_len;
+    while remaining > 0 {
+        let want = remaining.min(64 * 1024);
+        let start = frame.len();
+        frame.resize(start + want, 0);
+        recv.read_exact(&mut frame[start..])
+            .await
+            .context("read frame body")?;
+        remaining -= want;
+    }
     Ok(frame)
 }
 
@@ -354,6 +393,52 @@ async fn read_response(recv: &mut iroh::endpoint::RecvStream) -> Result<SyncResp
 /// Read a length-prefixed ops blob from a recv stream and decode it.
 async fn read_ops_blob(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<LogOp>> {
     decode_ops_blob(&read_frame(recv).await?)
+}
+
+/// How long to wait for a single connect attempt before giving up.
+///
+/// iroh 1.0.0's QUIC multipath opens paths to every candidate address at
+/// once and stalls ~30s on a dead one (`MultipathNotNegotiated`) before
+/// the relay path can carry the connection. Bounding each attempt caps
+/// that stall so a stale direct address can't wedge every catch-up tick,
+/// and lets the bare-id (relay/discovery) fallback take over.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Connect to `peer` for a sync, resilient to a stale direct address.
+///
+/// Tries the full `EndpointAddr` (relay + on-LAN direct) first — fast on
+/// the same LAN — bounded by [`CONNECT_TIMEOUT`]. If that stalls or fails
+/// **and** the address carried direct addrs (which may be a moved peer's
+/// dead LAN IP that still sits in `peers.json`), it retries by **bare
+/// node id**, so iroh's relay + discovery learns the peer's CURRENT
+/// address instead of wedging on the dead path. Same route the
+/// gossip-triggered dial uses; here it's the self-heal for a moved peer.
+async fn connect_with_fallback(
+    endpoint: &iroh::Endpoint,
+    peer_addr: iroh::EndpointAddr,
+) -> Result<Connection> {
+    let node_id = peer_addr.id;
+    let had_direct = peer_addr.ip_addrs().next().is_some();
+
+    match tokio::time::timeout(CONNECT_TIMEOUT, endpoint.connect(peer_addr, SYNC_ALPN)).await {
+        Ok(Ok(conn)) => return Ok(conn),
+        Ok(Err(e)) if !had_direct => return Err(e).context("connect for delta sync"),
+        Err(_) if !had_direct => return Err(anyhow::anyhow!("connect for delta sync timed out")),
+        Ok(Err(e)) => debug!(
+            "direct connect to {} failed ({e}); retrying via relay/discovery",
+            node_id.fmt_short()
+        ),
+        Err(_) => debug!(
+            "direct connect to {} timed out; retrying via relay/discovery",
+            node_id.fmt_short()
+        ),
+    }
+
+    // Fallback: bare node id → relay + discovery resolves the current addr.
+    tokio::time::timeout(CONNECT_TIMEOUT, endpoint.connect(node_id, SYNC_ALPN))
+        .await
+        .context("relay/discovery connect timed out")?
+        .context("connect for delta sync (relay/discovery)")
 }
 
 /// Bidirectional delta sync (initiator side).
@@ -387,10 +472,7 @@ pub(crate) async fn delta_sync(
 
     let peer_addr: iroh::EndpointAddr = peer.into();
     let peer_node_id = peer_addr.id;
-    let conn = endpoint
-        .connect(peer_addr, SYNC_ALPN)
-        .await
-        .context("connect for delta sync")?;
+    let conn = connect_with_fallback(endpoint, peer_addr).await?;
 
     let (mut send, mut recv) = conn.open_bi().await.context("open bi stream")?;
 
@@ -435,8 +517,22 @@ pub(crate) async fn delta_sync(
     // races that read and silently drops our push (the "B never receives A's
     // ops" bug). Instead, wait for the responder to finish ingesting and close
     // the connection itself; `closed()` returns once it does.
-    conn.closed().await;
-    Ok(())
+    //
+    // The responder closes with code 0 ("done") ONLY after it has durably
+    // ingested our pushed ops (`serve` step 4). Any OTHER close — a
+    // mid-exchange teardown on a suspended iPhone / carrier-NAT drop, a reset,
+    // a timeout — means our push may never have landed. So require the "done"
+    // close: without it, reporting `Ok` was a false success that logged
+    // "catch-up: sync ok" while the peer stayed empty (the desktop→mobile
+    // "synced ok but nothing arrived" bug). A lost close frame on an otherwise-
+    // successful ingest only costs a redundant re-push next tick, which the
+    // receiver's ingest dedup absorbs — far cheaper than silently losing ops.
+    match conn.closed().await {
+        ConnectionError::ApplicationClosed(ac) if ac.error_code == 0u32.into() => Ok(()),
+        other => Err(anyhow::anyhow!(
+            "peer did not confirm durable ingest (closed: {other})"
+        )),
+    }
 }
 
 // ── Sync protocol handler ────────────────────────────────────────────────────
@@ -513,6 +609,51 @@ impl SyncProtocolHandler {
             return Ok(());
         }
 
+        // Reject a peer that is NOT (or is no longer) an approved device for this
+        // workspace. The workspace_id check above only proves the peer THINKS it
+        // belongs here — a device removed from `peers.json` still knows the id, so
+        // without this it would keep pulling history and pushing edits (issue #158
+        // "removing a paired device doesn't revoke its access"). Read `peers.json`
+        // fresh on every inbound connection (not cached at boot): it can change
+        // while the transport runs, so a `peer remove` takes effect on the very
+        // next connection instead of after a restart.
+        let remote_id = conn.remote_id().to_string();
+        let peers_path = crate::peers::workspace_peers_path(&self.workspace_root);
+        let store = match tokio::task::spawn_blocking(move || {
+            crate::peers::PeersStore::load_or_default(&peers_path)
+        })
+        .await
+        {
+            Ok(Ok(store)) => store,
+            Ok(Err(e)) => {
+                // Fail CLOSED: if the peer list can't be read we can't prove the
+                // peer is approved, so reject rather than fall back to open access.
+                warn!(
+                    peer = %conn.remote_id().fmt_short(),
+                    "rejecting sync: peers.json unreadable ({e:#})"
+                );
+                conn.close(4u32.into(), b"unknown-peer");
+                return Ok(());
+            }
+            Err(e) => {
+                warn!(
+                    peer = %conn.remote_id().fmt_short(),
+                    "rejecting sync: peers.json load task failed ({e})"
+                );
+                conn.close(4u32.into(), b"unknown-peer");
+                return Ok(());
+            }
+        };
+        let authorized = store.list().iter().any(|p| p.node_id == remote_id);
+        if !authorized {
+            warn!(
+                peer = %conn.remote_id().fmt_short(),
+                "rejecting sync from an unknown / revoked peer (not in peers.json)"
+            );
+            conn.close(4u32.into(), b"unknown-peer");
+            return Ok(());
+        }
+
         let ops_dir = self.workspace_root.join("ops");
 
         // 2. send our own vector clock so the initiator can compute its push.
@@ -546,10 +687,66 @@ impl SyncProtocolHandler {
             info!("delta sync: received {} ops (serve side)", received_count);
         }
 
+        // Self-heal a moved peer's stale stored address: this inbound dial
+        // arrived over the peer's CURRENT direct socket, so refresh
+        // `peers.json` with it (dropping any dead direct addr) — the next
+        // outbound dial then reaches the peer directly instead of stalling
+        // on the old IP. Only when there IS a direct (IP) path; a purely
+        // relayed connection carries no usable peer socket. Best-effort —
+        // never fail the sync over it.
+        let direct_sock = conn.paths().iter().find_map(|p| match p.remote_addr() {
+            iroh::TransportAddr::Ip(sock) => Some(*sock),
+            _ => None,
+        });
+        if let Some(sock) = direct_sock {
+            match crate::peers::refresh_peer_direct_addr(
+                &self.workspace_root,
+                conn.remote_id(),
+                sock,
+            ) {
+                Ok(true) => info!(
+                    "refreshed direct addr for {} → {sock}",
+                    conn.remote_id().fmt_short()
+                ),
+                Ok(false) => {}
+                Err(e) => debug!("peer addr refresh failed: {e}"),
+            }
+        }
+
         // We've now drained the initiator's pushed ops, so it's safe to close.
         // The initiator is parked on `conn.closed()` waiting for exactly this —
         // closing here is the signal that the responder is done with the push.
         conn.close(0u32.into(), b"done");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #155 — a frame's declared length is attacker-controlled, so an oversized
+    /// claim must be rejected *before* it can size an allocation. Guards the
+    /// `0xFFFFFFFF` → ~4 GiB OOM as well as the exact cap boundary.
+    #[test]
+    fn frame_body_length_is_capped() {
+        // The 4-byte 0xFFFFFFFF prefix (the ~4 GiB OOM claim) is refused.
+        assert!(checked_frame_body_len([0xff, 0xff, 0xff, 0xff]).is_err());
+        // One byte over the ceiling is refused.
+        let over = (MAX_FRAME_BODY as u32) + 1;
+        assert!(checked_frame_body_len(over.to_be_bytes()).is_err());
+        // The ceiling itself, and anything under it, is accepted verbatim.
+        assert_eq!(
+            checked_frame_body_len((MAX_FRAME_BODY as u32).to_be_bytes()).expect("cap is allowed"),
+            MAX_FRAME_BODY
+        );
+        assert_eq!(
+            checked_frame_body_len(0u32.to_be_bytes()).expect("empty body is allowed"),
+            0
+        );
+        assert_eq!(
+            checked_frame_body_len(1234u32.to_be_bytes()).expect("small body is allowed"),
+            1234
+        );
     }
 }

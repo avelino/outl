@@ -17,9 +17,16 @@ outl-mobile (this crate)
    │   ├── workspace_open.rs       (boot orchestration over outl_tauri_shared::workspace_open primitives)
    │   ├── workspace_picker.rs     (set_workspace — folder choice + persistence; native picker deferred)
    │   ├── iroh_sync.rs            (wire_iroh_transport — boot the P2P transport, register the bg-sync handle)
-   │   ├── bg_sync.rs              (outl_ios_background_sync FFI — drives a forced sync from the iOS BGProcessingTask)
-   │   ├── plugin_service.rs       (mobile shim: CLIENT id + capability set over outl_tauri_shared::PluginService)
-   │   └── commands/               (thin #[tauri::command] wrappers over outl_tauri_shared::commands)
+   │   ├── bg_sync.rs             (outl_ios_background_sync FFI — drives a forced sync from the iOS BGProcessingTask)
+   │   ├── plugin_service.rs       (PluginService + dedicated plugin thread — Boa Context is !Send, so it can't live in AppState)
+   │   └── commands/               (Tauri command surface — split mirrors outl-desktop)
+   │       ├── mod.rs
+   │       ├── workspace.rs        (workspace_stats, reload_workspace)
+   │       ├── page.rs             (list_all_pages / search_pages / search_persons / outl_emoji_search / open_* / *_day / resolve_ref / legacy compat shims)
+   │       ├── block.rs            (create / edit / toggle_todo / toggle_quote / delete / indent / outdent / move_* / set_collapsed / paste_markdown_at / copy_markdown)
+   │       ├── peers.rs            (outl_peer_list / outl_peer_remove — read/edit <workspace>/.outl/peers.json, no workspace lock)
+   │       ├── plugin.rs           (plugin_list / plugin_run / plugin_sync_hooks — thin shims over PluginService)
+   │       └── exec.rs             (run_code_block — thin shim over outl_actions::exec::run_code_block)
    ├── gen/apple/.../main.mm       (NSMetadataQuery + NSFileCoordinator iCloud watcher)
    └── (frontend in ../src)        (Solid components, Tailwind, Tauri bridge)
 ```
@@ -168,11 +175,13 @@ that, always call `openRef`.
 
 ## Page switcher — long-press to delete
 
-`PageSwitcher.tsx` renders each page as a row button; spreading `longPressHandlers(p)` on the row arms a 500 ms sustained-touch detector (canceled if the finger moves more than 10 px, so a scroll never false-fires).
-On fire, `handleDelete(p)` runs `window.confirm(...)` → `deletePage(slug)` (from `@outl/shared/api/commands`) → navigates to the returned today's journal → refetches the list.
-Journals are excluded (`p.kind === "journal"` skips the handlers) — only regular pages can be deleted from the switcher.
-The backend `delete_page` Tauri command is the shared `outl_tauri_shared::commands::page::delete_page` body — no mobile-specific logic.
+`PageSwitcher.tsx` renders each page as a row button; spreading `longPressHandlers(p)` arms a 500 ms sustained-touch detector (canceled if the finger moves more than 10 px).
+On fire, `handleDelete(p)` runs `window.confirm(...)` → `deletePage(slug)` → navigates to the returned today's journal → refetches the list.
+Journals are excluded — only regular pages can be deleted from the switcher.
+The backend command is the shared `outl_tauri_shared::commands::page::delete_page` body — no mobile-specific logic.
 `Action::DeletePage` carries a `g d` chord in the shared catalog (Normal mode), but mobile has no keyboard surface — long-press in the page switcher remains the only trigger on touch devices.
+
+`BacklinksSection.tsx`'s header button (`order`/`onToggleOrder`) flips newest/oldest via `setBacklinksOrder`; `Journal.tsx` wires `backlinks_order`.
 
 ## Opening an external `[label](url)` link
 
@@ -184,56 +193,33 @@ Backlink rows stay inert: the whole row is already a tap-to-source button.
 
 ## Blockquote chrome
 
-A block whose `text` starts with the CommonMark `"> "` marker renders with a left border (`border-l-2 border-(--color-ios-text-secondary)/40`),
-a very faint tint (`bg-(--color-ios-text-secondary)/[0.05]` light / `[0.07]` dark),
-a right-rounded corner (`rounded-r-md`),
-and **full body colour** — refs / bold / tags / code keep their normal palette so the styled-token affordance isn't lost.
-The tint is intentionally ~5% alpha: enough to read as a soft box at a glance, low enough to not fight with surrounding outline rows.
-
-The chrome wrapper sits one level above the bullet — it envelops **both `<BulletOrCheckbox />` *and* the body** in a single flex container.
-That order (`│ ☐ body`) matches the TUI exactly and reads as "this is a quoted task" instead of "a task whose body happens to be a quote".
-The `<CollapseTriangle />` stays outside the chrome so the gutter isn't double-boxed.
-When the block isn't quoted, the wrapper degrades to a plain `flex min-w-0 flex-1 items-start gap-2.5` container, so non-quoted rows render byte-identical.
-
-The earlier `italic text-(--color-ios-text-secondary)` body styling (suggested by issue #64's mock) was dropped after testing:
-the muted body erased the cyan of `[[ref]]` underlines and the bold weight of `**abc**` against the background,
-which hurts more than it helps when the user is scanning a quoted excerpt.
-
-The check uses **`splitQuote`** from `@outl/shared/markdown` (the TS mirror of `outl_actions::quote::split_quote`) and **`stripQuoteFromTokens`** to remove the `> ` from the first `Plain` token before handing the list to `<MarkdownInline />`
-— otherwise the marker would render once in the body and once in the chrome.
-The two pieces compose with the existing TODO/DONE checkbox: a `> TODO foo` row paints the checkbox **and** the left border.
-
-Toggling the marker goes through the same Tauri pipeline as TODO/DONE: a `toggleQuote(id)` wrapper in `@outl/shared/api/commands` calls the `toggle_quote` command on each client's `src-tauri`, which delegates to `outl_actions::block::toggle_quote`.
-There is **no string surgery on the TS side** — the prefix arithmetic owns the rule and stays in one place.
-
-The TUI applies the same "chrome only, body full colour" policy via `│ ` in `view::inline::render_pretty_block_text_impl` and `view/outline.rs::BlockRowKind::Bullet`.
-Three surfaces, one policy.
+A `"> "`-prefixed block gets a left border + ~5% tint, right-rounded, body full-colour (refs / bold / tags keep their palette).
+The chrome envelops **both `<BulletOrCheckbox />` and the body** (`│ ☐ body`, TUI order); `<CollapseTriangle />` stays outside; a non-quoted block degrades to a plain flex container (byte-identical).
+Detection is `splitQuote` + `stripQuoteFromTokens` (`@outl/shared/markdown`, mirror of `outl_actions::quote::split_quote`) so the `> ` isn't rendered twice; it composes with the TODO/DONE checkbox.
+Toggling: `toggleQuote(id)` → `toggle_quote` → `outl_actions::block::toggle_quote` (no TS string surgery).
+Full convention (three-surface parity): [`docs/clients.md` → Blockquote convention](../../docs/clients.md#blockquote-convention).
 
 ## Paste from external apps
 
-The textarea in `BlockRow.tsx` intercepts paste events (with formatting only — mobile has no `Cmd+Shift+V`).
-A rich clipboard (`text/html`: Slack, Docs, Notion) converts to outl markdown via `htmlToOutlMarkdown` (`@outl/shared/paste`, Turndown), so pasted **bold** / links / lists survive.
-Plain text routes to `outl_actions::paste_markdown` (`paste_markdown_at`) when `looksLikeOutline` (bullets) **or** `hasMultipleParagraphs` (blank-line paragraphs) is true.
-Multi-paragraph plain text splits into one block per paragraph; single-paragraph falls through to the browser's default splice.
+The textarea in `BlockRow.tsx` intercepts paste (with formatting only — mobile has no `Cmd+Shift+V`).
+Rich `text/html` converts via `htmlToOutlMarkdown` (`@outl/shared/paste`); plain text routes to `paste_markdown_at` when `looksLikeOutline` **or** `hasMultipleParagraphs`, splitting multi-paragraph into one block each (else native splice).
 
 `create_block` has a **stale-anchor fallback**: if `after_id` is not in the tree (`NotInTree`), the block is appended at the end of the page instead of returning an error (mirrors the desktop fix).
 
+The long-press context menu's "Copy" action calls `copy_markdown` (`commands/block.rs` → `outl_actions::copy_markdown`), serialising the block and its full subtree as clean outl markdown to the iOS clipboard.
+
 ## Code execution (`run_code_block`)
 
-Long-press a `` ```lang …``` `` block → the contextual menu shows a `Run <lang>` action that fires `runCodeBlock` (`@outl/shared/api/commands`).
-The backend command is in `src-tauri/src/exec.rs` and is a **thin adapter**
-— the orchestration (flat-DFS walk, `.md` path resolution, `outl-exec` invocation, DTO build) lives in `outl_actions::exec::run_code_block` so the desktop client shares the exact same flow.
-The mobile adapter only parses NodeIds, locks the workspace, calls the action, and wraps the outcome with a refreshed `PageView`.
-Adding behaviour to `src-tauri/src/exec.rs` is almost always a smell — promote it to `outl-actions` instead.
+Long-press a `` ```lang …``` `` block → "Run `<lang>`" fires `runCodeBlock`.
+Mobile's `src-tauri/src/exec.rs` is a **thin adapter** over `outl_actions::exec::run_code_block` (shared with desktop), wrapping the outcome with a refreshed `PageView`.
+The action only shows when `detectFence` matches; the backend re-validates in `run_block_at_index`, so a false-positive is a toast, not damage.
+Runtimes on iOS: **Lisp, JS, Python, Lua** — `lang-rust` is off in `Cargo.toml`.
+Flow + runtime-catalog rationale: [`docs/clients.md` → Running code blocks](../../docs/clients.md#running-code-blocks).
 
-Runtimes shipped on iOS: **Lisp, JS, Python, Lua**.
-`lang-rust` is deliberately disabled in `outl-mobile/src-tauri/Cargo.toml` — the wasmtime + Cranelift stack adds tens of MB to the IPA and runs into iOS code-signing restrictions on dynamic code generation.
-The dependency is declared with `path = "../../outl-exec"` (not `workspace = true`) so we can opt out of the workspace dep's default features without changing them for every other consumer (CLI / TUI / desktop, which all keep Rust).
+## Insert template (structural templates)
 
-The "Run code" action only shows up when `@outl/shared/highlight::detectFence` matches the block's raw text
-— same detector the read-mode renderer uses,
-and the backend re-validates inside `run_block_at_index`,
-so a false-positive surfaces as a runtime toast instead of doing damage.
+The block long-press menu's "Insert template" action opens `TemplateSheet` (bottom sheet listing `listTemplates()`); picking one calls `instantiateTemplateAt(name, blockId)` and applies the returned `PageView`.
+Wire commands are the shared `list_templates_cmd` / `instantiate_template_at` bodies — no mobile logic; contract in [`docs/clients.md` → Structural templates](../../docs/clients.md#structural-templates).
 
 ## Plugins
 
@@ -326,6 +312,9 @@ The header `<SyncDot>` and the refresh button / `PullToRefresh` reflect and driv
   `Journal.tsx` shares the refresh core as `pullAndReload()` and fires it automatically: on `onMount` (opening the app), on `visibilitychange` → visible (iOS froze JS in the background), and on the 5s poll tick (alongside the peer-status probe).
   The mobile side initiating the dial is NAT-friendly — waiting for the desktop to reach an iPhone behind carrier NAT is not — so this is what makes a desktop edit show up without the user touching refresh.
   The `workspace-ready` reload skips while a block is being edited (guarded by `editingId()`) so it never resets the textarea mid-edit.
+  It also routes through `pullAndReload` (not a raw `openJournalFor` + `applyView`) so it inherits its guards.
+  **Reload-ordering guard:** each `pullAndReload` captures a monotonic `reloadGen` at entry and applies only when still the latest, so a slow reload can't flip the page back to an older state.
+  (The split-content flicker's real cause was a backend duplicate-slug-root bug, fixed in `outl-actions::merge_duplicate_slug_roots`; this is the frontend belt-and-suspenders.)
 
 `syncNow()` and `peersOnline()` both live in `@outl/shared` so mobile and desktop derive the dot + drive the refresh identically.
 See [`outl-sync-iroh/CLAUDE.md`](../outl-sync-iroh/CLAUDE.md) → "Force-sync trigger (`sync_now`)".

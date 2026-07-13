@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- App-scoped only: getExternalFilesDir / getExternalCacheDir / getCacheDir.
+       NOT `<external-path path="."/>` (the shared external-storage root), which
+       would let the FileProvider serve URIs for any file on shared storage and
+       widen the blast radius of a URI-handling bug. outl only ever shares files
+       it writes itself, all under the app sandbox. -->
+  <external-files-path name="my_images" path="." />
+  <external-cache-path name="my_cache_images" path="." />
+  <cache-path name="my_internal_cache" path="." />
+</paths>

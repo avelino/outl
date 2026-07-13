@@ -55,18 +55,23 @@ timezone = "Europe/London"        # optional IANA name; omit = OS local timezone
 
 [sync]
 transport = "iroh"                # "iroh" (P2P, default) | "file" (iCloud/fs opt-out)
-relay_url = ""                    # optional; empty = use iroh n0 default relays
+relay_url = ""                    # optional; empty = outl's default relay (use1-1.relay.avelino.outl.iroh.link)
 
 [tui]
 mouse_capture = false             # opt-in: enables mouse wheel + click + drag-to-copy in the TUI
+
+[display]
+backlinks_order = "newest"        # "newest" (default) | "oldest" — direction of the backlinks list
 ```
 
-Six sections, each modelled as its own struct ([`WorkspaceCfg`], [`ThemeCfg`], [`EditorCfg`], [`CalendarCfg`], [`SyncConfig`], [`TuiCfg`]).
+Seven sections, each modelled as its own struct ([`WorkspaceCfg`], [`ThemeCfg`], [`EditorCfg`], [`CalendarCfg`], [`SyncConfig`], [`TuiCfg`], [`DisplayCfg`]).
 `CalendarCfg::timezone` is an optional IANA name resolved at boot by `outl_actions::clock::init`; missing/empty/unknown falls back to the OS local timezone (the previous behaviour).
 It exists for environments where the OS clock lies about the zone — containers and Chrome OS **Crostini** run in UTC regardless of the user's real timezone (issue #107).
 `SyncConfig::transport` is a [`SyncTransportKind`] enum (`File` | `Iroh`, serde `lowercase`); missing `[sync]` falls back to `Iroh` (P2P is outl's primary sync), and `transport = "file"` is the explicit iCloud/filesystem opt-out.
-`SyncConfig::relay_url()` treats an empty string as `None` (use iroh's default relays).
+`SyncConfig::relay_url()` treats an empty string as `None`, which the iroh transport resolves to outl's default relay (`use1-1.relay.avelino.outl.iroh.link`; see [`docs/relay.md`](../../docs/relay.md)).
 `TuiCfg::mouse_capture` (default `false`) is read by the TUI at boot in `runtime.rs` to decide whether to call `EnableMouseCapture` and listen for `Event::Mouse`; the desktop ignores this section entirely.
+`DisplayCfg::backlinks_order` is a [`BacklinksOrder`] enum (`Newest` | `Oldest`, serde `lowercase`, default `Newest`) — a pure display preference, same "never converges between devices" policy as `theme.preset` (root `CLAUDE.md` invariant #7).
+`BacklinksOrder::newest_first()` returns the `bool` `outl_actions::sort_backlinks` expects.
 `#[serde(default)]` everywhere — a missing field falls back to the type's `Default`, so an older binary reading a newer config doesn't choke and a newer binary reading an older config doesn't blow up.
 
 ## Behaviour contract (read this before changing anything)
@@ -106,6 +111,7 @@ If the field **must converge between devices**, it doesn't belong in TOML at all
 | `calendar.timezone` | Every client at boot, via `outl_actions::clock::init` (resolves the IANA name once into the process-wide clock) | `crates/outl-tui/src/runtime.rs`, `crates/outl-cli/src/main.rs`, `crates/outl-desktop/src-tauri/src/lib.rs`, `crates/outl-mobile/src-tauri/src/lib.rs` |
 | `sync.transport` / `sync.relay_url` | TUI peer-sync wiring | `crates/outl-tui/src/actions/lifecycle/peer_sync.rs::wire_sync_transport` (config-driven; replaces the `OUTL_IROH=1` env gate) |
 | `tui.mouse_capture` | TUI only | `crates/outl-tui/src/runtime.rs` (conditionally emits `EnableMouseCapture` and arms the `Event::Mouse` branch) |
+| `display.backlinks_order` | TUI at boot (`runtime.rs`, applied post-construction); GUI clients on every `build_page_view` call | `crates/outl-tui/src/runtime.rs`, `crates/outl-tauri-shared/src/helpers.rs::build_page_view` (desktop + mobile share this reader) |
 
 Update this table whenever a new reader appears.
 

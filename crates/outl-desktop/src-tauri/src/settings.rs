@@ -10,7 +10,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use outl_config::{Config, EditorCfg, SyncConfig, SyncTransportKind, ThemeCfg, WorkspaceCfg};
+use outl_config::{
+    BacklinksOrder, Config, DisplayCfg, EditorCfg, SyncConfig, SyncTransportKind, ThemeCfg,
+    WorkspaceCfg,
+};
 
 /// Parse the flat wire string into a transport kind. Anything that isn't an
 /// explicit `"file"` opt-out (including an empty string from an older frontend)
@@ -27,6 +30,24 @@ fn transport_str(t: SyncTransportKind) -> String {
     match t {
         SyncTransportKind::File => "file",
         SyncTransportKind::Iroh => "iroh",
+    }
+    .to_string()
+}
+
+/// Parse the flat wire string into a backlinks order. Anything that isn't an
+/// explicit `"oldest"` resolves to newest — the product default (issue #142).
+fn parse_backlinks_order(s: &str) -> BacklinksOrder {
+    match s {
+        "oldest" => BacklinksOrder::Oldest,
+        _ => BacklinksOrder::Newest,
+    }
+}
+
+/// Render a backlinks order to the lowercase wire string the frontend uses.
+fn backlinks_order_str(o: BacklinksOrder) -> String {
+    match o {
+        BacklinksOrder::Newest => "newest",
+        BacklinksOrder::Oldest => "oldest",
     }
     .to_string()
 }
@@ -49,6 +70,11 @@ pub struct Settings {
     /// Sync transport: `"iroh"` (P2P, default) or `"file"` (iCloud /
     /// shared filesystem opt-out). The Sync panel writes this.
     pub sync_transport: String,
+    /// Backlinks list direction: `"newest"` (default) or `"oldest"`
+    /// (issue #142). Read-only here — the backlinks toggle writes it via
+    /// the dedicated `set_backlinks_order` command, and `save` restores
+    /// it from disk so a settings-modal write can't clobber it.
+    pub backlinks_order: String,
 }
 
 impl Settings {
@@ -67,6 +93,7 @@ impl From<Config> for Settings {
             theme: c.theme.preset,
             font_size: c.editor.font_size,
             sync_transport: transport_str(c.sync.transport),
+            backlinks_order: backlinks_order_str(c.display.backlinks_order),
         }
     }
 }
@@ -103,6 +130,13 @@ impl From<Settings> for Config {
             // `[storage]` is core-managed (LRU cap for JsonlStorage);
             // same restore-on-save pattern as the other core sections.
             storage: outl_config::StorageCfg::default(),
+            // `[display]` (backlinks order) is written by the dedicated
+            // `set_backlinks_order` command, not the settings modal. `save`
+            // restores it from disk so a modal write doesn't clobber the
+            // toggle (same restore-on-save pattern as `[calendar]`).
+            display: DisplayCfg {
+                backlinks_order: parse_backlinks_order(&s.backlinks_order),
+            },
         }
     }
 }
@@ -132,6 +166,9 @@ pub fn save(_app_config_dir: &std::path::Path, settings: &Settings) -> anyhow::R
     let on_disk = outl_config::load();
     cfg.sync.relay_url = on_disk.sync.relay_url;
     cfg.calendar = on_disk.calendar;
+    // The backlinks toggle owns `[display]` via `set_backlinks_order`;
+    // restore it so a modal save can't revert the user's direction.
+    cfg.display = on_disk.display;
     outl_config::save(&cfg)
 }
 
@@ -151,6 +188,7 @@ mod tests {
         assert_eq!(s.theme, "outl");
         assert_eq!(s.font_size, 15);
         assert_eq!(s.sync_transport, "iroh", "P2P is the default transport");
+        assert_eq!(s.backlinks_order, "newest", "newest-first is the default");
     }
 
     #[test]
@@ -161,6 +199,7 @@ mod tests {
             theme: "dracula".into(),
             font_size: 18,
             sync_transport: "file".into(),
+            backlinks_order: "oldest".into(),
         };
         let cfg: Config = s.clone().into();
         let back: Settings = cfg.into();
@@ -169,5 +208,6 @@ mod tests {
         assert_eq!(back.theme, s.theme);
         assert_eq!(back.font_size, s.font_size);
         assert_eq!(back.sync_transport, s.sync_transport);
+        assert_eq!(back.backlinks_order, s.backlinks_order);
     }
 }

@@ -118,6 +118,28 @@ The runtime catalog is selected per-binary via `outl-exec` features:
 - `outl-mobile` — opts out of `lang-rust` (wasmtime is heavy and trips iOS code-signing restrictions on dynamic code generation).
 - `outl-actions` — `default-features = false` so it never drags `wasmtime` into the mobile IPA via the back door.
 
+## Structural templates
+
+A **template** is any page with a non-empty `template::` property; its outline is a body every client can deep-copy under a target block (see [`docs/templates.md`](templates.md) for the authoring model).
+Instantiation is reachable from every surface (TUI/CLI `/template <name>`, MCP), and both GUI clients wrap the **same** two shared command bodies in `outl_tauri_shared::commands::template` — no plugin needed:
+
+- `list_templates` → `Vec<TemplateDto>` (`{ name, slug, duplicate }`) — wraps `outl_actions::list_templates`.
+- `instantiate_template_at(name, target_block)` → refreshed `PageView`.
+  It resolves the target block's enclosing page (slug + journal date), calls `outl_actions::instantiate_template`, reprojects, and announces the ops.
+  An unknown name or stale block id is a typed error the client toasts.
+
+Both clients register the wire command as `list_templates_cmd` plus `instantiate_template_at`.
+The `_cmd` suffix dodges a glob-import collision with the `outl_actions::list_templates` re-export.
+The TS wrappers are `listTemplates()` / `instantiateTemplateAt(name, targetBlockId)` in `@outl/shared/api/commands`.
+
+Client affordances (chrome per-client, one backend):
+
+- **Desktop** — the block-initial `/` slash menu lists `template: <name>` entries alongside plugin commands.
+  They are injected via `templateSlashCommands` under a reserved `@outl/template` sentinel `plugin_id`.
+  Picking one instantiates under the selected block; `OutlineView`'s `onRunPluginCommand` intercepts the sentinel and calls `instantiateTemplateAt` instead of `pluginRun`.
+- **Mobile** — the block long-press menu has an "Insert template" action that opens `TemplateSheet` (a bottom sheet listing templates).
+  Picking a template instantiates it under the long-pressed block and applies the returned `PageView`.
+
 ## Copy and paste
 
 Every client supports copying blocks as clean outl markdown and pasting markdown from external apps.
@@ -199,6 +221,19 @@ Multi-line quote bodies keep the `> ` on every continuation line so the `.md` st
 Children of a quoted block are **not** implicitly quoted — the marker lives on the block, not on its subtree.
 Inline tokens (`**bold**`, `[[ref]]`, `#tag`, `((blk-…))`) continue to tokenize **inside** the body — the wrapper is transparent.
 
+## Backlinks order (issue #142)
+
+Every client sorts the "Linked from" list the same way: `outl_actions::sort_backlinks` groups backlinks by source page (each page's blocks stay contiguous, in document order) and orders the pages by how recently each was referenced.
+The direction — `newest` (default, most recently referenced page on top) or `oldest` — is a pure display preference stored in `[display] backlinks_order` (`config.toml`), same non-converging policy as `theme.preset`.
+
+| Client | Toggle | Persistence |
+|---|---|---|
+| TUI | `Ctrl+O` (Normal mode) | writes `config.toml` directly via `outl_config::save` |
+| Desktop | direction button in the `InlineBacklinks` header | `set_backlinks_order` Tauri command |
+| Mobile | direction button in the `BacklinksSection` header | `set_backlinks_order` Tauri command |
+
+See [config.md → `[display]`](config.md#display) for the schema and [shortcuts.md](shortcuts.md) for the TUI chord.
+
 ## iCloud sync (mobile + TUI, today)
 
 The iOS app is on a public TestFlight beta — <https://testflight.apple.com/join/P2GdWAMd>.
@@ -245,6 +280,29 @@ The policy diverges; the engine does not.
 `engine.scan_for_orphans()` is the other shared piece: it walks `journals/` and `pages/` for `.md` files whose sidecar is missing or stale (fresh import from Roam/Logseq, peer-shipped projection without sidecar, external vim edit).
 The TUI runs the scan every 10s on a worker thread; mobile runs it once at boot.
 Both feed the same `outl_md::reconcile::reconcile_md`.
+
+### Split-brain slug repair (boot)
+
+`outl_actions::merge_duplicate_slug_roots(ws, hlc)` is the boot-time repair for the split-brain bug where two creators minted **different** ids for the same slug.
+Two `2026-07-10` journal roots split a day's content across two roots, so the client flickers between them.
+For each slug with more than one root it picks a canonical survivor: the `page_id_from_slug` id if one is present, else the root with the most descendants, tie-broken by smallest id.
+It then re-parents every child of the other roots under the survivor preserving order (no data loss), and trashes the emptied duplicates.
+Every step is an `Op` through `Workspace::apply`, so running it on **any** client converges on every device via the CRDT; it's idempotent (returns 0 on a clean workspace) and safe to call on every boot.
+Clients call it once at startup alongside `migrate_legacy_into_today`.
+Belt-and-suspenders: `find_by_slug` already resolves the same canonical winner deterministically, so the UI stops flickering even before the merge runs.
+
+### Doubled journal title repair (background)
+
+Page and journal roots get a **deterministic** id (`page_id_from_slug`), so two devices that create the same slug offline mint the same root and its `Op::Create` converges cleanly.
+Before the fix, each device also wrote the title straight into the root's Yrs text.
+Those two concurrent inserts at position 0 concatenated instead of converging — a `2026-06-25` journal opened offline on two devices ended up titled `2026-06-252026-06-25`.
+`open_or_create` now writes the title into a `title::` property instead (`Op::SetProp`, last-write-wins by HLC), and only when the title differs from the slug.
+A journal's title always equals its slug, so journals carry no `title::` property and no `title::` line lands in their `.md`.
+Regular pages created in-app now render `title:: <title>` at the top of their `.md`.
+`outl_actions::repair_doubled_journal_titles(ws, hlc)` cleans up journals corrupted before the fix.
+Any journal root whose text is its slug repeated two or more times gets that text cleared — an `Op`, so the repair converges to every device — and the title falls back to the slug.
+Idempotent, journal-only, and run on the **background** reconcile pass, not boot, since it scales with page count.
+Desktop's `spawn_background_reconcile` and mobile's `spawn_workspace_opener` both call it.
 
 ### Peer reachability indicator (P2P / iroh transport)
 

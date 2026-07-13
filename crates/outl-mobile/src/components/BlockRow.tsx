@@ -625,6 +625,13 @@ function EditableTextarea(props: {
         // structured (plain outline / multi-paragraph the backend splits),
         // or native (a trivial word / URL stays on the browser splice).
         if (!props.onPaste) return;
+        // Inside a fenced code block the whole block is one raw ```lang…```
+        // string. Converting a multi-line / outline clipboard would split
+        // the fence into sibling blocks and strand the closing ``` on its
+        // own line. Let the browser splice the text in literally (newlines
+        // preserved), exactly like typing it — `onInput` keeps the draft
+        // in sync. (Mirror of the desktop BlockRow guard.)
+        if (detectFence(e.currentTarget.value)) return;
         const decision = choosePasteRoute(
           e.clipboardData?.getData("text/html") ?? "",
           e.clipboardData?.getData("text/plain") ?? "",

@@ -22,6 +22,8 @@ For the reuse-first rule (why this matters, past drift incidents, what to do whe
 | Route an op through the log → tree (the **only** mutation path) | `outl_core::Workspace::apply(LogOp)` | `crates/outl-core/src/workspace.rs` |
 | Read the materialized tree / op log from a workspace | `outl_core::Workspace::tree` / `log` / `block_text` | `crates/outl-core/src/workspace.rs` |
 | Build a Yrs text-replace update payload for an op | `outl_core::Workspace::build_text_replace_update` | `crates/outl-core/src/workspace.rs` |
+| Save / boot from a materialized-state snapshot (local boot cache, workspace-owned) | `outl_core::Workspace::save_snapshot` / `set_snapshot_policy` / `wait_for_snapshots` | `crates/outl-core/src/workspace.rs` |
+| Read / write the raw snapshot body on disk (`<root>/.outl/snapshots/snap-<actor>.bin` — NOT a `Storage` method) | `outl_core::snapshot::read_from_disk` / `write_to_disk` (`SnapshotBody`) | `crates/outl-core/src/snapshot.rs` |
 | Generate HLC timestamps with actor tiebreak (required for every op) | `outl_core::HlcGenerator::new` / `next` / `observe` | `crates/outl-core/src/hlc.rs` |
 | Wrap an `Op` into a `LogOp` (timestamp + actor) for `apply` | `outl_core::Op` + `outl_core::LogOp` | `crates/outl-core/src/op.rs` |
 | Extract the `NodeId` an op targets | `outl_core::op::op_node(&Op) -> Option<NodeId>` | `crates/outl-core/src/op.rs` |
@@ -72,12 +74,14 @@ Every entry here routes through `Workspace::apply` — never build a `LogOp` fro
 
 | Intent | Use this | File |
 |---|---|---|
-| Page-property keys (constants — don't hardcode the strings) | `outl_actions::page::SLUG_KEY` / `KIND_KEY` / `TYPE_KEY` | `crates/outl-actions/src/page.rs` |
+| Page-property keys (constants — don't hardcode the strings) | `outl_actions::page::SLUG_KEY` / `KIND_KEY` / `TYPE_KEY` / `TITLE_KEY` | `crates/outl-actions/src/page.rs` |
 | Canonical `type::` value marking a page as a person (`@` mention autocomplete filter) | `outl_actions::page::PERSON_TYPE` | `crates/outl-actions/src/page.rs` |
 | Page metadata (slug, kind, title, **`page_type`**) for a node id | `outl_actions::page::page_meta` / `PageMeta` / `PageKind` | `crates/outl-actions/src/page.rs` |
 | Validate a slug for filesystem safety (`..`, `/`, `\`, control chars) | `outl_actions::page::is_valid_slug` | `crates/outl-actions/src/page.rs` |
-| Derive a **deterministic page id** from slug (so two peers converge) | `outl_actions::page::page_id_from_slug` | `crates/outl-actions/src/page.rs` |
-| Find / list / create-if-missing pages | `outl_actions::page::find_by_slug` / `list_all` / `open_or_create` | `crates/outl-actions/src/page.rs` |
+| Derive a **deterministic page/journal-root id** from slug (so every creation path — in-app, `outl-md` reconcile, desync recovery — converges on ONE root; the single owner) | `outl_core::NodeId::from_slug` (thin wrapper `outl_actions::page::page_id_from_slug`) | `crates/outl-core/src/id.rs` |
+| Find / list / create-if-missing pages (`find_by_slug` resolves a deterministic winner when a slug has >1 root, so a split-brain workspace stops flickering pre-merge) | `outl_actions::page::find_by_slug` / `list_all` / `open_or_create` | `crates/outl-actions/src/page.rs` |
+| Repair a split-brain workspace where a slug has >1 page/journal root (re-parents every child under the canonical root, trashes the emptied duplicates, all via `Op`s so it converges on every device; idempotent) | `outl_actions::merge_duplicate_slug_roots` (impl `outl_actions::page_merge`) | `crates/outl-actions/src/page_merge.rs` |
+| Repair journal titles doubled by concurrent offline creation (two devices minted the same deterministic root and each wrote the slug into the root's Yrs text, so the concurrent inserts concatenated into `"2026-06-252026-06-25"`; clears the text via `Op::Edit` so the title falls back to the slug; idempotent, journal-only) | `outl_actions::repair_doubled_journal_titles` (impl `outl_actions::page_repair_titles`) | `crates/outl-actions/src/page_repair_titles.rs` |
 | Delete a page (move root to `NodeId::trash()` via one `Op::Move`; whole subtree travels with it; returns `PageMeta` so callers can drop projections + navigate away; `ActionError::PageNotFound` when the slug doesn't resolve) | `outl_actions::page::delete` (re-exported as `outl_actions::delete_page`) | `crates/outl-actions/src/page.rs` |
 | Remove a page's `.md` + `.outl` from disk (the inverse of `apply_page_md_with_sidecar`; idempotent on missing files; pairs with `page::delete`) | `outl_actions::journal::remove_page_projection` (re-exported at crate root) | `crates/outl-actions/src/journal.rs` |
 | Open-or-create a page from a **human-typed name** (slugifies + keeps original as title, used when a `[[ref]]` / `#tag` / picker query may not be a valid slug) | `outl_actions::resolve::open_or_create_by_name` | `crates/outl-actions/src/resolve.rs` |
@@ -205,6 +209,7 @@ UI-agnostic; both TUI and mobile consume them.
 | Extract `[[ref]]` tokens out of a block's text (tolerates unbalanced openers) | `outl_actions::backlinks::extract_refs` | `crates/outl-actions/src/backlinks.rs` |
 | Backlink DTO returned by the queries below | `outl_actions::backlinks::Backlink` | `crates/outl-actions/src/backlinks.rs` |
 | Walk every backlink for a target / a `PageMeta` (matches `[[ref]]` literally **and** `#tag` via slugify — same resolution a tag click uses) | `outl_actions::backlinks::backlinks_for_target` / `backlinks_for_page` | `crates/outl-actions/src/backlinks.rs` |
+| Order a backlinks list chronologically (group-stable by source page, newest- or oldest-first; drives the issue-#142 direction toggle on every client) | `outl_actions::sort_backlinks` | `crates/outl-actions/src/backlinks_sort.rs` |
 
 ## 13. Code-block execution (outl-actions::exec)
 
@@ -220,6 +225,20 @@ The **cross-client glue** every UI uses to wire a "run this fence" gesture (TUI 
 
 The runtime catalog (which languages are available) is selected by the **binary** that consumes this crate, via `outl-exec` features in its own `Cargo.toml`.
 `outl-actions` itself depends on `outl-exec` with `default-features = false` so it doesn't drag `wasmtime` (Rust runtime) into the mobile IPA via the back door.
+
+The `query` runtime (`outl_exec::runtimes::query`) is a special case: it returns `OutputFormat::Embeds` instead of `OutputFormat::Text`, so the orchestrator renders results as live `!((blk-XXXXXX))` embeds rather than a code-fence stdout dump.
+It also overrides `Runtime::auto_run()` to return `true`, so query blocks always re-run on page load without needing the `auto-run::` property or manual `gx`.
+
+The query engine also exposes a **structured API** for plugins and code that runs outside the ` ```query ` fence:
+
+| Intent | Use this | File |
+|---|---|---|
+| Structured query from a `QueryParams` object (plugin-facing) | `outl_exec::run_query_structured` | `crates/outl-exec/src/runtimes/query.rs` |
+| DSL query from a string (user-facing) | `outl_exec::run_query_dsl` | `crates/outl-exec/src/runtimes/query.rs` |
+| Query parameters struct (status, tag, kind, since, text, sort, limit) | `outl_exec::QueryParams` | `crates/outl-exec/src/runtimes/query.rs` |
+| Query result hit (handle, text, status, page) | `outl_exec::QueryHit` | `crates/outl-exec/src/runtimes/query.rs` |
+
+In JS code blocks, the same API is available as `outl.query({ status: "todo", … })`.
 
 ## 14. Sync engine, locks, storage trait
 
@@ -254,6 +273,26 @@ This is *not* per-keystroke undo inside an uncommitted draft — that belongs to
 | Bounded undo / redo stacks over any snapshot type (`record` / `undo` / `redo` / `can_undo` / `can_redo` / `clear`) | `outl_actions::history::HistoryStacks` | `crates/outl-actions/src/history.rs` |
 | Default per-stack bound (matches the TUI's session cap) | `outl_actions::DEFAULT_HISTORY_CAP` | `crates/outl-actions/src/history.rs` |
 | Restore a page to a previously-rendered `.md` snapshot (write + reconcile → min ops through `Workspace::apply`) | `outl_actions::restore_page_md` | `crates/outl-actions/src/history.rs` |
+
+---
+
+## 16. Templates
+
+| Intent | Use this | File |
+|---|---|---|
+| List all template pages (any page with a non-empty `template::` property), sorted by name (each entry flags `duplicate` when another page shares its name) | `outl_actions::list_templates` → `TemplateEntry` | `crates/outl-actions/src/template/list.rs` |
+| Resolve the page node for a `template:: <name>` (first in tree order; `tracing::warn!` on a name collision) | `outl_actions::template::list::find_template_by_name` | `crates/outl-actions/src/template/list.rs` |
+| Instantiate (deep-copy) a structural template's subtree under a target block, with `{{token}}` substitution and `from-template::` traceability on each root clone | `outl_actions::instantiate_template` | `crates/outl-actions/src/template/instantiate.rs` |
+| Resolve a callable template's code block (language, source, declared `params::`) | `outl_actions::resolve_call` → `CallResolution` | `crates/outl-actions/src/template/call.rs` |
+| Parse a ` ```call:<name> ` block's `key: value` body into params | `outl_actions::parse_call_params` | `crates/outl-actions/src/template/call.rs` |
+| The template name invoked by a ` ```call:<name> ` fence (inverse of the exec path's fence read; drives the backlinks traceability match) | `outl_actions::call_target_name` | `crates/outl-actions/src/template/call.rs` |
+| Inject a `params` binding into a callable template's source (serde_json-escaped, language canonicalized via `outl_md::lang::canonical`, so quotes/newlines in a value can't break or inject into the generated program) | `outl_actions::inject_call_params` | `crates/outl-actions/src/template/call.rs` |
+| Detect + parse a ` ```call:<name> ` block into `(name, params)` — the shared "is this a call invocation?" check every client uses before running normal exec | `outl_actions::parse_call_invocation` | `crates/outl-actions/src/template/run.rs` |
+| Execute a callable template (resolve → inject params → run via a client `RuntimeRegistry` → write the `> **result:**` subtree). The single owner every client wraps for `call:` execution | `outl_actions::run_callable_block` | `crates/outl-actions/src/template/run.rs` |
+| Template property key constant | `outl_actions::TEMPLATE_KEY` | `crates/outl-actions/src/template/mod.rs` |
+| Traceability property key constant (set on structural-instance root blocks) | `outl_actions::FROM_TEMPLATE_KEY` | `crates/outl-actions/src/template/mod.rs` |
+| Callable params key constant | `outl_actions::PARAMS_KEY` | `crates/outl-actions/src/template/mod.rs` |
+| Reserved template name for the daily journal body — a page with `template:: journal` is auto-instantiated (untraced) into every fresh daily note | `outl_actions::JOURNAL_TEMPLATE_NAME` | `crates/outl-actions/src/template/mod.rs` |
 
 ---
 

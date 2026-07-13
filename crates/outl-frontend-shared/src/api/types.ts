@@ -9,6 +9,9 @@
 
 export type TodoState = "TODO" | "DONE";
 export type PageKind = "page" | "journal";
+/** Direction of the backlinks ("Linked from") list (issue #142).
+ * Mirrors `outl_config::BacklinksOrder`. */
+export type BacklinksOrder = "newest" | "oldest";
 
 /**
  * Pre-tokenized inline markdown coming from the Rust backend
@@ -136,6 +139,10 @@ export interface PageView {
   page: PageMeta;
   outline: BlockNode[];
   backlinks: Backlink[];
+  /** Direction `backlinks` was sorted in (issue #142) — `"newest"` or
+   * `"oldest"`. Lets a client's direction toggle show the right arrow
+   * without a separate settings read. Mirrors `PageView.backlinks_order`. */
+  backlinks_order: BacklinksOrder;
   /**
    * Parser recovery records for the page's `.md`. Empty (or
    * absent) when the file is fully in the outl dialect. Drives
@@ -385,4 +392,24 @@ export interface RegistryItem {
   latest: string | null;
   installed: boolean;
   enabled: boolean;
+}
+
+/**
+ * One structural template surfaced by {@link import("./commands").listTemplates}.
+ * Mirrors `outl_tauri_shared::state::TemplateDto`. A template is any page
+ * with a non-empty `template::` property; its outline is the body
+ * deep-copied under a target block by
+ * {@link import("./commands").instantiateTemplateAt}.
+ */
+export interface TemplateDto {
+  /** Invocation name (the page's `template::` property value). */
+  name: string;
+  /** Slug of the page that defines the template. */
+  slug: string;
+  /**
+   * `true` when another page shares this `template:: <name>`; the picker
+   * can flag it since resolution silently picks the first in tree order.
+   * Omitted from the wire (defaults to `false`) when not a duplicate.
+   */
+  duplicate?: boolean;
 }

@@ -167,7 +167,6 @@ Don't unilaterally pivot.
 
 Don't add code for these unless explicitly asked:
 
-- Query DSL (`{{query: ...}}`)
 - Plugin system (`rhai`)
 - `ChronDbStorage` backend (issue #1, tracked publicly)
 - Android mobile build (only iOS today; Android needs an `NSMetadataQuery` equivalent)

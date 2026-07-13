@@ -9,10 +9,12 @@
 //!
 //! ## Layout
 //!
-//! [`SnapshotBody`] is bincode-serialized into the opaque `bytes` field
-//! of a [`crate::storage::Snapshot`]. Storage treats it as a black box;
-//! this module owns the format. A single `schema_version` lets us
-//! migrate later without guessing.
+//! [`SnapshotBody`] is bincode-serialized and written straight to
+//! `<root>/.outl/snapshots/snap-<actor>.bin` by [`write_to_disk`], and
+//! read back by [`read_from_disk`]. `Workspace` owns both the format and
+//! the on-disk location — the snapshot is a local boot cache, never
+//! routed through the storage backend (the op log). A single
+//! `schema_version` lets us migrate later without guessing.
 //!
 //! ## Integrity
 //!
@@ -43,7 +45,7 @@ use std::path::Path;
 /// Current snapshot wire format. Bumped on any breaking change to
 /// [`SnapshotBody`]; `decode` rejects mismatched versions instead of
 /// guessing at backward compatibility.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Errors that can occur while encoding or decoding a snapshot.
 ///
@@ -99,11 +101,22 @@ pub struct SnapshotBody {
     pub schema_version: u32,
     /// Actor that produced this snapshot. Informational; any actor may
     /// load any actor's snapshot (the materialized tree is the union of
-    /// every actor's ops up to `hlc_cutoff`).
+    /// every actor's ops up to the per-actor `cutoff`).
     pub actor: ActorId,
-    /// "Materialized state as of this HLC." `Workspace` replays
-    /// `Storage::ops_since(hlc_cutoff)` on top of this body.
-    pub hlc_cutoff: Hlc,
+    /// Per-actor replay cutoff: the high-water-mark HLC of each actor
+    /// whose ops the materialized state below already includes.
+    ///
+    /// On boot `Workspace` replays, for each actor `A`, only the ops with
+    /// `hlc > cutoff[A]` — and **every** op of an actor absent from this
+    /// map (that actor was entirely unseen when the snapshot was taken).
+    ///
+    /// This must be a per-actor vector clock, not a single global HLC: a
+    /// single cutoff tracks only the high-water mark of the snapshotting
+    /// actor, so a legitimately-low-HLC op from a *different* actor
+    /// delivered after the snapshot (offline device, lagging clock) would
+    /// fall below it and be silently dropped from the tree even though
+    /// it's durably in storage (#156).
+    pub cutoff: BTreeMap<ActorId, Hlc>,
     /// Tree nodes: `(node_id -> (parent, position))`. `ROOT` and
     /// `TRASH_ROOT` are implicit, never present as keys.
     pub nodes: BTreeMap<NodeId, (NodeId, Fractional)>,
@@ -124,12 +137,13 @@ impl SnapshotBody {
     /// Assemble a snapshot from the materialized pieces of a workspace.
     ///
     /// The caller (always `Workspace` today) is responsible for picking
-    /// the cutoff — typically the HLC of the last op applied. We
-    /// compute the `content_hash` here so what's returned is ready to
-    /// [`encode`](Self::encode) and persist.
+    /// the per-actor `cutoff` — the high-water-mark HLC of each actor the
+    /// materialized state already reflects. We compute the `content_hash`
+    /// here so what's returned is ready to [`encode`](Self::encode) and
+    /// persist.
     pub fn from_parts(
         actor: ActorId,
-        hlc_cutoff: Hlc,
+        cutoff: BTreeMap<ActorId, Hlc>,
         nodes: BTreeMap<NodeId, (NodeId, Fractional)>,
         properties: BTreeMap<(NodeId, String), PropValue>,
         collapsed: BTreeSet<NodeId>,
@@ -138,7 +152,7 @@ impl SnapshotBody {
         let mut body = Self {
             schema_version: SCHEMA_VERSION,
             actor,
-            hlc_cutoff,
+            cutoff,
             nodes,
             properties,
             collapsed,
@@ -149,7 +163,7 @@ impl SnapshotBody {
         body
     }
 
-    /// Serialize via bincode for persistence in [`crate::storage::Snapshot::bytes`].
+    /// Serialize via bincode for persistence by [`write_to_disk`].
     pub fn encode(&self) -> Result<Vec<u8>, SnapshotError> {
         bincode::serialize(self).map_err(|e| SnapshotError::Encode(e.to_string()))
     }
@@ -207,8 +221,9 @@ fn compute_hash(body: &SnapshotBody) -> [u8; 32] {
 /// This is a standalone function (not on `Storage`) on purpose: the
 /// background-snapshot path in `Workspace::apply` calls it from a
 /// worker thread that owns the body outright, with no borrow of the
-/// storage backend. `JsonlStorage::save_snapshot` delegates here for
-/// its synchronous shutdown path.
+/// storage backend. `Workspace::save_snapshot` delegates here for its
+/// synchronous shutdown path, and `Workspace::spawn_background_snapshot`
+/// for the in-band worker-thread path.
 pub fn write_to_disk(snapshots_dir: &Path, body: &SnapshotBody) -> Result<(), SnapshotError> {
     let actor = body.actor;
     let bytes = body.encode()?;
@@ -239,6 +254,33 @@ pub fn write_to_disk(snapshots_dir: &Path, body: &SnapshotBody) -> Result<(), Sn
     Ok(())
 }
 
+/// Read and decode `snapshots_dir/snap-<actor>.bin`, if present.
+///
+/// Returns `Ok(None)` when no snapshot exists yet — first boot, or the
+/// file was never written. A decode / hash / schema failure is surfaced
+/// as `Err` so the caller can log a targeted warning; the boot path
+/// treats *every* outcome other than `Ok(Some(_))` as "snapshot
+/// unusable, fall back to full replay". Only the exact `snap-<actor>.bin`
+/// is read, so a leftover `.tmp` from a crashed [`write_to_disk`] is
+/// never mistaken for a valid snapshot.
+///
+/// Standalone (not on `Storage`) for the same reason as [`write_to_disk`]:
+/// the snapshot is a local boot cache owned by `Workspace`, not part of
+/// the source-of-truth op log, so it never routes through the storage
+/// backend.
+pub fn read_from_disk(
+    snapshots_dir: &Path,
+    actor: ActorId,
+) -> Result<Option<SnapshotBody>, SnapshotError> {
+    let path = snapshots_dir.join(format!("snap-{actor}.bin"));
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(SnapshotError::Io(format!("read {}: {e}", path.display()))),
+    };
+    SnapshotBody::decode(&bytes).map(Some)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,11 +288,7 @@ mod tests {
     fn empty_body() -> SnapshotBody {
         SnapshotBody::from_parts(
             ActorId::new(),
-            Hlc {
-                physical_ms: 0,
-                logical: 0,
-                actor: ActorId::new(),
-            },
+            BTreeMap::new(),
             BTreeMap::new(),
             BTreeMap::new(),
             BTreeSet::new(),

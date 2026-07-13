@@ -44,7 +44,7 @@ fn snapshot_and_delta_match_full_replay() {
     let mut ws = Workspace::open_with_storage(
         actor,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
-        None,
+        Some(tmp.path().to_path_buf()),
     )
     .unwrap();
 
@@ -152,7 +152,7 @@ fn snapshot_and_delta_match_full_replay() {
     let mut ws2 = Workspace::open_with_storage(
         actor,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
-        None,
+        Some(tmp.path().to_path_buf()),
     )
     .unwrap();
 
@@ -209,7 +209,7 @@ fn snapshot_and_delta_match_full_replay() {
     let from_snapshot = Workspace::open_with_storage(
         actor,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
-        None,
+        Some(tmp.path().to_path_buf()),
     )
     .unwrap();
 
@@ -217,7 +217,7 @@ fn snapshot_and_delta_match_full_replay() {
     let from_full = Workspace::open_with_storage(
         actor,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
-        None,
+        Some(tmp.path().to_path_buf()),
     )
     .unwrap();
 
@@ -237,7 +237,7 @@ fn corrupt_snapshot_falls_back_to_full_replay() {
     let mut ws = Workspace::open_with_storage(
         actor,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
-        None,
+        Some(tmp.path().to_path_buf()),
     )
     .unwrap();
     let n = NodeId::new();
@@ -273,7 +273,7 @@ fn corrupt_snapshot_falls_back_to_full_replay() {
     let ws = Workspace::open_with_storage(
         actor,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
-        None,
+        Some(tmp.path().to_path_buf()),
     )
     .unwrap();
     assert_eq!(ws.block_text(n).as_deref(), Some("before snapshot"));
@@ -301,7 +301,7 @@ fn leftover_tmp_from_crashed_save_is_ignored() {
     let mut ws = Workspace::open_with_storage(
         actor,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
-        None,
+        Some(tmp.path().to_path_buf()),
     )
     .unwrap();
     let n = NodeId::new();
@@ -330,7 +330,7 @@ fn leftover_tmp_from_crashed_save_is_ignored() {
     let ws = Workspace::open_with_storage(
         actor,
         Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
-        None,
+        Some(tmp.path().to_path_buf()),
     )
     .unwrap();
     assert_eq!(ws.block_text(n).as_deref(), Some("fresh"));

@@ -224,6 +224,22 @@ If the diff adds a primitive that overlaps with a catalog entry, it is a duplica
 - Does the PR add a new `pub fn|struct|enum|const` in `crates/outl-{core,md,actions}/src/`?
   The new symbol **must** appear in the Shared primitives catalog (the local `doc-sync-guard.sh` + `catalog-sync-guard.sh` hooks enforce this pre-merge; the same rule applies in review).
 
+Recently added — check these before writing a parallel template helper (catalog § 16 "Templates"):
+
+| Intent | Use this | File |
+|---|---|---|
+| Inject a `params` binding into a callable template's source (serde_json-escaped, language-canonicalized) | `outl_actions::inject_call_params` | `crates/outl-actions/src/template/call.rs` |
+| The template name invoked by a ` ```call:<name> ` fence | `outl_actions::call_target_name` | `crates/outl-actions/src/template/call.rs` |
+| Reserved template name for the daily journal auto-stamp | `outl_actions::JOURNAL_TEMPLATE_NAME` | `crates/outl-actions/src/template/mod.rs` |
+| Detect + parse a ` ```call:<name> ` block into `(name, params)` | `outl_actions::parse_call_invocation` | `crates/outl-actions/src/template/run.rs` |
+| Execute a callable template (shared by TUI `gx` + desktop exec) | `outl_actions::run_callable_block` | `crates/outl-actions/src/template/run.rs` |
+| Resolve the page node for a `template:: <name>` (first in tree order; `tracing::warn!` on a name collision, and `list_templates` flags `TemplateEntry.duplicate`) | `outl_actions::template::list::find_template_by_name` | `crates/outl-actions/src/template/list.rs` |
+| Derive a page/journal-root id from a slug (single owner — every creation path routes here so two paths converge on one root) | `outl_core::NodeId::from_slug` (wrapper `outl_actions::page::page_id_from_slug`) | `crates/outl-core/src/id.rs` |
+| Read / write the raw snapshot boot cache on disk (`<root>/.outl/snapshots/snap-<actor>.bin`, workspace-owned — NOT a `Storage` method; boot reads via `read_from_disk`, `save_snapshot` + background writer go via `write_to_disk`) | `outl_core::snapshot::read_from_disk` / `write_to_disk` (`SnapshotBody`) | `crates/outl-core/src/snapshot.rs` |
+| Repair a split-brain workspace where a slug has >1 root (re-parents children under the canonical root, trashes duplicates; all `Op`s; idempotent) | `outl_actions::merge_duplicate_slug_roots` (impl `outl_actions::page_merge`) | `crates/outl-actions/src/page_merge.rs` |
+| Repair journal titles doubled by concurrent offline creation (two devices minted the same deterministic root and each wrote the slug into the root's Yrs text, concatenating into `"2026-06-252026-06-25"`; clears the text via `Op::Edit`; idempotent, journal-only) | `outl_actions::repair_doubled_journal_titles` (impl `outl_actions::page_repair_titles`) | `crates/outl-actions/src/page_repair_titles.rs` |
+| Order a backlinks list chronologically (group-stable by source page, newest-/oldest-first; drives the issue-#142 direction toggle on every client — never re-sort backlinks by hand per client) | `outl_actions::sort_backlinks` | `crates/outl-actions/src/backlinks_sort.rs` |
+
 ### 5.2 Reuse-first violations — no parallel implementations
 
 Duplication here is a real hazard: two implementations of the same logic drift apart over time, and the user is the one who hits the divergence.

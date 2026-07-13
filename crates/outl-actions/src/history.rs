@@ -209,10 +209,16 @@ mod tests {
             h.record(before);
             apply_page_md_with_sidecar(&ws, tmp.path(), page).unwrap();
         }
-        assert_eq!(render_page_md(&ws, page), "- four\n");
+        // In-app pages carry their title as a `title::` page property, so
+        // every render leads with it (see `page::open_or_create`).
+        assert_eq!(render_page_md(&ws, page), "title:: Ideas\n\n- four\n");
 
         // Three undos, each the way `step_history` does it.
-        for expected in ["- three\n", "- two\n", "- one\n"] {
+        for expected in [
+            "title:: Ideas\n\n- three\n",
+            "title:: Ideas\n\n- two\n",
+            "title:: Ideas\n\n- one\n",
+        ] {
             let current = render_page_md(&ws, page);
             let snapshot = h.undo(current).expect("stack must not run dry");
             restore_page_md(&mut ws, &hlc, tmp.path(), page, &snapshot).unwrap();
@@ -222,7 +228,11 @@ mod tests {
         assert!(h.undo(current).is_none(), "exactly three steps recorded");
 
         // And redo walks forward again.
-        for expected in ["- two\n", "- three\n", "- four\n"] {
+        for expected in [
+            "title:: Ideas\n\n- two\n",
+            "title:: Ideas\n\n- three\n",
+            "title:: Ideas\n\n- four\n",
+        ] {
             let current = render_page_md(&ws, page);
             let snapshot = h.redo(current).expect("redo stack must not run dry");
             restore_page_md(&mut ws, &hlc, tmp.path(), page, &snapshot).unwrap();

@@ -121,7 +121,8 @@ A capability the client can't honor lands in a warning, and the plugin still loa
 
 Live capabilities: `op-hook`, `slash-command`, `keybinding`, `config-schema` (read), `toolbar-button`, `ui-render`, and `content-transformer:text` / `:rich`.
 `sync-transport` is core-ready (the host serializes/applies ops through a registered transport) but no client polls it yet.
-A plugin that wants to be a query engine registers a `content-transformer` for the `query` fence language (` ```query `); `{{query}}` inline would need a new markdown token the parser defers, so there is no separate `query-provider` capability.
+A plugin that wants to be a query engine registers a `content-transformer` for the `query` fence language (` ```query `).
+Plugins and JS code blocks can also call `outl.query({ status: "todo", … })` to get structured `QueryHit[]` results — see [Query code blocks → Plugin SDK API](query.md#plugin-sdk-api-outlquery).
 
 ### `permissions[]`
 
@@ -195,6 +196,7 @@ The typed signatures live in `@outl/plugin-sdk`; the runtime ships the subset be
 | `ctx.ops` | `onOp(cb: (op: LogOp) => void)` | `read-op-log` |
 | `ctx.blocks` | `query(filter) → Block[]`, `get(id) → Block`, `edit(id, text)`, `create(parentId, text)`, `createAfter(afterId, text)`, `move(id, { toPage } \| { toParent })`, `toggleTodo(id)`, `delete(id)` | `read-page` (reads) · `write-page` (writes) |
 | `ctx.page` | `list() → { slug, title, kind }[]`, `create(slug)` | `read-page` (`list`) · `write-page` (`create`) |
+| `ctx.template` | `list() → { name, slug, params? }[]`, `instantiate(name, blockId)` — stamp a structural template under a block (see [Templates](templates.md)) | `read-page` (`list`) · `write-page` (`instantiate`) |
 | `ctx.commands` | `register(id, handler)` | — (declared in `contributes.commands`) |
 | `ctx.config` | `get<T>() → T` | — |
 | `ctx.content` | `register(lang, fn)` — `fn(body) → { kind: "text" \| "rich", content } \| null` renders a fenced block of language `lang` (e.g. ` ```query `) | capability `content-transformer:text` / `:rich` |
@@ -241,7 +243,7 @@ These are typed in `@outl/plugin-sdk` and/or enumerated in the manifest schema s
 |---|---|---|
 | `sync-transport` client polling | **Core live, no client driver** | `ctx.sync.register` works and convergence is tested, but no client calls `push`/`pull` on a timer yet. |
 | `ctx.page.open(slug)` / `ctx.page.today()` | **Not present** | Typed in the SDK; the runtime `ctx.page` exposes only `list`/`create`. |
-| `{{query}}` inline | **Parser defers it** | A fenced ` ```query ` block already works through a `content-transformer`; inline `{{query}}` needs a new markdown token the project defers. |
+| `{{query}}` inline | **Parser defers it** | A fenced ` ```query ` block works natively (auto-run, embeds). Plugins can call `outl.query({ … })` for structured results. Inline `{{query}}` needs a new parser token the project defers. |
 
 `github:` install and `outl plugin init` ship today (see [Plugins → Installing](plugins.md#installing)).
 The remaining tooling roadmap (`outl plugin update`, `.outlpkg` pack, dev hot-reload, a dev console, a config-editing form UI, and discovery / marketplace / signing in the clients) is tracked in [Plugins](plugins.md).

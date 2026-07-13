@@ -59,6 +59,27 @@ fn io_err(path: &Path, source: io::Error) -> ReconcileError {
     }
 }
 
+/// The page slug for `md_path` — the filename without extension.
+///
+/// `to_string_lossy` keeps the slug non-empty even when the filename is
+/// not valid UTF-8 (replaces invalid sequences with U+FFFD). This is the
+/// same slug `ensure_page_root_in_tree` writes into the `page-slug`
+/// property, so seeding the page-root id from it here keeps the id and
+/// the slug property in agreement.
+fn slug_from_md_path(md_path: &Path) -> String {
+    md_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Deterministic page-root [`NodeId`] for `md_path`, derived from its
+/// slug via [`NodeId::from_slug`] — the single owner of the derivation
+/// shared with `outl_actions::page::page_id_from_slug`.
+fn page_id_from_stem(md_path: &Path) -> NodeId {
+    NodeId::from_slug(&slug_from_md_path(md_path))
+}
+
 /// Reconcile a single `.md` file with the workspace.
 ///
 /// `orphan_log_path` receives one line per orphan id surfaced during
@@ -87,7 +108,16 @@ pub fn reconcile_md(
     };
     let (page_id, old_blocks, created_sidecar) = match &existing_sidecar {
         Some(sc) => (sc.page_id, sc.blocks.clone(), false),
-        None => (NodeId::new(), Vec::new(), true),
+        // No sidecar → derive the page-root id **from the slug**, never
+        // a fresh `NodeId::new()`. A page/journal root's identity is its
+        // slug (see `NodeId::from_slug`): minting a time-based ULID here
+        // is exactly what split the day's journal across two competing
+        // roots — one deterministic, one time-based — when the same
+        // `journals/YYYY-MM-DD.md` was reconciled on a device that had
+        // no `.outl` yet (external editor, peer that shipped only the
+        // `.md`, crash before the sidecar landed). Deriving from the
+        // slug makes every such path converge on the one node.
+        None => (page_id_from_stem(md_path), Vec::new(), true),
     };
 
     // Short-circuit: file unchanged since last sync AND the sidecar
@@ -228,15 +258,10 @@ pub fn ensure_page_root_in_tree(
     const PAGE_SLUG_KEY: &str = "page-slug";
     const PAGE_KIND_KEY: &str = "page-kind";
 
-    // `to_string_lossy` keeps the slug non-empty even when the
-    // filename is not valid UTF-8 (replaces invalid sequences with
-    // U+FFFD). `unwrap_or("")` would have left such pages with an
-    // empty `page-slug`, which `find_by_slug` and the picker treat
-    // as "no page" — silently hiding the file.
-    let slug = md_path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    // Shared slug derivation (see `slug_from_md_path`): the same value
+    // that seeds the page-root id in `reconcile_md`'s no-sidecar arm, so
+    // the id and this `page-slug` property never disagree.
+    let slug = slug_from_md_path(md_path);
     let kind_value = if md_path
         .parent()
         .and_then(|p| p.file_name())
@@ -569,6 +594,95 @@ mod tests {
             positions.len(),
             dedup.len(),
             "two externally-authored pages must not share a fractional position; got {positions:?}"
+        );
+    }
+
+    /// Regression for the split-brain journal bug: a
+    /// `journals/YYYY-MM-DD.md` with **no sidecar** must materialise its
+    /// page root under the DETERMINISTIC id (`NodeId::from_slug(slug)`),
+    /// never a fresh time-based `NodeId::new()`. Otherwise the same day
+    /// reconciled on a device without the `.outl` yet (external editor,
+    /// peer that shipped only the `.md`) spawns a second, competing root
+    /// and the day's content splits in two.
+    #[test]
+    fn no_sidecar_journal_uses_deterministic_root_id() {
+        let (dir, mut ws, hlc) = setup_workspace();
+        let journals = dir.path().join("journals");
+        fs::create_dir_all(&journals).unwrap();
+        let md_path = journals.join("2026-07-10.md");
+        fs::write(&md_path, "- morning\n- afternoon\n").unwrap();
+
+        let report = reconcile_md(&mut ws, &hlc, &md_path, None).unwrap();
+        assert!(report.created_sidecar);
+
+        // The page root must be the deterministic id, and it must be a
+        // real child of root carrying the slug.
+        let expected = NodeId::from_slug("2026-07-10");
+        assert_eq!(
+            ws.tree().parent(expected),
+            Some(NodeId::root()),
+            "journal root must be the deterministic id, parented under root"
+        );
+        assert_eq!(
+            ws.tree().property(expected, "page-slug"),
+            Some(&outl_core::property::PropValue::Text(
+                "2026-07-10".to_string()
+            )),
+        );
+
+        // And there is exactly ONE root child carrying that slug.
+        let roots_with_slug = ws
+            .tree()
+            .iter_nodes()
+            .filter(|(_, parent, _)| *parent == NodeId::root())
+            .filter(|(id, _, _)| {
+                ws.tree().property(*id, "page-slug")
+                    == Some(&outl_core::property::PropValue::Text(
+                        "2026-07-10".to_string(),
+                    ))
+            })
+            .count();
+        assert_eq!(roots_with_slug, 1, "exactly one journal root per slug");
+    }
+
+    /// Reconciling a sidecar-less `.md` twice — the second time the
+    /// deterministic root already exists in the tree — must NOT create a
+    /// second root. This is the convergence property the fix buys:
+    /// re-materialising the same slug is idempotent on the root node.
+    #[test]
+    fn reconcile_twice_without_sidecar_does_not_duplicate_root() {
+        let (dir, mut ws, hlc) = setup_workspace();
+        let journals = dir.path().join("journals");
+        fs::create_dir_all(&journals).unwrap();
+        let md_path = journals.join("2026-07-10.md");
+
+        // First pass writes the sidecar; delete it to force the
+        // no-sidecar arm again on the second pass (models a peer that
+        // shipped only the `.md`, or a lost `.outl`).
+        fs::write(&md_path, "- one\n").unwrap();
+        reconcile_md(&mut ws, &hlc, &md_path, None).unwrap();
+        let sidecar_path = sidecar_path_for(&md_path);
+        fs::remove_file(&sidecar_path).unwrap();
+
+        // Change the file so the pass actually runs (not short-circuited)
+        // and reconcile again with no sidecar present.
+        fs::write(&md_path, "- one\n- two\n").unwrap();
+        reconcile_md(&mut ws, &hlc, &md_path, None).unwrap();
+
+        let roots_with_slug = ws
+            .tree()
+            .iter_nodes()
+            .filter(|(_, parent, _)| *parent == NodeId::root())
+            .filter(|(id, _, _)| {
+                ws.tree().property(*id, "page-slug")
+                    == Some(&outl_core::property::PropValue::Text(
+                        "2026-07-10".to_string(),
+                    ))
+            })
+            .count();
+        assert_eq!(
+            roots_with_slug, 1,
+            "second sidecar-less reconcile must reuse the deterministic root, not spawn a duplicate"
         );
     }
 

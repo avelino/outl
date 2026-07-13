@@ -226,7 +226,7 @@ Use a free chord like `Ctrl+G` or a two-chord sequence such as `Ctrl+G A`.
 Mobile has no keyboard, so it doesn't apply there.
 **`toolbar-button` is live**: desktop and mobile render a button in the chrome for the plugin's command, and the TUI surfaces that command in its slash menu (a terminal has no chrome bar).
 **`content-transformer` is live** today: `ctx.content.register(lang, fn)` renders a fenced block — `:text` on every read surface (inline in the TUI), `:rich` as HTML in a sandboxed iframe on the GUIs (the TUI drops it).
-A plugin that wants to be a query engine registers a transformer for the `query` fence; there is no separate `query-provider` capability, and inline `{{query}}` waits on a parser token the project defers.
+A plugin that wants to be a query engine registers a transformer for the `query` fence; plugins can also call `outl.query({ … })` from JS code blocks to get structured results (see [Query code blocks → Plugin SDK API](query.md#plugin-sdk-api-outlquery)).
 **`sync-transport` is core-ready**: `ctx.sync.register({ push, pull })` works and convergence is tested, but no client polls the transport on a timer yet — that wiring is roadmap.
 The CLI is headless, so anything visual or chord-driven (`keybinding`, `toolbar-button`, `content-transformer:*`) doesn't apply to it.
 

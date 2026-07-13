@@ -54,32 +54,57 @@ pub(crate) fn spawn_background_reconcile(
         let engine = outl_actions::SyncEngine::new(storage_root.clone(), hlc.actor());
         // Filesystem walk needs no workspace lock.
         let orphans = engine.scan_for_orphans();
-        if orphans.is_empty() {
-            return;
+        let mut changed = false;
+        if !orphans.is_empty() {
+            info!(
+                "background reconcile: {} orphan(s) to process",
+                orphans.len()
+            );
+            for path in &orphans {
+                // Lock per page, drop between iterations so the frontend
+                // can grab the workspace between reconciles. A page with
+                // hundreds of blocks still runs in well under 50ms, well
+                // inside the user's perception threshold.
+                let mut slot = workspace_slot.lock();
+                let Some(ws) = slot.as_mut() else {
+                    // Workspace was closed (user picked another) — abort
+                    // the rest of the batch cleanly.
+                    return;
+                };
+                if let Err(e) = outl_md::reconcile::reconcile_md(ws, &hlc, path, None) {
+                    warn!("orphan reconcile failed for {}: {e}", path.display());
+                } else {
+                    changed = true;
+                }
+                drop(slot);
+            }
+            info!("background reconcile complete");
         }
-        info!(
-            "background reconcile: {} orphan(s) to process",
-            orphans.len()
-        );
-        for path in &orphans {
-            // Lock per page, drop between iterations so the frontend
-            // can grab the workspace between reconciles. A page with
-            // hundreds of blocks still runs in well under 50ms, well
-            // inside the user's perception threshold.
+
+        // Repair journal titles doubled by concurrent offline creation
+        // (two devices auto-created the same day's journal; each wrote the
+        // slug as the root's Yrs text and the two concurrent inserts
+        // concatenated). Runs regardless of orphans — a clean workspace is
+        // a cheap no-op — and off the boot path. One lock, released after.
+        {
             let mut slot = workspace_slot.lock();
             let Some(ws) = slot.as_mut() else {
-                // Workspace was closed (user picked another) — abort
-                // the rest of the batch cleanly.
                 return;
             };
-            if let Err(e) = outl_md::reconcile::reconcile_md(ws, &hlc, path, None) {
-                warn!("orphan reconcile failed for {}: {e}", path.display());
+            match outl_actions::repair_doubled_journal_titles(ws, &hlc) {
+                Ok(0) => {}
+                Ok(n) => {
+                    info!("repaired {n} doubled journal title(s)");
+                    changed = true;
+                }
+                Err(e) => warn!("doubled-title repair: {e}"),
             }
-            drop(slot);
         }
-        info!("background reconcile complete");
-        if let Err(e) = app.emit("workspace-reconciled", ()) {
-            warn!("emit workspace-reconciled: {e}");
+
+        if changed {
+            if let Err(e) = app.emit("workspace-reconciled", ()) {
+                warn!("emit workspace-reconciled: {e}");
+            }
         }
     });
 }

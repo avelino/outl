@@ -36,8 +36,8 @@ There is one place where logic lives, and that place is `outl-actions`.
                   └──────────────┬─────────────┘
                                  ▼
 ┌────────────────────────────────────────────────────────────┐
-│ outl-actions                                                │
-│   block · tree · todo · journal · page · backlinks · sync   │
+│ outl-actions                                                          │
+│   block · tree · todo · journal · page · backlinks · sync · template   │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -196,6 +196,23 @@ Properties stay in the `key:: value` lines at the top of the page; the CLI never
 `export md` is the same string `page render` returns.
 `export json` is the full AST plus sidecar — the format an external tool would ingest.
 
+### Template
+
+| CLI                                                                        | MCP tool                |
+|----------------------------------------------------------------------------|-------------------------|
+| `outl template list [--json]`                                              | `outl_template_list`    |
+| `outl template apply <name> --page <slug> [--block <id>]`                  | `outl_template_apply`   |
+| `outl template resolve <name> [--json]`                                    | `outl_template_resolve` |
+| `outl template run <name> --page <slug> --block <id> [--params k=v …]`     | `outl_template_run`     |
+
+`template list` finds every page with a non-empty `template::` property.
+`template apply` deep-copies the template's subtree under a target block with variable substitution.
+`template resolve` returns a callable template's code block language, source, and declared params.
+`template run` executes a callable template — injects `--params`, runs its code block through the shared runtime, and writes the `> **result:**` subtree under `--block`.
+The MCP tool takes `params` as an object (`{ "k": "v" }`).
+`--block` (and `apply`'s optional `--block`) must belong to `--page`; a cross-page block returns `INVALID_ARG` (reprojection only touches `--page`, so a foreign anchor would silently drop the new blocks from disk).
+See [Templates](templates.md) for the full guide.
+
 ### Batch
 
 | CLI                                  | MCP tool      |
@@ -325,6 +342,7 @@ Shipping today:
 - `outl tag list|pages`
 - `outl page prop set|get|list`
 - `outl export hugo|md|json`
+- `outl template list|apply|resolve|run`
 - `outl batch` — stream `{ops: [...]}` from stdin (or `--ops=…`)
 - `outl workspace info`
 - `outl mcp serve` — full MCP protocol surface (tools, resources, prompts) over stdio.

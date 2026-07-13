@@ -15,17 +15,18 @@
 //! backlinks cache — that earlier duplication was the bug that made
 //! self-references invisible on one surface but not the other.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use outl_core::fractional::Fractional;
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
 use serde::{Serialize, Serializer};
 
 use crate::journal::page_md_path;
-use crate::outline::{project_outline_node, OutlineNode};
+use crate::outline::{project_outline_node_indexed, ChildrenIndex, OutlineNode};
 use crate::page::{page_meta, PageMeta};
 use crate::todo::{split_todo, TodoState};
-use crate::tree::children_of;
 
 /// One backlink reference from a source block to a target page.
 ///
@@ -100,10 +101,51 @@ where
 /// its `source_path` (the `.md` of the page the source block lives
 /// in).
 pub fn backlinks_for_target(workspace: &Workspace, root: &Path, target: &str) -> Vec<Backlink> {
-    let matcher = TargetMatcher::new(target);
-    let mut out: Vec<Backlink> = Vec::new();
+    let index = build_children_index(workspace);
+    collect_backlinks(workspace, root, &TargetMatcher::refs(target), &index)
+}
 
-    for (page_id, _) in children_of(workspace, NodeId::root()) {
+/// Build a `parent -> children (in fractional order)` map once per
+/// backlinks pass (one scan + per-parent sort; `O(n log n)` worst case).
+///
+/// The walk visits every block in the workspace and, for each match,
+/// materialises its subtree. Both steps used to go through
+/// [`children_of`], which **rescans every node** on each call (`Tree`
+/// stores only `node -> (parent, position)`, with no child index) —
+/// making the whole pass `O(n²)`. Building this map once and threading
+/// it through the walk + [`project_outline_node_indexed`] eliminates the
+/// `O(n²)` rescans (the remaining cost is one full walk + sorting).
+/// Rebuilt per `backlinks_for_page` call, so it never goes stale: it is a
+/// scratch accelerator, not cached state.
+fn build_children_index(workspace: &Workspace) -> ChildrenIndex {
+    let mut grouped: HashMap<NodeId, Vec<(NodeId, Fractional)>> = HashMap::new();
+    for (id, parent, pos) in workspace.tree().iter_nodes() {
+        grouped.entry(parent).or_default().push((id, pos.clone()));
+    }
+    grouped
+        .into_iter()
+        .map(|(parent, mut kids)| {
+            kids.sort_by(|a, b| a.1.cmp(&b.1));
+            (parent, kids.into_iter().map(|(id, _)| id).collect())
+        })
+        .collect()
+}
+
+/// Walk every page's blocks and collect the ones `matcher` accepts.
+/// `index` is the shared `parent -> children` map (see
+/// [`build_children_index`]); pages are the children of
+/// [`NodeId::root`].
+fn collect_backlinks(
+    workspace: &Workspace,
+    root: &Path,
+    matcher: &TargetMatcher,
+    index: &ChildrenIndex,
+) -> Vec<Backlink> {
+    let mut out: Vec<Backlink> = Vec::new();
+    let Some(pages) = index.get(&NodeId::root()) else {
+        return out;
+    };
+    for &page_id in pages {
         let Some(meta) = page_meta(workspace, page_id) else {
             continue;
         };
@@ -115,48 +157,101 @@ pub fn backlinks_for_target(workspace: &Workspace, root: &Path, target: &str) ->
             &meta,
             &source_path,
             &mut path,
-            &matcher,
+            matcher,
             &mut out,
+            index,
         );
     }
     out
 }
 
-/// Pre-computed match state for one backlink target: the literal
-/// `[[target]]` needle plus the target's slug form for `#tag`
-/// comparison.
+/// Pre-computed match state for one backlink target.
+///
+/// A block counts as a backlink when it matches any enabled channel:
+/// the literal `[[target]]` needle, a `#tag` whose slug form equals
+/// the target's, a ` ```call:<name> ` fence (callable-template render
+/// site), or a `from-template:: <slug>` property (structural-template
+/// instance). The last two are how a template page surfaces where it
+/// was used without the user hand-writing a `[[link]]`.
 struct TargetMatcher {
+    /// `[[target]]` literal; empty disables the ref channel.
     needle: String,
-    target_slug: String,
+    /// Slug form for `#tag` comparison; `None` disables the tag channel.
+    tag_slug: Option<String>,
+    /// Template invocation name for `call:<name>` fences; `None`
+    /// disables the callable channel.
+    call_name: Option<String>,
+    /// Page slug matched against `from-template::`; `None` disables the
+    /// structural-instance channel.
+    provenance_slug: Option<String>,
 }
 
 impl TargetMatcher {
-    fn new(target: &str) -> Self {
+    /// The ordinary text-reference matcher: `[[target]]` + `#tag`.
+    fn refs(target: &str) -> Self {
         Self {
             needle: format!("[[{target}]]"),
-            target_slug: outl_md::slug::slugify(target),
+            tag_slug: Some(outl_md::slug::slugify(target)),
+            call_name: None,
+            provenance_slug: None,
         }
     }
 
-    /// Does this block's text mention the target? `[[ref]]` is a
-    /// substring probe (cheap, exact thanks to the `]]` terminator);
-    /// `#tag` goes through the real inline tokenizer so tags inside
-    /// code spans don't count and `#avelino-foo` doesn't false-match
-    /// a target of `avelino`.
-    fn matches(&self, text: &str) -> bool {
-        if text.contains(&self.needle) {
+    /// The template-provenance matcher for a template page: a
+    /// `call:<name>` fence or a `from-template:: <slug>` instance.
+    fn template(slug: &str, name: &str) -> Self {
+        Self {
+            needle: String::new(),
+            tag_slug: None,
+            call_name: Some(name.to_string()),
+            provenance_slug: Some(slug.to_string()),
+        }
+    }
+
+    /// Does this block mention the target on any enabled channel?
+    /// `[[ref]]` is a substring probe (cheap, exact thanks to the `]]`
+    /// terminator); `#tag` goes through the real inline tokenizer so
+    /// tags inside code spans don't count and `#avelino-foo` doesn't
+    /// false-match `avelino`.
+    fn matches(&self, workspace: &Workspace, block_id: NodeId, text: &str) -> bool {
+        if !self.needle.is_empty() && text.contains(&self.needle) {
             return true;
         }
-        if !text.contains('#') {
-            return false;
-        }
-        outl_md::inline::tokenize(text).iter().any(|tok| match tok {
-            outl_md::inline::InlineTok::Tag { name } => {
-                outl_md::slug::slugify(name) == self.target_slug
+        if let Some(name) = &self.call_name {
+            if crate::template::call_target_name(text).as_deref() == Some(name.as_str()) {
+                return true;
             }
-            _ => false,
-        })
+        }
+        if let Some(slug) = &self.provenance_slug {
+            let from = crate::page::read_text_prop(
+                workspace,
+                block_id,
+                crate::template::FROM_TEMPLATE_KEY,
+            );
+            if from.as_deref() == Some(slug.as_str()) {
+                return true;
+            }
+        }
+        if let Some(want) = &self.tag_slug {
+            if text.contains('#') {
+                return outl_md::inline::tokenize(text).iter().any(|tok| match tok {
+                    outl_md::inline::InlineTok::Tag { name } => {
+                        outl_md::slug::slugify(name) == *want
+                    }
+                    _ => false,
+                });
+            }
+        }
+        false
     }
+}
+
+/// The template invocation name of `meta`'s page, when it is a template
+/// (has a non-empty `template::` property).
+fn template_name_of(workspace: &Workspace, meta: &PageMeta) -> Option<String> {
+    let id = crate::page::find_by_slug(workspace, &meta.slug)?;
+    let name = crate::page::read_text_prop(workspace, id, crate::template::TEMPLATE_KEY)?;
+    (!name.trim().is_empty()).then_some(name)
 }
 
 /// Convenience: backlinks against either the page's slug or its title.
@@ -169,24 +264,35 @@ impl TargetMatcher {
 /// Without scanning the alias, every mention of `@avelino` would fall
 /// off the person's backlinks panel.
 pub fn backlinks_for_page(workspace: &Workspace, root: &Path, meta: &PageMeta) -> Vec<Backlink> {
-    let mut acc = backlinks_for_target(workspace, root, &meta.slug);
-    let mut push = |extra: Vec<Backlink>| {
-        for link in extra {
+    // Build the `parent -> children` index once and reuse it across every
+    // channel below, so a template page (up to four scans) still walks the
+    // tree a single logical time instead of rebuilding the accelerator per
+    // target.
+    let index = build_children_index(workspace);
+    let mut acc: Vec<Backlink> = Vec::new();
+    let mut add = |matcher: TargetMatcher| {
+        for link in collect_backlinks(workspace, root, &matcher, &index) {
             if !acc.iter().any(|l| l.block_id == link.block_id) {
                 acc.push(link);
             }
         }
     };
+
+    add(TargetMatcher::refs(&meta.slug));
     if meta.title != meta.slug {
-        push(backlinks_for_target(workspace, root, &meta.title));
+        add(TargetMatcher::refs(&meta.title));
     }
     if meta.page_type.as_deref() == Some(crate::person::PERSON_TYPE) {
-        let at_slug = format!("@{}", meta.slug);
-        push(backlinks_for_target(workspace, root, &at_slug));
+        add(TargetMatcher::refs(&format!("@{}", meta.slug)));
         if meta.title != meta.slug {
-            let at_title = format!("@{}", meta.title);
-            push(backlinks_for_target(workspace, root, &at_title));
+            add(TargetMatcher::refs(&format!("@{}", meta.title)));
         }
+    }
+    // A template page also surfaces where it was rendered (`call:<name>`
+    // fences) or instantiated (`from-template:: <slug>`) — neither is a
+    // `[[ref]]`, so the scans above miss them.
+    if let Some(name) = template_name_of(workspace, meta) {
+        add(TargetMatcher::template(&meta.slug, &name));
     }
     acc
 }
@@ -203,13 +309,17 @@ fn walk_inside_page(
     path: &mut Vec<usize>,
     matcher: &TargetMatcher,
     out: &mut Vec<Backlink>,
+    index: &ChildrenIndex,
 ) {
-    for (idx, (child_id, _)) in children_of(workspace, parent).into_iter().enumerate() {
+    let Some(children) = index.get(&parent) else {
+        return;
+    };
+    for (idx, child_id) in children.iter().copied().enumerate() {
         path.push(idx);
         let text = workspace.block_text(child_id).unwrap_or_default();
-        if matcher.matches(&text) {
+        if matcher.matches(workspace, child_id, &text) {
             let (todo, body) = split_todo(&text);
-            let source_block = project_outline_node(workspace, child_id);
+            let source_block = project_outline_node_indexed(workspace, child_id, index);
             out.push(Backlink {
                 block_id: child_id.to_string(),
                 block_text: body.to_string(),
@@ -220,7 +330,16 @@ fn walk_inside_page(
                 source_path: Some(source_path.to_path_buf()),
             });
         }
-        walk_inside_page(workspace, child_id, meta, source_path, path, matcher, out);
+        walk_inside_page(
+            workspace,
+            child_id,
+            meta,
+            source_path,
+            path,
+            matcher,
+            out,
+            index,
+        );
         path.pop();
     }
 }
@@ -271,7 +390,7 @@ pub fn extract_refs(text: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::block::{append_block, edit_text};
-    use crate::page::{open_journal, open_or_create, PageKind};
+    use crate::page::{find_by_slug, open_journal, open_or_create, PageKind};
     use chrono::NaiveDate;
     use outl_core::hlc::HlcGenerator;
     use outl_core::id::ActorId;
@@ -301,6 +420,83 @@ mod tests {
     fn extract_refs_ignores_unbalanced() {
         let refs = extract_refs("[[unterminated and [[ok]] mixed");
         assert!(refs.contains(&"ok".to_string()));
+    }
+
+    /// Build a template page named `name` with a single code block, so
+    /// it can be both instantiated (structural) and called (callable).
+    fn make_template(workspace: &mut Workspace, hlc: &HlcGenerator, slug: &str, name: &str) {
+        use crate::page::set_property;
+        use crate::template::TEMPLATE_KEY;
+        use outl_core::property::PropValue;
+
+        let id = open_or_create(workspace, hlc, slug, slug, PageKind::Page).unwrap();
+        set_property(
+            workspace,
+            hlc,
+            id,
+            TEMPLATE_KEY,
+            Some(PropValue::Text(name.into())),
+        )
+        .unwrap();
+        append_block(workspace, hlc, Some(id), Some("- **Item:**")).unwrap();
+    }
+
+    #[test]
+    fn structural_instance_shows_in_template_backlinks() {
+        // Instantiate a template into a journal, then the template
+        // page's backlinks must list where it was stamped — the
+        // `from-template::` property is not a `[[ref]]`, so this only
+        // works because the matcher reads the property directly.
+        let (mut w, hlc) = ws();
+        make_template(&mut w, &hlc, "template-1on1", "1on1");
+        let j = open_journal(&mut w, &hlc, NaiveDate::from_ymd_opt(2026, 7, 9).unwrap()).unwrap();
+        let target = append_block(&mut w, &hlc, Some(j), Some("host")).unwrap();
+        crate::template::instantiate_template(&mut w, &hlc, "1on1", target, "2026-07-09", None)
+            .unwrap();
+
+        let meta = page_meta(&w, find_by_slug(&w, "template-1on1").unwrap()).unwrap();
+        let bl = backlinks_for_page(&w, root(), &meta);
+        assert!(
+            !bl.is_empty(),
+            "structural instance should appear in the template's backlinks"
+        );
+        assert!(bl.iter().any(|b| b
+            .source_page
+            .as_ref()
+            .is_some_and(|p| p.slug == "2026-07-09")));
+    }
+
+    #[test]
+    fn callable_site_shows_in_template_backlinks() {
+        // A `call:<name>` fence must surface in the template page's
+        // backlinks without a hand-written `[[link]]`.
+        let (mut w, hlc) = ws();
+        make_template(&mut w, &hlc, "template-calc", "calc");
+        let j = open_journal(&mut w, &hlc, NaiveDate::from_ymd_opt(2026, 7, 9).unwrap()).unwrap();
+        append_block(&mut w, &hlc, Some(j), Some("```call:calc\nx: 1\n```")).unwrap();
+
+        let meta = page_meta(&w, find_by_slug(&w, "template-calc").unwrap()).unwrap();
+        let bl = backlinks_for_page(&w, root(), &meta);
+        assert!(
+            bl.iter().any(|b| b
+                .source_page
+                .as_ref()
+                .is_some_and(|p| p.slug == "2026-07-09")),
+            "callable site should appear in the template's backlinks"
+        );
+    }
+
+    #[test]
+    fn non_template_page_ignores_call_and_provenance() {
+        // A regular page must not accidentally pull in call/provenance
+        // matches — the template channel only fires for template pages.
+        let (mut w, hlc) = ws();
+        let p = open_or_create(&mut w, &hlc, "regular", "regular", PageKind::Page).unwrap();
+        append_block(&mut w, &hlc, Some(p), Some("```call:regular\n```")).unwrap();
+
+        let meta = page_meta(&w, p).unwrap();
+        let bl = backlinks_for_page(&w, root(), &meta);
+        assert!(bl.is_empty(), "regular page has no template channel");
     }
 
     #[test]

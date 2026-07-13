@@ -204,6 +204,8 @@ pub(crate) enum Overlay {
     /// the user can trigger. Discoverable in a way `:` (vim command
     /// palette) isn't — every command shows up with a description.
     Slash(SlashState),
+    /// Template picker: fuzzy-searchable list of template pages.
+    TemplatePicker(TemplatePickerState),
 }
 
 /// One entry in the slash menu.
@@ -241,6 +243,18 @@ pub(crate) enum SlashOrigin {
         plugin_id: String,
         command_id: String,
     },
+}
+
+/// State of the template picker overlay.
+#[derive(Debug)]
+pub(crate) struct TemplatePickerState {
+    pub(crate) query: String,
+    /// All templates in the workspace, fetched once on open.
+    pub(crate) all: Vec<outl_actions::TemplateEntry>,
+    /// Indices into `all` matching the current query.
+    pub(crate) filtered: Vec<usize>,
+    /// Index into `filtered` of the highlighted entry.
+    pub(crate) selected: usize,
 }
 
 /// State of the slash overlay.
@@ -573,6 +587,14 @@ pub(crate) struct App {
     /// Toggled with `B`. Default `true` so users discover the feature.
     pub(crate) show_backlinks: bool,
 
+    /// Direction of the inline backlinks list (issue #142): `true` puts
+    /// the most recently referenced page on top (the product default),
+    /// `false` flips to oldest-first. Loaded from `[display]
+    /// backlinks_order` at boot and toggled with `Ctrl+O`, which
+    /// persists the new value back to `config.toml`. A pure display
+    /// preference — it never goes through the op log.
+    pub(crate) backlinks_newest_first: bool,
+
     /// Whether the left sidebar (mini-calendar + pinned + recent) is
     /// visible. Default `false` so first-time users land on the
     /// classic single-pane layout — the toggle (`\`) opt-ins those who
@@ -751,4 +773,20 @@ pub(crate) struct App {
     /// being edited (cursor on it) renders raw regardless of an entry
     /// here, so the user always sees and edits the real fence source.
     pub(crate) transform_cache: HashMap<NodeId, String>,
+}
+
+impl Drop for App {
+    /// Flush a materialized-state snapshot on shutdown so the next open
+    /// (this TUI, the CLI, or a peer client sharing the workspace) boots
+    /// from it instead of replaying the entire op log (#109). This is the
+    /// only path that guarantees a snapshot for a workspace that never
+    /// crosses the in-band background threshold. Best-effort — a snapshot
+    /// is only a cache, so a failure is logged and swallowed — and it
+    /// joins any in-flight background writer so we don't race the exit.
+    fn drop(&mut self) {
+        self.workspace.wait_for_snapshots();
+        if let Err(e) = self.workspace.save_snapshot() {
+            tracing::warn!("snapshot flush on exit failed (non-fatal): {e}");
+        }
+    }
 }

@@ -32,6 +32,7 @@ pub const KNOWN_ALIASES: &[(&str, &[&str])] = &[
     ("lua", &["lua"]),
     ("lisp", &["lisp", "cl", "common-lisp", "elisp"]),
     ("echo", &["echo", "text", "txt", "plain"]),
+    ("query", &["query", "tasks"]),
     // Highlight-only (no runtime, but the syntax highlighter on
     // every client should know these so a fence labelled `ts`,
     // `tsx`, `bash`, `yml`, etc. still gets colorized). Listed here

@@ -113,6 +113,30 @@ pub fn run_code_block(
     let meta =
         page_meta(workspace, page_id).ok_or_else(|| ActionError::NotInTree(page_id.to_string()))?;
 
+    // Callable template: a `call:<name>` fence resolves and runs the
+    // named template, writing the result under this block. Handled here
+    // (not in `outl-exec`) because template resolution needs the
+    // workspace — so every client that calls `run_code_block` (desktop,
+    // mobile) gets `call:` for free, matching the TUI's `gx` path.
+    let block_text = workspace.block_text(block_id).unwrap_or_default();
+    if let Some((name, params)) = crate::template::parse_call_invocation(&block_text) {
+        let (result_ok, error) = match crate::template::run_callable_block(
+            workspace, hlc, registry, &name, &params, block_id,
+        ) {
+            Ok(out) => (Some(ExecOutputDto::from(&out)), None),
+            Err(e) => (None, Some(e.to_string())),
+        };
+        // `run_callable_block` mutates the op log; project the `.md` so
+        // the on-disk page matches (the normal path's `run_block_at_index`
+        // does this itself).
+        let _ = crate::journal::apply_page_md_with_sidecar(workspace, storage_root, page_id);
+        return Ok(RunCodeBlockOutcome {
+            language: format!("call:{name}"),
+            result_ok,
+            error,
+        });
+    }
+
     let outline = project_outline(workspace, page_id);
     let flat_idx = flat_index_for_block(&outline, block_id)
         .ok_or_else(|| ActionError::NotInTree(block_id.to_string()))?;

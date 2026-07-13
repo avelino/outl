@@ -18,6 +18,7 @@
   "dependencies": {
     "@outl/shared": "workspace:*",
     "@tauri-apps/api": "catalog:",
+    "@tauri-apps/plugin-clipboard-manager": "^2.3.0",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-opener": "catalog:",
     "@tauri-apps/plugin-os": "catalog:",

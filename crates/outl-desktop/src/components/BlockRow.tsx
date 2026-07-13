@@ -39,6 +39,7 @@ import {
 } from "@outl/shared/autocomplete";
 import {
   type EmojiHit,
+  listTemplates,
   openRef,
   pluginList,
   searchBlocks,
@@ -58,9 +59,13 @@ import {
 } from "@outl/shared/plugins/transformer-registry";
 
 import { detectFence } from "@outl/shared/highlight";
+import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import { appState, setAppState } from "../lib/store";
 import { handlePopupNav } from "../lib/popup-nav";
-import { rankSlashCommands } from "../lib/slash-commands";
+import {
+  rankSlashCommands,
+  templateSlashCommands,
+} from "../lib/slash-commands";
 
 export interface BlockCallbacks {
   /** A textarea was double-clicked → enter edit mode on `id`. */
@@ -85,11 +90,24 @@ export interface BlockCallbacks {
   /** Chevron click — fold / unfold. */
   onToggleCollapsed: (id: string, collapsed: boolean) => Promise<void>;
   /** External-clipboard paste with formatting (Cmd+V) — structured
-   *  payload is converted to blocks. */
-  onPasteMarkdown: (id: string, caret: number, text: string) => Promise<void>;
+   *  payload is converted to blocks. `hostText` is the in-flight
+   *  textarea value so the parent can flush the draft into the
+   *  workspace before splicing (else the caret is measured on the draft
+   *  but applied to stale backend text). */
+  onPasteMarkdown: (
+    id: string,
+    caret: number,
+    text: string,
+    hostText: string,
+  ) => Promise<void>;
   /** Paste without formatting (Cmd+Shift+V) — raw text spliced at the
-   *  caret, no conversion. */
-  onPastePlain: (id: string, caret: number, text: string) => Promise<void>;
+   *  caret, no conversion. `hostText` is flushed like `onPasteMarkdown`. */
+  onPastePlain: (
+    id: string,
+    caret: number,
+    text: string,
+    hostText: string,
+  ) => Promise<void>;
   /** Run a fenced code block through `outl-exec`. */
   onRunCodeBlock: (id: string) => Promise<void>;
   /** Run a plugin command picked from the inline `/` slash menu. The
@@ -99,6 +117,11 @@ export interface BlockCallbacks {
   /** Ref / tag click handlers (forwarded to MarkdownInline). */
   onRefClick: (target: string) => void;
   onTagClick: (tag: string) => void;
+  /** Navigate to a page by its exact slug. Used by a `call:<name>` code
+   *  fence to jump to the template's page. Unlike `onRefClick` (→
+   *  `openRef`, which *creates* a page when the target doesn't resolve),
+   *  this is an exact `openPageBySlug` — no side effect on a miss. */
+  onOpenPage: (slug: string) => void;
   /** External `[label](url)` link click — opens in the system browser.
    *  Optional: contexts that keep links inert simply omit it (the
    *  renderer then draws a plain, non-interactive span). */
@@ -166,10 +189,17 @@ export function BlockRow(props: {
   const [slashCommands, setSlashCommands] = createSignal<PluginCommand[]>([]);
   const [slashIndex, setSlashIndex] = createSignal(0);
   // Lazily-loaded, cached command list (null until the first `/`).
+  // Native `/template <name>` entries (structural templates, no plugin
+  // needed) are merged ahead of plugin commands so the core feature is
+  // reachable from the same popup — see `templateSlashCommands`.
   let allSlashCommands: PluginCommand[] | null = null;
   async function ensureSlashCommands(): Promise<PluginCommand[]> {
     if (allSlashCommands) return allSlashCommands;
-    allSlashCommands = await pluginList().catch(() => []);
+    const [plugins, templates] = await Promise.all([
+      pluginList().catch(() => []),
+      listTemplates().catch(() => []),
+    ]);
+    allSlashCommands = [...templateSlashCommands(templates), ...plugins];
     return allSlashCommands;
   }
   // `query` last sent to the backend — skip redundant round-trips when
@@ -533,13 +563,18 @@ export function BlockRow(props: {
       if (!ta) return;
       let clip = "";
       try {
-        clip = await navigator.clipboard.readText();
+        // Read via the Tauri clipboard plugin, NOT
+        // `navigator.clipboard.readText()`: the macOS WKWebview pops a
+        // native "Paste" permission button for a programmatic web-API
+        // read (outside a real paste gesture), which showed a "paste"
+        // prompt and inserted nothing. The plugin reads on the backend.
+        clip = await readClipboardText();
       } catch {
-        return; // clipboard read denied — nothing to paste
+        return; // clipboard read denied / empty — nothing to paste
       }
       if (!clip) return;
       const caretChars = utf16OffsetToCharOffset(ta.value, ta.selectionStart ?? 0);
-      await props.cb.onPastePlain(props.block.id, caretChars, clip);
+      await props.cb.onPastePlain(props.block.id, caretChars, clip, ta.value);
       return;
     }
     // The four inline autocomplete popups share one keyboard contract
@@ -687,6 +722,14 @@ export function BlockRow(props: {
   async function handlePaste(e: ClipboardEvent) {
     const ta = textareaRef;
     if (!ta) return;
+    // Inside a fenced code block the whole block is one raw ```lang…```
+    // string. Converting a multi-line / outline clipboard "with
+    // formatting" would split the fence into sibling blocks and strand
+    // the closing ``` on its own line (the "paste jumps to the last
+    // line" bug). Let the browser splice the text in literally (newlines
+    // preserved), exactly like typing it — `onInput` keeps the draft in
+    // sync. Cmd+Shift+V (paste without formatting) already splices raw.
+    if (detectFence(ta.value)) return;
     // "Paste with formatting" (Cmd+V). `choosePasteRoute` (shared with
     // mobile) decides between: rich (text/html converted to markdown so a
     // Slack/Docs/Notion paste keeps its **bold** + lists), structured
@@ -703,7 +746,12 @@ export function BlockRow(props: {
       ta.value,
       ta.selectionStart ?? 0,
     );
-    await props.cb.onPasteMarkdown(props.block.id, caretChars, decision.text);
+    await props.cb.onPasteMarkdown(
+      props.block.id,
+      caretChars,
+      decision.text,
+      ta.value,
+    );
   }
 
   /** TODO/DONE state to render the bullet by. Edit mode is the
@@ -899,6 +947,7 @@ export function BlockRow(props: {
                             focusTextarea();
                           }}
                           onRun={() => props.cb.onRunCodeBlock(props.block.id)}
+                          onOpenPage={props.cb.onOpenPage}
                         />
                       ) : (
                         (() => {
@@ -941,6 +990,7 @@ export function BlockRow(props: {
                                   onRefClick={props.cb.onRefClick}
                                   onTagClick={props.cb.onTagClick}
                                   onLinkClick={props.cb.onLinkClick}
+                                  embeds={appState.embeds}
                                 />
                               </Show>
                             </div>
@@ -1263,8 +1313,24 @@ function CodeFenceView(props: {
   body: string;
   onEdit: () => void;
   onRun: () => Promise<void>;
+  /** Navigate to a page by slug — wired for `call:<name>` fences so the
+   *  language chip links to the template's page. */
+  onOpenPage?: (slug: string) => void;
 }) {
   const [busy, setBusy] = createSignal(false);
+
+  // A `call:<name>` fence references a template page. Resolve its slug so
+  // the language chip can double as a link to that page. `null` for any
+  // non-`call:` fence (the resource never runs) or an unknown template
+  // name (the chip stays a plain label — no dead link).
+  const callName = createMemo(() => {
+    const lang = props.language.toLowerCase();
+    return lang.startsWith("call:") ? props.language.slice(5).trim() : null;
+  });
+  const [templateSlug] = createResource(callName, async (name) => {
+    const templates = await listTemplates().catch(() => []);
+    return templates.find((t) => t.name === name)?.slug ?? null;
+  });
 
   async function run() {
     setBusy(true);
@@ -1299,9 +1365,28 @@ function CodeFenceView(props: {
   return (
     <div class="rounded-md border border-(--color-outl-fg)/10 bg-(--color-outl-bg-elev)/60">
       <div class="flex items-center justify-between border-b border-(--color-outl-fg)/10 px-2 py-1">
-        <span class="font-mono text-[10px] uppercase opacity-60">
-          {props.language}
-        </span>
+        <Show
+          when={props.onOpenPage ? templateSlug() : null}
+          fallback={
+            <span class="font-mono text-[10px] uppercase opacity-60">
+              {props.language}
+            </span>
+          }
+        >
+          {(slug) => (
+            <button
+              type="button"
+              title={`Open template: ${callName()}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                props.onOpenPage?.(slug());
+              }}
+              class="cursor-pointer font-mono text-[10px] uppercase opacity-60 underline decoration-dotted underline-offset-2 hover:opacity-100"
+            >
+              {props.language}
+            </button>
+          )}
+        </Show>
         <Show
           when={match()}
           fallback={

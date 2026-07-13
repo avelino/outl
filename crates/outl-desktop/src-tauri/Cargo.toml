@@ -38,6 +38,12 @@ rustls = { workspace = true }
 
 tauri = { workspace = true }
 tauri-plugin-dialog = "2"
+# Backend clipboard read for "paste without formatting" (Cmd+Shift+V).
+# `navigator.clipboard.readText()` in the macOS WKWebview pops the native
+# "Paste" permission button when called outside a paste gesture, so the
+# chord surfaced a "paste" prompt and inserted nothing. Reading via the
+# plugin (backend `arboard`) bypasses that gate.
+tauri-plugin-clipboard-manager = "2"
 tauri-plugin-opener = { workspace = true }
 tauri-plugin-os = { workspace = true }
 # `outl://` deep links (Raycast "open in app", shared launchers). The

@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use mlua::{Lua, MultiValue, Value, Variadic};
 
-use crate::runtime::{ExecContext, ExecError, ExecOutput, ExitStatus, Runtime};
+use crate::runtime::{ExecContext, ExecError, ExecOutput, ExitStatus, OutputFormat, Runtime};
 
 /// mlua-backed Lua 5.4 runtime.
 pub struct LuaRuntime;
@@ -60,6 +60,7 @@ impl Runtime for LuaRuntime {
                     stderr: String::new(),
                     duration: start.elapsed(),
                     exit: ExitStatus::Ok,
+                    format: OutputFormat::Text,
                 })
             }
             Err(e) => Ok(ExecOutput {
@@ -67,6 +68,7 @@ impl Runtime for LuaRuntime {
                 stderr: e.to_string(),
                 duration: start.elapsed(),
                 exit: ExitStatus::Trap("lua-error".into()),
+                format: OutputFormat::Text,
             }),
         }
     }

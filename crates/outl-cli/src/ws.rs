@@ -101,7 +101,8 @@ pub fn open(path: &Path) -> Result<WsCtx, ApiError> {
     // CLI is ephemeral: every command opens, mutates, exits. Writing a
     // snapshot here would race with the long-lived TUI/desktop/mobile
     // that own the workspace, and snapshots already pay back at boot
-    // via `load_snapshot`. So opt out — read, don't write.
+    // (`Workspace::open_with_storage` reads one via `snapshot::read_from_disk`
+    // regardless of this policy). So opt out — read, don't write (#109).
     workspace.set_snapshot_policy(false, 0);
     // Register per-page shards if the workspace has been migrated
     // (RFC #137 Phase B). No-op for legacy Global workspaces.
@@ -121,6 +122,23 @@ pub fn open(path: &Path) -> Result<WsCtx, ApiError> {
         workspace.set_snapshot_policy(false, 0);
     }
     let hlc = HlcGenerator::new(actor);
+
+    // Repair split-brain page/journal roots (two roots sharing one slug, e.g. a
+    // sidecar-less `.md` reconciled to a fresh id) before any command reads or
+    // writes. Idempotent and a no-op when clean; only emits Ops when a duplicate
+    // exists, and those converge across devices via the op log. Covers every CLI
+    // command and the long-lived MCP server (both open through here).
+    //
+    // Cost: an O(roots) scan grouping page roots by slug. It runs on every CLI
+    // invocation, but the open above already replays the whole op log (O(ops),
+    // far larger), so this scan is noise next to it. If a huge workspace ever
+    // makes it show up in a profile, gate it on a persisted "merged at op-count
+    // N" marker in `.outl/` rather than paying the scan when nothing changed.
+    match outl_actions::merge_duplicate_slug_roots(&mut workspace, &hlc) {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!("merged {n} duplicate slug root(s)"),
+        Err(e) => tracing::warn!("duplicate-slug-root repair: {e}"),
+    }
 
     Ok(WsCtx {
         root: paths.root.clone(),

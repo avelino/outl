@@ -88,7 +88,7 @@ crates/outl-desktop/
         ├── settings.rs        # settings.json IO + tests
         ├── state.rs           # AppState + AppHost impl; wire DTOs re-exported from outl-tauri-shared
         ├── helpers.rs         # re-exports of outl_tauri_shared::helpers + desktop-only undo invalidation
-        ├── workspace_open.rs  # open_workspace_at + spawn_workspace_opener (over shared primitives)
+        ├── workspace_open.rs  # opener + background pass (also repairs doubled journal titles)
         ├── plugin_service.rs  # desktop shim: CLIENT id + capability set over outl_tauri_shared::PluginService
         ├── fs_watcher.rs      # notify + debouncer → peer-ops-changed
         └── commands/          # thin #[tauri::command] wrappers over outl_tauri_shared::commands
@@ -115,7 +115,7 @@ The flow is two honest steps, no filler:
 2. **Sync (optional)** — the shared `SYNC_STEP` copy (`@outl/shared/onboarding`) + the existing `<SyncPanel />` so the user can pair right there, or skip.
    A single device is first-class.
 
-The "has the user onboarded" flag is a **per-install UI flag in `localStorage`** (`outl.onboarded`), **not** workspace state — it deliberately does NOT go through the op log (it must not converge across devices; each device onboards once).
+The "has the user onboarded" flag is a **per-install UI flag in `localStorage`** (`outl.onboarded`), **not** workspace state — it deliberately does NOT go through the op log.
 It is intentionally not in `settings.json` either, since `settings.last_workspace` is the only first-run signal the backend tracks.
 
 The onboarding **copy** lives in `@outl/shared/onboarding` (identical to mobile); only the chrome is desktop-local.
@@ -123,36 +123,28 @@ Pairing is **not** reimplemented — `Onboarding` renders the real `<SyncPanel /
 
 ### Sync status dot (always-visible)
 
-`<SyncIndicator />` sits in the bottom-left `<ChromeToggleBar />` cluster so the mesh state is glanceable without opening Settings (GUI users expect that, the way mobile shows a dot in its toolbar).
-Green = at least one iroh peer reachable, orange = none, dim = first probe still running; clicking opens Settings → Sync (the full `<SyncPanel />`).
-It derives reachability from `peerStatus()` → `peersOnline()` (`@outl/shared/peers`) — the **same source** the Sync panel and the mobile dot use, so the three never disagree.
-It re-probes on a slow interval and immediately on `peer-ops-changed` (a delivery proves the mesh is up).
+`<SyncIndicator />` sits in the bottom-left `<ChromeToggleBar />` cluster so the mesh state is glanceable without opening Settings.
+Green = at least one iroh peer reachable, orange = none, dim = first probe still running; clicking opens Settings → Sync.
+It derives reachability from `peerStatus()` → `peersOnline()` (`@outl/shared/peers`), the same source the Sync panel and the mobile dot use.
+It re-probes on a slow interval and immediately on `peer-ops-changed`.
 Do not add a second reachability path; `peersOnline` is the one owner.
 
 ### Sidebar page deletion
 
-`Sidebar.tsx`'s `<Row>` takes an optional `onDelete` callback; when provided, a `×` button appears on hover (top-right, `opacity-0 → group-hover:opacity-100`).
+`Sidebar.tsx`'s `<Row>` takes an optional `onDelete` callback; when provided, a `×` button appears on hover.
 `handleDelete(p)` calls `window.confirm(...)`, then `deletePage(slug)` (from `@outl/shared/api/commands`), applies the returned today's-journal view, and refetches the page list.
-Journals are excluded (`p.kind === "journal" ? undefined : ...`) — only regular pages show the affordance.
-The `g d` chord (Normal mode, "go delete") routes through the `DeletePage` case in `action-handlers.ts` — the same `window.confirm` + `deletePage(slug)` flow as the `×` button (the `Action` TS union in `lib/api.ts` carries `| { kind: "DeletePage" }`).
+Journals are excluded — only regular pages show the affordance.
+The `g d` chord (Normal mode, "go delete") routes through the `DeletePage` case in `action-handlers.ts`.
+It runs the same `window.confirm` + `deletePage(slug)` flow as the `×` button.
 The backend `delete_page` Tauri command is the shared `outl_tauri_shared::commands::page::delete_page` body — no desktop-specific logic.
+
+`InlineBacklinks.tsx`'s header direction button (`setBacklinksOrder`) flips newest/oldest; `appState.backlinksOrder` hydrates at boot.
 
 ## Blockquote chrome
 
-A block whose `text` starts with the CommonMark `"> "` marker renders with a left border, a ~6% tint (`bg-(--color-outl-fg-dimmer)/[0.06]`), and a right-rounded corner.
-Body keeps **full colour** — refs, tags, bold, code stay on their normal palette so the styled-token affordance isn't lost.
-
-The chrome wrapper sits one level above the bullet button — it envelops **both bullet *and* body** as one flex container (`│ ☐ body`, matching the TUI).
-The fold chevron and indent guides stay *outside* the chrome so the gutter isn't boxed twice.
-A non-quoted block degrades the wrapper to a plain `flex min-w-0 flex-1 items-start` container, so those rows render byte-identical to before.
-
-TUI has no per-line background available in ratatui, so it stays with just the `│ ` bar — the tint is a desktop/mobile addition that costs nothing to omit on terminal.
-The detection uses `splitQuote` from `@outl/shared/markdown` (mirror of `outl_actions::quote::split_quote`);
-`stripQuoteFromTokens` drops the `> ` from the first `Plain` token before handing the list to `<MarkdownInline />` so the marker doesn't render twice.
-
-Composition: the marker stacks with TODO/DONE like the TUI (`> TODO foo` → quote chrome + checkbox).
-Toggling routes `toggleQuote` (`@outl/shared/api/commands`) → `toggle_quote` command → `outl_actions::block::toggle_quote` (same Rust fn as mobile/TUI).
-**No string surgery on the TS side** — the prefix arithmetic stays in one place.
+A `"> "`-prefixed block renders with a left border + ~6% tint, right-rounded, body full-colour; the chrome wraps **both bullet and body** (`│ ☐ body`, TUI order).
+Detection is `splitQuote` + `stripQuoteFromTokens`; toggling routes `toggleQuote` → `toggle_quote` → `outl_actions::block::toggle_quote`.
+Full convention: [`docs/clients.md` → Blockquote convention](../../docs/clients.md#blockquote-convention).
 
 ## Theme tokens
 
@@ -160,14 +152,12 @@ Toggling routes `toggleQuote` (`@outl/shared/api/commands`) → `toggle_quote` c
 
 - **`--color-outl-*`** — the canonical set.
   New desktop code uses only these (`bg-(--color-outl-bg-elev)`, `border-(--color-outl-fg)/15`, etc.).
-- **`--color-ios-*` / `--color-iosd-*`** — legacy names still consumed by `@outl/shared/markdown::MarkdownInline`.
-  They are mapped from the active palette so the shared renderer stays client-agnostic until it migrates.
+- **`--color-ios-*` / `--color-iosd-*`** — legacy names still consumed by `MarkdownInline`, mapped from the active palette until it migrates.
 
-`src/styles.css` provides boot-default values for both namespaces (the `outl` brand palette) so the page isn't flash-unstyled before `applyPaletteToRoot` runs.
-`color-scheme` (`light` / `dark`) is also set from the palette's `bg` luminance so native controls (scrollbars, `<select>`) follow the active preset.
+`src/styles.css` provides boot-default values for both namespaces so the page isn't flash-unstyled before `applyPaletteToRoot` runs.
+`color-scheme` is set from the palette's `bg` luminance so native controls (scrollbars, `<select>`) follow the active preset.
 
-**When `@outl/shared/markdown::MarkdownInline` migrates to `--color-outl-*`**, the `--color-ios-*` writes in `applyPaletteToRoot` and the legacy block in `styles.css` can both be removed.
-See [`outl-frontend-shared/CLAUDE.md`](../outl-frontend-shared/CLAUDE.md#theming-note) for the migration plan.
+When `MarkdownInline` migrates to `--color-outl-*`, the `--color-ios-*` writes in `applyPaletteToRoot` + the legacy `styles.css` block can both go — see [`outl-frontend-shared/CLAUDE.md`](../outl-frontend-shared/CLAUDE.md#theming-note).
 
 ## Running
 
@@ -233,9 +223,12 @@ Implementation lives in `lib/markdown-wrap.ts`: each handler reads `document.act
 
 ### Paste (with and without formatting)
 
-User-facing behaviour lives in [`docs/paste.md`](../../docs/paste.md).
-`Cmd/Ctrl+V` (with formatting, `paste_markdown_at`) reads `text/html`, converts a rich clipboard via `htmlToOutlMarkdown` (`@outl/shared/paste`, Turndown), and routes to the backend on added formatting or `looksLikeOutline` / `hasMultipleParagraphs`.
-`Cmd/Ctrl+Shift+V` (without formatting, `paste_plain_at` → `paste_plain`) inserts raw text as one block via `onPastePlain`.
+User-facing behaviour + routing lives in [`docs/paste.md`](../../docs/paste.md).
+Three guards (mobile mirrors them):
+
+- Code-fence host bails `Cmd/Ctrl+V` to the native splice (`detectFence` early-return), keeping it literal.
+- `Cmd/Ctrl+Shift+V` reads via `tauri-plugin-clipboard-manager` (`clipboard-manager:allow-read-text`), dodging the macOS webview "Paste" gate.
+- Both pass `textarea.value` so `flushDraftBeforePaste` commits the draft first.
 
 `create_block`: stale `after_id` (`NotInTree`) → append at page end (fixes `o`-key crash after peer reload).
 
@@ -266,17 +259,17 @@ This section captures only the **architectural decisions** a contributor needs t
   3. **Pending-input** (`r{ch}`, `f{ch}`, `F{ch}`) — read a second character before applying.
      The dispatcher has no machinery for this today; categorised as char-cursor since they're blocked anyway.
 
-- **Visual mode is real**: `Mode::"vim-visual"` in the store with `visualAnchorId` + `lastVisualRange`.
-  `<BlockRow />`'s `isInVisualRange()` paints the range at 18% accent opacity (distinct from the 6% single-row selection tint).
-  Every Visual exit (`Esc`, `y`, `d`) captures the range to `lastVisualRange` so `g v` can restore it.
+- **Visual mode is real, and reachable without vim (issue #23)**: `Mode::"vim-visual"` in the store with `visualAnchorId` + `lastVisualRange`, painted at 18% accent opacity.
+  `Shift+↓` / `Shift+↑` (`SelectRange{Down,Up}`, bound in **both** Normal and Visual) start or grow the range via the DOM "nothing focused" → Normal fallback, so one machinery serves vim and non-vim.
+  `extendVisualRange` stays in the outline, never crossing into read-only backlinks.
+  Every exit funnels through one `exitVisual()` (captures `lastVisualRange` for `g v`); resting `vim-normal` folds to `normal` in `detectMode` + `StatusBar`.
 
-- **`*` / `#` is not vim-pure.**
-  Without a char cursor, "word under cursor" isn't defined — we seed the picker with the first 4 words of the selected block's text instead.
-  Document this in `docs/shortcuts.md` so users aren't surprised.
+- **`<BatchToolbar />`** (`components/BatchToolbar.tsx`) floats `N selected` + Indent / Outdent / Move ↑↓ / Delete / Done while `mode === "vim-visual"`, firing the **same** `handlers` the keyboard does so button and chord can't drift.
+  Its **Delete** confirms (`window.confirm`) when a selected block has children; keyboard `d` does not (vim convention).
 
-- **Range ops walk bottom-up + tolerate id-already-gone.**
-  `DeleteRange` iterates `[hi → lo]` so children go before parents (a parent's move-to-trash would otherwise pull a still-targeted descendant out from under us).
-  NodeIds are stable (`deleteBlock` is `Move(node, TRASH)`), so the pre-loop id snapshot stays valid; `safeCall` swallows per-id failures (a peer ate the same id, or the range straddled parent + descendants).
+- **Range ops walk bottom-up or top-down via `applyVisualBlockOp`, and tolerate id-already-gone.**
+  `DeleteRange` + `MoveVisualRangeDown` iterate `[hi → lo]` (children before parents; a descending move clears the block below first); `IndentVisualRange` + `MoveVisualRangeUp` walk `[lo → hi]`.
+  NodeIds are stable (`deleteBlock` is `Move(node, TRASH)`, moves preserve identity), so the highlight follows the re-render; `safeCall` swallows per-id failures.
 
 - **`UnfoldAll` / `FoldAll` walk via `flattenAll` / `flattenParents`, never `flattenVisible`.**
   `zR` must expand subtrees hidden under a collapsed parent; a visible-only walk would no-op on every descendant of a folded node.
@@ -285,27 +278,23 @@ This section captures only the **architectural decisions** a contributor needs t
   Mirrors `outl-tui`'s `collect_collapse_candidates` so the op count matches across clients.
 
 - **`A` (`EnterInsertAtEnd`) routes through `appState.caretIntent`.**
-  The handler sets `caretIntent: "end"` *before* `editingBlockId`; `<BlockRow />`'s `createEffect` reads it on mount, applies `setSelectionRange`, clears the signal (poking the textarea via `queueMicrotask` after flipping `editingBlockId` raced).
+  The handler sets `caretIntent: "end"` *before* `editingBlockId`; `<BlockRow />`'s `createEffect` reads it on mount, applies `setSelectionRange`, then clears the signal.
 
 - **Visual highlight uses a memoised `Set<id>` at the parent, not a per-row predicate.**
   `<OutlineView />` builds `visualSet = createMemo(() => visualRangeSet(...))` once per change; `<BlockRow />` answers `props.visualSet?.has(id) ?? false` in O(1).
-  The old per-row `isInVisualRange` (O(N²)/keystroke) survives in `@outl/shared/outline` for unit tests only — **no render path calls it**.
+  The old per-row `isInVisualRange` (O(N²)/keystroke) is kept in `@outl/shared/outline` for tests only.
 
-- **Char-cursor nudge is one shared handler.**
-  All 10 char-cursor catalog entries (`x` `X` `D` `C` `s` `r` `~` `e` `f` `F`) point at `charCursorNudge`, so the message can't drift between them.
+- **Char-cursor nudge is one shared handler:** the 10 char-cursor entries (`x` `X` `D` `C` `s` `r` `~` `e` `f` `F`) all point at `charCursorNudge`, so the message can't drift.
 
-- **`Y` / Visual `y` copy to the OS clipboard** via `copy_markdown` + `navigator.clipboard.writeText` (fills `yankRegister` too; paste-in `p`/`P` deferred).
+- **`Y` / Visual `y` copy to the OS clipboard** via `copy_markdown` + `navigator.clipboard.writeText` (fills `yankRegister`; paste-in `p`/`P` deferred).
 
 - **`NewBlockAbove` (`O`) uses `beforeId`, not a post-creation move walk.**
   `createBlock({ beforeId: anchor })` → `create_before` (floor-slot swap in core); never reintroduce the old create-at-tail + `moveBlockDown`-loop.
   `Cmd/Ctrl+Shift+Enter` is caret-aware in `BlockRow`'s keydown (col 0 → *before*, past col 0 → *below*); `stopImmediatePropagation` preempts the catalog's create-below binding.
 
 - **Block clipboard: view-mode cut/copy/paste of a whole block** (chords: [`docs/shortcuts.md`](../../docs/shortcuts.md)).
-  **Normal**-mode only; `appState.blockClipboard` = `{ kind: "cut", nodeId } | { kind: "copy", markdown }`, no `pageId` (backend resolves the page via `enclosing_page_id`).
+  **Normal**-mode only; `appState.blockClipboard` = `{ kind: "cut", nodeId } | { kind: "copy", markdown }` (backend resolves the page via `enclosing_page_id`).
   Cut is one identity-preserving `Op::Move` (`block::move_after`, cross-page, self-subtree rejected); copy duplicates via `paste_block_after` with fresh ids.
-
-- **Path to enable char-cursor ops.**
-  Add a visible Normal-mode caret in `<BlockRow />`, then move the 10 blocked handlers to real impls (separate PR).
 
 ### `Enter` outside a textarea (Normal mode)
 
@@ -313,11 +302,7 @@ With a block selected and no textarea focused (the DOM fallback puts the dispatc
 `Enter` resolves to the shared `OpenRefUnderCursor` action — but the desktop handler **always enters Insert on the selected block**.
 The one exception: when the selection sits on a **backlink row** (read-only), `Enter` opens the source page and lands the cursor on the referencing block.
 
-Why diverge from the TUI: the TUI has a char cursor so "open the ref under cursor" is well-defined.
-The desktop only has a selected block — approximating it as "first `[[ref]]` in the block" made ref-carrying blocks impossible to edit via `Enter`.
-On the desktop, **following a ref is the click on the token** (`onRefClick`); `Enter` means edit.
-
-### `:shortcode:` emoji autocomplete
+Why diverge from the TUI: the TUI has a char cursor so "open the ref under cursor" is well-defined; the desktop only has a selected block, so **following a ref is the click on the token** (`onRefClick`) and `Enter` means edit.
 
 ### `:shortcode:` emoji autocomplete
 
@@ -334,8 +319,8 @@ Accept inserts the page title (or ISO slug for journals).
 
 The `((` counterpart of `[[page]]` (issue #116).
 Inside an open `((…))`, `BlockRow` shows `BlockSuggestPopup`, reusing `detectRefContext` (`kind: "block"`) / `applySuggestion` plus `search_blocks` (`outl_md::WorkspaceIndex::search_block_text`).
-Rows show snippet + slug; the pick inserts the **ref handle** (`((blk-XXXXXX))`), never the text; empty query lists the newest blocks; mobile registers the command for parity, popup unwired.
-`search_blocks` rebuilds the index from disk, so it's debounced ~150ms; caching it in `AppState` is a follow-up.
+Rows show snippet + slug; the pick inserts the **ref handle** (`((blk-XXXXXX))`), never the text; mobile registers the command for parity, popup unwired.
+`search_blocks` rebuilds the index from disk, so it's debounced ~150ms.
 
 ### Clicking external `[label](url)` links
 
@@ -345,8 +330,15 @@ which scheme-guards to `http(s)`/`mailto` and opens in the system browser via **
 the capability grants a scoped `opener:allow-open-url` for `http`/`https`/`mailto` in `capabilities/default.json`).
 Failures (malformed URL, disallowed scheme) land on the status line via `appState.lastError`.
 The `[[ref]]` / `#tag` click handlers are unchanged (they navigate the workspace, not the browser).
-The opener call lives in the shared wrapper — not a custom Tauri command — so mobile can opt in later by registering the same plugin and passing `onLinkClick`.
+The opener call lives in the shared wrapper (not a custom Tauri command), so mobile can opt in later.
 Backlink rows stay inert (the whole row is already a navigate-to-source button; nesting a second click target would conflict).
+
+### `/template` slash entry
+
+The block-initial `/` menu lists native `template: <name>` rows (`templateSlashCommands`, `lib/slash-commands.ts`) that `OutlineView` runs via `instantiateTemplateAt`.
+Contract + backend: [`docs/clients.md` → Structural templates](../../docs/clients.md#structural-templates).
+
+In a `call:<name>` fence, `CodeFenceView`'s `CALL:<NAME>` chip links to the template page — `onOpenPage`→`openPageBySlug` (exact, not `openRef`), slug via `listTemplates()`; unknown name = inert chip.
 
 ## Plugins
 
@@ -450,12 +442,14 @@ Schema (`crates/outl-desktop/src-tauri/src/settings.rs::Settings`):
   "vim_mode": false,
   "theme": "auto",       // "light" | "dark" | "auto"
   "font_size": 15,
-  "sync_transport": "iroh"  // "iroh" (P2P, default) | "file" (iCloud/fs)
+  "sync_transport": "iroh",  // "iroh" (P2P, default) | "file" (iCloud/fs)
+  "backlinks_order": "newest"  // "newest" (default) | "oldest" — read-only, see below
 }
 ```
 
 The Sync transport select in `SettingsModal` writes `sync_transport`.
 `settings.rs` maps it to/from `[sync] transport` and preserves `relay_url` on save; takes effect on next launch.
+`backlinks_order` is read-only here — `save` restores it from disk (same pattern as `[calendar]`) so the modal can't clobber the dedicated `set_backlinks_order` command's write.
 
 The actor id (one per device) lives next to it as `actor` — a plain ULID.
 Switching workspaces does not rotate it.

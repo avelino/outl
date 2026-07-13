@@ -60,6 +60,16 @@ pub fn open_workspace_at(
     if let Err(e) = migrate_legacy_into_today(&mut workspace, hlc) {
         warn!("legacy migration: {e}");
     }
+    // Repair split-brain page/journal roots (two roots sharing one slug, e.g. a
+    // sidecar-less `.md` reconciled to a fresh id before the deterministic-id
+    // fix). Merges every duplicate's children under the canonical root and
+    // trashes the emptied duplicates — via Ops, so it converges across devices.
+    // Idempotent; a clean workspace is a no-op.
+    match outl_actions::merge_duplicate_slug_roots(&mut workspace, hlc) {
+        Ok(0) => {}
+        Ok(n) => warn!("merged {n} duplicate slug root(s) on boot"),
+        Err(e) => warn!("duplicate-slug-root repair: {e}"),
+    }
     if let Err(e) = open_today(&mut workspace, hlc) {
         warn!("could not pre-open today: {e}");
     }
@@ -68,6 +78,13 @@ pub fn open_workspace_at(
     // op in RAM to rebuild Yrs `Doc`s; afterwards cold ops come back
     // from disk via the offset index.
     workspace.apply_lru_cap(lru_cap);
+
+    // Snapshot boot-cache policy (#128/#109): as a long-lived client the
+    // GUI writes background snapshots so the next open (this app, the CLI,
+    // or a peer) boots from one instead of replaying the whole op log.
+    // Defaults (enabled, 10k) unless `[snapshot]` overrides them.
+    let snap_cfg = outl_config::load().snapshot;
+    workspace.set_snapshot_policy(snap_cfg.enabled, snap_cfg.op_threshold);
 
     Ok(workspace)
 }

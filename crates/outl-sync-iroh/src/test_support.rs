@@ -25,8 +25,33 @@ use outl_core::WorkspaceId;
 
 use crate::engine::{delta_sync, SyncProtocolHandler};
 use crate::engine_catchup::run_catch_up;
-use crate::peers::PeerEntry;
+use crate::peers::{workspace_peers_path, PeerEntry, PeersStore};
 use crate::protocol::SYNC_ALPN;
+
+/// Authorize `peer` as an approved device for the responder rooted at
+/// `workspace_root`, by writing a minimal [`PeerEntry`] into its
+/// `<root>/.outl/peers.json` — the same file real pairing writes.
+///
+/// The production `SyncProtocolHandler::serve` rejects any connection whose
+/// `remote_id()` is not in `peers.json` (issue #158). The loopback tests stand
+/// up two endpoints and sync them as a *paired* workspace, so each responder
+/// must know the initiator(s) it's expected to serve. Call this for every
+/// initiator node id before (or after) `spawn_responder`; a node id absent from
+/// this list is treated as unknown/revoked and refused, which is exactly what
+/// the security check tests assert.
+pub fn authorize_peer(workspace_root: &Path, peer: iroh::EndpointId) {
+    let path = workspace_peers_path(workspace_root);
+    let mut store = PeersStore::load_or_default(&path).expect("load peers store");
+    store
+        .add(PeerEntry {
+            node_id: peer.to_string(),
+            alias: None,
+            relay_url: None,
+            endpoint_addr: None,
+            added_at: "2026-01-01T00:00:00Z".to_string(),
+        })
+        .expect("authorize peer in peers.json");
+}
 
 /// Bind a sync-ALPN endpoint with the given identity, exactly like the
 /// transport's `run_iroh` does.
@@ -45,7 +70,65 @@ pub async fn bind_sync_endpoint(identity: &crate::IrohIdentity) -> Result<iroh::
         .context("bind sync endpoint")
 }
 
+/// A responder that completes the sync exchange up to — but NOT
+/// including — the durable-ingest `close(0, "done")`.
+///
+/// It sends a valid (empty) response + empty push, drains the
+/// initiator's frames so its writes all succeed, then closes with a
+/// **non-"done"** code WITHOUT ingesting. This simulates a
+/// suspended-iPhone / carrier-NAT-drop peer: the connection completes
+/// cleanly for the initiator, but the peer never durably persisted the
+/// push. Used to prove `delta_sync` does NOT report success in that
+/// case (the false-"catch-up: sync ok" bug).
+#[derive(Debug, Clone)]
+struct HalfResponder;
+
+impl iroh::protocol::ProtocolHandler for HalfResponder {
+    async fn accept(
+        &self,
+        conn: iroh::endpoint::Connection,
+    ) -> std::result::Result<(), iroh::protocol::AcceptError> {
+        let Ok((mut send, mut recv)) = conn.accept_bi().await else {
+            return Ok(());
+        };
+        // Send a valid response + empty push so the initiator proceeds
+        // all the way through pushing its own ops.
+        let response = crate::protocol::SyncResponse {
+            vector_clock: std::collections::HashMap::new(),
+        };
+        if let Ok(bytes) = crate::protocol::encode_response(&response) {
+            let _ = send.write_all(&bytes).await;
+        }
+        if let Ok(bytes) = crate::protocol::encode_ops_blob(&[]) {
+            let _ = send.write_all(&bytes).await;
+        }
+        let _ = send.finish();
+        // Drain the initiator's request + push so ITS writes succeed
+        // (the connection looks healthy from the initiator's side) — but
+        // never ingest, and close with a code that is NOT the "done"
+        // durable-ingest sentinel.
+        let _ = recv.read_to_end(16 * 1024 * 1024).await;
+        conn.close(9u32.into(), b"early-no-ingest");
+        Ok(())
+    }
+}
+
+/// Mount a `HalfResponder` (completes the exchange but never confirms
+/// durable ingest) on a `Router`. See the `HalfResponder` doc.
+pub fn spawn_half_responder(endpoint: iroh::Endpoint) -> Router {
+    Router::builder(endpoint)
+        .accept(SYNC_ALPN, HalfResponder)
+        .spawn()
+}
+
 /// Mount the production `SyncProtocolHandler` on a `Router` and return it.
+///
+/// `authorized_peers` is seeded into the responder's `peers.json` before the
+/// handler goes up, mirroring a real paired relationship: the production serve
+/// side refuses any connection whose `remote_id()` is not an approved peer
+/// (issue #158). Pass every initiator node id the responder is expected to
+/// serve; pass an empty slice to stand up a responder that trusts nobody (used
+/// by the revocation regression test to prove an unknown peer is rejected).
 ///
 /// Keep the returned `Router` alive for as long as the responder must accept
 /// connections; drop it (or call `shutdown()`) to stop serving.
@@ -55,7 +138,11 @@ pub fn spawn_responder(
     workspace_id: WorkspaceId,
     actor: ActorId,
     peer_ready_tx: std::sync::mpsc::Sender<()>,
+    authorized_peers: &[iroh::EndpointId],
 ) -> Router {
+    for peer in authorized_peers {
+        authorize_peer(&workspace_root, *peer);
+    }
     Router::builder(endpoint)
         .accept(
             SYNC_ALPN,
@@ -105,6 +192,12 @@ pub async fn run_delta_sync(
 /// prove "a peer added AFTER the loop started gets caught up" over real QUIC.
 ///
 /// Runs until the spawned task is dropped/aborted (the loop never returns).
+///
+/// `wid_changed`: `Some(rx)` wires the workspace-id-change broadcast so a test
+/// can prove the loop **clears its per-session `synced` dedup and re-dials**
+/// when the joiner adopts the host's id at runtime; `None` drives a fixed id and
+/// asserts plain convergence (the adoption path is covered by
+/// `catch_up_redials_after_workspace_id_change`).
 #[allow(clippy::too_many_arguments)]
 pub async fn run_catch_up_loop<F>(
     endpoint: iroh::Endpoint,
@@ -115,6 +208,7 @@ pub async fn run_catch_up_loop<F>(
     workspace_id: WorkspaceId,
     actor: ActorId,
     peer_ready_tx: std::sync::mpsc::Sender<()>,
+    wid_changed: Option<tokio::sync::broadcast::Receiver<WorkspaceId>>,
 ) where
     F: FnMut() -> Vec<iroh::EndpointAddr>,
 {
@@ -134,50 +228,7 @@ pub async fn run_catch_up_loop<F>(
         // dedup inside the loop is what the test exercises).
         std::sync::Arc::new(tokio::sync::Mutex::new(())),
         None,
-        // No workspace-id-change signal in this harness: the catch-up regression
-        // test drives a fixed id and asserts plain convergence. The adoption →
-        // re-dial path is covered by `catch_up_redials_after_workspace_id_change`.
-        None,
-    )
-    .await
-}
-
-/// Like [`run_catch_up_loop`], but wired to a workspace-id-change broadcast so a
-/// test can prove the catch-up loop **clears its per-session `synced` dedup and
-/// re-dials** when the joiner adopts the host's id at runtime (the resume-sync
-/// item 2 fix).
-///
-/// The caller holds the matching [`tokio::sync::broadcast::Sender`]: it seeds a
-/// peer, lets the loop sync it once (peer goes into `synced`), adds more ops to
-/// that peer, then fires the sender — without which the loop would never re-dial
-/// the already-synced peer and the new ops would never land.
-#[allow(clippy::too_many_arguments)]
-pub async fn run_catch_up_loop_with_wid_change<F>(
-    endpoint: iroh::Endpoint,
-    period: Duration,
-    resync_after: Duration,
-    resolve_peers: F,
-    workspace_root: PathBuf,
-    workspace_id: WorkspaceId,
-    actor: ActorId,
-    peer_ready_tx: std::sync::mpsc::Sender<()>,
-    wid_changed: tokio::sync::broadcast::Receiver<WorkspaceId>,
-) where
-    F: FnMut() -> Vec<iroh::EndpointAddr>,
-{
-    run_catch_up(
-        endpoint,
-        period,
-        resync_after,
-        resolve_peers,
-        workspace_root,
-        Arc::new(RwLock::new(workspace_id)),
-        actor,
-        peer_ready_tx,
-        None,
-        std::sync::Arc::new(tokio::sync::Mutex::new(())),
-        None,
-        Some(wid_changed),
+        wid_changed,
     )
     .await
 }

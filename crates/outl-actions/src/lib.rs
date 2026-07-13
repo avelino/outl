@@ -50,6 +50,7 @@
 #![warn(missing_docs)]
 
 pub mod backlinks;
+pub mod backlinks_sort;
 pub mod block;
 pub mod clipboard;
 pub mod clock;
@@ -63,16 +64,20 @@ pub mod history;
 pub mod journal;
 pub mod outline;
 pub mod page;
+pub mod page_merge;
+pub mod page_repair_titles;
 pub mod paste;
 pub mod person;
 pub mod quote;
 pub mod resolve;
 pub mod storage_scope;
 pub mod sync;
+pub mod template;
 pub mod todo;
 pub mod tree;
 
 pub use backlinks::{backlinks_for_page, backlinks_for_target, extract_refs, Backlink};
+pub use backlinks_sort::sort_backlinks;
 pub use block::{
     append_block, append_forest, append_tree, create_after, create_after_or_append, create_before,
     create_under, delete, edit_text, indent, move_after, move_down, move_under, move_up, outdent,
@@ -92,8 +97,9 @@ pub use exec::{run_code_block, ExecOutputDto, RunCodeBlockOutcome};
 pub use history::{restore_page_md, HistoryStacks, DEFAULT_HISTORY_CAP};
 pub use journal::{
     apply_all_pages_md, apply_page_md, apply_page_md_with_sidecar,
-    apply_page_md_with_sidecar_if_absent, journals_dir, mutate_page_md, page_md_path, pages_dir,
-    remove_page_projection, render_block_md, render_page_md, write_md_atomic,
+    apply_page_md_with_sidecar_if_absent, apply_page_md_with_sidecar_if_stale, journals_dir,
+    mutate_page_md, page_md_path, pages_dir, remove_page_projection, render_block_md,
+    render_page_md, write_md_atomic,
 };
 pub use outl_md::parse::{ParseWarning, ParseWarningKind};
 pub use outline::{
@@ -103,9 +109,11 @@ pub use outline::{
 };
 pub use page::{
     delete as delete_page, find_by_slug, is_valid_slug, list_all as list_pages,
-    migrate_legacy_into_today, open_journal, open_or_create as open_or_create_page, open_today,
-    page_meta, read_text_prop, set_property, today, PageKind, PageMeta,
+    merge_duplicate_slug_roots, migrate_legacy_into_today, open_journal,
+    open_or_create as open_or_create_page, open_today, page_meta, read_text_prop, set_property,
+    today, PageKind, PageMeta,
 };
+pub use page_repair_titles::repair_doubled_journal_titles;
 pub use paste::{
     looks_like_outline, normalize_external_syntax, paste_markdown, paste_plain, PasteAnchor,
     PasteOutcome,
@@ -113,6 +121,10 @@ pub use paste::{
 pub use person::{search_persons, PERSON_TYPE, TYPE_KEY};
 pub use resolve::{open_or_create_by_name, open_or_create_by_ref};
 pub use sync::{FileSyncTransport, OpsFileSnapshot, PeerHealthSnapshot, SyncEngine, SyncTransport};
+pub use template::{
+    instantiate_template, list_templates, parse_call_invocation, resolve_call, run_callable_block,
+    TemplateEntry, FROM_TEMPLATE_KEY, JOURNAL_TEMPLATE_NAME, PARAMS_KEY, TEMPLATE_KEY,
+};
 pub use todo::{cycle_todo, split_todo, TodoState, DONE_PREFIX, TODO_PREFIX};
 pub use tree::{
     children_of, enclosing_page_id, position_after, position_for_new_last_child, walk_subtree,
