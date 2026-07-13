@@ -1,7 +1,7 @@
 ---
 description: Measures coverage in outl-core via cargo-llvm-cov. Focuses on the 4 critical functions (do_op, undo_op, apply_op, creates_cycle) that must be at 100%.
 allowed-tools: Bash(cargo llvm-cov:*), Bash(cargo install:*)
-argument-hint: [crate] (default: outl-core)
+argument-hint: "[crate] (default: outl-core)"
 ---
 
 Target: `${1:-outl-core}`
