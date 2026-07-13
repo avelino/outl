@@ -41,6 +41,7 @@
     "./outline": "./src/outline/index.ts",
     "./paste": "./src/paste/index.ts",
     "./plugins/transformer-registry": "./src/plugins/transformer-registry.ts",
+    "./toolbar": "./src/toolbar/index.ts",
     "./autocomplete": "./src/autocomplete/index.ts",
     "./highlight": "./src/highlight/index.ts",
     "./highlight/styles": "./src/highlight/styles.css",

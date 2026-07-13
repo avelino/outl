@@ -20,6 +20,7 @@
  * — UIKit isn't there to read it, but Solid keeps the visual editor
  * consistent.
  */
+import { createSignal } from "solid-js";
 import type { EmojiHit } from "@outl/shared/api/commands";
 import type { PageMeta } from "@outl/shared/api/types";
 import { refReplacement } from "@outl/shared/autocomplete";
@@ -93,13 +94,27 @@ export function buildEmojiShowMessage(hits: EmojiHit[]): SuggesterShowMessage {
 export const HIDE_MESSAGE: SuggesterHideMessage = { action: "hide" };
 
 /**
- * Publish the next state UIKit will pick up on its poll tick. Pass
- * `null` to clear (suggester becomes inert).
+ * Reactive mirror of the published suggester state, for the **web** chip
+ * strip (`<SuggesterStrip />`, Android). The iOS native strip polls the
+ * `window` global instead; a single setter (`setNativeSuggesterState`)
+ * feeds both so the two rendering paths can never disagree.
+ */
+const [suggesterState, setSuggesterSignal] =
+  createSignal<SuggesterMessage | null>(null);
+
+/** Accessor for the web chip strip to render reactively. */
+export const nativeSuggesterState = suggesterState;
+
+/**
+ * Publish the next state. The iOS native strip picks it up off
+ * `window.__outlSuggesterState` on its next poll tick; the web strip
+ * reacts to the signal. Pass `null` to clear (suggester becomes inert).
  */
 export function setNativeSuggesterState(
   state: SuggesterMessage | null,
 ): void {
   (window as WindowWithBridge).__outlSuggesterState = state;
+  setSuggesterSignal(state);
 }
 
 /** Read the current published state. Mostly for tests. */

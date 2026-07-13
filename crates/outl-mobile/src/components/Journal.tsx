@@ -84,7 +84,10 @@ import {
   registerPickedCallback,
   setNativeSuggesterState,
 } from "../lib/native-suggester";
+import { platform } from "@tauri-apps/plugin-os";
+import type { ToolbarAction } from "@outl/shared/toolbar";
 import { Calendar } from "./Calendar";
+import { KeyboardAccessory } from "./KeyboardAccessory";
 import { DevicesSheet } from "./DevicesSheet";
 import { PluginSheet } from "./PluginSheet";
 import { PluginViewOverlay } from "./PluginViewOverlay";
@@ -101,7 +104,20 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { TemplateSheet } from "./TemplateSheet";
 import { Toast } from "./Toast";
 
+/** Whether this build runs on Android. The web keyboard accessory bar
+ *  mounts only here; iOS keeps its native `OutlToolbarView` until the web
+ *  bar is device-validated. `platform()` throws in a plain-browser dev
+ *  server (no Tauri), so default to false there. */
+function detectAndroid(): boolean {
+  try {
+    return platform() === "android";
+  } catch {
+    return false;
+  }
+}
+
 export function Journal() {
+  const isAndroid = detectAndroid();
   const [view, setView] = createSignal<PageView | null>(null);
   const [loaded, setLoaded] = createSignal(false);
   const [refreshing, setRefreshing] = createSignal(false);
@@ -604,60 +620,68 @@ export function Journal() {
    * `window.__outlToolbar(action)` and we map each action onto the
    * existing handler.
    */
+  /**
+   * Single dispatch for a toolbar action, shared by the two surfaces that
+   * fire them: the iOS native bar (via `window.__outlToolbar`) and the web
+   * `<KeyboardAccessory />` (Android). Keeping one switch means the two
+   * bars can't drift on what a button does.
+   */
+  function dispatchToolbarAction(action: string) {
+    const id = editingId();
+    switch (action) {
+      case "indent":
+        if (id) handleIndent(id);
+        return;
+      case "outdent":
+        if (id) handleOutdent(id);
+        return;
+      case "moveUp":
+        if (id) handleMoveUp(id);
+        return;
+      case "moveDown":
+        if (id) handleMoveDown(id);
+        return;
+      case "todo":
+        if (id) handleToggleTodo(id);
+        return;
+      case "delete":
+        if (id) handleDelete(id);
+        return;
+      case "newLine":
+        if (id) {
+          handleCreateAfter(id);
+        } else {
+          handleAppendBlock();
+        }
+        return;
+      case "bold":
+        wrapSelection("bold");
+        return;
+      case "italic":
+        wrapSelection("italic");
+        return;
+      case "code":
+        wrapSelection("code");
+        return;
+      case "insertRef":
+        insertAtCursor("pair", "[[", "]]");
+        return;
+      case "insertBlock":
+        insertAtCursor("pair", "((", "))");
+        return;
+      case "insertHash":
+        insertAtCursor("text", "#");
+        return;
+      case "done":
+        if (editingId()) commitEdit();
+        return;
+    }
+  }
+
   function registerNativeToolbarBridge() {
     (window as unknown as {
       __outlToolbar?: (action: string) => void;
-    }).__outlToolbar = (action: string) => {
-      const id = editingId();
-      switch (action) {
-        case "indent":
-          if (id) handleIndent(id);
-          return;
-        case "outdent":
-          if (id) handleOutdent(id);
-          return;
-        case "moveUp":
-          if (id) handleMoveUp(id);
-          return;
-        case "moveDown":
-          if (id) handleMoveDown(id);
-          return;
-        case "todo":
-          if (id) handleToggleTodo(id);
-          return;
-        case "delete":
-          if (id) handleDelete(id);
-          return;
-        case "newLine":
-          if (id) {
-            handleCreateAfter(id);
-          } else {
-            handleAppendBlock();
-          }
-          return;
-        case "bold":
-          wrapSelection("bold");
-          return;
-        case "italic":
-          wrapSelection("italic");
-          return;
-        case "code":
-          wrapSelection("code");
-          return;
-        case "insertRef":
-          insertAtCursor("pair", "[[", "]]");
-          return;
-        case "insertBlock":
-          insertAtCursor("pair", "((", "))");
-          return;
-        case "insertHash":
-          insertAtCursor("text", "#");
-          return;
-        case "done":
-          if (editingId()) commitEdit();
-          return;
-      }
-    };
+    }).__outlToolbar = dispatchToolbarAction;
   }
 
   async function withError<T>(fn: () => Promise<T>): Promise<T | undefined> {
@@ -1502,6 +1526,14 @@ export function Journal() {
           </svg>
         </button>
       </Show>
+
+      {/* Web keyboard accessory bar (suggester strip + edit toolbar).
+          Android only — iOS keeps its native `OutlToolbarView`. Both
+          surfaces fire the same `dispatchToolbarAction`. */}
+      <KeyboardAccessory
+        active={isAndroid && editingId() !== null}
+        onAction={(action: ToolbarAction) => dispatchToolbarAction(action)}
+      />
 
       {/* Ghost textarea kept off-screen, focused inside tap handlers
           to preserve iOS keyboard state across async work. */}

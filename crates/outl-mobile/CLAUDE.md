@@ -208,6 +208,14 @@ Rich `text/html` converts via `htmlToOutlMarkdown` (`@outl/shared/paste`); plain
 
 The long-press context menu's "Copy" action calls `copy_markdown` (`commands/block.rs` → `outl_actions::copy_markdown`), serialising the block and its full subtree as clean outl markdown to the iOS clipboard.
 
+## Keyboard accessory bar (Android web bar / iOS native bar)
+
+The keyboard toolbar + suggester strip have two renderings.
+iOS is native (`OutlToolbarView` swizzled onto `WKContentView`), untouched.
+Android is web: `KeyboardAccessory.tsx` → `<SuggesterStrip />` + `<KeyboardToolbar />`, gated in `Journal.tsx` on `isAndroid && editingId()`.
+Catalog + MFU are shared in `@outl/shared/toolbar` (port of `swift/OutlKit/Toolbar/*`); the action ids are the `window.__outlToolbar(action)` wire contract, so the Swift and TS catalogs stay byte-identical until the native bar retires.
+Full convention (shared `dispatchToolbarAction`, the two invariants): [`docs/clients.md` → Keyboard accessory bar](../../docs/clients.md#keyboard-accessory-bar-mobile).
+
 ## Code execution (`run_code_block`)
 
 Long-press a `` ```lang …``` `` block → "Run `<lang>`" fires `runCodeBlock`.
@@ -256,42 +264,32 @@ Content is `srcdoc={html}` (no network), fullscreen, `pointer-events: none`, aut
 
 The overlay exposes an imperative `push(html)` via its `bind` prop.
 `Journal.tsx` holds it as `pushPluginView` and feeds it from `showPluginViews(views)` at every source: `PluginSheet`'s `onViews`, `commitEdit`'s `pluginSyncHooks` reply, and `runToolbarButton`.
-**End-to-end:** block → DONE → `commitEdit` → `plugin_sync_hooks` → confetti plugin's `onOp` emits HTML → `showPluginViews` → iframe overlay → confetti.
+**End-to-end:** block → DONE → `commitEdit` → `plugin_sync_hooks` → `onOp` emits HTML → `showPluginViews` → iframe overlay.
 
-The sandbox attrs + auto-removal are pinned by `PluginViewOverlay.test.ts` (Vitest + happy-dom).
-`plugin_service.rs` unit tests cover list / toolbar / transformer / run / unknown-command / empty-host; a real plugin load + the sheet UI + iframe overlay only exercise under `cargo tauri ios dev`.
+The sandbox attrs + auto-removal are pinned by `PluginViewOverlay.test.ts`; `plugin_service.rs` unit-tests the host surface.
+A real plugin load + iframe overlay only exercise under `cargo tauri ios dev`.
 
 ### Content transformers (custom-language fences)
 
-A plugin transformer claims a code-fence language and turns the body into a render descriptor (`{kind, content}`).
-`Journal.tsx`'s `onMount` calls `loadTransformers()` (`@outl/shared/plugins/transformer-registry`) once when the workspace opens, filling a module signal keyed by `lang` (best-effort — failure leaves fences as plain code).
-`BlockRow`'s fence branch looks the language up via `transformerFor(lang)`; a match renders `<PluginFence />`, falling back to plain `<HighlightedCode />` while loading or on decline.
-`<PluginFence />` runs `pluginTransform(...)` through `runTransform`, **cached by `(block id, body)`** so it runs at most once per distinct body (editing invalidates; a `null` decline is cached too).
-Render by `kind`: `text` → inline preformatted text (no frontend markdown-string tokenizer — backend-only in `outl_md`).
-`rich` → HTML in a persistent **inline** sandboxed `<iframe>` (`allow-scripts`, never `allow-same-origin` — same posture as `<PluginViewOverlay />`).
-The registry + cache glue is shared with the desktop in `@outl/shared/plugins/transformer-registry`, alongside the DTO shapes + `invoke()` wrappers in `@outl/shared/api`.
+A transformer claims a fence language and turns the body into a `{kind, content}` descriptor.
+The registry + `(block id, body)` cache glue is shared with the desktop in `@outl/shared/plugins/transformer-registry` (see [`outl-desktop/CLAUDE.md` → Plugins](../outl-desktop/CLAUDE.md#plugins)).
+Mobile just wires it: `Journal.tsx`'s `onMount` calls `loadTransformers()`, and `BlockRow`'s fence branch renders `<PluginFence />` on a `transformerFor(lang)` match (else plain `<HighlightedCode />`).
+`rich` output lands in an inline sandboxed `<iframe>` — `allow-scripts`, never `allow-same-origin`, same posture as `<PluginViewOverlay />`.
 
 ## Peer / device management (`outl_peer_list` / `outl_peer_remove`)
 
-`commands/peers.rs` exposes two Tauri commands that read and edit the iroh
-peers file (`<workspace>/.outl/peers.json`) via `outl_sync_iroh::PeersStore`:
+`commands/peers.rs` exposes two Tauri commands over the iroh peers file (`<workspace>/.outl/peers.json`, via `outl_sync_iroh::PeersStore`):
 
-- `outl_peer_list() -> Vec<PeerDto>` — lists paired devices (`node_id`,
-  `alias`, `added_at`).
-- `outl_peer_remove(id: String) -> bool` — removes peers whose `node_id`
-  starts with the given prefix; `true` if any matched.
+- `outl_peer_list() -> Vec<PeerDto>` — lists paired devices (`node_id`, `alias`, `added_at`).
+- `outl_peer_remove(id: String) -> bool` — removes peers whose `node_id` starts with the prefix; `true` if any matched.
 
-The peer list is per-**graph**: it lives at `<workspace_root>/.outl/peers.json`
-(resolved from `AppState::storage_root` via `outl_sync_iroh::workspace_peers_path`),
-NOT next to the device identity.
-The device `identity.key` stays per-**install** in the Tauri app local data dir
-([`iroh_sync::iroh_dir`]) — one node id per install.
+The peer list is per-**graph** (resolved from `AppState::storage_root` via `outl_sync_iroh::workspace_peers_path`), NOT next to the device identity.
+The device `identity.key` stays per-**install** in the Tauri app local data dir ([`iroh_sync::iroh_dir`]) — one node id per install.
 Each command runs `migrate_global_peers_if_absent` first, so a legacy global
 `~/.outl/peers.json` is copied into the workspace once on first open.
 These are the **only** commands that touch `peers.json` directly instead of
-the workspace lock — peer pairing is sync-transport state, but the list is
-graph-scoped, so they read `storage_root` without going through
-`outl-actions`.
+the workspace lock — the list is graph-scoped sync-transport state, so they
+read `storage_root` without going through `outl-actions`.
 
 `commands/peers.rs` also exposes `outl_sync_now()` (reads `state.iroh`, calls the transport's `sync_now()`) — the force-sync trigger behind the refresh button.
 

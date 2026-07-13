@@ -221,6 +221,27 @@ Multi-line quote bodies keep the `> ` on every continuation line so the `.md` st
 Children of a quoted block are **not** implicitly quoted — the marker lives on the block, not on its subtree.
 Inline tokens (`**bold**`, `[[ref]]`, `#tag`, `((blk-…))`) continue to tokenize **inside** the body — the wrapper is transparent.
 
+## Keyboard accessory bar (mobile)
+
+The edit toolbar docked above the soft keyboard — a Bear-style pill of `+` / indent / bold / `[[` / TODO / delete / hide-keyboard — plus the ref/emoji chip strip, exist in **two renderings**.
+iOS is native: `OutlToolbarView` supplied as the private `WKContentView`'s `inputAccessoryView` via the `OutlSwizzle` swizzle, suggester in `OutlSuggestOverlay` / `OutlSuggestView`.
+Android (and iOS later) is web: `KeyboardAccessory.tsx` renders `<SuggesterStrip />` + `<KeyboardToolbar />` in the webview, bottom-anchored at `useKeyboardInset()`, gated on `isAndroid && editingId() !== null`.
+There is no web equivalent to iOS's docked accessory view, so the native bar stays until the web one is proven on a device.
+
+The logic is shared, never triplicated.
+The action catalog + most-frequently-used ordering live in `@outl/shared/toolbar`, a port of `crates/outl-mobile/swift/OutlKit/Toolbar/{ToolbarAction,ToolbarMFU}.swift`.
+The action string ids (`newLine`, `indent`, `todo`, …) are the wire contract the iOS native bar ships to JS via `window.__outlToolbar(action)`.
+So the Swift `ToolbarAction` copy and the TS catalog stay byte-identical — rename on both sides in one commit — until the native bar retires.
+Both bars dispatch through the same `Journal.tsx` `dispatchToolbarAction` (the native bridge just assigns it to `window.__outlToolbar`).
+Both accept a chip through the same `window.__outlSuggesterPicked` callback.
+The web strip reads the reactive `nativeSuggesterState` signal that `setNativeSuggesterState` feeds alongside the `window.__outlSuggesterState` global the native strip polls.
+
+Two invariants the web bar must keep.
+Every button calls `e.preventDefault()` on `onPointerDown` so the tap can't blur the textarea and dismiss the keyboard.
+`AndroidManifest.xml`'s activity sets `android:windowSoftInputMode="adjustResize"`.
+With the `interactive-widget=resizes-content` meta the visual viewport then shrinks on keyboard show and `useKeyboardInset()` collapses to ~0, so `bottom: inset` rests the bar on the keys; drop `adjustResize` and it floats behind the keyboard.
+Validation needs an Android device/emulator build — docking and `visualViewport` don't exercise under host `cargo check` or `bun run dev`.
+
 ## Backlinks order (issue #142)
 
 Every client sorts the "Linked from" list the same way: `outl_actions::sort_backlinks` groups backlinks by source page (each page's blocks stay contiguous, in document order) and orders the pages by how recently each was referenced.
