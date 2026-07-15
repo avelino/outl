@@ -104,6 +104,36 @@ pub fn default_bindings() -> Vec<Binding> {
         Binding::new(meta(','), Global, Action::OpenSettings, "Open settings"),
         Binding::new(meta('['), Global, Action::PrevDay, "Previous journal day"),
         Binding::new(meta(']'), Global, Action::NextDay, "Next journal day"),
+        // Zoom into / out of a block for the non-vim desktop. Mirrors the
+        // `Cmd+[`/`Cmd+]` day-navigation pair one dimension over: plain
+        // brackets walk days, `Shift`+brackets walk the block hierarchy.
+        // `]` = deeper (zoom in), `[` = back out, matching the browser
+        // back/forward convention. Dual-spelled META + CTRL because the
+        // desktop adapter never rewrites `Cmd`↔`Ctrl`.
+        Binding::new(
+            shift_meta_ch(']'),
+            Global,
+            Action::ZoomIn,
+            "Zoom in on block (Cmd+Shift+])",
+        ),
+        Binding::new(
+            shift_ctrl_ch(']'),
+            Global,
+            Action::ZoomIn,
+            "Zoom in on block (Ctrl+Shift+])",
+        ),
+        Binding::new(
+            shift_meta_ch('['),
+            Global,
+            Action::ZoomOut,
+            "Zoom out (Cmd+Shift+[)",
+        ),
+        Binding::new(
+            shift_ctrl_ch('['),
+            Global,
+            Action::ZoomOut,
+            "Zoom out (Ctrl+Shift+[)",
+        ),
         Binding::new(ctrl('c'), Global, Action::Quit, "Quit"),
         // Toggle TODO/DONE.
         // - Desktop: `Cmd+Enter` and `Cmd+T` (Global). Both fire
@@ -360,6 +390,17 @@ pub fn default_bindings() -> Vec<Binding> {
             Action::CenterViewport,
             "Center viewport on cursor (zz)",
         ),
+        // Zoom / focus chord family. `z i` descends into the selected
+        // block (it becomes the outline root); `z o` pops back up one
+        // level. Same `z*` namespace as the view ops above — zoom is
+        // viewport state, not editing.
+        Binding::new(
+            pair('z', 'i'),
+            Normal,
+            Action::ZoomIn,
+            "Zoom in on block (zi)",
+        ),
+        Binding::new(pair('z', 'o'), Normal, Action::ZoomOut, "Zoom out (zo)"),
         // Visual re-select + range indent / outdent.
         Binding::new(
             pair('g', 'v'),

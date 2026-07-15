@@ -123,6 +123,10 @@ impl App {
         // stale `Focus::Backlink { idx, … }` across pages would point
         // at the wrong backlink list (the new page has its own).
         self.focus = Focus::Outline;
+        // A zoom root is a path into the *previous* page's AST — it
+        // means nothing on the freshly-loaded one, so every view switch
+        // resets the zoom back to the whole page.
+        self.zoom_stack.clear();
         // Rebuild the flat-index → NodeId mapping from the sidecar
         // (sidecar blocks are already DFS-preorder, so they line up
         // with the render walk's `cursor`) and hydrate the collapsed

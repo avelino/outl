@@ -53,9 +53,16 @@ pub(crate) fn render_outline(
     // a mouse click can resolve a screen row back to the block it landed
     // on (see `App::block_at_visual_line`).
     let mut block_starts: Vec<(usize, usize)> = Vec::new();
-    for block in &p.blocks {
+    // Zoom (Roam/Workflowy): when the user has zoomed into a block, draw
+    // only that block's subtree. We render the single root node instead
+    // of every top-level block; `cursor` still counts from 0 in whole-
+    // page DFS order (advanced through the skipped prefix first) so
+    // `selected` / `id_by_flat` / `block_starts` keep their whole-page
+    // indices — the zoom is a render window, not a re-indexing.
+    if let Some((root, root_index)) = app.zoom_root_node() {
+        cursor = root_index;
         render_block(
-            block,
+            root,
             0,
             &mut cursor,
             app,
@@ -64,6 +71,19 @@ pub(crate) fn render_outline(
             &mut block_starts,
             text_width,
         );
+    } else {
+        for block in &p.blocks {
+            render_block(
+                block,
+                0,
+                &mut cursor,
+                app,
+                &mut out,
+                &mut selected_line,
+                &mut block_starts,
+                text_width,
+            );
+        }
     }
     (out, selected_line, block_starts)
 }

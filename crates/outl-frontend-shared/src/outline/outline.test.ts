@@ -9,6 +9,7 @@ import {
   flattenNodes,
   flattenParents,
   flattenVisible,
+  focusSubtree,
   isInVisualRange,
   nextVisibleId,
   previousVisibleId,
@@ -315,5 +316,52 @@ describe("visualRangeSet", () => {
     expect(visualRangeSet(null, "b", tree)).toBeNull();
     expect(visualRangeSet("b", null, tree)).toBeNull();
     expect(visualRangeSet("b", "ghost", tree)).toBeNull();
+  });
+});
+
+describe("focusSubtree", () => {
+  // a
+  //   a1
+  //     a1x
+  //   a2
+  // b
+  const tree = [
+    block("a", {
+      children: [
+        block("a1", { children: [block("a1x")] }),
+        block("a2"),
+      ],
+    }),
+    block("b"),
+  ];
+
+  it("returns the subtree and breadcrumb for a nested block", () => {
+    const fv = focusSubtree(tree, "a1");
+    expect(fv).not.toBeNull();
+    expect(fv?.root.id).toBe("a1");
+    // subtree carries its own children
+    expect(fv?.root.children.map((c) => c.id)).toEqual(["a1x"]);
+    // breadcrumb is page-top first, immediate parent last
+    expect(fv?.breadcrumb.map((c) => c.id)).toEqual(["a"]);
+  });
+
+  it("gives an empty breadcrumb for a top-level block", () => {
+    const fv = focusSubtree(tree, "b");
+    expect(fv?.root.id).toBe("b");
+    expect(fv?.breadcrumb).toEqual([]);
+  });
+
+  it("builds a top-down breadcrumb down a deep chain", () => {
+    const fv = focusSubtree(tree, "a1x");
+    expect(fv?.root.id).toBe("a1x");
+    expect(fv?.breadcrumb.map((c) => c.id)).toEqual(["a", "a1"]);
+  });
+
+  it("returns null for an unknown id (stale zoom target)", () => {
+    expect(focusSubtree(tree, "ghost")).toBeNull();
+  });
+
+  it("returns null for an empty outline", () => {
+    expect(focusSubtree([], "a")).toBeNull();
   });
 });

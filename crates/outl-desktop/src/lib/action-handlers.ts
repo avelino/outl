@@ -47,6 +47,7 @@ import {
   flattenAll,
   flattenParents,
   flattenVisible,
+  focusSubtree,
   nextVisibleId,
   previousVisibleId,
   visualRangeIds,
@@ -95,6 +96,18 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
   function backlinkBlockIds(): string[] {
     if (!appState.backlinksOpen) return [];
     return appState.backlinks.map((b) => b.block_id);
+  }
+
+  /** Blocks the selection cursor is allowed to traverse. When zoomed
+   *  (`focusBlockId` set and still present), the focused block is the
+   *  header title, so the cursor traverses its **children** (the visible
+   *  body) — matching what `<OutlineView />` renders. Otherwise the
+   *  whole page. A stale focus falls back to the full outline. */
+  function navBlocks(): BlockNode[] {
+    const id = appState.focusBlockId;
+    if (!id) return appState.outline;
+    const fv = focusSubtree(appState.outline, id);
+    return fv ? fv.root.children : appState.outline;
   }
 
   /** Find a block in the outline by id; deep search. */
@@ -344,8 +357,9 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
         return;
       }
       const cur = appState.selectedBlockId;
-      const list = flattenVisible(appState.outline);
-      const next = nextVisibleId(cur, appState.outline);
+      const nav = navBlocks();
+      const list = flattenVisible(nav);
+      const next = nextVisibleId(cur, nav);
       const atLast = cur !== null && next === cur;
       if (atLast && backlinkIds.length > 0) {
         // Cross into the backlinks section.
@@ -369,7 +383,7 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
         }
         // First backlink → step back into the outline's last
         // visible block.
-        const list = flattenVisible(appState.outline);
+        const list = flattenVisible(navBlocks());
         if (list.length > 0) {
           setAppState("selectedBacklinkBlockId", null);
           setAppState("selectedBlockId", list[list.length - 1]);
@@ -377,8 +391,9 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
         return;
       }
       const cur = appState.selectedBlockId;
-      const list = flattenVisible(appState.outline);
-      const prev = previousVisibleId(cur, appState.outline);
+      const nav = navBlocks();
+      const list = flattenVisible(nav);
+      const prev = previousVisibleId(cur, nav);
       console.info(
         `[shortcuts] SelectionUp cur=${cur} → ${prev} (idx ${list.indexOf(cur ?? "")} → ${list.indexOf(prev ?? "")} of ${list.length})`,
       );
@@ -810,6 +825,32 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
     },
     FoldAll: async () => {
       await applyCollapsedToAll(true);
+    },
+
+    // ── Zoom / focus (z i / z o, Cmd+Shift+] / Cmd+Shift+[) ───────
+    //
+    // View-state only: `focusBlockId` slices the outline via
+    // `focusSubtree` at render time; no op, no backend round-trip. The
+    // breadcrumb click targets in `<OutlineView />` set the same signal.
+    ZoomIn: () => {
+      const id = appState.selectedBlockId;
+      if (!id) return;
+      setAppState("focusBlockId", id);
+    },
+    // The desktop keeps no zoom stack; pop one level by reading the
+    // current focus's breadcrumb — its last crumb is the parent to zoom
+    // to, and an empty breadcrumb means the focused block is top-level,
+    // so zooming out exits to the full page. A stale focus (block gone)
+    // also exits.
+    ZoomOut: () => {
+      const id = appState.focusBlockId;
+      if (!id) return;
+      const fv = focusSubtree(appState.outline, id);
+      if (fv && fv.breadcrumb.length > 0) {
+        setAppState("focusBlockId", fv.breadcrumb[fv.breadcrumb.length - 1].id);
+      } else {
+        setAppState("focusBlockId", null);
+      }
     },
 
     // ── Viewport (zz) ────────────────────────────────────────────

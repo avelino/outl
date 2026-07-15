@@ -48,6 +48,13 @@ interface BlockRowProps {
   onIndent: (id: string) => void;
   onOutdent: (id: string) => void;
   onCreateAfter: (id: string) => void;
+  /**
+   * Zoom in on this block (Roam/Workflowy focus). Tapping a plain
+   * bullet dot makes the block the outline root. Optional so a client
+   * that doesn't support zoom can omit it (the dot falls back to its
+   * mark-as-TODO tap).
+   */
+  onFocusBlock?: (id: string) => void;
   /** Open the block's contextual menu (long-press gesture). */
   onContextMenu: (id: string) => void;
   /**
@@ -112,6 +119,11 @@ export function BlockRow(props: BlockRowProps): JSX.Element {
             haptic("light");
             props.onToggleTodo(props.block.id);
           }}
+          onFocusBlock={
+            props.onFocusBlock
+              ? () => props.onFocusBlock!(props.block.id)
+              : undefined
+          }
           onLongPress={() => {
             // iOS standard: long-press opens the contextual menu for
             // the block. Toggling TODO stays available as a discrete
@@ -157,6 +169,7 @@ export function BlockRow(props: BlockRowProps): JSX.Element {
                 onOutdent={props.onOutdent}
                 onCreateAfter={props.onCreateAfter}
                 onToggleCollapse={props.onToggleCollapse}
+                onFocusBlock={props.onFocusBlock}
                 onContextMenu={props.onContextMenu}
                 onRefClick={props.onRefClick}
                 onTagClick={props.onTagClick}
@@ -188,6 +201,10 @@ function BlockBody(props: {
   onDraftChange: (text: string) => void;
   onCommitEdit: () => void;
   onToggleTodo: () => void;
+  /** Zoom in on this block. When set, a tap on the plain bullet dot
+   *  focuses instead of marking TODO. `undefined` keeps the dot's
+   *  mark-as-TODO tap. */
+  onFocusBlock?: () => void;
   onLongPress: () => void;
   onRefClick?: (target: string) => void;
   onTagClick?: (tag: string) => void;
@@ -296,6 +313,7 @@ function BlockBody(props: {
             onToggle={() => {
               props.onToggleTodo();
             }}
+            onFocus={props.onFocusBlock}
           />
         );
         const bodyDiv = (
@@ -429,6 +447,10 @@ function CollapseTriangle(props: {
 function BulletOrCheckbox(props: {
   todo: BlockNode["todo"];
   onToggle: () => void;
+  /** Zoom into this block (Roam/Workflowy). When set, a tap on the
+   *  plain bullet dot focuses; TODO toggling stays in the long-press
+   *  menu. When `undefined`, the dot marks TODO as before. */
+  onFocus?: () => void;
 }) {
   // Apple HIG: minimum tap target is 44×44. We hit ~36×30 here so we
   // stay visually compact in dense outlines but no longer demand
@@ -440,10 +462,14 @@ function BulletOrCheckbox(props: {
       fallback={
         <button
           type="button"
-          aria-label="Mark as TODO"
+          aria-label={props.onFocus ? "Zoom into block" : "Mark as TODO"}
           onClick={(e) => {
             e.stopPropagation();
-            props.onToggle();
+            // Bullet dot zooms when the client supports it; otherwise it
+            // keeps its legacy mark-as-TODO behaviour. TODO stays
+            // reachable via the long-press context menu regardless.
+            if (props.onFocus) props.onFocus();
+            else props.onToggle();
           }}
           class="group/bullet relative z-10 -my-1.5 -ml-2 flex h-[30px] w-[26px] shrink-0 items-center justify-center"
         >

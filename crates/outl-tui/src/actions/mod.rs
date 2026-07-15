@@ -35,6 +35,7 @@ pub(crate) mod text_ops;
 pub(crate) mod toast;
 pub(crate) mod visual;
 pub(crate) mod yank;
+pub(crate) mod zoom;
 
 // Re-exports for crate-internal consumers in *non-test* code paths.
 // `app.rs` tests reach for `cycle_todo_state` / `detect_trigger` /

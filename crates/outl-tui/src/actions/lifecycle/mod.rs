@@ -94,6 +94,7 @@ impl App {
             recent_paths: Vec::new(),
             toasts: Vec::new(),
             focus: Focus::Outline,
+            zoom_stack: Vec::new(),
             scroll_y: 0,
             viewport_height: 0,
             outline_area: None,

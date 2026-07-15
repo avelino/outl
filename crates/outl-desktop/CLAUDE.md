@@ -45,60 +45,21 @@ What this crate **does** own:
 
 ```
 crates/outl-desktop/
-├── CLAUDE.md
-├── package.json               # bun workspace, deps @outl/shared + tauri + dialog plugin
-├── tsconfig.json
-├── tsconfig.node.json
-├── vite.config.ts
-├── vitest.config.ts
-├── index.html
+├── package.json / tsconfig*.json / vite.config.ts / vitest.config.ts / index.html
 ├── src/                       # frontend (Solid)
-│   ├── index.tsx              # mount
-│   ├── App.tsx                # Onboarding / AppShell switch (first-run gate)
-│   ├── styles.css             # Tailwind v4 entry + theme tokens
-│   ├── setup.test.ts          # smoke (@outl/shared resolves)
-│   ├── components/
-│   │   ├── AppShell.tsx       # 3-pane grid
-│   │   ├── Sidebar.tsx        # Today / Journals / Pages, filter input
-│   │   ├── OutlineView.tsx    # editable outline (owns BlockCallbacks)
-│   │   ├── BlockRow.tsx       # block render + textarea editor + CodeFenceView
-│   │   ├── BacklinksPanel.tsx # right pane
-│   │   ├── Picker.tsx         # Cmd+P quick switcher
-│   │   ├── SettingsModal.tsx  # Cmd+, settings
-│   │   ├── ChromeToggleBar.tsx# bottom-left cluster: sidebar / help toggles + SyncIndicator
-│   │   ├── SyncIndicator.tsx  # always-visible sync dot → opens Settings → Sync
-│   │   ├── Onboarding.tsx     # first-run flow (storage pick → optional pairing)
-│   │   └── WorkspacePicker.tsx
-│   └── lib/
-│       ├── api.ts             # desktop-only commands (workspace, settings, exec)
-│       ├── code-block.ts      # detect ```lang fences
-│       ├── events.ts          # listen workspace-ready / peer-ops-changed
-│       ├── shortcuts.ts       # Cmd+P/B/\\/,/T/[/] handler
-│       └── store.ts           # Solid createStore (panel state, page view)
+│   ├── index.tsx  App.tsx (Onboarding/AppShell gate)  styles.css  setup.test.ts
+│   ├── components/            # AppShell, Sidebar, OutlineView (owns BlockCallbacks),
+│   │                         #   BlockRow (+CodeFenceView), BacklinksPanel, Picker,
+│   │                         #   SettingsModal, ChromeToggleBar, SyncIndicator,
+│   │                         #   Onboarding, WorkspacePicker
+│   └── lib/                   # api.ts (desktop-only cmds), code-block.ts, events.ts,
+│                             #   shortcuts.ts, action-handlers.ts, store.ts
 └── src-tauri/
-    ├── Cargo.toml             # outl-desktop crate manifest
-    ├── build.rs
-    ├── tauri.conf.json        # identifier app.outl.desktop, 1280×800 window
-    ├── capabilities/
-    │   └── default.json       # core:default + dialog:default/allow-open
-    ├── icons/                 # placeholder icons (mirror of mobile)
-    └── src/
-        ├── main.rs            # binary entry
-        ├── lib.rs             # mod decls + run() (registers all 25 commands)
-        ├── settings.rs        # settings.json IO + tests
-        ├── state.rs           # AppState + AppHost impl; wire DTOs re-exported from outl-tauri-shared
-        ├── helpers.rs         # re-exports of outl_tauri_shared::helpers + desktop-only undo invalidation
-        ├── workspace_open.rs  # opener + background pass (also repairs doubled journal titles)
-        ├── plugin_service.rs  # desktop shim: CLIENT id + capability set over outl_tauri_shared::PluginService
-        ├── fs_watcher.rs      # notify + debouncer → peer-ops-changed
-        └── commands/          # thin #[tauri::command] wrappers over outl_tauri_shared::commands
-            ├── mod.rs
-            ├── workspace.rs   # set_workspace, current_workspace, reload, settings, stats (desktop-only)
-            ├── page.rs        # list / search / open / journal nav / resolve_ref
-            ├── block.rs       # create / edit / todo / move / collapsed / paste_* / copy_markdown
-            ├── exec.rs        # run_code_block
-            ├── peers.rs       # outl_peer_list / outl_peer_remove / outl_sync_now
-            └── plugin.rs      # plugin_* shims (+ plugin_keybindings, desktop-only)
+    ├── Cargo.toml  build.rs  tauri.conf.json (app.outl.desktop)  capabilities/  icons/
+    └── src/                   # main.rs, lib.rs (run() registers all commands),
+                              #   settings.rs, state.rs, helpers.rs, workspace_open.rs,
+                              #   plugin_service.rs, fs_watcher.rs,
+                              #   commands/ (thin shims over outl_tauri_shared::commands)
 ```
 
 ## First-run onboarding
@@ -295,6 +256,25 @@ This section captures only the **architectural decisions** a contributor needs t
 - **Block clipboard: view-mode cut/copy/paste of a whole block** (chords: [`docs/shortcuts.md`](../../docs/shortcuts.md)).
   **Normal**-mode only; `appState.blockClipboard` = `{ kind: "cut", nodeId } | { kind: "copy", markdown }` (backend resolves the page via `enclosing_page_id`).
   Cut is one identity-preserving `Op::Move` (`block::move_after`, cross-page, self-subtree rejected); copy duplicates via `paste_block_after` with fresh ids.
+
+### Zoom / focus into a block (Roam/Workflowy)
+
+Click a neutral `•` bullet, or fire `ZoomIn` (`z i` / `Cmd/Ctrl+Shift+]`), to zoom into the selected block; `ZoomOut` (`z o` / `Cmd/Ctrl+Shift+[`) pops one level.
+The header becomes the focused block's own **page-like header** (Roam-style).
+The focused block's text is the `<h1>` title.
+The eyebrow is a clickable **zoom path**: a leading page crumb (`📅 <slug>` / `📄 <title>`) exits the zoom back to the journal/page, then one crumb per ancestor re-focuses it.
+The outline body renders the focused block's **children** (`rootBlocks()` → `fv.root.children`), so the block isn't duplicated as both title and first row.
+`navBlocks()` traverses the same children so `j`/`k` stay in the body.
+`addFirstBlock()` creates into the focused block (`parentId: focusBlockId`) when it's a zoomed-into leaf.
+
+Load-bearing decisions:
+
+- Zoom is **local view state, never an op** — `appState.focusBlockId` (default `null`), sliced at render time via `focusSubtree` (`@outl/shared/outline`).
+  No Tauri round-trip, no `PageView` change; a display preference like `backlinksOrder`, not cross-device state.
+- **No zoom stack:** `ZoomOut` reads the current focus's breadcrumb — last crumb is the parent, empty breadcrumb means top-level so it exits to the full page.
+- **Bullet gesture split** (no TODO collision): a `•` (non-TODO) bullet zooms via `onFocusBlock`; a `▢`/`▣` checkbox keeps its TODO toggle; the fold **chevron** stays collapse.
+- **Stale zoom self-heals:** `focusSubtree` → `null` when the id left the outline (peer delete / off-page move) clears `focusBlockId`; page navigation resets it too.
+- **`j`/`k` stay inside the zoom:** `SelectionUp`/`SelectionDown` walk `navBlocks()` (`[fv.root]` when zoomed) so the cursor can't escape the subtree.
 
 ### `Enter` outside a textarea (Normal mode)
 

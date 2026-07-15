@@ -193,6 +193,16 @@ export interface AppStateShape {
   marketplaceOpen: boolean;
   /** Help overlay open state. `?` in Normal mode toggles. */
   helpOpen: boolean;
+  /**
+   * Zoom / focus root (Roam/Workflowy style). When non-null, the
+   * outline renders only this block's subtree with a clickable
+   * ancestor breadcrumb above it. Pure **view state, local per
+   * device** — zoom never round-trips through the op log (the client
+   * already holds the whole `outline`; `focusSubtree` slices it). Reset
+   * to `null` on page navigation (the `OutlineView` page-change effect)
+   * or when the focused block goes stale (deleted / moved off-page).
+   */
+  focusBlockId: string | null;
   /** Last error surfaced to the user (status line). */
   lastError: string | null;
 }
@@ -222,6 +232,7 @@ const [state, setState] = createStore<AppStateShape>({
   settingsOpen: false,
   marketplaceOpen: false,
   helpOpen: false,
+  focusBlockId: null,
   lastError: null,
 });
 

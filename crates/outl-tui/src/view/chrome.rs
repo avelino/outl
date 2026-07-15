@@ -94,6 +94,15 @@ fn breadcrumb(app: &App) -> Line<'static> {
         spans.push(Span::raw(format!("{ic} ")));
     }
     spans.push(Span::styled(title, app.theme.heading));
+
+    // When zoomed into a block (Roam/Workflowy), extend the breadcrumb
+    // with the ancestor chain down to the focused root so the user can
+    // see `page ▸ parent ▸ block` and knows they're not looking at the
+    // whole page.
+    for crumb in app.zoom_breadcrumb() {
+        spans.push(Span::styled(" ▸ ", app.theme.dim));
+        spans.push(Span::styled(crumb, app.theme.hint));
+    }
     Line::from(spans)
 }
 

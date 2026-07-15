@@ -199,6 +199,13 @@ Detection is `splitQuote` + `stripQuoteFromTokens` (`@outl/shared/markdown`, mir
 Toggling: `toggleQuote(id)` → `toggle_quote` → `outl_actions::block::toggle_quote` (no TS string surgery).
 Full convention (three-surface parity): [`docs/clients.md` → Blockquote convention](../../docs/clients.md#blockquote-convention).
 
+## Zoom / focus on a block
+
+Tap a block's plain bullet dot to zoom in — it becomes the outline root (Roam/Workflowy focus); `← Back` + breadcrumb zoom out.
+Local view state (`focusBlockId` in `Journal.tsx`), never a Tauri round-trip; the shared `focusSubtree` (`@outl/shared/outline`) does the subtree + breadcrumb.
+Mobile owns only the touch chrome: the bullet tap moves mark-as-TODO to the long-press menu; checkbox + `<CollapseTriangle>` untouched.
+Full convention: [`docs/clients.md` → Zoom / focus on a block](../../docs/clients.md#zoom--focus-on-a-block-roamworkflowy).
+
 ## Paste from external apps
 
 The textarea in `BlockRow.tsx` intercepts paste (with formatting only — mobile has no `Cmd+Shift+V`).
@@ -418,13 +425,10 @@ To bump the app version, edit `[workspace.package].version` at the repo root —
 | `CFBundleShortVersionString` | iOS `Info.plist` | Tauri propagates from `--config` during `cargo tauri ios build` |
 | `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` | `gen/apple/.../project.pbxproj` | Same — Tauri regenerates from the merged config every build |
 
-**Why `--config` and not just rely on Tauri's `Cargo.toml` fallback?**
-The docs say Tauri uses `Cargo.toml` when `version` is missing, but the iOS code path doesn't honor that — it falls back to `1.0.0` instead.
-So CI reads the workspace version itself (`awk` against `Cargo.toml` in the `Compute build metadata` step) and passes it via `--config`.
-That keeps `Cargo.toml` as the only place a human bumps, and the `Patch archive CFBundleVersion` step has a sanity check that aborts the build if the propagated short version doesn't match what was passed in.
-
-**Never** put `"version": "x.y.z"` back in `tauri.conf.json`.
-If it's present, Tauri uses the static value instead of the `--config` override, and the two drift the moment someone bumps the workspace.
+**Why `--config` and not Tauri's `Cargo.toml` fallback?**
+The iOS code path doesn't honor that fallback — it uses `1.0.0` instead.
+So CI reads the workspace version (`awk` against `Cargo.toml` in `Compute build metadata`) and passes it via `--config`; the `Patch archive CFBundleVersion` step aborts if the propagated short version mismatches.
+**Never** put `"version": "x.y.z"` back in `tauri.conf.json` — Tauri would then use the static value over the `--config` override and the two drift on the next bump.
 
 ### CI release flow
 
@@ -443,9 +447,7 @@ The build number is patched into the `.xcarchive`'s embedded `Info.plist` after 
 
 ### What goes wrong if you forget this
 
-- Stale `"version"` in `tauri.conf.json` → IPA ships that static value (ignores `Cargo.toml` / `--config`) → Apple 409 duplicate.
-- Dropping `--config '{"version": "..."}'` from `mobile.yml` → Tauri's iOS path falls back to `1.0.0` (not `Cargo.toml`); the `Patch archive CFBundleVersion` sanity check catches it — don't disable it.
-- Patching `gen/apple/.../Info.plist` pre-build is a no-op (Tauri regenerates it). `xcrun altool --type ios` exits 0 even on 409, so `testflight.yml` greps for `ERROR:` — don't simplify that step.
+- Patching `gen/apple/.../Info.plist` pre-build is a no-op (Tauri regenerates it); `xcrun altool` exits 0 even on 409, so `testflight.yml` greps for `ERROR:`, don't simplify it.
 
 ## Deep links (`outl://`)
 

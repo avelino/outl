@@ -95,6 +95,13 @@ pub enum Action {
     /// Center the viewport vertically on the selected block
     /// (vim `zz`).
     CenterViewport,
+    /// Zoom in: make the selected block the root of the outline view,
+    /// hiding everything outside its subtree (vim `z i`; desktop
+    /// `Cmd/Ctrl+Shift+]`). Pure local view state — never an `Op`.
+    ZoomIn,
+    /// Zoom out: pop one level back up the zoom stack toward the full
+    /// page (vim `z o`; desktop `Cmd/Ctrl+Shift+[`).
+    ZoomOut,
     /// Search the workspace for the word under cursor, forward
     /// (vim `*`). `n` / `N` then walk through the results.
     SearchWordForward,

@@ -112,6 +112,8 @@ The TUI is vim-style by definition.
 | Unfold all on the page (chord) | `z R` | `z R` | — |
 | Fold all on the page (chord) | `z M` | `z M` | — |
 | Center viewport on cursor (chord) | `z z` | `z z` | — |
+| Zoom in on block (make it the outline root) | `z i` | `z i` / `Cmd/Ctrl+Shift+]` | tap bullet |
+| Zoom out (back up one level toward the page) | `z o` | `z o` / `Cmd/Ctrl+Shift+[` | tap breadcrumb / back |
 | Last block (jump) | `G` | `G` | — |
 | First block (chord) | `g g` | `g g` | — |
 | Reselect last Visual range (chord) | `g v` | `g v` | — |

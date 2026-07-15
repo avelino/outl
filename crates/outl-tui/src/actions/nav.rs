@@ -244,22 +244,27 @@ impl App {
     fn step_forward(&mut self) -> bool {
         match self.focus.clone() {
             Focus::Outline => {
+                // When zoomed into a block, navigation is confined to
+                // that block's subtree window `[start, end)`; otherwise
+                // the window is the whole page.
+                let (_, end) = self.zoom_root_window();
                 // Walk forward until we hit a visible block (not
                 // hidden under a collapsed ancestor) or fall off the
-                // end of the outline.
+                // end of the (zoom-confined) outline.
                 let mut next = self.selected + 1;
-                while next < self.flat_len
-                    && self.hidden_by_collapse.get(next).copied().unwrap_or(false)
-                {
+                while next < end && self.hidden_by_collapse.get(next).copied().unwrap_or(false) {
                     next += 1;
                 }
-                if next < self.flat_len {
+                if next < end {
                     self.selected = next;
                     self.cursor_col = 0;
                     return true;
                 }
                 // Bottom of outline → try entering the backlinks zone.
-                if self.backlinks_navigable() {
+                // Only when the whole page is shown: a zoomed subtree
+                // ends before `flat_len`, and its backlinks aren't part
+                // of the focused view, so `j` stops at the subtree edge.
+                if self.zoom_stack.is_empty() && self.backlinks_navigable() {
                     self.focus = Focus::Backlink {
                         idx: 0,
                         sub_path: Vec::new(),
@@ -307,13 +312,16 @@ impl App {
     fn step_backward(&mut self) -> bool {
         match self.focus.clone() {
             Focus::Outline => {
+                // The zoom root is the top of the confined window — `k`
+                // must not walk above it. Not zoomed → floor is 0.
+                let (start, _) = self.zoom_root_window();
                 // Walk backward over hidden subtree entries the same
                 // way `step_forward` skips them going down.
-                if self.selected == 0 {
+                if self.selected <= start {
                     return false;
                 }
                 let mut prev = self.selected - 1;
-                while prev > 0 && self.hidden_by_collapse.get(prev).copied().unwrap_or(false) {
+                while prev > start && self.hidden_by_collapse.get(prev).copied().unwrap_or(false) {
                     prev -= 1;
                 }
                 if self.hidden_by_collapse.get(prev).copied().unwrap_or(false) {
