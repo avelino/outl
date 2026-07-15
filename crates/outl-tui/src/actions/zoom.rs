@@ -124,12 +124,13 @@ fn crumb_label(text: &str) -> String {
     if first.is_empty() {
         return "·".to_string();
     }
-    let chars: Vec<char> = first.chars().collect();
-    if chars.len() > MAX {
-        let clipped: String = chars[..MAX].iter().collect();
-        format!("{clipped}…")
-    } else {
-        first.to_string()
+    // Clip to MAX chars without allocating a `Vec<char>`: the byte
+    // offset of the (MAX+1)-th char is where to cut. This runs on every
+    // header render while zoomed, so the extra allocation is worth
+    // avoiding. `None` means the string is already <= MAX chars.
+    match first.char_indices().nth(MAX) {
+        Some((byte_idx, _)) => format!("{}…", &first[..byte_idx]),
+        None => first.to_string(),
     }
 }
 
