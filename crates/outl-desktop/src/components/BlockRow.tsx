@@ -126,6 +126,10 @@ export interface BlockCallbacks {
    *  Optional: contexts that keep links inert simply omit it (the
    *  renderer then draws a plain, non-interactive span). */
   onLinkClick?: (href: string) => void;
+  /** Bullet marker click → zoom into this block (Roam/Workflowy focus).
+   *  The fold chevron stays the collapse gesture; the `•`/`▢`/`▣` marker
+   *  is the zoom gesture. Optional so contexts without zoom omit it. */
+  onFocusBlock?: (id: string) => void;
 }
 
 /**
@@ -892,12 +896,21 @@ export function BlockRow(props: {
         {/* The list marker stays outside quote chrome so a quoted body
           * remains an ordinary outline block. */}
         {(() => {
+          // Bullet gesture split (no collision):
+          //   - TODO/DONE blocks render a checkbox marker (▢/▣) → click
+          //     toggles the state (checkbox semantics win).
+          //   - A neutral `•` bullet has no other job → click zooms into
+          //     the block (Roam/Workflowy focus). When zoom isn't wired
+          //     (`onFocusBlock` absent) it falls back to the TODO toggle,
+          //     preserving the old "click a plain bullet to add TODO".
+          const zoomableBullet = props.block.todo === null && !!props.cb.onFocusBlock;
           const bullet = (
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                void props.cb.onToggleTodo(props.block.id);
+                if (zoomableBullet) props.cb.onFocusBlock?.(props.block.id);
+                else void props.cb.onToggleTodo(props.block.id);
               }}
               {...(isInteractive() ? { "data-todo": "true" } : {})}
               class={`outl-row-chrome mt-[5px] mr-2 w-3 shrink-0 cursor-pointer select-none text-center text-[13px] leading-none transition-opacity hover:opacity-70 ${bulletClass()}`}
@@ -906,14 +919,18 @@ export function BlockRow(props: {
                   ? "Click to uncheck"
                   : props.block.todo === "TODO"
                     ? "Click to mark done"
-                    : "Click to mark as TODO"
+                    : zoomableBullet
+                      ? "Click to zoom in"
+                      : "Click to mark as TODO"
               }
               aria-label={
                 props.block.todo === "DONE"
                   ? "Mark not done"
                   : props.block.todo === "TODO"
                     ? "Mark done"
-                    : "Mark as TODO"
+                    : zoomableBullet
+                      ? "Zoom in on block"
+                      : "Mark as TODO"
               }
             >
               {bulletGlyph()}

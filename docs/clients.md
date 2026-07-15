@@ -222,6 +222,18 @@ Children of a quoted block are **not** implicitly quoted — the marker lives on
 GUI clients render the outline bullet outside the quote chrome, so the quote is visually the body's content rather than a nested list item.
 Inline tokens (`**bold**`, `[[ref]]`, `#tag`, `((blk-…))`) continue to tokenize **inside** the body — the wrapper is transparent.
 
+## Zoom / focus on a block (Roam/Workflowy)
+
+Zooming makes one block the outline root so only its subtree renders — the Roam/Workflowy "focus" gesture.
+It is **local view state**, never an `Op` and never a Tauri round-trip: the client already holds the whole `outline`, so zoom is a pure decision about what to render, and it does not converge across devices (each device focuses independently).
+The subtree lookup + ancestor breadcrumb is the shared `focusSubtree(blocks, blockId)` in `@outl/shared/outline` (mirror of `outl_actions::focus_view`), returning `{ root, breadcrumb }` or `null` when the id is gone.
+Every client resolves the focused id against the **live** outline on each render, so an edit / collapse inside the zoom stays reflected, and a stale target (block deleted or moved to another page → `null`) transparently falls back to the full page.
+Switching pages drops the zoom, so focus is scoped to the page it was set on.
+
+On mobile the gesture is touch, not a chord: a tap on a block's **plain bullet dot** zooms in (`Journal.tsx` holds one `focusBlockId` signal; `BlockRow` → `BulletOrCheckbox` fires `onFocusBlock` when wired).
+That repurposes the plain dot's old mark-as-TODO tap — TODO stays reachable in the long-press context menu — while the TODO/DONE checkbox and the collapse triangle keep their taps, so no gesture collides.
+Zoom-out is stackless: a `← Back` header button plus a tappable ancestor breadcrumb, derived by re-resolving `focusSubtree` and stepping to `breadcrumb.at(-1)` (the parent) or exiting when already top-level.
+
 ## Keyboard accessory bar (mobile)
 
 The edit toolbar docked above the soft keyboard — a Bear-style pill of `+` / indent / bold / `[[` / TODO / delete / hide-keyboard — plus the ref/emoji chip strip, exist in **two renderings**.

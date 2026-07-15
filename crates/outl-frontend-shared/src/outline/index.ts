@@ -39,6 +39,52 @@ export function findBlock(blocks: BlockNode[], id: string): BlockNode | null {
   return null;
 }
 
+/** One hop in a zoom/focus breadcrumb — an ancestor block's id and its
+ *  plain text (TODO/DONE prefix already split off). */
+export interface FocusCrumb {
+  id: string;
+  text: string;
+}
+
+/** Result of zooming into a block: the subtree to render as the new
+ *  root, plus the breadcrumb of ancestors — page-top first, the focused
+ *  block's immediate parent last (empty when the block is already
+ *  top-level). */
+export interface FocusView {
+  root: BlockNode;
+  breadcrumb: FocusCrumb[];
+}
+
+/**
+ * Locate `blockId` in the outline and return its subtree + breadcrumb
+ * for zoom/focus, or `null` when the id isn't present — a stale zoom
+ * target (block deleted or moved to another page). The caller drops the
+ * zoom and renders the full page.
+ *
+ * Pure view logic: zoom is local per device and never round-trips to
+ * the backend (the client already holds the whole `outline`). The one
+ * owner of the zoom walk, shared by desktop + mobile — one owner, every
+ * client wraps.
+ */
+export function focusSubtree(
+  blocks: BlockNode[],
+  blockId: string,
+): FocusView | null {
+  const breadcrumb: FocusCrumb[] = [];
+  const find = (nodes: BlockNode[]): BlockNode | null => {
+    for (const node of nodes) {
+      if (node.id === blockId) return node;
+      breadcrumb.push({ id: node.id, text: node.text });
+      const hit = find(node.children);
+      if (hit) return hit;
+      breadcrumb.pop();
+    }
+    return null;
+  };
+  const root = find(blocks);
+  return root ? { root, breadcrumb } : null;
+}
+
 /**
  * Flatten an outline into a DFS-preorder list of **`BlockNode`s**
  * (fold state ignored — every block is included).

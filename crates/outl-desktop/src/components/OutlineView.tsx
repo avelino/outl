@@ -25,7 +25,7 @@ import type { PageView } from "@outl/shared/api/types";
 
 import { ParseWarningsBanner } from "@outl/shared/warnings";
 import { journalSlugToDate } from "@outl/shared/journal";
-import { visualRangeSet } from "@outl/shared/outline";
+import { focusSubtree, visualRangeSet } from "@outl/shared/outline";
 import { NATIVE_TEMPLATE_PLUGIN_ID } from "../lib/slash-commands";
 import { playPluginViews } from "../lib/plugin-views";
 import { appState, setAppState } from "../lib/store";
@@ -72,8 +72,10 @@ export function OutlineView() {
       return;
     }
     // Navigating to a different page always lands the cursor on
-    // the outline (never on a stale backlink from the previous page).
+    // the outline (never on a stale backlink from the previous page)
+    // and drops any zoom held on the previous page's block.
     setAppState("selectedBacklinkBlockId", null);
+    setAppState("focusBlockId", null);
     const outline = appState.outline;
     if (outline.length === 0) {
       setAppState("selectedBlockId", null);
@@ -175,6 +177,38 @@ export function OutlineView() {
       appState.outline,
     );
   });
+
+  /**
+   * Zoom view (Roam/Workflowy focus). `null` when not zoomed; otherwise
+   * the focused block's subtree + ancestor breadcrumb, sliced from the
+   * outline the client already holds — pure view state, no round-trip.
+   * `focusSubtree` returns `null` when the focused id is no longer in
+   * the outline (a peer deleted it, or it moved off-page); we clear the
+   * zoom so the full page renders again instead of a blank pane.
+   */
+  const focus = createMemo<import("@outl/shared/outline").FocusView | null>(
+    () => {
+      const id = appState.focusBlockId;
+      if (!id) return null;
+      const fv = focusSubtree(appState.outline, id);
+      if (!fv) {
+        // Stale zoom target — drop it. Setting state inside a memo is
+        // safe here: it's a one-shot self-heal that makes this memo
+        // re-run and settle on `null`, not a render loop.
+        setAppState("focusBlockId", null);
+        return null;
+      }
+      return fv;
+    },
+  );
+
+  /** Blocks to render in the outline body. When zoomed (Roam-style) the
+   *  focused block becomes the header title, so the body shows its
+   *  **children**; otherwise the whole page. */
+  const rootBlocks = () => {
+    const fv = focus();
+    return fv ? fv.root.children : appState.outline;
+  };
 
   async function handleError<T>(promise: Promise<T>): Promise<T | undefined> {
     try {
@@ -379,13 +413,23 @@ export function OutlineView() {
       const view = await handleError(openPageBySlug(slug));
       if (view) applyView(view);
     },
+    onFocusBlock: (id) => {
+      // Zoom into the clicked block. Also sync the selection cursor so
+      // `j/k` pick up inside the focused subtree.
+      setAppState("selectedBlockId", id);
+      setAppState("focusBlockId", id);
+    },
   };
 
   async function addFirstBlock() {
     const pageId = appState.page?.id;
     if (!pageId) return;
+    // When zoomed into a leaf, the empty body is *inside* the focused
+    // block, so the first block must be created as its child — not at
+    // the page root.
+    const parentId = appState.focusBlockId;
     const reply = await handleError(
-      createBlock(pageId, { afterId: null, parentId: null, text: "" }),
+      createBlock(pageId, { afterId: null, parentId, text: "" }),
     );
     if (reply) applyView(reply.view);
   }
@@ -403,6 +447,22 @@ export function OutlineView() {
     // previous day in negative-offset timezones).
     const d = journalSlugToDate(page.slug);
     return d ? d.toLocaleDateString(undefined, { weekday: "long" }) : "";
+  }
+
+  /** Page icon, with the same 📅/📄 default the eyebrow uses. */
+  function pageIcon(): string {
+    return (
+      appState.page?.icon ||
+      (appState.page?.kind === "journal" ? "📅" : "📄")
+    );
+  }
+
+  /** Human label for the page crumb in the zoom path — the journal's
+   *  ISO slug or a regular page's title (falling back to its slug). */
+  function pageCrumbLabel(): string {
+    const page = appState.page;
+    if (!page) return "";
+    return page.kind === "journal" ? page.slug : page.title || page.slug;
   }
 
   return (
@@ -426,36 +486,108 @@ export function OutlineView() {
       <header class="border-b border-(--color-outl-border)/30 px-12 pt-12 pb-8">
         <div class="mx-auto max-w-3xl">
           {/*
-           * Breadcrumb — mirrors the TUI's
-           * `📅 Journal · Thursday, 2026-06-04` header. For pages,
-           * it carries the slug instead.
+           * When zoomed (Roam/Workflowy focus) the header becomes the
+           * focused block's own page-like header: a clickable path back
+           * to the journal/page + ancestors as the eyebrow, and the
+           * block's text as the title. Otherwise the normal page header.
            */}
-          <Show when={appState.page?.kind === "journal"}>
-            <div class="mb-2 flex items-baseline gap-1.5 text-[12.5px] text-(--color-outl-fg-dim)">
-              <span>{appState.page?.icon || "📅"}</span>
-              <span>Journal · {journalWeekday()}</span>
-            </div>
-          </Show>
-          <Show when={appState.page && appState.page.kind !== "journal"}>
-            <div class="mb-2 flex items-baseline gap-1.5 text-[12.5px] text-(--color-outl-fg-dim)">
-              <span>{appState.page?.icon || "📄"}</span>
-              <span class="font-mono">{appState.page?.slug}</span>
-            </div>
-          </Show>
+          <Show
+            when={focus()}
+            fallback={
+              <>
+                {/*
+                 * Breadcrumb — mirrors the TUI's
+                 * `📅 Journal · Thursday, 2026-06-04` header. For pages,
+                 * it carries the slug instead.
+                 */}
+                <Show when={appState.page?.kind === "journal"}>
+                  <div class="mb-2 flex items-baseline gap-1.5 text-[12.5px] text-(--color-outl-fg-dim)">
+                    <span>{pageIcon()}</span>
+                    <span>Journal · {journalWeekday()}</span>
+                  </div>
+                </Show>
+                <Show when={appState.page && appState.page.kind !== "journal"}>
+                  <div class="mb-2 flex items-baseline gap-1.5 text-[12.5px] text-(--color-outl-fg-dim)">
+                    <span>{pageIcon()}</span>
+                    <span class="font-mono">{appState.page?.slug}</span>
+                  </div>
+                </Show>
 
-          <h1 class="font-mono text-[28px] font-semibold leading-[1.15] tracking-tight">
-            <Show
-              when={appState.page}
-              fallback={<span class="opacity-40">No page open</span>}
-            >
-              <Show
-                when={appState.page?.kind === "journal"}
-                fallback={appState.page?.title}
-              >
-                {appState.page?.slug}
-              </Show>
-            </Show>
-          </h1>
+                <h1 class="font-mono text-[28px] font-semibold leading-[1.15] tracking-tight">
+                  <Show
+                    when={appState.page}
+                    fallback={<span class="opacity-40">No page open</span>}
+                  >
+                    <Show
+                      when={appState.page?.kind === "journal"}
+                      fallback={appState.page?.title}
+                    >
+                      {appState.page?.slug}
+                    </Show>
+                  </Show>
+                </h1>
+              </>
+            }
+          >
+            {(fv) => (
+              <>
+                {/*
+                 * Zoom path (eyebrow). The leading crumb is the whole
+                 * page — click it to exit the zoom and return to the
+                 * journal/page; each ancestor crumb re-focuses that
+                 * block. The focused block itself is the title below,
+                 * so it isn't a crumb.
+                 */}
+                <nav
+                  aria-label="Zoom path"
+                  class="mb-2 flex flex-wrap items-center gap-1 text-[12.5px] text-(--color-outl-fg-dim)"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setAppState("focusBlockId", null)}
+                    class="flex items-center gap-1.5 opacity-70 hover:opacity-100"
+                    title="Back to page"
+                  >
+                    <span>{pageIcon()}</span>
+                    <span
+                      class={
+                        appState.page?.kind === "journal" ? "font-mono" : ""
+                      }
+                    >
+                      {pageCrumbLabel()}
+                    </span>
+                  </button>
+                  <For each={fv().breadcrumb}>
+                    {(crumb) => (
+                      <>
+                        <span aria-hidden="true" class="opacity-40">
+                          ›
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setAppState("focusBlockId", crumb.id)}
+                          class="max-w-[16rem] truncate opacity-70 hover:opacity-100"
+                          title={crumb.text}
+                        >
+                          {crumb.text || "(empty)"}
+                        </button>
+                      </>
+                    )}
+                  </For>
+                </nav>
+
+                {/* Title = the focused block itself. */}
+                <h1 class="font-mono text-[28px] font-semibold leading-[1.15] tracking-tight">
+                  <Show
+                    when={fv().root.text}
+                    fallback={<span class="opacity-40">(empty block)</span>}
+                  >
+                    {fv().root.text}
+                  </Show>
+                </h1>
+              </>
+            )}
+          </Show>
         </div>
       </header>
 
@@ -463,7 +595,7 @@ export function OutlineView() {
         <div class="mx-auto w-full max-w-3xl">
           <ParseWarningsBanner warnings={appState.parseWarnings} />
           <Show
-            when={appState.outline.length > 0}
+            when={rootBlocks().length > 0}
             fallback={
               <button
                 type="button"
@@ -474,7 +606,7 @@ export function OutlineView() {
               </button>
             }
           >
-            <For each={appState.outline}>
+            <For each={rootBlocks()}>
               {(block) => (
                 <BlockRow
                   block={block}

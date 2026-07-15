@@ -103,6 +103,7 @@ No characters insert themselves — every key is a command.
 | `*` / `#` | Search workspace for the word under cursor (forward / backward). Walk results with `n` / `N`. |
 | `z R` / `z M` | Unfold all / fold all blocks on the current page (chord). `z M` skips leaf blocks — only blocks that already have children get folded; folding a leaf today is invisible, but would silently surface as "children appear collapsed" once the user added any underneath. |
 | `z z` | Center viewport vertically on the cursor (chord) |
+| `z i` / `z o` | Zoom in on the selected block / zoom out one level (chord). `z i` makes the block the outline root — only its subtree renders, with a breadcrumb of ancestors in the status chrome; `z o` pops one level back toward the full page (no-op at the page root). Pure local view state — never written to the op log, so it's per-device and never syncs. |
 | `g v` | Re-enter Visual mode at the last captured range (chord) |
 | `o` / `O` | New block below / above |
 | `Enter` | Open `[[ref]]` / `#tag` / journal / block ref (`((blk-X))` / `!((blk-X))`) under cursor (otherwise edit). On a block ref it opens the source page and lands the cursor on the referenced block; orphan handles surface a status message and stay put. |

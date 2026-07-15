@@ -242,6 +242,8 @@ export type Action =
   | { kind: "CursorWordEnd" }
   | { kind: "UnfoldAll" }
   | { kind: "FoldAll" }
+  | { kind: "ZoomIn" }
+  | { kind: "ZoomOut" }
   | { kind: "CenterViewport" }
   | { kind: "SearchWordForward" }
   | { kind: "SearchWordBackward" }

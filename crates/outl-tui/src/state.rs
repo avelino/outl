@@ -675,6 +675,23 @@ pub(crate) struct App {
     /// changes (page open, journal navigation, etc).
     pub(crate) focus: Focus,
 
+    /// Zoom / focus stack (Roam/Workflowy "zoom into a block"). Each
+    /// entry is the DFS path (`Vec<usize>` of child indices into
+    /// `page.blocks`) of a block the user zoomed into; the **top** of
+    /// the stack is the current render root. Empty = the whole page is
+    /// shown (the default).
+    ///
+    /// `z i` pushes the selected block's path; `z o` pops one level.
+    /// The render walk (`view::outline`) draws only the subtree at the
+    /// top path, and `j`/`k` navigation is confined to that subtree.
+    /// `selected` / `id_by_flat` stay whole-page flat indices, so the
+    /// zoom is purely a render + navigation window — editing still
+    /// operates on the full `ParsedPage`.
+    ///
+    /// Reset to empty on every view change (`load_current`), so opening
+    /// a page, going to today, or following a ref clears the zoom.
+    pub(crate) zoom_stack: Vec<Vec<usize>>,
+
     /// First visible line of the outline (vertical scroll offset). The
     /// view module keeps this in sync with `selected` — when navigation
     /// pushes the selection off-screen, this advances so the cursor

@@ -37,6 +37,14 @@ This section captures only the **architectural / TUI-specific behaviour** a cont
   Bullet row shows `▼ `/`▶ ` for parents (two-space gap on leaves so columns stay flush).
   Hidden subtrees are skipped by `j`/`k`.
   Persisted as `Op::SetCollapsed` in the op log — converges across devices through the CRDT, no per-file last-write-wins.
+- **`z i` / `z o` zoom (Roam/Workflowy) is a render + nav window, not op-log state.**
+  Lives in `actions/zoom.rs` (an `impl App` block) and hangs off `App::zoom_stack: Vec<Vec<usize>>` — a stack of **DFS paths**, top = current render root, empty = whole page.
+  Path-based (not id-based) because the TUI already navigates the in-flight AST by path via `outl_md::outline_ops`, so the breadcrumb is just a walk down the root path's ancestors (`zoom_breadcrumb`, rendered in `view::chrome::breadcrumb`).
+  `selected` / `id_by_flat` stay **whole-page** flat indices; `render_outline` draws only the root subtree but keeps `cursor` counting from the root's whole-page index (`zoom_root_node`), so nothing re-indexes.
+  Navigation is confined to `zoom_root_window()` — `step_forward`/`step_backward` in `actions/nav.rs` clamp to `[start, end)` and don't cross into backlinks while zoomed.
+  Zooming a leaf is allowed (Workflowy shows just that block); `z o` at the page root is a silent no-op.
+  **Pure local view state** — never an `Op`, per-device, cleared on every view switch (`load_current_no_autorun` empties `zoom_stack` alongside `focus`).
+  A stale root path (block moved/deleted) degrades to the whole page instead of panicking.
 - **`z M` / `z R` skip-leaves contract.**
   `z M` (fold-all) walks the AST in DFS and only emits `Op::SetCollapsed(true)` for blocks with `!children.is_empty()`.
   Foldar leaf é invisível hoje, mas o op fica no log: adicionar children embaixo depois faria eles aparecerem colapsados (future-surprise).

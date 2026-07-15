@@ -9,6 +9,7 @@ import {
   onMount,
 } from "solid-js";
 import type {
+  BlockNode,
   PageView,
   PluginToolbarButton,
 } from "@outl/shared/api/types";
@@ -51,6 +52,7 @@ import { detectFence } from "@outl/shared/highlight";
 import {
   countDescendants,
   findBlock,
+  focusSubtree,
   rawTextWithTodo,
 } from "@outl/shared/outline";
 import {
@@ -127,6 +129,11 @@ export function Journal() {
   // the retry button has a clean condition to render against.
   const [loadFailed, setLoadFailed] = createSignal(false);
   const [editingId, setEditingId] = createSignal<string | null>(null);
+  // Zoom/focus view-state — local per device, never round-trips to the
+  // backend (we already hold the whole outline). When non-null, only the
+  // focused block's subtree renders as the outline root. Reset to null on
+  // page change (see `applyView`).
+  const [focusBlockId, setFocusBlockId] = createSignal<string | null>(null);
   const [draft, setDraft] = createSignal("");
   const [error, setError] = createSignal<string | null>(null);
   // Optional retry handler tied to the most recent error. When set,
@@ -224,6 +231,12 @@ export function Journal() {
   let reloadGen = 0;
 
   function applyView(v: PageView) {
+    // Dropping the zoom on a page switch keeps focus scoped to the page
+    // it was set on. A same-page refresh (background poll, edit commit)
+    // keeps it — `focusSubtree` re-resolves the id against the fresh
+    // outline every render, and falls back to the full page if the block
+    // vanished.
+    if (v.page.slug !== view()?.page.slug) setFocusBlockId(null);
     setView(v);
   }
 
@@ -699,6 +712,27 @@ export function Journal() {
     return view()?.page.id ?? null;
   }
 
+  /**
+   * The active zoom, resolved against the live outline every read. `null`
+   * when not zoomed OR when the focused block vanished (stale target) —
+   * both cases fall back to rendering the full page. Resolving lazily
+   * here (instead of caching a subtree) means an edit / collapse inside
+   * the zoom stays reflected without extra bookkeeping.
+   */
+  function focusView() {
+    const id = focusBlockId();
+    const cur = view();
+    if (!id || !cur) return null;
+    return focusSubtree(cur.outline, id);
+  }
+
+  /** Blocks to render as the outline root: the focused subtree when
+   *  zoomed, else the whole page. */
+  function outlineRoots(): BlockNode[] {
+    const fv = focusView();
+    return fv ? [fv.root] : (view()?.outline ?? []);
+  }
+
   function startEdit(id: string, initial: string) {
     batch(() => {
       setEditingId(id);
@@ -867,6 +901,34 @@ export function Journal() {
     haptic("light");
     const updated = await withError(() => setBlockCollapsed(pid, id, next));
     if (updated) applyView(updated);
+  }
+
+  /**
+   * Zoom in on a block: tapping its bullet makes that block the outline
+   * root (Roam/Workflowy style). Pure view-state — no backend call, the
+   * client already holds the whole outline.
+   */
+  function handleFocusBlock(id: string) {
+    haptic("light");
+    setFocusBlockId(id);
+  }
+
+  /**
+   * Zoom out one level. Derived (no stack): re-resolve the current focus
+   * against the live outline; go to its parent when there's a breadcrumb,
+   * else leave zoom entirely. A stale target (block gone) also exits.
+   */
+  function handleZoomOut() {
+    const id = focusBlockId();
+    const cur = view();
+    if (!id || !cur) return;
+    haptic("light");
+    const fv = focusSubtree(cur.outline, id);
+    if (fv && fv.breadcrumb.length > 0) {
+      setFocusBlockId(fv.breadcrumb[fv.breadcrumb.length - 1].id);
+    } else {
+      setFocusBlockId(null);
+    }
   }
 
   async function handleIndent(id: string) {
@@ -1425,7 +1487,45 @@ export function Journal() {
             }
           >
             <ParseWarningsBanner warnings={view()!.warnings ?? []} />
-            <For each={view()!.outline}>
+            {/* Zoom header — visible only while focused on a block. The
+                "← Back" chevron zooms out one level (or exits); each
+                breadcrumb crumb is tappable to jump straight to that
+                ancestor. */}
+            <Show when={focusView()}>
+              {(fv) => (
+                <div class="mb-1 flex items-center gap-1 overflow-x-auto px-4 pt-1 pb-2">
+                  <button
+                    type="button"
+                    aria-label="Zoom out"
+                    onClick={handleZoomOut}
+                    class="flex shrink-0 items-center gap-1 rounded-full py-0.5 pr-2 pl-1 text-[13px] font-medium text-(--color-ios-accent) active:opacity-50 dark:text-(--color-iosd-accent)"
+                  >
+                    <ChevronLeft />
+                    Back
+                  </button>
+                  <For each={fv().breadcrumb}>
+                    {(crumb) => (
+                      <>
+                        <span
+                          aria-hidden="true"
+                          class="shrink-0 text-[12px] text-(--color-ios-text-tertiary) dark:text-(--color-iosd-text-tertiary)"
+                        >
+                          /
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setFocusBlockId(crumb.id)}
+                          class="max-w-[12rem] shrink-0 truncate text-[13px] text-(--color-ios-text-secondary) active:opacity-50 dark:text-(--color-iosd-text-secondary)"
+                        >
+                          {crumb.text || "Untitled"}
+                        </button>
+                      </>
+                    )}
+                  </For>
+                </div>
+              )}
+            </Show>
+            <For each={outlineRoots()}>
               {(block) => (
                 <BlockRow
                   block={block}
@@ -1441,6 +1541,7 @@ export function Journal() {
                   onOutdent={handleOutdent}
                   onCreateAfter={handleCreateAfter}
                   onToggleCollapse={handleToggleCollapse}
+                  onFocusBlock={handleFocusBlock}
                   onContextMenu={(id) => setContextMenuBlockId(id)}
                   onRefClick={handleRefClick}
                   onTagClick={handleTagClick}

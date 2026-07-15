@@ -275,6 +275,18 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                 app.center_viewport_on_selection();
                 return Ok(false);
             }
+            ('z', KeyCode::Char('i')) => {
+                // `zi` — zoom in: focus the selected block as the render
+                // root (Roam/Workflowy). `Action::ZoomIn` in the shared
+                // catalog.
+                app.zoom_in_on_selected();
+                return Ok(false);
+            }
+            ('z', KeyCode::Char('o')) => {
+                // `zo` — zoom out one level. `Action::ZoomOut`.
+                app.zoom_out();
+                return Ok(false);
+            }
             _ => {} // fall through to normal handling
         }
     }
