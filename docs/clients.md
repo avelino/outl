@@ -226,7 +226,8 @@ Inline tokens (`**bold**`, `[[ref]]`, `#tag`, `((blk-…))`) continue to tokeniz
 
 Zooming makes one block the outline root so only its subtree renders — the Roam/Workflowy "focus" gesture.
 It is **local view state**, never an `Op` and never a Tauri round-trip: the client already holds the whole `outline`, so zoom is a pure decision about what to render, and it does not converge across devices (each device focuses independently).
-The subtree lookup + ancestor breadcrumb is the shared `focusSubtree(blocks, blockId)` in `@outl/shared/outline` (mirror of `outl_actions::focus_view`), returning `{ root, breadcrumb }` or `null` when the id is gone.
+On the GUI clients (desktop + mobile) the subtree lookup + ancestor breadcrumb is the shared `focusSubtree(blocks, blockId)` in `@outl/shared/outline`, returning `{ root, breadcrumb }` or `null` when the id is gone.
+This is pure view state with no Rust mirror — the id never leaves the frontend; the TUI reaches the same behaviour through its own path-based zoom stack in `outl-tui/src/actions/zoom.rs`.
 Every client resolves the focused id against the **live** outline on each render, so an edit / collapse inside the zoom stays reflected, and a stale target (block deleted or moved to another page → `null`) transparently falls back to the full page.
 Switching pages drops the zoom, so focus is scoped to the page it was set on.
 

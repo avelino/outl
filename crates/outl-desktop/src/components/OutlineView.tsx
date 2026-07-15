@@ -190,17 +190,21 @@ export function OutlineView() {
     () => {
       const id = appState.focusBlockId;
       if (!id) return null;
-      const fv = focusSubtree(appState.outline, id);
-      if (!fv) {
-        // Stale zoom target — drop it. Setting state inside a memo is
-        // safe here: it's a one-shot self-heal that makes this memo
-        // re-run and settle on `null`, not a render loop.
-        setAppState("focusBlockId", null);
-        return null;
-      }
-      return fv;
+      return focusSubtree(appState.outline, id);
     },
   );
+
+  // Self-heal a stale zoom target *outside* the memo: when the focused
+  // id left the outline (peer delete / off-page move) `focus()` is
+  // `null` while `focusBlockId` still holds the dead id, so clear it and
+  // the full page renders. Kept in an effect, not the memo, so the memo
+  // stays a pure derivation (a `setAppState` inside a memo is a
+  // reactivity hazard as the component grows).
+  createEffect(() => {
+    if (appState.focusBlockId && !focus()) {
+      setAppState("focusBlockId", null);
+    }
+  });
 
   /** Blocks to render in the outline body. When zoomed (Roam-style) the
    *  focused block becomes the header title, so the body shows its

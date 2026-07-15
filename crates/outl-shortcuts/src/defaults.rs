@@ -108,28 +108,30 @@ pub fn default_bindings() -> Vec<Binding> {
         // `Cmd+[`/`Cmd+]` day-navigation pair one dimension over: plain
         // brackets walk days, `Shift`+brackets walk the block hierarchy.
         // `]` = deeper (zoom in), `[` = back out, matching the browser
-        // back/forward convention. Dual-spelled META + CTRL because the
-        // desktop adapter never rewrites `Cmd`↔`Ctrl`.
+        // back/forward convention. The user presses `Cmd/Ctrl+Shift+]`,
+        // but the catalog binds the **shifted glyph without SHIFT**
+        // (`}` / `{`): the desktop `KeyboardEvent` adapter
+        // (`shortcuts.ts::modsOf`) deliberately drops the SHIFT bit for
+        // symbol keys and reports the already-shifted `e.key` (`}`/`{`),
+        // the same convention `ch('?')`-style bindings use. Binding
+        // `SHIFT + ]` here would never match on a US layout. Dual-spelled
+        // META + CTRL because the desktop adapter never rewrites
+        // `Cmd`↔`Ctrl`.
         Binding::new(
-            shift_meta_ch(']'),
+            meta('}'),
             Global,
             Action::ZoomIn,
             "Zoom in on block (Cmd+Shift+])",
         ),
         Binding::new(
-            shift_ctrl_ch(']'),
+            ctrl('}'),
             Global,
             Action::ZoomIn,
             "Zoom in on block (Ctrl+Shift+])",
         ),
+        Binding::new(meta('{'), Global, Action::ZoomOut, "Zoom out (Cmd+Shift+[)"),
         Binding::new(
-            shift_meta_ch('['),
-            Global,
-            Action::ZoomOut,
-            "Zoom out (Cmd+Shift+[)",
-        ),
-        Binding::new(
-            shift_ctrl_ch('['),
+            ctrl('{'),
             Global,
             Action::ZoomOut,
             "Zoom out (Ctrl+Shift+[)",

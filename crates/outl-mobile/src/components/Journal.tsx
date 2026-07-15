@@ -3,6 +3,7 @@ import {
   Show,
   batch,
   createEffect,
+  createMemo,
   createResource,
   createSignal,
   onCleanup,
@@ -713,18 +714,22 @@ export function Journal() {
   }
 
   /**
-   * The active zoom, resolved against the live outline every read. `null`
-   * when not zoomed OR when the focused block vanished (stale target) —
-   * both cases fall back to rendering the full page. Resolving lazily
-   * here (instead of caching a subtree) means an edit / collapse inside
-   * the zoom stays reflected without extra bookkeeping.
+   * The active zoom, resolved against the live outline. `null` when not
+   * zoomed OR when the focused block vanished (stale target) — both cases
+   * fall back to rendering the full page. A `createMemo` (not a plain
+   * function) so the `focusSubtree` tree walk runs once per relevant
+   * state change instead of on every read: it's read multiple times per
+   * render (`<Show when={focusView()}>`, `outlineRoots()`), and on a
+   * large page the O(N) walk per read is noticeable. Still resolves
+   * against the live outline, so an edit / collapse inside the zoom stays
+   * reflected — the memo re-runs whenever `focusBlockId` or `view` moves.
    */
-  function focusView() {
+  const focusView = createMemo(() => {
     const id = focusBlockId();
     const cur = view();
     if (!id || !cur) return null;
     return focusSubtree(cur.outline, id);
-  }
+  });
 
   /** Blocks to render as the outline root: the focused subtree when
    *  zoomed, else the whole page. */

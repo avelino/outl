@@ -235,4 +235,35 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn zoom_chords_match_the_desktop_adapter_output() {
+        // Regression (PR #177 review): the desktop `KeyboardEvent`
+        // adapter (`outl-desktop/src/lib/shortcuts.ts::modsOf`) drops
+        // the SHIFT bit for symbol keys and reports the already-shifted
+        // glyph, so pressing `Cmd/Ctrl+Shift+]` reaches `lookup` as
+        // `META/CTRL + Char('}')` — NOT `META/CTRL | SHIFT + Char(']')`.
+        // The zoom bindings were originally spelled `shift_meta_ch(']')`
+        // and never fired on the desktop. Assert against the exact chord
+        // the adapter produces so the split can't silently regress.
+        let zoom_in_meta = ChordSequence::chord(Chord::new(Modifiers::META, Key::char('}')));
+        let zoom_in_ctrl = ChordSequence::chord(Chord::new(Modifiers::CTRL, Key::char('}')));
+        let zoom_out_meta = ChordSequence::chord(Chord::new(Modifiers::META, Key::char('{')));
+        let zoom_out_ctrl = ChordSequence::chord(Chord::new(Modifiers::CTRL, Key::char('{')));
+
+        for chord in [&zoom_in_meta, &zoom_in_ctrl] {
+            assert_eq!(
+                lookup(Mode::Global, chord),
+                Some(Action::ZoomIn),
+                "Cmd/Ctrl+Shift+] (adapter emits {chord:?}) must resolve to ZoomIn",
+            );
+        }
+        for chord in [&zoom_out_meta, &zoom_out_ctrl] {
+            assert_eq!(
+                lookup(Mode::Global, chord),
+                Some(Action::ZoomOut),
+                "Cmd/Ctrl+Shift+[ (adapter emits {chord:?}) must resolve to ZoomOut",
+            );
+        }
+    }
 }
