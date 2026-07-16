@@ -138,6 +138,12 @@ pub(crate) fn run_plugin_thread<R: StorageRootProvider>(
                 }
                 let _ = reply.send(result);
             }
+            PluginRequest::Reload { reply } => {
+                // Drop the loaded host so the next request rebuilds it from the
+                // lockfile (picking up a config edit made off-thread).
+                loaded_root = None;
+                let _ = reply.send(Ok(()));
+            }
         }
     }
 }

@@ -8,6 +8,9 @@
 
 use serde::Serialize;
 
+use outl_plugins::settings::{self, SettingsField};
+use outl_plugins::KeyringStore;
+
 use crate::helpers::{build_page_view, parse_node_id, with_ws};
 use crate::host::AppHost;
 use crate::plugin_service::PluginService;
@@ -80,6 +83,56 @@ pub fn run<S: AppHost>(
         view,
         views: run.views,
     })
+}
+
+/// Describe a plugin's settings form: every config/secret field with its type,
+/// current value, and (for secrets) whether it is set. Read-only — reads the
+/// schema + lockfile + keychain directly, so it needs no plugin thread.
+pub fn settings_describe<S: AppHost>(
+    state: &S,
+    plugin_id: String,
+) -> Result<Vec<SettingsField>, String> {
+    let root = state.storage_root()?;
+    settings::describe(&root, &plugin_id, &KeyringStore::new()).map_err(|e| e.to_string())
+}
+
+/// Set a plaintext config field (coerced to its schema type), then reload the
+/// host so the running plugin sees the new value. Rejects secret fields —
+/// those go through [`secret_set`].
+pub fn config_set<S: AppHost>(
+    state: &S,
+    plugins: &PluginService,
+    plugin_id: String,
+    key: String,
+    value: String,
+) -> Result<(), String> {
+    let root = state.storage_root()?;
+    let fields =
+        settings::describe(&root, &plugin_id, &KeyringStore::new()).map_err(|e| e.to_string())?;
+    let field = fields
+        .iter()
+        .find(|f| f.key == key)
+        .ok_or_else(|| format!("`{plugin_id}` has no config field `{key}`"))?;
+    if field.secret {
+        return Err(format!("`{key}` is a secret — use secret_set"));
+    }
+    let coerced = settings::coerce(field.kind, &value).map_err(|e| e.to_string())?;
+    settings::set_config(&root, &plugin_id, &key, coerced).map_err(|e| e.to_string())?;
+    plugins.reload()
+}
+
+/// Store a secret field's value in the OS keychain. No host reload needed —
+/// `ctx.secrets` reads the keychain lazily each turn.
+pub fn secret_set(plugin_id: String, key: String, value: String) -> Result<(), String> {
+    if value.is_empty() {
+        return Err("empty value — nothing stored".to_string());
+    }
+    settings::set_secret(&plugin_id, &key, &value, &KeyringStore::new()).map_err(|e| e.to_string())
+}
+
+/// Delete a secret field's value from the keychain (idempotent).
+pub fn secret_remove(plugin_id: String, key: String) -> Result<(), String> {
+    settings::delete_secret(&plugin_id, &key, &KeyringStore::new()).map_err(|e| e.to_string())
 }
 
 /// Fire the plugins' `onOp` hook sweep after a user mutation.
