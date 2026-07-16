@@ -11,6 +11,9 @@ dist/
 .vite/
 **/.vite/
 
+# npm pack output (e.g. `npm pack` in plugin-sdk/ for a pre-publish smoke test)
+*.tgz
+
 # Tauri auto-generated capability schemas (regenerated on every build by tauri-build).
 # `gen/apple/` (mobile) is manual config and intentionally committed.
 **/src-tauri/gen/schemas/
@@ -70,3 +73,4 @@ scripts/local-*.sh
 docs/app-store-*
 .lsp/
 .clj-kondo/
+.envrc
