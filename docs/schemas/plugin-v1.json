@@ -85,7 +85,8 @@
               "write-page",
               "read-op-log",
               "submit-op",
-              "storage:local"
+              "storage:local",
+              "secrets"
             ]
           },
           {

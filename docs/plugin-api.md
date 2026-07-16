@@ -20,8 +20,9 @@ The day-zero surface.
   `ui-render` and `content-transformer:rich` run author-written HTML/JS in a sandboxed iframe on the **GUI clients** (desktop + mobile); the TUI/CLI drop HTML.
   `content-transformer:text` renders on every read surface (inline in the TUI).
   `sync-transport` is **core-ready** (the host serializes and applies ops through a registered `{push, pull}`) but no client polls it yet — see [Roadmap](#roadmap-not-yet-available).
-- **Host namespaces (live):** `ctx.ops`, `ctx.blocks`, `ctx.page`, `ctx.commands`, `ctx.config`, `ctx.content`, `ctx.storage`, `ctx.net`, `ctx.sync`, `ctx.log`, `ctx.ui`. (`ctx.sync.register` is live; the client polling that drives it is roadmap.)
-- **Permissions:** `read-page`, `write-page`, `read-op-log`, `submit-op`, `storage:local`, `network:<domain>`.
+- **Host namespaces (live):** `ctx.ops`, `ctx.blocks`, `ctx.page`, `ctx.commands`, `ctx.config`, `ctx.content`, `ctx.storage`, `ctx.secrets`, `ctx.net`, `ctx.sync`, `ctx.log`, `ctx.ui`. (`ctx.sync.register` is live; the client polling that drives it is roadmap.)
+  `ctx.blocks.appendTree` / `ctx.page.appendTree` build a nested tree in one turn (the describe→apply escape hatch for seeding fresh content), and `ctx.blocks.query` results carry `parent` for reconstructing hierarchy.
+- **Permissions:** `read-page`, `write-page`, `read-op-log`, `submit-op`, `storage:local`, `secrets`, `network:<domain>`.
 - **Entry contract:** `definePlugin({ activate(ctx), deactivate?() })`.
 
 Anything not listed here is **not** part of API 1.0, even if a capability string for it exists in the manifest schema (see [Versioning](#versioning)).
@@ -194,20 +195,23 @@ The typed signatures live in `@outl/plugin-sdk`; the runtime ships the subset be
 | Namespace | Functions (what runs today) | Permission |
 |---|---|---|
 | `ctx.ops` | `onOp(cb: (op: LogOp) => void)` | `read-op-log` |
-| `ctx.blocks` | `query(filter) → Block[]`, `get(id) → Block`, `edit(id, text)`, `create(parentId, text)`, `createAfter(afterId, text)`, `move(id, { toPage } \| { toParent })`, `toggleTodo(id)`, `delete(id)` | `read-page` (reads) · `write-page` (writes) |
-| `ctx.page` | `list() → { slug, title, kind }[]`, `create(slug)` | `read-page` (`list`) · `write-page` (`create`) |
+| `ctx.blocks` | `query(filter) → Block[]`, `get(id) → Block`, `edit(id, text)`, `create(parentId, text)`, `createAfter(afterId, text)`, `appendTree(parentId, tree)`, `move(id, { toPage } \| { toParent })`, `toggleTodo(id)`, `delete(id)` | `read-page` (reads) · `write-page` (writes) |
+| `ctx.page` | `list() → { slug, title, kind }[]`, `create(slug)`, `appendTree(slug, tree)` | `read-page` (`list`) · `write-page` (`create`, `appendTree`) |
 | `ctx.template` | `list() → { name, slug, params? }[]`, `instantiate(name, blockId)` — stamp a structural template under a block (see [Templates](templates.md)) | `read-page` (`list`) · `write-page` (`instantiate`) |
 | `ctx.commands` | `register(id, handler)` | — (declared in `contributes.commands`) |
 | `ctx.config` | `get<T>() → T` | — |
 | `ctx.content` | `register(lang, fn)` — `fn(body) → { kind: "text" \| "rich", content } \| null` renders a fenced block of language `lang` (e.g. ` ```query `) | capability `content-transformer:text` / `:rich` |
 | `ctx.storage` | `get(k) → v \| null`, `set(k, v)`, `delete(k)` — per-plugin KV at `<workspace>/.outl/plugins/<id>/storage.json`, local-only (never converges) | `storage:local` |
+| `ctx.secrets` | `get(k) → string \| null` — read the plugin's own secret from the **OS keychain** (namespaced `outl-plugin:<id>`, never on disk in the workspace). Set out-of-band by the user; the plugin only reads | `secrets` |
 | `ctx.net` | `fetch(url, { method?, headers?, body?, timeoutMs? }) → { ok, status, headers, text(), json() }` (or `{ ok: false, error }` on a denied domain — it returns, it doesn't throw); **blocking** on the plugin thread | `network:<domain>` |
 | `ctx.sync` | `register({ push(opsJsonl), pull() → jsonl \| null })` — register a sync transport (core live; client polling is roadmap) | capability `sync-transport` |
 | `ctx.log` | `info(m)` / `warn(m)` / `error(m)` | — |
 | `ctx.ui` | `notify(m)` | — |
 | `ctx.ui` | `render(html)` — run author-written HTML/JS in a sandboxed iframe overlay (GUI only) | capability `ui-render` |
 
-`Block` is `{ id, text, todo?, page }` — `text` has the `TODO`/`DONE` prefix stripped, and `todo` is `"TODO" \| "DONE"` or absent.
+`Block` is `{ id, text, parent, todo?, page }` — `text` has the `TODO`/`DONE` prefix stripped, `todo` is `"TODO" \| "DONE"` or absent, and `parent` is the parent block id or `null` for a top-level child of the page (use it to reconstruct hierarchy from a `query`).
+
+`TreeNode` (what `appendTree` takes) is `{ text, children? }`, recursive.
 `LogOp` (what `onOp` receives) is `{ kind, node, text?, todo? }`, where `kind` is one of `"Create" | "Move" | "Edit" | "SetProp" | "SetCollapsed"`; `text` and `todo` are present only on `"Edit"`.
 
 A few load-bearing notes:
@@ -220,6 +224,9 @@ A few load-bearing notes:
 - **Reads are a turn snapshot, writes are deferred.**
   `query`/`get` read the workspace as it was at the start of the turn; a write you emit is *not* visible to a later read in the same handler — it lands on the next turn.
   This is the describe → apply model ([architecture](plugin-architecture.md#execution-model-describe--apply)).
+- **`ctx.page.appendTree(slug, tree)` / `ctx.blocks.appendTree(parentId, tree)`** build a whole nested `TreeNode[]` in one turn.
+  This is the escape hatch for the describe→apply limitation above: `create` needs a parent id, but a plugin can't obtain the id of a block (or a fresh page's first block) it just created this turn.
+  `appendTree` sidesteps it — the host threads the new ids through internally as it applies, so you can **seed a brand-new page in a single run** (`page.appendTree` creates the page if missing) instead of running the command twice.
 - **`ctx.config.get<T>()`** returns the plugin's config from the lockfile's `config` field as-is.
   Schema *validation* of that config (against `configSchema`) is not enforced yet, so treat `T` as a shape you trust, not one the host guarantees.
 - **`ctx.commands.register`** wires a handler to a `contributes.commands[].id`, surfaced in the slash menu / palette / mobile sheet, or run headless via `outl plugin run <id> <command>`.
@@ -229,11 +236,87 @@ A few load-bearing notes:
 - **`ctx.storage.{get,set,delete}`** is per-plugin key/value persisted at `<workspace>/.outl/plugins/<id>/storage.json`.
   It's **local-only and deliberately outside the op log** — it does not converge between devices.
   Without `storage:local` the call throws a clear error.
+- **`ctx.secrets.get(key)`** reads the plugin's own secret from the **OS keychain** — never from the workspace on disk, so a token is not synced or committed with your notes.
+  Secrets are namespaced by plugin id (`outl-plugin:<id>`), so a plugin can only read its own; without the `secrets` permission the call throws.
+  The plugin **only reads** — the value is set out-of-band by the user via `outl plugin secret set <id> <key>` or a client's plugin settings, and `get` returns `null` until then (prompt the user to configure it).
+  Mark the field in your `config.schema.json` with `"x-outl-secret": true` so the settings form routes it to the keychain instead of the lockfile.
 - **`ctx.net.fetch(url, opts)`** is **blocking** on the plugin thread (on the TUI it blocks the UI for the duration of the request, bounded by `timeoutMs`).
   A domain the manifest didn't grant **returns `{ ok: false, error }`** rather than throwing.
   `network:<domain>` gates it; a bare `network:*` is rejected at parse time (use `domain` or `*.domain`).
 - **`ctx.sync.register({ push, pull })`** registers a sync transport: the host serializes local ops into `push(opsJsonl)` and applies whatever `pull()` returns through `Workspace::apply`.
   The core path is live and convergence is tested; what's missing is a client that calls `push`/`pull` on a timer — see [Roadmap](#roadmap-not-yet-available).
+
+### Secrets — the full flow
+
+A secret (an API token, a webhook key) should never live in the lockfile or the
+synced workspace. `ctx.secrets` keeps it in the OS keychain; the plugin only
+reads it. Four steps wire it end to end.
+
+**1. Request the permission** in `plugin.json`:
+
+```json
+"permissions": ["network:api.ouraring.com", "secrets"]
+```
+
+**2. Mark the field as a secret** in `config.schema.json` with the
+`x-outl-secret` extension, so a client's plugin settings routes it to the
+keychain instead of the plaintext config:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "token": {
+      "type": "string",
+      "title": "API token",
+      "x-outl-secret": true
+    }
+  }
+}
+```
+
+**3. The user stores the value** out-of-band — it never passes through the
+plugin. From the CLI (hidden prompt), or a client's plugin-settings form:
+
+```sh
+outl plugin secret set run.avelino.ouraring token
+# Value for run.avelino.ouraring/token: ••••••••
+```
+
+**4. The plugin reads it** at run time and uses it — e.g. as a bearer token on a
+gated `ctx.net.fetch`. `get` returns `null` until the user sets it, so guard for
+that and tell them how:
+
+```ts
+export default definePlugin({
+  activate(ctx) {
+    ctx.commands.register("oura-sync", async () => {
+      const token = await ctx.secrets.get("token");
+      if (!token) {
+        ctx.ui.notify(
+          "No Oura token. Run: outl plugin secret set run.avelino.ouraring token",
+        );
+        return;
+      }
+
+      const r = await ctx.net.fetch("https://api.ouraring.com/v2/usercollection/daily_sleep", {
+        headers: { Authorization: `Bearer ${token}` },
+        timeoutMs: 10_000,
+      });
+      if (!r.ok) {
+        ctx.ui.notify(`Oura request failed (HTTP ${r.status})`);
+        return;
+      }
+      // …write the data to pages…
+    });
+  },
+});
+```
+
+The token stays in the keychain the whole time — it is in memory only for the
+duration of the turn, never written to the workspace, never synced, never in the
+op log. A plugin without the `secrets` permission throws on `ctx.secrets.get`,
+and each plugin is namespaced (`outl-plugin:<id>`), so it can only read its own.
 
 ### Roadmap (not yet available)
 
@@ -246,7 +329,7 @@ These are typed in `@outl/plugin-sdk` and/or enumerated in the manifest schema s
 | `{{query}}` inline | **Parser defers it** | A fenced ` ```query ` block works natively (auto-run, embeds). Plugins can call `outl.query({ … })` for structured results. Inline `{{query}}` needs a new parser token the project defers. |
 
 `github:` install and `outl plugin init` ship today (see [Plugins → Installing](plugins.md#installing)).
-The remaining tooling roadmap (`outl plugin update`, `.outlpkg` pack, dev hot-reload, a dev console, a config-editing form UI, and discovery / marketplace / signing in the clients) is tracked in [Plugins](plugins.md).
+The remaining tooling roadmap (`outl plugin update`, `.outlpkg` pack, dev hot-reload, a dev console, and discovery / marketplace / signing in the clients) is tracked in [Plugins](plugins.md). A config-editing surface now ships on every client: `outl plugin config` / `outl plugin secret` on the CLI, and a settings form per installed plugin in the desktop / mobile plugin browser and the TUI `plugin-settings` overlay.
 
 ---
 

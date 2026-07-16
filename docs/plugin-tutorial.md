@@ -204,7 +204,7 @@ Two notes on the dependency line:
 
 - `@outl/plugin-sdk` is **types plus one helper** (`definePlugin`) and nothing else — zero runtime code.
   Inside this repo, `workspace:*` resolves it from `plugin-sdk/`.
-  If you're building a plugin *outside* the repo, depend on the published package version instead once it's on npm; until then, point at a local checkout of `plugin-sdk`.
+  If you're building a plugin *outside* the repo, depend on the published package instead: `npm i -D @outl/plugin-sdk` (the `release` workflow publishes it to npm on every release, so `latest` tracks the newest build cut from `main`).
 
 If you're using TypeScript, create `tag-counter/tsconfig.json`:
 

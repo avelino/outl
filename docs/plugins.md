@@ -219,7 +219,7 @@ The plugin still runs for everything else.
 ✅ implemented · ◑ partial · 🔜 planned (post day-zero) · — not applicable to this client.
 
 `op-hook` and `slash-command` run identically on every client (the CLI exposes commands through `outl plugin run`).
-**`config-schema` is partial**: a plugin can *read* its config with `ctx.config.get()` (the value comes from the lockfile), but there is no config-editing form UI yet, and the schema isn't enforced on the stored value.
+**`config-schema` is live**: a plugin reads its config with `ctx.config.get()` (from the lockfile) and its secrets with `ctx.secrets.get()` (from the OS keychain, for fields marked `x-outl-secret`). Every client edits both — `outl plugin config` / `outl plugin secret` on the CLI, a settings form in the desktop / mobile plugin browser, and the TUI `plugin-settings` overlay — with values coerced to the field's schema type. The schema type is coerced but not otherwise validated on the stored value.
 **`keybinding` is live on the TUI and the desktop.**
 A `contributes.keybindings` chord fires the bound command — on the TUI from Normal mode (single- and two-chord sequences), on the desktop wherever a native binding doesn't claim it first.
 Use a free chord like `Ctrl+G` or a two-chord sequence such as `Ctrl+G A`.
