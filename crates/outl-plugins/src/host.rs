@@ -13,6 +13,7 @@
 //! (`last_seen`). Ops a plugin itself produces advance `last_seen` too, so they
 //! never re-trigger hooks — no plugin → op → plugin cycle.
 
+use std::rc::Rc;
 use std::str::FromStr;
 
 use serde_json::Value;
@@ -34,8 +35,9 @@ use crate::model::{
     BlockView, HostIntent, LogOpView, MoveTarget, PageView, ReadModel, TemplateView,
     TransformResult,
 };
-use crate::permission::PermissionSet;
+use crate::permission::{Permission, PermissionSet};
 use crate::runtime::PluginEngine;
+use crate::secrets::{plugin_service, KeyringStore, SecretStore};
 
 /// One loaded, activated plugin.
 struct LoadedPlugin {
@@ -130,6 +132,10 @@ pub struct PluginHost {
     /// `<root>/.outl/plugins` — where each plugin's `storage.json` lives. When
     /// unset (tests), `ctx.storage` stays in-memory and is not persisted.
     storage_dir: Option<std::path::PathBuf>,
+    /// Backing keychain for `ctx.secrets`. Defaults to the OS keychain
+    /// ([`KeyringStore`]); tests swap in an in-memory store via
+    /// [`PluginHost::set_secret_store`].
+    secret_store: Rc<dyn SecretStore>,
 }
 
 impl PluginHost {
@@ -142,7 +148,27 @@ impl PluginHost {
             last_pushed: 0,
             dispatching: false,
             storage_dir: None,
+            secret_store: Rc::new(KeyringStore::new()),
         }
+    }
+
+    /// Swap the backing secret store (tests use an in-memory store so
+    /// `ctx.secrets` never touches the OS keychain or prompts in CI).
+    pub fn set_secret_store(&mut self, store: Rc<dyn SecretStore>) {
+        self.secret_store = store;
+    }
+
+    /// Configure `ctx.secrets` for the plugin at `idx` this turn: grant the
+    /// keychain store only when the plugin holds the `secrets` permission, and
+    /// namespace it to this plugin's service so it can never read another's.
+    fn prepare_secrets(&mut self, idx: usize) {
+        let p = &self.plugins[idx];
+        let enabled = p.perms.check(&Permission::Secrets);
+        let service = plugin_service(&p.manifest.id);
+        let store = enabled.then(|| Rc::clone(&self.secret_store));
+        self.plugins[idx]
+            .engine
+            .set_secrets(enabled, service, store);
     }
 
     /// Tell the host where to persist per-plugin `ctx.storage` KVs (the
@@ -359,6 +385,7 @@ impl PluginHost {
             .iter()
             .position(|p| p.manifest.id == plugin_id)
             .ok_or_else(|| PluginError::Manifest(format!("no such plugin `{plugin_id}`")))?;
+        self.prepare_secrets(idx);
         let config = self.plugins[idx].config.clone();
         let json = self.plugins[idx]
             .engine
@@ -392,6 +419,7 @@ impl PluginHost {
 
         let read_model = build_read_model(workspace);
         self.prepare_storage(idx);
+        self.prepare_secrets(idx);
         let (config, turn) = {
             let p = &mut self.plugins[idx];
             let config = p.config.clone();
@@ -454,6 +482,7 @@ impl PluginHost {
         for view in &views {
             for &i in &plugin_ids {
                 self.prepare_storage(i);
+                self.prepare_secrets(i);
                 let (perms, plugin_id, has_ui, turn) = {
                     let p = &mut self.plugins[i];
                     let config = p.config.clone();
@@ -516,6 +545,7 @@ impl PluginHost {
         }
         let jsonl = lines.join("\n");
         let count = lines.len();
+        self.prepare_secrets(idx);
         let config = self.plugins[idx].config.clone();
         self.plugins[idx]
             .engine
@@ -532,6 +562,7 @@ impl PluginHost {
         let Some(idx) = self.sync_plugin() else {
             return Ok(0);
         };
+        self.prepare_secrets(idx);
         let config = self.plugins[idx].config.clone();
         let Some(jsonl) = self.plugins[idx]
             .engine
@@ -634,7 +665,39 @@ fn apply_one(workspace: &mut Workspace, hlc: &HlcGenerator, intent: &HostIntent)
             };
             block::move_under(workspace, hlc, n, parent).map_err(act)
         }
+        HostIntent::AppendTree { target, tree } => {
+            let parent = match target {
+                MoveTarget::ToParent { to_parent } => parse_node(to_parent)?,
+                // `toPage` is a slug, same as `Move`/`EnsurePage`. Pages are
+                // flat (`pages/<slug>.md`); the slug is also the page title, so
+                // the plugin reads the day back with `query({ page: slug })`.
+                MoveTarget::ToPage { to_page } => {
+                    page::open_or_create(workspace, hlc, to_page, to_page, PageKind::Page)
+                        .map_err(act)?
+                }
+            };
+            append_tree(workspace, hlc, parent, tree).map_err(act)
+        }
     }
+}
+
+/// Recursively create `nodes` under `parent`, descending into children with the
+/// id the host gets back from each create. This is what lets `AppendTree`
+/// materialize a nested structure in one turn — the plugin never sees the ids,
+/// the host threads them through here.
+fn append_tree(
+    workspace: &mut Workspace,
+    hlc: &HlcGenerator,
+    parent: NodeId,
+    nodes: &[crate::model::TreeNode],
+) -> std::result::Result<(), outl_actions::error::ActionError> {
+    for node in nodes {
+        let id = block::create_under(workspace, hlc, parent, Some(&node.text))?;
+        if !node.children.is_empty() {
+            append_tree(workspace, hlc, id, &node.children)?;
+        }
+    }
+    Ok(())
 }
 
 fn act(e: outl_actions::error::ActionError) -> PluginError {
@@ -670,7 +733,7 @@ fn build_read_model(workspace: &Workspace) -> ReadModel {
         .collect();
 
     let mut blocks = Vec::new();
-    for (node, _parent, _pos) in workspace.tree().iter_nodes() {
+    for (node, parent, _pos) in workspace.tree().iter_nodes() {
         if node == NodeId::root() || node == NodeId::trash() {
             continue;
         }
@@ -682,10 +745,21 @@ fn build_read_model(workspace: &Workspace) -> ReadModel {
             continue;
         };
         let (todo, body) = split_todo(&raw);
+        // A block whose parent is the page root (or root/trash) is top-level:
+        // report `null` so the plugin sees "no addressable parent block".
+        let parent_id = if parent == NodeId::root()
+            || parent == NodeId::trash()
+            || page::page_meta(workspace, parent).is_some()
+        {
+            None
+        } else {
+            Some(parent.to_string())
+        };
         blocks.push(BlockView {
             id: node.to_string(),
             text: body.to_string(),
             todo: todo.map(|t| t.as_str().to_string()),
+            parent: parent_id,
             page: page_slug_of(workspace, node).unwrap_or_default(),
         });
     }

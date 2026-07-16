@@ -26,6 +26,7 @@ use serde_json::Value;
 
 use crate::model::{HostIntent, LogOpView, ReadModel, TurnOutput};
 use crate::runtime::{EngineError, PluginEngine};
+use crate::secrets::SecretStore;
 
 /// State the native bridge functions read and write. Lives behind an `Rc<
 /// RefCell<>>` shared between the `Context` closures and the engine.
@@ -42,6 +43,14 @@ struct EngineShared {
     storage: serde_json::Map<String, Value>,
     /// Set when the plugin mutated `storage` this turn, so the host persists it.
     storage_dirty: bool,
+    /// Whether `secrets` is granted. When false, `ctx.secrets.*` throws.
+    secrets_enabled: bool,
+    /// Keychain service namespace for this plugin's secrets (`outl-plugin:<id>`).
+    secret_service: String,
+    /// Backing keychain store, injected by the host. `None` keeps `ctx.secrets`
+    /// inert (returns null) even when a permission is somehow set — belt and
+    /// suspenders against reading an unconfigured store.
+    secret_store: Option<Rc<dyn SecretStore>>,
 }
 
 /// A plugin engine backed by Boa.
@@ -150,6 +159,13 @@ impl PluginEngine for BoaEngine {
         } else {
             None
         }
+    }
+
+    fn set_secrets(&mut self, enabled: bool, service: String, store: Option<Rc<dyn SecretStore>>) {
+        let mut s = self.shared.borrow_mut();
+        s.secrets_enabled = enabled;
+        s.secret_service = service;
+        s.secret_store = store;
     }
 
     fn sync_push(&mut self, ops_jsonl: &str, config: &Value) -> Result<(), EngineError> {
@@ -349,6 +365,29 @@ fn register_natives(
     };
     reg(context, "__outl_storage_delete", 1, storage_del)?;
 
+    // __outl_secret_get(key) -> valueJson | null. Reads the plugin's own secret
+    // from the OS keychain (namespaced by `secret_service`). Throws if the
+    // `secrets` permission is not granted; returns null when the key is unset or
+    // the keychain read fails (the plugin treats both as "not configured").
+    let secret_shared = shared.clone();
+    let secret_get = unsafe {
+        NativeFunction::from_closure(move |_, args, ctx| {
+            let s = secret_shared.borrow();
+            secret_guard(&s)?;
+            let key = arg_string(args, ctx);
+            let value = match &s.secret_store {
+                Some(store) => store.get(&s.secret_service, &key).unwrap_or(None),
+                None => None,
+            };
+            let json = match value {
+                Some(v) => serde_json::to_string(&v).unwrap_or_else(|_| "null".into()),
+                None => "null".into(),
+            };
+            Ok(JsValue::from(js_string!(json)))
+        })
+    };
+    reg(context, "__outl_secret_get", 1, secret_get)?;
+
     Ok(())
 }
 
@@ -359,6 +398,17 @@ fn storage_guard(s: &EngineShared) -> boa_engine::JsResult<()> {
     } else {
         Err(boa_engine::JsError::from_opaque(JsValue::from(js_string!(
             "ctx.storage needs the `storage:local` permission"
+        ))))
+    }
+}
+
+/// Reject a secrets call when the `secrets` permission was not granted.
+fn secret_guard(s: &EngineShared) -> boa_engine::JsResult<()> {
+    if s.secrets_enabled {
+        Ok(())
+    } else {
+        Err(boa_engine::JsError::from_opaque(JsValue::from(js_string!(
+            "ctx.secrets needs the `secrets` permission"
         ))))
     }
 }
@@ -522,10 +572,12 @@ function __outl_ctx() {
             move: (id, target) => __outl_emit(JSON.stringify({ op: 'move', node: id, target })),
             toggleTodo: (id) => __outl_emit(JSON.stringify({ op: 'toggle-todo', node: id })),
             delete: (id) => __outl_emit(JSON.stringify({ op: 'delete', node: id })),
+            appendTree: (parent, tree) => __outl_emit(JSON.stringify({ op: 'append-tree', target: { toParent: parent }, tree })),
         },
         page: {
             list: () => read({ kind: 'pages' }),
             create: (slug) => __outl_emit(JSON.stringify({ op: 'ensure-page', slug })),
+            appendTree: (slug, tree) => __outl_emit(JSON.stringify({ op: 'append-tree', target: { toPage: slug }, tree })),
             open: () => { throw new Error('ctx.page.open is not available yet in this outl version (roadmap)'); },
             today: () => { throw new Error('ctx.page.today is not available yet in this outl version (roadmap)'); },
         },
@@ -546,6 +598,12 @@ function __outl_ctx() {
             get: (key) => JSON.parse(__outl_storage_get(String(key))),
             set: (key, value) => __outl_storage_set(String(key), JSON.stringify(value === undefined ? null : value)),
             delete: (key) => __outl_storage_delete(String(key)),
+        },
+        // Read-only from the plugin's side: the value lives in the OS keychain,
+        // set out-of-band by the user (`outl plugin secret set` / a client's
+        // plugin settings). Returns null when unset. Gated by `secrets`.
+        secrets: {
+            get: (key) => JSON.parse(__outl_secret_get(String(key))),
         },
         net: {
             // Blocking under the hood (on the plugin's own thread). The native
@@ -654,18 +712,21 @@ mod tests {
                 id: "a".into(),
                 text: "x".into(),
                 todo: Some("DONE".into()),
+                parent: None,
                 page: "p".into(),
             },
             BlockView {
                 id: "b".into(),
                 text: "y".into(),
                 todo: Some("TODO".into()),
+                parent: None,
                 page: "p".into(),
             },
             BlockView {
                 id: "c".into(),
                 text: "z".into(),
                 todo: Some("DONE".into()),
+                parent: None,
                 page: "p".into(),
             },
         ]);

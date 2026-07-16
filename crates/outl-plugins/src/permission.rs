@@ -25,6 +25,9 @@ pub enum Permission {
     SubmitOp,
     /// Per-plugin local key/value storage.
     StorageLocal,
+    /// Read the plugin's own secrets from the OS keychain (`ctx.secrets`).
+    /// Namespaced per plugin id, so a plugin can never read another's secrets.
+    Secrets,
     /// Network access scoped to a single domain (wildcard only as a
     /// leading `*.` label, never the whole host).
     Network(NetworkDomain),
@@ -81,6 +84,7 @@ impl Permission {
             "read-op-log" => Ok(Self::ReadOpLog),
             "submit-op" => Ok(Self::SubmitOp),
             "storage:local" => Ok(Self::StorageLocal),
+            "secrets" => Ok(Self::Secrets),
             other => match other.strip_prefix("network:") {
                 Some(domain) => Ok(Self::Network(NetworkDomain::parse(domain)?)),
                 None => Err(format!("unknown permission `{other}`")),
@@ -96,6 +100,7 @@ impl Permission {
             Self::ReadOpLog => "read-op-log".into(),
             Self::SubmitOp => "submit-op".into(),
             Self::StorageLocal => "storage:local".into(),
+            Self::Secrets => "secrets".into(),
             Self::Network(d) => format!("network:{}", d.as_str()),
         }
     }
@@ -172,11 +177,37 @@ mod tests {
             Permission::parse("storage:local").unwrap(),
             Permission::StorageLocal
         );
+        assert_eq!(Permission::parse("secrets").unwrap(), Permission::Secrets);
     }
 
     #[test]
     fn unknown_permission_is_rejected() {
         assert!(Permission::parse("delete-everything").is_err());
+        // Near-misses must not be silently accepted as `secrets`.
+        assert!(Permission::parse("secret").is_err());
+        assert!(Permission::parse("secrets:read").is_err());
+        assert!(Permission::parse("Secrets").is_err());
+    }
+
+    #[test]
+    fn secrets_is_gated_and_not_implied() {
+        // A plugin without `secrets` is denied; only an exact grant allows it.
+        let none = PermissionSet::new([Permission::ReadPage, Permission::StorageLocal]);
+        assert!(!none.check(&Permission::Secrets));
+        let granted = PermissionSet::new([Permission::Secrets]);
+        assert!(granted.check(&Permission::Secrets));
+        // `secrets` grants nothing else, and nothing else grants `secrets`.
+        assert!(!granted.check(&Permission::StorageLocal));
+        assert!(!granted.check(&Permission::ReadPage));
+    }
+
+    #[test]
+    fn secrets_wire_roundtrips() {
+        assert_eq!(Permission::Secrets.as_wire(), "secrets");
+        let json = serde_json::to_string(&Permission::Secrets).unwrap();
+        assert_eq!(json, r#""secrets""#);
+        let back: Permission = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, Permission::Secrets);
     }
 
     #[test]
