@@ -40,6 +40,8 @@ pub mod model;
 pub mod permission;
 pub mod registry;
 pub mod runtime;
+pub mod secrets;
+pub mod settings;
 
 pub use capability::{Capability, CapabilityMatch, ClientCapabilities};
 pub use error::{PluginError, Result};
@@ -60,6 +62,8 @@ pub use registry::{
     DEFAULT_REGISTRY_BASE, DEFAULT_REGISTRY_URL,
 };
 pub use runtime::{EngineError, PluginEngine};
+pub use secrets::{plugin_service, KeyringStore, MemorySecretStore, SecretStore};
+pub use settings::{describe as describe_settings, FieldKind, SettingsField};
 
 #[cfg(feature = "js")]
 pub use engine::BoaEngine;

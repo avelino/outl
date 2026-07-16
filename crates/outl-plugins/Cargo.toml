@@ -24,6 +24,11 @@ sha2.workspace = true
 hex.workspace = true
 chrono.workspace = true
 
+# OS keychain for `ctx.secrets`. Encapsulated behind `secrets::SecretStore` so
+# the CLI reaches the keychain through this crate rather than depending on
+# `keyring` directly.
+keyring.workspace = true
+
 # JS engine. Boa is pure-Rust (runs on iOS, no JIT) and is already the
 # code-block engine in outl-exec; the plugin runtime reuses it behind the
 # `PluginEngine` trait. Optional so a "no-JS" build (or a future QuickJS

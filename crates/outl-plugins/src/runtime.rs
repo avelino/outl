@@ -10,10 +10,13 @@
 //! each take a fresh read-only [`ReadModel`] plus the plugin config and return
 //! the [`TurnOutput`] (intents + logs + notifications) the host then applies.
 
+use std::rc::Rc;
+
 use serde_json::Value;
 
 use crate::model::{LogOpView, ReadModel, TurnOutput};
 use crate::permission::NetworkDomain;
+use crate::secrets::SecretStore;
 
 /// Anything that can go wrong evaluating plugin source.
 #[derive(Debug, thiserror::Error)]
@@ -67,6 +70,13 @@ pub trait PluginEngine {
     /// If the plugin mutated `ctx.storage` this turn, return the new KV for the
     /// host to persist; `None` when nothing changed.
     fn take_dirty_storage(&mut self) -> Option<serde_json::Map<String, Value>>;
+
+    /// Configure `ctx.secrets` for the turn. `enabled` mirrors the `secrets`
+    /// permission (when false, `ctx.secrets.*` throws); `service` is the
+    /// keychain namespace for this plugin (`outl-plugin:<id>`); `store` is the
+    /// backing keychain (`None` keeps secrets inert). The host calls this before
+    /// each turn, same as `set_storage`.
+    fn set_secrets(&mut self, enabled: bool, service: String, store: Option<Rc<dyn SecretStore>>);
 
     /// Run a content transformer registered for `lang` against `input`,
     /// returning the descriptor JSON it produced (`{kind, content}`), or `None`

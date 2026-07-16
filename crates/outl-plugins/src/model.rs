@@ -46,6 +46,11 @@ pub struct BlockView {
     /// `"TODO"`, `"DONE"`, or absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub todo: Option<String>,
+    /// Parent block id, or `null` when the block is a top-level child of its
+    /// page (its parent is the page root, which plugins never address). Lets a
+    /// plugin reconstruct hierarchy from a `query` — e.g. tell an anchor block
+    /// from its children.
+    pub parent: Option<String>,
     /// Slug of the page this block belongs to.
     pub page: String,
 }
@@ -145,6 +150,29 @@ pub enum HostIntent {
         /// Target block id to instantiate under.
         under: String,
     },
+    /// Append a whole tree of blocks under a page (by slug, created if missing)
+    /// or under an existing block. The host resolves each parent id *as it
+    /// applies*, so a nested structure lands in a single turn — the
+    /// describe→apply escape hatch for building brand-new content (a plugin
+    /// can't otherwise create a page's first block, since `create` needs a
+    /// parent id it has no way to obtain mid-turn).
+    AppendTree {
+        /// Where the tree's roots attach: a page slug or a block id.
+        target: MoveTarget,
+        /// Forest of nodes to create, in order.
+        tree: Vec<TreeNode>,
+    },
+}
+
+/// A node in a tree passed to [`HostIntent::AppendTree`]: its text plus an
+/// optional list of children (recursive).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreeNode {
+    /// Block text (TODO/DONE prefix included if any).
+    pub text: String,
+    /// Child nodes, created under this one. Empty for a leaf.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<TreeNode>,
 }
 
 impl HostIntent {
@@ -231,6 +259,41 @@ mod tests {
     #[test]
     fn all_intents_require_write() {
         let i = HostIntent::Delete { node: "n".into() };
+        assert_eq!(i.required_permission(), Permission::WritePage);
+    }
+
+    #[test]
+    fn append_tree_intent_roundtrips_with_nesting() {
+        let intent = HostIntent::AppendTree {
+            target: MoveTarget::ToPage {
+                to_page: "ouraring/2025-11-29".into(),
+            },
+            tree: vec![TreeNode {
+                text: "#ouraring".into(),
+                children: vec![TreeNode {
+                    text: "Sleep — 85".into(),
+                    children: vec![],
+                }],
+            }],
+        };
+        let json = serde_json::to_string(&intent).unwrap();
+        // The JS side emits exactly this shape from ctx.page.appendTree.
+        assert_eq!(
+            json,
+            r##"{"op":"append-tree","target":{"toPage":"ouraring/2025-11-29"},"tree":[{"text":"#ouraring","children":[{"text":"Sleep — 85"}]}]}"##
+        );
+        let back: HostIntent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, intent);
+    }
+
+    #[test]
+    fn append_tree_all_requires_write() {
+        let i = HostIntent::AppendTree {
+            target: MoveTarget::ToParent {
+                to_parent: "n".into(),
+            },
+            tree: vec![],
+        };
         assert_eq!(i.required_permission(), Permission::WritePage);
     }
 }

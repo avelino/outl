@@ -45,6 +45,18 @@ outl-tui = { path = "crates/outl-tui", version = "0.8.0" }
 # IDs and time
 ulid = { version = "1", features = ["serde"] }
 
+# OS keychain for per-plugin secrets (`ctx.secrets`). Native stores on every
+# platform; `sync-secret-service` + `crypto-rust` keep Linux off OpenSSL,
+# matching the workspace TLS policy.
+keyring = { version = "3", features = [
+    "apple-native",
+    "windows-native",
+    "sync-secret-service",
+    "crypto-rust",
+] }
+# Hidden-input prompt for `outl plugin secret set` (never echo a token).
+rpassword = "7"
+
 # Versioning (plugin api/engine semver ranges)
 semver = { version = "1", features = ["serde"] }
 

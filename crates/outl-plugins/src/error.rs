@@ -50,6 +50,10 @@ pub enum PluginError {
     #[error("engine: {0}")]
     Engine(String),
 
+    /// The OS keychain (secret store) refused a read/write.
+    #[error("secret store: {0}")]
+    Secret(String),
+
     /// No engine is available (built without the `js` feature).
     #[error("plugin engine unavailable: built without the `js` feature")]
     NoEngine,

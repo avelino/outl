@@ -679,3 +679,180 @@ fn instantiate_template_intent_uses_journal_page_date() {
         "`{{{{date}}}}` should resolve to the journal's date, got: {clone_text}"
     );
 }
+
+// --- ctx.secrets ------------------------------------------------------------
+
+const SECRET_PLUGIN: &str = r#"
+        globalThis.__outl_register({
+            activate(ctx) {
+                ctx.commands.register('show-secret', () => {
+                    const t = ctx.secrets.get('token');
+                    ctx.ui.notify(t === null ? 'none' : ('token=' + t));
+                });
+            }
+        });
+    "#;
+
+const SECRET_READER_ID: &str = "app.outl.examples.secret-reader";
+
+fn host_with_secret_plugin(
+    perms: &[Permission],
+    store: std::rc::Rc<dyn crate::secrets::SecretStore>,
+) -> PluginHost {
+    let mut host = PluginHost::new([Capability::SlashCommand].into_iter().collect());
+    host.set_secret_store(store);
+    let manifest = PluginManifest::parse(
+        br#"{
+                "id": "app.outl.examples.secret-reader",
+                "name": "Secret Reader",
+                "version": "1.0.0",
+                "api": "^1.0",
+                "main": "index.js",
+                "capabilities": ["slash-command"],
+                "permissions": ["secrets"],
+                "contributes": { "commands": [{ "id": "show-secret", "title": "Show secret" }] }
+            }"#,
+    )
+    .unwrap();
+    host.load_plugin(
+        manifest,
+        SECRET_PLUGIN,
+        PermissionSet::new(perms.to_vec()),
+        serde_json::json!({}),
+    )
+    .unwrap();
+    host
+}
+
+#[test]
+fn granted_plugin_reads_its_secret_from_the_store() {
+    let (mut ws, hlc) = ws();
+    let store = std::rc::Rc::new(crate::secrets::MemorySecretStore::new());
+    store
+        .set(
+            &crate::secrets::plugin_service(SECRET_READER_ID),
+            "token",
+            "pat-123",
+        )
+        .unwrap();
+
+    let mut host = host_with_secret_plugin(&[Permission::Secrets], store);
+    let run = host
+        .run_command(&mut ws, &hlc, SECRET_READER_ID, "show-secret")
+        .unwrap();
+    assert_eq!(run.notifications, vec!["token=pat-123"]);
+    assert!(run.errors.is_empty(), "errors: {:?}", run.errors);
+}
+
+#[test]
+fn granted_plugin_gets_null_when_secret_unset() {
+    let (mut ws, hlc) = ws();
+    // Store is empty: a granted read of a never-set key returns null, not an error.
+    let store = std::rc::Rc::new(crate::secrets::MemorySecretStore::new());
+    let mut host = host_with_secret_plugin(&[Permission::Secrets], store);
+    let run = host
+        .run_command(&mut ws, &hlc, SECRET_READER_ID, "show-secret")
+        .unwrap();
+    assert_eq!(run.notifications, vec!["none"]);
+}
+
+#[test]
+fn plugin_without_secrets_permission_is_denied() {
+    let (mut ws, hlc) = ws();
+    // Secret exists in the store, but the plugin holds no `secrets` grant:
+    // ctx.secrets.get must throw, surfacing as an engine error, never the value.
+    let store = std::rc::Rc::new(crate::secrets::MemorySecretStore::new());
+    store
+        .set(
+            &crate::secrets::plugin_service(SECRET_READER_ID),
+            "token",
+            "pat-should-not-leak",
+        )
+        .unwrap();
+
+    let mut host = host_with_secret_plugin(&[], store);
+    let result = host.run_command(&mut ws, &hlc, SECRET_READER_ID, "show-secret");
+    assert!(
+        result.is_err(),
+        "reading a secret without the `secrets` permission must fail, got {result:?}"
+    );
+}
+
+#[test]
+fn one_plugin_cannot_read_anothers_secret() {
+    let (mut ws, hlc) = ws();
+    // The token is stored under a *different* plugin's service namespace.
+    let store = std::rc::Rc::new(crate::secrets::MemorySecretStore::new());
+    store
+        .set(
+            &crate::secrets::plugin_service("app.outl.examples.other-plugin"),
+            "token",
+            "not-yours",
+        )
+        .unwrap();
+
+    let mut host = host_with_secret_plugin(&[Permission::Secrets], store);
+    let run = host
+        .run_command(&mut ws, &hlc, SECRET_READER_ID, "show-secret")
+        .unwrap();
+    // The reader is namespaced to its own service, so the other plugin's secret
+    // is invisible: it sees null.
+    assert_eq!(run.notifications, vec!["none"]);
+}
+
+// --- AppendTree: seed a fresh page in one turn ------------------------------
+
+#[test]
+fn append_tree_seeds_a_fresh_page_in_one_turn() {
+    use std::str::FromStr;
+
+    let (mut ws, hlc) = ws();
+    // The page does not exist yet — this is exactly the case a plugin can't
+    // handle with `create` (no parent id to hand it mid-turn).
+    let intent = HostIntent::AppendTree {
+        target: MoveTarget::ToPage {
+            to_page: "ouraring-2025-11-29".into(),
+        },
+        tree: vec![crate::model::TreeNode {
+            text: "#ouraring anchor".into(),
+            children: vec![
+                crate::model::TreeNode {
+                    text: "Sleep — Score 85".into(),
+                    children: vec![],
+                },
+                crate::model::TreeNode {
+                    text: "Readiness — Score 78".into(),
+                    children: vec![],
+                },
+            ],
+        }],
+    };
+    apply_one(&mut ws, &hlc, &intent).unwrap();
+
+    // The page now exists — its title keeps the pretty `/`-name, its slug is
+    // the slugified filename-safe form.
+    let rm = build_read_model(&ws);
+    assert!(
+        rm.pages.iter().any(|p| p.slug == "ouraring-2025-11-29"),
+        "flat page created from the slug, got: {:?}",
+        rm.pages.iter().map(|p| &p.slug).collect::<Vec<_>>()
+    );
+    // …with the anchor as a top-level block on it.
+    let anchor = rm
+        .blocks
+        .iter()
+        .find(|b| b.text == "#ouraring anchor")
+        .expect("anchor block created on the fresh page");
+
+    // …and the two section lines nested under it (verified via the tree, not
+    // just page membership).
+    let anchor_id = NodeId(ulid::Ulid::from_str(&anchor.id).unwrap());
+    let kids = outl_actions::tree::children_of(&ws, anchor_id);
+    assert_eq!(kids.len(), 2, "anchor has its two children");
+    let texts: Vec<String> = kids
+        .into_iter()
+        .filter_map(|(id, _)| ws.block_text(id))
+        .collect();
+    assert!(texts.iter().any(|t| t.starts_with("Sleep")));
+    assert!(texts.iter().any(|t| t.starts_with("Readiness")));
+}
