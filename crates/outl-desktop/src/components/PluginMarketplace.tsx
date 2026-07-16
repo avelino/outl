@@ -8,6 +8,7 @@ import {
   pluginUninstall,
 } from "@outl/shared/api/commands";
 import type { RegistryItem } from "@outl/shared/api/types";
+import { PluginSettings } from "@outl/shared/plugins";
 import { appState, setAppState } from "../lib/store";
 
 /**
@@ -30,10 +31,15 @@ export function PluginMarketplace() {
   const [error, setError] = createSignal<string | null>(null);
   const [busyId, setBusyId] = createSignal<string | null>(null);
   const [query, setQuery] = createSignal("");
+  // Which installed plugin's settings panel is expanded (one at a time).
+  const [settingsFor, setSettingsFor] = createSignal<string | null>(null);
 
   function close() {
     setAppState("marketplaceOpen", false);
   }
+
+  const toggleSettings = (id: string) =>
+    setSettingsFor((cur) => (cur === id ? null : id));
 
   onMount(() => {
     const esc = (e: KeyboardEvent) => {
@@ -120,7 +126,8 @@ export function PluginMarketplace() {
           <div class="flex-1 overflow-y-auto">
             <For each={filtered()}>
               {(i) => (
-                <div class="flex items-start gap-3 border-b border-(--color-outl-fg)/5 px-5 py-3">
+                <div class="border-b border-(--color-outl-fg)/5">
+                <div class="flex items-start gap-3 px-5 py-3">
                   <div class="min-w-0 flex-1">
                     <div class="flex items-center gap-2">
                       <span class="font-medium">{i.name}</span>
@@ -169,6 +176,13 @@ export function PluginMarketplace() {
                     >
                       <button
                         type="button"
+                        onClick={() => toggleSettings(i.id)}
+                        class="rounded border border-(--color-outl-fg)/20 px-2 py-1 text-xs hover:bg-(--color-outl-fg)/5"
+                      >
+                        {settingsFor() === i.id ? "Close" : "Settings"}
+                      </button>
+                      <button
+                        type="button"
                         disabled={busyId() === i.id}
                         onClick={() => void toggle(i)}
                         class="rounded border border-(--color-outl-fg)/20 px-2 py-1 text-xs hover:bg-(--color-outl-fg)/5 disabled:opacity-50"
@@ -185,6 +199,12 @@ export function PluginMarketplace() {
                       </button>
                     </Show>
                   </div>
+                </div>
+                <Show when={i.installed && settingsFor() === i.id}>
+                  <div class="border-t border-(--color-outl-fg)/10 bg-(--color-outl-bg)/40 px-5 py-4">
+                    <PluginSettings pluginId={i.id} />
+                  </div>
+                </Show>
                 </div>
               )}
             </For>
