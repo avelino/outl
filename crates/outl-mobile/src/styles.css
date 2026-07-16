@@ -2,6 +2,7 @@
 @import "@outl/shared/highlight/styles";
 @import "@outl/shared/warnings/styles";
 @import "@outl/shared/peers/styles";
+@import "@outl/shared/plugins/styles";
 
 /* Spring-ish ease curves used across the app. Apple's UIKit defaults
    land somewhere between these two — `--ease-spring-out` is for sheets

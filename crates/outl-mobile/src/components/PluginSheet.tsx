@@ -13,6 +13,7 @@ import {
   pluginUninstall,
 } from "@outl/shared/api/commands";
 import type { PluginCommand, RegistryItem } from "@outl/shared/api/types";
+import { PluginSettings } from "@outl/shared/plugins";
 import { haptic } from "../lib/haptics";
 
 /**
@@ -55,6 +56,12 @@ export function PluginSheet(props: {
   const [loading, setLoading] = createSignal(false);
   const [query, setQuery] = createSignal("");
   const [busyId, setBusyId] = createSignal<string | null>(null);
+  // Which installed plugin's settings panel is expanded (one at a time).
+  const [settingsFor, setSettingsFor] = createSignal<string | null>(null);
+  const toggleSettings = (id: string) => {
+    haptic("light");
+    setSettingsFor((cur) => (cur === id ? null : id));
+  };
 
   // Commands state.
   const [commands, setCommands] = createSignal<PluginCommand[]>([]);
@@ -226,6 +233,13 @@ export function PluginSheet(props: {
                             <div class="flex flex-col items-end gap-1">
                               <button
                                 type="button"
+                                onClick={() => toggleSettings(i.id)}
+                                class="rounded-full border border-(--color-ios-divider) px-2.5 py-1 text-[12px] text-(--color-ios-text) active:opacity-60 dark:text-(--color-iosd-text)"
+                              >
+                                {settingsFor() === i.id ? "Close" : "Settings"}
+                              </button>
+                              <button
+                                type="button"
                                 disabled={busyId() === i.id}
                                 onClick={() => void toggle(i)}
                                 class="rounded-full border border-(--color-ios-divider) px-2.5 py-1 text-[12px] text-(--color-ios-text) active:opacity-60 disabled:opacity-50 dark:text-(--color-iosd-text)"
@@ -244,6 +258,11 @@ export function PluginSheet(props: {
                           </Show>
                         </div>
                       </div>
+                      <Show when={i.installed && settingsFor() === i.id}>
+                        <div class="mt-3 border-t border-(--color-ios-divider)/40 pt-3 dark:border-(--color-iosd-divider)/40">
+                          <PluginSettings pluginId={i.id} />
+                        </div>
+                      </Show>
                     </div>
                   )}
                 </For>
