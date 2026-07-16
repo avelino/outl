@@ -40,6 +40,8 @@
     "./onboarding": "./src/onboarding/index.ts",
     "./outline": "./src/outline/index.ts",
     "./paste": "./src/paste/index.ts",
+    "./plugins": "./src/plugins/index.ts",
+    "./plugins/styles": "./src/plugins/styles.css",
     "./plugins/transformer-registry": "./src/plugins/transformer-registry.ts",
     "./toolbar": "./src/toolbar/index.ts",
     "./autocomplete": "./src/autocomplete/index.ts",

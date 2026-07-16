@@ -26,6 +26,7 @@ import type {
   PeerStatusDto,
   PluginCommand,
   PluginRunReply,
+  PluginSettingsField,
   PluginSyncHooksReply,
   PluginToolbarButton,
   PluginTransformer,
@@ -731,6 +732,44 @@ export function pluginSetEnabled(id: string, enabled: boolean): Promise<void> {
 /** Uninstall a plugin; resolves `true` if anything was removed. */
 export function pluginUninstall(id: string): Promise<boolean> {
   return invoke<boolean>("plugin_uninstall", { id });
+}
+
+/**
+ * Describe a plugin's settings form: every config/secret field with its type,
+ * current value, and — for secrets — whether it is set (never the value).
+ * Empty when the plugin declares no config schema.
+ */
+export function pluginSettingsDescribe(
+  pluginId: string,
+): Promise<PluginSettingsField[]> {
+  return invoke<PluginSettingsField[]>("plugin_settings_describe", { pluginId });
+}
+
+/**
+ * Set a plaintext config field. The host coerces the string to the field's
+ * schema type and reloads the plugin so the change is live. Rejects secret
+ * fields — use {@link pluginSecretSet}.
+ */
+export function pluginConfigSet(
+  pluginId: string,
+  key: string,
+  value: string,
+): Promise<void> {
+  return invoke<void>("plugin_config_set", { pluginId, key, value });
+}
+
+/** Store a secret field's value in the OS keychain (never on disk). */
+export function pluginSecretSet(
+  pluginId: string,
+  key: string,
+  value: string,
+): Promise<void> {
+  return invoke<void>("plugin_secret_set", { pluginId, key, value });
+}
+
+/** Delete a secret field's value from the keychain (idempotent). */
+export function pluginSecretRemove(pluginId: string, key: string): Promise<void> {
+  return invoke<void>("plugin_secret_remove", { pluginId, key });
 }
 
 /**
