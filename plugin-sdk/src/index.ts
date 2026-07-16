@@ -29,8 +29,9 @@
 export type BlockId = string;
 
 /**
- * A page slug. Lowercase, `/` preserved for hierarchy (e.g. `ai-agent/learning`).
- * Daily notes use ISO `YYYY-MM-DD`.
+ * A page slug — a page's flat, filename-safe id (`pages/<slug>.md`). Pages are
+ * **not** nested directories, so `/` is not a slug character; use a separator
+ * like `-` (e.g. `ouraring-2025-11-29`). Daily notes use ISO `YYYY-MM-DD`.
  */
 export type PageSlug = string;
 
@@ -82,6 +83,17 @@ export interface BlockFilter {
 export type MoveTarget =
   | { toPage: PageSlug; toParent?: never; index?: number }
   | { toParent: BlockId; toPage?: never; index?: number };
+
+/**
+ * A node in a tree passed to `appendTree`: its text plus optional children.
+ * Recursive, so you describe a whole nested outline in one value.
+ */
+export interface TreeNode {
+  /** Block text (include a `TODO `/`DONE ` prefix to set that state). */
+  text: string;
+  /** Child nodes, created under this one. Omit or empty for a leaf. */
+  children?: TreeNode[];
+}
 
 /**
  * An op as it appears *after* being applied to the log — what `ctx.ops.onOp`
@@ -185,6 +197,14 @@ export interface BlocksApi {
   toggleTodo(id: BlockId): Promise<void>;
   /** Delete a block (moved to trash; the op stays in the log). */
   delete(id: BlockId): Promise<void>;
+  /**
+   * Append a nested tree of blocks under `parent`, all in one turn. The host
+   * threads the new ids through internally, so — unlike `create` — you don't
+   * need any child's id in hand. Use it to build fresh nested content under a
+   * block you already have. To seed a page that has no blocks yet, use
+   * `ctx.page.appendTree(slug, tree)` instead.
+   */
+  appendTree(parent: BlockId, tree: TreeNode[]): Promise<void>;
 }
 
 /**
@@ -195,6 +215,14 @@ export interface PageApi {
   list(): Promise<Page[]>;
   /** Create a page (idempotent on slug). */
   create(slug: PageSlug): Promise<void>;
+  /**
+   * Append a nested tree of blocks to a page (created if missing), all in one
+   * turn. This is the way to give a **brand-new page** its first blocks:
+   * `create` needs a parent block id that a fresh page has no way to hand you
+   * mid-turn (describe→apply), and `appendTree` sidesteps that — the host
+   * resolves the page's root and threads child ids through as it builds.
+   */
+  appendTree(slug: PageSlug, tree: TreeNode[]): Promise<void>;
   /**
    * @roadmap Not wired yet — calling this throws at runtime in the current
    * outl version. Open a page in the active client view.
@@ -285,6 +313,30 @@ export interface NetApi {
   fetch(url: string, opts: FetchOptions): Promise<FetchResponse>;
 }
 
+/**
+ * Read-only access to the plugin's own secrets. Gated by the `secrets`
+ * permission.
+ *
+ * Unlike `ctx.config` (plaintext in the lockfile) and `ctx.storage` (plaintext
+ * on disk, local-only), secrets live in the **OS keychain** — macOS Keychain,
+ * Windows Credential Manager, Linux Secret Service — and never touch the
+ * workspace on disk. They are namespaced per plugin, so a plugin can only ever
+ * read its own.
+ *
+ * The plugin only **reads**. The value is set out-of-band by the user, through
+ * `outl plugin secret set <id> <key>` or a client's plugin settings. Use this
+ * for API tokens and anything you would not want synced or committed with the
+ * workspace.
+ */
+export interface SecretsApi {
+  /**
+   * Read a secret by key, resolving to `null` when it was never set (so the
+   * plugin can prompt the user to configure it). Async-typed for
+   * forward-compatibility; the runtime resolves it synchronously today.
+   */
+  get(key: string): Promise<string | null>;
+}
+
 /** Structured logging — surfaces in the client's plugin log, prefixed by id. */
 export interface LogApi {
   info(msg: string): void;
@@ -329,6 +381,7 @@ export interface PluginContext {
   content: ContentApi;
   sync: SyncApi;
   storage: StorageApi;
+  secrets: SecretsApi;
   net: NetApi;
   log: LogApi;
   ui: UiApi;
