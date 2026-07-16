@@ -1,6 +1,10 @@
 import { For, Show } from "solid-js";
 
-import { openRef, setBacklinksOrder } from "@outl/shared/api/commands";
+import {
+  openRef,
+  setBacklinksOrder,
+  toggleTodo,
+} from "@outl/shared/api/commands";
 import { MarkdownInline } from "@outl/shared/markdown";
 import type { Backlink } from "@outl/shared/api/types";
 
@@ -34,21 +38,39 @@ import { appState, setAppState } from "../lib/store";
  * triggered the open.
  */
 export function InlineBacklinks() {
+  function applyView(view: Awaited<ReturnType<typeof openRef>>) {
+    setAppState({
+      page: view.page,
+      outline: view.outline,
+      backlinks: view.backlinks,
+    });
+  }
+
   async function openBacklink(link: Backlink) {
     const target = link.source_page?.slug;
     if (!target) return;
     try {
       const view = await openRef(target);
-      setAppState({
-        page: view.page,
-        outline: view.outline,
-        backlinks: view.backlinks,
-      });
+      applyView(view);
       // Position cursor on the source block (the one we just came
       // from). Reset backlink cursor so j/k keep working in the
       // freshly-opened outline.
       setAppState("selectedBacklinkBlockId", null);
       setAppState("selectedBlockId", link.block_id);
+    } catch (e) {
+      setAppState("lastError", e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function toggleBacklinkTodo(link: Backlink) {
+    const sourcePage = link.source_page;
+    const currentSlug = appState.page?.slug;
+    if (!sourcePage || !currentSlug) return;
+    try {
+      await toggleTodo(sourcePage.id, link.block_id);
+      // The mutation returns the source page. Re-open the current tag/page
+      // so its backlink projection immediately reflects the new TODO state.
+      applyView(await openRef(currentSlug));
     } catch (e) {
       setAppState("lastError", e instanceof Error ? e.message : String(e));
     }
@@ -74,11 +96,7 @@ export function InlineBacklinks() {
     if (!sourceSlug) return;
     try {
       const view = await openRef(sourceSlug);
-      setAppState({
-        page: view.page,
-        outline: view.outline,
-        backlinks: view.backlinks,
-      });
+      applyView(view);
       setAppState("selectedBacklinkBlockId", null);
     } catch (e) {
       setAppState("lastError", e instanceof Error ? e.message : String(e));
@@ -180,22 +198,60 @@ export function InlineBacklinks() {
                               : ""
                           }
                         >
-                          <button
-                            type="button"
-                            onClick={() => void openBacklink(link)}
-                            onMouseEnter={() =>
-                              setAppState(
-                                "selectedBacklinkBlockId",
-                                link.block_id,
-                              )
-                            }
-                            class="block w-full rounded px-1 py-0.5 text-left text-sm leading-snug opacity-90 hover:bg-(--color-outl-fg)/5 hover:opacity-100"
-                          >
-                            <MarkdownInline
-                              tokens={link.source_block.tokens}
-                              variant="inline"
-                            />
-                          </button>
+                          <div class="flex items-start">
+                            <button
+                              type="button"
+                              data-todo={link.todo ?? "none"}
+                              onClick={() => void toggleBacklinkTodo(link)}
+                              class={`mt-[2px] mr-2 w-3 shrink-0 cursor-pointer text-center text-[13px] leading-none hover:opacity-70 ${
+                                link.todo === "DONE"
+                                  ? "text-(--color-outl-todo-done-fg)"
+                                  : link.todo === "TODO"
+                                    ? "text-(--color-outl-todo-open-fg)"
+                                    : "text-(--color-outl-fg-dimmer)"
+                              }`}
+                              title={
+                                link.todo === "DONE"
+                                  ? "Mark not done"
+                                  : link.todo === "TODO"
+                                    ? "Mark done"
+                                    : "Mark as TODO"
+                              }
+                              aria-label={
+                                link.todo === "DONE"
+                                  ? "Mark not done"
+                                  : link.todo === "TODO"
+                                    ? "Mark done"
+                                    : "Mark as TODO"
+                              }
+                            >
+                              {link.todo === "DONE"
+                                ? "▣"
+                                : link.todo === "TODO"
+                                  ? "▢"
+                                  : "•"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void openBacklink(link)}
+                              onMouseEnter={() =>
+                                setAppState(
+                                  "selectedBacklinkBlockId",
+                                  link.block_id,
+                                )
+                              }
+                              class={`block min-w-0 flex-1 rounded px-1 py-0.5 text-left text-sm leading-snug opacity-90 hover:bg-(--color-outl-fg)/5 hover:opacity-100 ${
+                                link.todo === "DONE"
+                                  ? "line-through opacity-60"
+                                  : ""
+                              }`}
+                            >
+                              <MarkdownInline
+                                tokens={link.source_block.tokens}
+                                variant="inline"
+                              />
+                            </button>
+                          </div>
                         </li>
                       );
                     }}
