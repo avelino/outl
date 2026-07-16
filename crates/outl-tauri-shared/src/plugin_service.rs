@@ -115,6 +115,9 @@ pub(crate) enum PluginRequest {
         id: String,
         reply: Sender<Result<bool, String>>,
     },
+    /// Force the host to reload from the lockfile before the next request —
+    /// used after a config edit so the running plugin picks up the new config.
+    Reload { reply: Sender<Result<(), String>> },
 }
 
 /// What a `SyncHooks` sweep produced: how many intents the op-hooks
@@ -308,6 +311,17 @@ impl PluginService {
         let (reply, rx) = mpsc::channel();
         self.tx
             .send(PluginRequest::Uninstall { id, reply })
+            .map_err(|_| "plugin host unavailable".to_string())?;
+        rx.recv()
+            .map_err(|_| "plugin host did not reply".to_string())?
+    }
+
+    /// Force a host reload before the next request. Call after editing a
+    /// plugin's config so the running host picks up the new values.
+    pub fn reload(&self) -> Result<(), String> {
+        let (reply, rx) = mpsc::channel();
+        self.tx
+            .send(PluginRequest::Reload { reply })
             .map_err(|_| "plugin host unavailable".to_string())?;
         rx.recv()
             .map_err(|_| "plugin host did not reply".to_string())?
