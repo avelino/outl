@@ -23,6 +23,7 @@ pub(crate) fn handle_overlay_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         Some(Overlay::Command(_)) => handle_command_overlay_key(app, key),
         Some(Overlay::Slash(_)) => handle_slash_overlay_key(app, key),
         Some(Overlay::TemplatePicker(_)) => handle_template_picker_key(app, key),
+        Some(Overlay::PluginSettings(_)) => handle_plugin_settings_key(app, key),
         Some(Overlay::Error(_)) => {
             // Modal error popup: any key dismisses. Special-case Ctrl+C
             // so it still quits the whole TUI.
@@ -197,6 +198,39 @@ fn handle_template_picker_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             app.refresh_template_picker();
         }
         _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_plugin_settings_key(app: &mut App, key: KeyEvent) -> Result<bool> {
+    // Ctrl+C still quits the whole TUI, even mid-edit.
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+        return Ok(true);
+    }
+
+    let editing = matches!(
+        &app.overlay,
+        Some(Overlay::PluginSettings(ps)) if ps.editing.is_some()
+    );
+
+    if editing {
+        match key.code {
+            KeyCode::Esc => app.plugin_settings_cancel_edit(),
+            KeyCode::Enter => app.plugin_settings_commit_edit(),
+            KeyCode::Backspace => app.plugin_settings_edit_backspace(),
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.plugin_settings_edit_push(c);
+            }
+            _ => {}
+        }
+    } else {
+        match key.code {
+            KeyCode::Esc => app.overlay = None,
+            KeyCode::Up => app.plugin_settings_move(-1),
+            KeyCode::Down => app.plugin_settings_move(1),
+            KeyCode::Enter => app.plugin_settings_activate(),
+            _ => {}
+        }
     }
     Ok(false)
 }
