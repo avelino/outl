@@ -206,6 +206,33 @@ pub(crate) enum Overlay {
     Slash(SlashState),
     /// Template picker: fuzzy-searchable list of template pages.
     TemplatePicker(TemplatePickerState),
+    /// Plugin settings: edit config + secret fields of installed plugins.
+    PluginSettings(PluginSettingsState),
+}
+
+/// One installed plugin's editable fields, for [`Overlay::PluginSettings`].
+#[derive(Debug)]
+pub(crate) struct PluginSettingsEntry {
+    /// Reverse-DNS plugin id.
+    pub(crate) plugin_id: String,
+    /// Config + secret fields from the plugin's schema.
+    pub(crate) fields: Vec<outl_plugins::SettingsField>,
+}
+
+/// State for the plugin-settings overlay: every configurable plugin, a flat
+/// cursor over their fields, and the inline edit buffer.
+#[derive(Debug)]
+pub(crate) struct PluginSettingsState {
+    /// Installed plugins that expose at least one config field.
+    pub(crate) entries: Vec<PluginSettingsEntry>,
+    /// Selectable rows, flattened as `(entry index, field index)`.
+    pub(crate) rows: Vec<(usize, usize)>,
+    /// Cursor into `rows`.
+    pub(crate) selected: usize,
+    /// The inline edit buffer when editing a field; `None` while navigating.
+    pub(crate) editing: Option<String>,
+    /// Transient status / error line at the bottom of the overlay.
+    pub(crate) message: Option<String>,
 }
 
 /// One entry in the slash menu.

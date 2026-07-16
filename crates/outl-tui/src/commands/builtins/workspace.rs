@@ -144,3 +144,28 @@ impl SlashCommand for OpenCommand {
         Ok(false)
     }
 }
+
+// ---------------------------------------------------------------------------
+
+/// Open the plugin-settings overlay: edit installed plugins' config and
+/// keychain-backed secrets.
+pub struct PluginSettingsCommand;
+
+impl SlashCommand for PluginSettingsCommand {
+    fn name(&self) -> &'static str {
+        "plugin-settings"
+    }
+
+    fn description(&self) -> &'static str {
+        "Configure installed plugins (config + secrets)"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &["plugins"]
+    }
+
+    fn execute(&self, app: &mut App, _args: &str) -> Result<bool> {
+        app.open_plugin_settings();
+        Ok(false)
+    }
+}

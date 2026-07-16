@@ -28,6 +28,7 @@ outl-plugins = { workspace = true }
 outl-shortcuts = { workspace = true }
 outl-theme = { workspace = true }
 anyhow = { workspace = true }
+serde_json = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 # Width-aware word wrapping of block text in the outline (terminals

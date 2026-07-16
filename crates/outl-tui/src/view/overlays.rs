@@ -5,9 +5,10 @@
 //! own popup inside. `render_app` in the parent module dispatches based
 //! on `app.overlay`.
 
+use crate::actions::plugins::value_to_input;
 use crate::state::{
-    App, AutocompleteKind, AutocompleteState, CommandState, ErrorState, QuickSwitchState,
-    SearchState, SlashState, SwitchKind, TemplatePickerState,
+    App, AutocompleteKind, AutocompleteState, CommandState, ErrorState, PluginSettingsState,
+    QuickSwitchState, SearchState, SlashState, SwitchKind, TemplatePickerState,
 };
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
@@ -639,6 +640,95 @@ pub(crate) fn render_template_picker(
             (0, 0)
         });
     f.render_widget(list, outer[1]);
+}
+
+pub(crate) fn render_plugin_settings(
+    f: &mut ratatui::Frame<'_>,
+    full: Rect,
+    app: &App,
+    ps: &PluginSettingsState,
+) {
+    let area = centered_rect(full, 72, 62);
+    f.render_widget(Clear, area);
+
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(2)])
+        .split(area);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut row = 0usize; // flat index, aligned with ps.rows / ps.selected
+    for entry in &ps.entries {
+        lines.push(Line::from(vec![Span::styled(
+            format!(" {} ", entry.plugin_id),
+            app.theme.help_title,
+        )]));
+        for field in &entry.fields {
+            let selected = row == ps.selected;
+            let editing = selected && ps.editing.is_some();
+            let kind = format!("{:?}", field.kind).to_lowercase();
+
+            let state = if editing {
+                let buf = ps.editing.as_deref().unwrap_or("");
+                let shown = if field.secret {
+                    "•".repeat(buf.chars().count())
+                } else {
+                    buf.to_string()
+                };
+                format!("{shown}▏")
+            } else if field.secret {
+                if field.is_set {
+                    "set".to_string()
+                } else {
+                    "not set".to_string()
+                }
+            } else {
+                match &field.value {
+                    Some(v) => value_to_input(v),
+                    None => match &field.default {
+                        Some(d) => format!("({})", value_to_input(d)),
+                        None => "(unset)".to_string(),
+                    },
+                }
+            };
+
+            let prefix = if selected { "❯ " } else { "  " };
+            let label = format!("{prefix}{}  [{kind}]  {state}", field.key);
+            let style = if selected {
+                app.theme.help_title
+            } else {
+                Style::default()
+            };
+            lines.push(Line::from(vec![Span::styled(label, style)]));
+        }
+        lines.push(Line::from(Span::raw("")));
+        row += entry.fields.len();
+    }
+
+    let scroll = if ps.selected > 8 {
+        (ps.selected.saturating_sub(8)) as u16
+    } else {
+        0
+    };
+    let list = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(app.theme.border)
+                .title(Span::styled(" Plugin settings ", app.theme.help_title))
+                .style(app.theme.popup_style()),
+        )
+        .scroll((scroll, 0));
+    f.render_widget(list, outer[0]);
+
+    let help = match (&ps.message, ps.editing.is_some()) {
+        (Some(msg), _) => msg.clone(),
+        (None, true) => "Enter save · Esc cancel".to_string(),
+        (None, false) => "↑↓ move · Enter edit/toggle · Esc close".to_string(),
+    };
+    let footer =
+        Paragraph::new(Line::from(Span::raw(format!(" {help}")))).style(app.theme.popup_style());
+    f.render_widget(footer, outer[1]);
 }
 
 pub(crate) fn render_error_overlay(

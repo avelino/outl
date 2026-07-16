@@ -20,12 +20,16 @@
 //! the rare total-failure path; an empty host (no plugins installed) is
 //! still `Some`.
 
-use crate::state::{App, ToastKind};
+use crate::state::{App, Overlay, PluginSettingsEntry, PluginSettingsState, ToastKind};
 use outl_core::id::NodeId;
 use outl_md::parse::OutlineNode;
 use std::collections::HashMap;
 
-use outl_plugins::{load_installed, plugins_dir, Capability, ClientCapabilities, PluginHost};
+use outl_plugins::settings;
+use outl_plugins::{
+    load_installed, lockfile_path, plugins_dir, Capability, ClientCapabilities, InstalledPlugins,
+    KeyringStore, PluginHost,
+};
 
 /// A pending content-transform: `(block id, plugin id, lang, fence body)`.
 ///
@@ -371,6 +375,193 @@ impl App {
         self.refresh_page_list();
         self.invalidate_backlinks_cache();
         self.load_current();
+    }
+}
+
+/// Plugin settings overlay: browse installed plugins' config + secret fields
+/// and edit them inline. Config writes go to the lockfile (host reloaded next
+/// command); secrets go to the OS keychain. All of it is off the plugin host —
+/// plain lockfile + keychain I/O via `outl_plugins::settings`.
+impl App {
+    /// Open the plugin-settings overlay. No-op with a status hint when no
+    /// installed plugin exposes a config schema.
+    pub(crate) fn open_plugin_settings(&mut self) {
+        let entries = self.collect_plugin_settings();
+        if entries.is_empty() {
+            self.status = "No configurable plugins installed".to_string();
+            return;
+        }
+        let rows: Vec<(usize, usize)> = entries
+            .iter()
+            .enumerate()
+            .flat_map(|(ei, e)| (0..e.fields.len()).map(move |fi| (ei, fi)))
+            .collect();
+        self.overlay = Some(Overlay::PluginSettings(PluginSettingsState {
+            entries,
+            rows,
+            selected: 0,
+            editing: None,
+            message: None,
+        }));
+    }
+
+    /// Describe every installed plugin, keeping only those with fields.
+    fn collect_plugin_settings(&self) -> Vec<PluginSettingsEntry> {
+        let dir = plugins_dir(&self.workspace_root);
+        let lock = InstalledPlugins::load(&lockfile_path(&dir)).unwrap_or_default();
+        let store = KeyringStore::new();
+        let mut out = Vec::new();
+        for id in lock.plugins.keys() {
+            if let Ok(fields) = settings::describe(&self.workspace_root, id, &store) {
+                if !fields.is_empty() {
+                    out.push(PluginSettingsEntry {
+                        plugin_id: id.clone(),
+                        fields,
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// Move the field cursor by `delta` (clamped). Ignored while editing.
+    pub(crate) fn plugin_settings_move(&mut self, delta: isize) {
+        if let Some(Overlay::PluginSettings(ref mut ps)) = self.overlay {
+            if ps.editing.is_some() || ps.rows.is_empty() {
+                return;
+            }
+            let last = ps.rows.len() - 1;
+            let next = (ps.selected as isize + delta).clamp(0, last as isize);
+            ps.selected = next as usize;
+        }
+    }
+
+    /// Enter on a field: booleans toggle immediately; everything else starts
+    /// an inline edit (config seeded with the current value, secrets blank).
+    pub(crate) fn plugin_settings_activate(&mut self) {
+        let Some(Overlay::PluginSettings(ref ps)) = self.overlay else {
+            return;
+        };
+        let Some(&(ei, fi)) = ps.rows.get(ps.selected) else {
+            return;
+        };
+        let field = &ps.entries[ei].fields[fi];
+
+        if !field.secret && matches!(field.kind, settings::FieldKind::Boolean) {
+            let current = field
+                .value
+                .as_ref()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            self.plugin_settings_write(ei, fi, if current { "false" } else { "true" });
+            return;
+        }
+
+        let seed = if field.secret {
+            String::new()
+        } else {
+            field.value.as_ref().map(value_to_input).unwrap_or_default()
+        };
+        if let Some(Overlay::PluginSettings(ref mut ps)) = self.overlay {
+            ps.editing = Some(seed);
+            ps.message = None;
+        }
+    }
+
+    /// Append a char to the edit buffer.
+    pub(crate) fn plugin_settings_edit_push(&mut self, c: char) {
+        if let Some(Overlay::PluginSettings(ref mut ps)) = self.overlay {
+            if let Some(buf) = ps.editing.as_mut() {
+                buf.push(c);
+            }
+        }
+    }
+
+    /// Delete the last char of the edit buffer.
+    pub(crate) fn plugin_settings_edit_backspace(&mut self) {
+        if let Some(Overlay::PluginSettings(ref mut ps)) = self.overlay {
+            if let Some(buf) = ps.editing.as_mut() {
+                buf.pop();
+            }
+        }
+    }
+
+    /// Cancel the current inline edit without writing.
+    pub(crate) fn plugin_settings_cancel_edit(&mut self) {
+        if let Some(Overlay::PluginSettings(ref mut ps)) = self.overlay {
+            ps.editing = None;
+        }
+    }
+
+    /// Commit the edit buffer to the selected field, then refresh it.
+    pub(crate) fn plugin_settings_commit_edit(&mut self) {
+        let Some(Overlay::PluginSettings(ref ps)) = self.overlay else {
+            return;
+        };
+        let Some(buf) = ps.editing.clone() else {
+            return;
+        };
+        let Some(&(ei, fi)) = ps.rows.get(ps.selected) else {
+            return;
+        };
+        self.plugin_settings_write(ei, fi, &buf);
+        if let Some(Overlay::PluginSettings(ref mut ps)) = self.overlay {
+            ps.editing = None;
+        }
+    }
+
+    /// Write `raw` to field `(ei, fi)` — config coerced to its type into the
+    /// lockfile, secret into the keychain — and re-describe that plugin so the
+    /// overlay reflects the new state. Errors land in the overlay message line.
+    fn plugin_settings_write(&mut self, ei: usize, fi: usize, raw: &str) {
+        let Some(Overlay::PluginSettings(ref ps)) = self.overlay else {
+            return;
+        };
+        let Some(entry) = ps.entries.get(ei) else {
+            return;
+        };
+        let Some(field) = entry.fields.get(fi) else {
+            return;
+        };
+        let plugin_id = entry.plugin_id.clone();
+        let key = field.key.clone();
+        let store = KeyringStore::new();
+
+        let result = if field.secret {
+            if raw.is_empty() {
+                Err("empty value — nothing stored".to_string())
+            } else {
+                settings::set_secret(&plugin_id, &key, raw, &store).map_err(|e| e.to_string())
+            }
+        } else {
+            settings::coerce(field.kind, raw)
+                .map_err(|e| e.to_string())
+                .and_then(|v| {
+                    settings::set_config(&self.workspace_root, &plugin_id, &key, v)
+                        .map_err(|e| e.to_string())
+                })
+        };
+
+        // Re-describe the plugin so `value` / `isSet` reflect the write.
+        let refreshed = settings::describe(&self.workspace_root, &plugin_id, &store).ok();
+        if let Some(Overlay::PluginSettings(ref mut ps)) = self.overlay {
+            if let (Some(fields), Some(entry)) = (refreshed, ps.entries.get_mut(ei)) {
+                entry.fields = fields;
+            }
+            ps.message = Some(match result {
+                Ok(()) => format!("saved {plugin_id}/{key}"),
+                Err(e) => e,
+            });
+        }
+    }
+}
+
+/// Render a config value as a plain string — the text a user sees and edits
+/// (strings unquoted, everything else as JSON). Shared with the overlay view.
+pub(crate) fn value_to_input(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
     }
 }
 
