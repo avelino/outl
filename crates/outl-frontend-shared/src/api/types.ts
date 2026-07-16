@@ -375,6 +375,34 @@ export interface PluginTransformResult {
   content: string;
 }
 
+/** The value type of a plugin settings field (from its config schema). */
+export type PluginFieldKind = "string" | "integer" | "number" | "boolean" | "json";
+
+/**
+ * One configurable field of a plugin, from `plugin_settings_describe`. Wire
+ * shape of `outl_plugins::settings::SettingsField`. Config fields carry their
+ * current `value`; secret fields carry only `isSet` (the value stays in the OS
+ * keychain and never crosses the wire).
+ */
+export interface PluginSettingsField {
+  /** Property key (`ctx.config.get()[key]` / `ctx.secrets.get(key)`). */
+  key: string;
+  /** Human label (schema `title`, falling back to the key). */
+  title: string;
+  /** Help text (schema `description`), when present. */
+  description?: string;
+  /** Value type. */
+  kind: PluginFieldKind;
+  /** Whether the field is keychain-backed (schema `x-outl-secret`). */
+  secret: boolean;
+  /** Schema default, when declared. */
+  default?: unknown;
+  /** Current config value (config fields only; absent when unset). */
+  value?: unknown;
+  /** For secret fields: whether a value is stored in the keychain. */
+  isSet: boolean;
+}
+
 /**
  * One plugin marketplace row: a registry entry (plugins.outl.app) plus the
  * workspace's local state. Wire shape of `outl_plugins::MarketplaceItem`,
