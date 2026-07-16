@@ -719,3 +719,60 @@ jobs:
           # workflow (which is `on: push: branches: [main]`).
           git commit -m "homebrew: outl ${VERSION} [skip ci]"
           git push origin HEAD:main
+
+  publish_npm:
+    name: Publish @outl/plugin-sdk to npm
+    needs: prepare
+    # `@outl/plugin-sdk` is types-only: zero runtime deps, no build step — it
+    # ships the raw `src/` TypeScript (see plugin-sdk/package.json `files`).
+    # It's independent of the Rust / desktop / mobile binaries, so it only
+    # waits on `prepare` (the version) and never blocks on a slow platform
+    # build — nor does a broken platform build block the SDK.
+    #
+    # Version tracks the release exactly, same as the binaries:
+    #   push main  -> <base>-beta.<run_number>   (prerelease)
+    #   tag vX.Y.Z -> X.Y.Z                       (GA)
+    # Both publish under the `latest` dist-tag, so `npm i @outl/plugin-sdk`
+    # always resolves the newest build cut from main.
+    if: needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    # `NPM_TOKEN` lives in the `release` environment.
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The build commit itself — not the tag, which the parallel `tag`
+          # job may not have pushed yet on a main-push run.
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          # Writes the `.npmrc` that reads NODE_AUTH_TOKEN below.
+          registry-url: https://registry.npmjs.org
+
+      - name: Publish (idempotent)
+        working-directory: plugin-sdk
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          # A re-run — or a retried beta run_number — may target a version
+          # already on npm. Republishing the same version is a hard error,
+          # so skip when it's already there (also the clean no-op path when
+          # nothing changed). `npm view` fails on a never-published package
+          # (first release), which the `|| true`-free `if` treats as "absent".
+          if npm view "@outl/plugin-sdk@${VERSION}" version >/dev/null 2>&1; then
+            echo "::notice::@outl/plugin-sdk@${VERSION} already on npm; skipping."
+            exit 0
+          fi
+          # Stamp the release version into package.json in place — no git
+          # commit/tag, same throwaway-patch approach the binaries use for
+          # Cargo.toml. The repo keeps its own version untouched.
+          npm version "${VERSION}" --no-git-tag-version --allow-same-version
+          # Scoped package: `--access public` (the first publish would else
+          # default to a private, paid publish). `latest` keeps main the
+          # default `npm install` resolves.
+          npm publish --access public --tag latest
+          echo "::notice::Published @outl/plugin-sdk@${VERSION}"
