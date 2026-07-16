@@ -60,7 +60,8 @@ use crate::commands::{
     open_journal_for, open_page_by_slug, open_ref, open_today_journal, outdent_block,
     outl_emoji_search, outl_peer_list, outl_peer_pair_host, outl_peer_pair_join, outl_peer_remove,
     outl_peer_status, outl_sync_now, paste_block_after, paste_markdown_at, paste_plain_at,
-    plugin_install_official, plugin_list, plugin_registry_list, plugin_run, plugin_set_enabled,
+    plugin_config_set, plugin_install_official, plugin_list, plugin_registry_list, plugin_run,
+    plugin_secret_remove, plugin_secret_set, plugin_set_enabled, plugin_settings_describe,
     plugin_sync_hooks, plugin_toolbar, plugin_transform, plugin_transformers, plugin_uninstall,
     previous_day, reload_workspace, resolve_ref, search_blocks, search_pages, search_persons,
     set_backlinks_order, set_block_collapsed, today_slug_cmd, toggle_quote, toggle_todo,
@@ -315,6 +316,11 @@ pub fn run() {
             plugin_install_official,
             plugin_set_enabled,
             plugin_uninstall,
+            // Plugin settings (config + secrets)
+            plugin_settings_describe,
+            plugin_config_set,
+            plugin_secret_set,
+            plugin_secret_remove,
             // Workspace folder selection (choose where the workspace lives)
             workspace_picker::set_workspace,
             // Code execution
