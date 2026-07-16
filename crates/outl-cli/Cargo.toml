@@ -41,6 +41,8 @@ chrono = { workspace = true }
 ulid = { workspace = true }
 parking_lot = { workspace = true }
 dirs = { workspace = true }
+# Hidden-input prompt for `outl plugin secret set` (never echo a token).
+rpassword = { workspace = true }
 # `outl plugin install github:…` clones into a temp dir and resolves the
 # newest semver tag.
 tempfile = { workspace = true }

@@ -86,6 +86,65 @@ pub enum PluginCommand {
         /// Plugin id.
         id: String,
     },
+    /// View or edit a plugin's configuration fields (from its config schema).
+    Config {
+        /// What to do with the config.
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+    /// Manage a plugin's secrets — stored in the OS keychain, never on disk.
+    Secret {
+        /// What to do with the secret.
+        #[command(subcommand)]
+        action: SecretAction,
+    },
+}
+
+/// `outl plugin config …` — a plugin's plaintext config fields.
+#[derive(Subcommand, Debug)]
+pub enum ConfigAction {
+    /// Show the plugin's settings form: every field, its type, and its
+    /// current value (secrets show only set/unset, never the value).
+    Show {
+        /// Plugin id (reverse-DNS, e.g. `run.avelino.ouraring`).
+        plugin_id: String,
+    },
+    /// Set a config field. The value is coerced to the field's schema type
+    /// (e.g. `daysToSync 14` → integer). Secret fields are rejected — use
+    /// `outl plugin secret set`.
+    Set {
+        /// Plugin id.
+        plugin_id: String,
+        /// Field key.
+        key: String,
+        /// New value (coerced to the field's type).
+        value: String,
+    },
+}
+
+/// `outl plugin secret …` — a plugin's keychain-backed secrets.
+#[derive(Subcommand, Debug)]
+pub enum SecretAction {
+    /// Store a secret in the OS keychain. Prompts for the value with hidden
+    /// input unless `--value` is given.
+    Set {
+        /// Plugin id.
+        plugin_id: String,
+        /// Secret key (e.g. `token`).
+        key: String,
+        /// Value (skips the hidden prompt; avoid on shared shells — it lands
+        /// in shell history).
+        #[arg(long)]
+        value: Option<String>,
+    },
+    /// Delete a secret from the keychain (idempotent).
+    #[command(visible_alias = "rm")]
+    Remove {
+        /// Plugin id.
+        plugin_id: String,
+        /// Secret key.
+        key: String,
+    },
 }
 
 /// Capabilities the CLI client implements. The CLI can run slash-style
@@ -115,6 +174,22 @@ pub fn run(cmd: &PluginCommand, path: &Path) -> Result<()> {
         PluginCommand::Enable { id } => set_enabled(path, id, true),
         PluginCommand::Disable { id } => set_enabled(path, id, false),
         PluginCommand::Remove { id } => remove(path, id),
+        PluginCommand::Config { action } => match action {
+            ConfigAction::Show { plugin_id } => config_show(path, plugin_id),
+            ConfigAction::Set {
+                plugin_id,
+                key,
+                value,
+            } => config_set(path, plugin_id, key, value),
+        },
+        PluginCommand::Secret { action } => match action {
+            SecretAction::Set {
+                plugin_id,
+                key,
+                value,
+            } => secret_set(path, plugin_id, key, value.as_deref()),
+            SecretAction::Remove { plugin_id, key } => secret_remove(path, plugin_id, key),
+        },
     }
 }
 
@@ -290,6 +365,108 @@ fn remove(path: &Path, id: &str) -> Result<()> {
     } else {
         println!("Plugin `{id}` is not installed.");
     }
+    Ok(())
+}
+
+/// Render a plugin's settings form: every field, its type, and its current
+/// value. A secret field shows only whether it is set, never its value.
+fn config_show(path: &Path, plugin_id: &str) -> Result<()> {
+    let wc = open_ws(path)?;
+    let store = outl_plugins::KeyringStore::new();
+    let fields = outl_plugins::settings::describe(&wc.root, plugin_id, &store)
+        .map_err(|e| anyhow::anyhow!("reading settings for `{plugin_id}`: {e}"))?;
+
+    if fields.is_empty() {
+        println!("`{plugin_id}` exposes no configurable fields.");
+        return Ok(());
+    }
+
+    println!("Settings for {plugin_id}:");
+    for f in &fields {
+        let kind = format!("{:?}", f.kind).to_lowercase();
+        let state = if f.secret {
+            format!("secret, {}", if f.is_set { "set" } else { "unset" })
+        } else {
+            match &f.value {
+                Some(v) => format!("= {v}"),
+                None => match &f.default {
+                    Some(d) => format!("(default {d})"),
+                    None => "(unset)".to_string(),
+                },
+            }
+        };
+        println!("  {key}  [{kind}]  {state}", key = f.key);
+        if let Some(desc) = &f.description {
+            println!("      {desc}");
+        }
+    }
+    println!();
+    println!("Edit: outl plugin config set {plugin_id} <key> <value>");
+    println!("      outl plugin secret set {plugin_id} <key>");
+    Ok(())
+}
+
+/// Set a plaintext config field, coercing the value to its schema type.
+fn config_set(path: &Path, plugin_id: &str, key: &str, value: &str) -> Result<()> {
+    let wc = open_ws(path)?;
+    let store = outl_plugins::KeyringStore::new();
+    let fields = outl_plugins::settings::describe(&wc.root, plugin_id, &store)
+        .map_err(|e| anyhow::anyhow!("reading settings for `{plugin_id}`: {e}"))?;
+
+    let field = fields
+        .iter()
+        .find(|f| f.key == key)
+        .with_context(|| format!("`{plugin_id}` has no config field `{key}`"))?;
+    if field.secret {
+        anyhow::bail!(
+            "`{key}` is a secret — set it with `outl plugin secret set {plugin_id} {key}`"
+        );
+    }
+
+    let coerced =
+        outl_plugins::settings::coerce(field.kind, value).map_err(|e| anyhow::anyhow!("{e}"))?;
+    outl_plugins::settings::set_config(&wc.root, plugin_id, key, coerced)
+        .map_err(|e| anyhow::anyhow!("writing config: {e}"))?;
+    println!("Set {plugin_id}/{key}.");
+    Ok(())
+}
+
+/// Store a secret in the OS keychain. Reads the value from a hidden prompt
+/// unless `--value` was supplied.
+fn secret_set(path: &Path, plugin_id: &str, key: &str, value: Option<&str>) -> Result<()> {
+    // Confirm the plugin is installed before writing to the keychain.
+    let _ = open_ws(path)?;
+
+    let secret = match value {
+        Some(v) => v.to_string(),
+        None => {
+            if !std::io::stdin().is_terminal() {
+                anyhow::bail!(
+                    "not a TTY — pass `--value` to set a secret non-interactively (mind shell history)"
+                );
+            }
+            rpassword::prompt_password(format!("Value for {plugin_id}/{key}: "))
+                .context("reading secret input")?
+        }
+    };
+    if secret.is_empty() {
+        anyhow::bail!("empty value — nothing stored");
+    }
+
+    let store = outl_plugins::KeyringStore::new();
+    outl_plugins::settings::set_secret(plugin_id, key, &secret, &store)
+        .map_err(|e| anyhow::anyhow!("storing secret in the keychain: {e}"))?;
+    println!("Stored {plugin_id}/{key} in the OS keychain.");
+    Ok(())
+}
+
+/// Delete a secret from the keychain (idempotent).
+fn secret_remove(path: &Path, plugin_id: &str, key: &str) -> Result<()> {
+    let _ = open_ws(path)?;
+    let store = outl_plugins::KeyringStore::new();
+    outl_plugins::settings::delete_secret(plugin_id, key, &store)
+        .map_err(|e| anyhow::anyhow!("deleting secret from the keychain: {e}"))?;
+    println!("Removed {plugin_id}/{key} from the OS keychain.");
     Ok(())
 }
 
