@@ -2,6 +2,7 @@
 @import "@outl/shared/highlight/styles";
 @import "@outl/shared/warnings/styles";
 @import "@outl/shared/peers/styles";
+@import "@outl/shared/plugins/styles";
 
 /*
  * Tailwind v4 content scanning. By default the plugin walks the

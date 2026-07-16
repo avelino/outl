@@ -11,7 +11,7 @@
 use tauri::State;
 
 use crate::state::AppState;
-use outl_plugins::MarketplaceItem;
+use outl_plugins::{MarketplaceItem, SettingsField};
 use outl_tauri_shared::commands::plugin::{self as shared, PluginRunReply, PluginSyncHooksReply};
 use outl_tauri_shared::plugin_dto::{
     PluginCommandDto, PluginKeybindingDto, ToolbarButtonDto, TransformResultDto, TransformerDto,
@@ -140,4 +140,41 @@ pub(crate) fn plugin_uninstall(
     plugins: State<'_, PluginService>,
 ) -> Result<bool, String> {
     plugins.uninstall(id)
+}
+
+/// Describe a plugin's settings form (config + secret fields).
+#[tauri::command]
+pub(crate) fn plugin_settings_describe(
+    plugin_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<SettingsField>, String> {
+    shared::settings_describe(state.inner(), plugin_id)
+}
+
+/// Set a plaintext config field (coerced to its schema type), then reload.
+#[tauri::command]
+pub(crate) fn plugin_config_set(
+    plugin_id: String,
+    key: String,
+    value: String,
+    plugins: State<'_, PluginService>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    shared::config_set(state.inner(), plugins.inner(), plugin_id, key, value)
+}
+
+/// Store a secret field in the OS keychain.
+#[tauri::command]
+pub(crate) fn plugin_secret_set(
+    plugin_id: String,
+    key: String,
+    value: String,
+) -> Result<(), String> {
+    shared::secret_set(plugin_id, key, value)
+}
+
+/// Delete a secret field from the keychain.
+#[tauri::command]
+pub(crate) fn plugin_secret_remove(plugin_id: String, key: String) -> Result<(), String> {
+    shared::secret_remove(plugin_id, key)
 }
