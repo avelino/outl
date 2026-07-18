@@ -89,7 +89,6 @@ function PluginToolbarButton(props: { entry: ToolbarButtonEntry }) {
         setAppState({
           page: reply.view.page,
           outline: reply.view.outline,
-          backlinks: reply.view.backlinks,
         });
       }
       playPluginViews(reply.views);

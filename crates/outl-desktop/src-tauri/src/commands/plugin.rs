@@ -22,8 +22,15 @@ use outl_tauri_shared::PluginService;
 /// `slash-command` capability the desktop honors. Empty until the
 /// workspace opens and plugins load (best-effort).
 #[tauri::command]
-pub(crate) fn plugin_list(plugins: State<'_, PluginService>) -> Vec<PluginCommandDto> {
-    plugins.list_commands()
+pub(crate) async fn plugin_list(
+    plugins: State<'_, PluginService>,
+) -> Result<Vec<PluginCommandDto>, String> {
+    let plugins = plugins.inner().clone();
+    Ok(
+        tauri::async_runtime::spawn_blocking(move || plugins.list_commands())
+            .await
+            .unwrap_or_default(),
+    )
 }
 
 /// List every keybinding a loaded plugin contributed for the desktop
@@ -32,8 +39,15 @@ pub(crate) fn plugin_list(plugins: State<'_, PluginService>) -> Vec<PluginComman
 /// `outl-shortcuts` binding already owns that chord (native wins). Empty
 /// until plugins load (best-effort).
 #[tauri::command]
-pub(crate) fn plugin_keybindings(plugins: State<'_, PluginService>) -> Vec<PluginKeybindingDto> {
-    plugins.list_keybindings()
+pub(crate) async fn plugin_keybindings(
+    plugins: State<'_, PluginService>,
+) -> Result<Vec<PluginKeybindingDto>, String> {
+    let plugins = plugins.inner().clone();
+    Ok(
+        tauri::async_runtime::spawn_blocking(move || plugins.list_keybindings())
+            .await
+            .unwrap_or_default(),
+    )
 }
 
 /// List every toolbar button a loaded plugin contributed for the desktop
@@ -41,8 +55,15 @@ pub(crate) fn plugin_keybindings(plugins: State<'_, PluginService>) -> Vec<Plugi
 /// `icon`, tooltip = `title`, click = `plugin_run`). Empty until plugins
 /// load (best-effort).
 #[tauri::command]
-pub(crate) fn plugin_toolbar(plugins: State<'_, PluginService>) -> Vec<ToolbarButtonDto> {
-    plugins.list_toolbar()
+pub(crate) async fn plugin_toolbar(
+    plugins: State<'_, PluginService>,
+) -> Result<Vec<ToolbarButtonDto>, String> {
+    let plugins = plugins.inner().clone();
+    Ok(
+        tauri::async_runtime::spawn_blocking(move || plugins.list_toolbar())
+            .await
+            .unwrap_or_default(),
+    )
 }
 
 /// List every content transformer a loaded plugin declared for a
@@ -51,8 +72,15 @@ pub(crate) fn plugin_toolbar(plugins: State<'_, PluginService>) -> Vec<ToolbarBu
 /// whose language matches through [`plugin_transform`]. Empty until plugins
 /// load (best-effort).
 #[tauri::command]
-pub(crate) fn plugin_transformers(plugins: State<'_, PluginService>) -> Vec<TransformerDto> {
-    plugins.list_transformers()
+pub(crate) async fn plugin_transformers(
+    plugins: State<'_, PluginService>,
+) -> Result<Vec<TransformerDto>, String> {
+    let plugins = plugins.inner().clone();
+    Ok(
+        tauri::async_runtime::spawn_blocking(move || plugins.list_transformers())
+            .await
+            .unwrap_or_default(),
+    )
 }
 
 /// Run a content transformer for `lang` against a fence `input` (its body).
@@ -63,13 +91,16 @@ pub(crate) fn plugin_transformers(plugins: State<'_, PluginService>) -> Vec<Tran
 /// `Some({kind, content})` otherwise — `kind` is `"text"` (inline markdown)
 /// or `"rich"` (HTML for a sandboxed iframe).
 #[tauri::command]
-pub(crate) fn plugin_transform(
+pub(crate) async fn plugin_transform(
     plugin_id: String,
     lang: String,
     input: String,
     plugins: State<'_, PluginService>,
 ) -> Result<Option<TransformResultDto>, String> {
-    plugins.transform_block(plugin_id, lang, input)
+    let plugins = plugins.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || plugins.transform_block(plugin_id, lang, input))
+        .await
+        .map_err(|e| format!("plugin task join: {e}"))?
 }
 
 /// Run a plugin command. `page_id` is the page currently on screen; the
@@ -107,39 +138,51 @@ pub(crate) fn plugin_sync_hooks(
 /// this workspace's lockfile (installed / enabled flags). Network + lockfile
 /// read on the plugin thread.
 #[tauri::command]
-pub(crate) fn plugin_registry_list(
+pub(crate) async fn plugin_registry_list(
     plugins: State<'_, PluginService>,
 ) -> Result<Vec<MarketplaceItem>, String> {
-    plugins.registry_list()
+    let plugins = plugins.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || plugins.registry_list())
+        .await
+        .map_err(|e| format!("plugin task join: {e}"))?
 }
 
 /// Tap-to-install an official plugin by id. Downloads + installs + reloads
 /// the host; returns the installed display name.
 #[tauri::command]
-pub(crate) fn plugin_install_official(
+pub(crate) async fn plugin_install_official(
     id: String,
     plugins: State<'_, PluginService>,
 ) -> Result<String, String> {
-    plugins.install_official(id)
+    let plugins = plugins.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || plugins.install_official(id))
+        .await
+        .map_err(|e| format!("plugin task join: {e}"))?
 }
 
 /// Enable / disable an installed plugin (lockfile flag), then reload.
 #[tauri::command]
-pub(crate) fn plugin_set_enabled(
+pub(crate) async fn plugin_set_enabled(
     id: String,
     enabled: bool,
     plugins: State<'_, PluginService>,
 ) -> Result<(), String> {
-    plugins.set_enabled(id, enabled)
+    let plugins = plugins.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || plugins.set_enabled(id, enabled))
+        .await
+        .map_err(|e| format!("plugin task join: {e}"))?
 }
 
 /// Uninstall a plugin (delete its dir + lockfile entry), then reload.
 #[tauri::command]
-pub(crate) fn plugin_uninstall(
+pub(crate) async fn plugin_uninstall(
     id: String,
     plugins: State<'_, PluginService>,
 ) -> Result<bool, String> {
-    plugins.uninstall(id)
+    let plugins = plugins.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || plugins.uninstall(id))
+        .await
+        .map_err(|e| format!("plugin task join: {e}"))?
 }
 
 /// Describe a plugin's settings form (config + secret fields).

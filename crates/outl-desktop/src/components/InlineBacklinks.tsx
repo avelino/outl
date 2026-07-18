@@ -39,10 +39,11 @@ export function InlineBacklinks() {
     if (!target) return;
     try {
       const view = await openRef(target);
+      // Backlinks refetch via OutlineView's per-slug effect once the
+      // new page's outline lands; the view no longer carries them.
       setAppState({
         page: view.page,
         outline: view.outline,
-        backlinks: view.backlinks,
       });
       // Position cursor on the source block (the one we just came
       // from). Reset backlink cursor so j/k keep working in the
@@ -61,8 +62,8 @@ export function InlineBacklinks() {
     if (!slug) return;
     const next = appState.backlinksOrder === "newest" ? "oldest" : "newest";
     try {
-      const view = await setBacklinksOrder(next, slug);
-      setAppState({ backlinksOrder: next, backlinks: view.backlinks });
+      const r = await setBacklinksOrder(next, slug);
+      setAppState({ backlinksOrder: r.backlinks_order, backlinks: r.backlinks });
     } catch (e) {
       setAppState("lastError", e instanceof Error ? e.message : String(e));
     }
@@ -74,10 +75,10 @@ export function InlineBacklinks() {
     if (!sourceSlug) return;
     try {
       const view = await openRef(sourceSlug);
+      // Backlinks refetch via OutlineView's per-slug effect.
       setAppState({
         page: view.page,
         outline: view.outline,
-        backlinks: view.backlinks,
       });
       setAppState("selectedBacklinkBlockId", null);
     } catch (e) {
