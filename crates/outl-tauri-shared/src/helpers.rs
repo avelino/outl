@@ -82,17 +82,43 @@ pub fn build_page_view(
             nodes: Vec::new(),
             warnings: Vec::new(),
         });
-    let mut backlinks = backlinks_for_page(workspace, storage_root, &meta);
-    // Order per the user's `[display] backlinks_order` (issue #142).
-    // The config read is negligible next to the `.md` read above.
+    // Backlinks are deliberately NOT computed here. `backlinks_for_page`
+    // is an O(blocks-in-workspace) scan, and this function is on the
+    // first-paint path (every open) AND the post-mutation path (every
+    // block edit, via `finish_in_page`). On a ~66k-node workspace that
+    // made the journal take seconds to appear on desktop and much longer
+    // on mobile. The frontend fetches backlinks lazily via the
+    // `page_backlinks` command after the outline paints — same policy the
+    // TUI has always used (lazy, cached, toggle-gated).
     let backlinks_order = outl_config::load().display.backlinks_order;
-    outl_actions::sort_backlinks(&mut backlinks, backlinks_order.newest_first());
     Ok(PageView {
         page: meta,
         outline: page_outline.nodes,
-        backlinks,
+        backlinks: Vec::new(),
         backlinks_order,
         warnings: page_outline.warnings,
+    })
+}
+
+/// Compute a page's backlinks, sorted per `[display] backlinks_order`.
+///
+/// The lazy counterpart to [`build_page_view`]: the `page_backlinks`
+/// command calls this off the first-paint path so the O(blocks) scan
+/// never blocks the journal appearing. `set_backlinks_order` reuses it to
+/// return the re-sorted list after flipping the preference.
+pub fn compute_backlinks(
+    workspace: &Workspace,
+    storage_root: &Path,
+    page_id: NodeId,
+) -> Result<crate::state::BacklinksReply, ActionError> {
+    let meta = page_meta_action(workspace, page_id)
+        .ok_or_else(|| ActionError::NotInTree(page_id.to_string()))?;
+    let mut backlinks = backlinks_for_page(workspace, storage_root, &meta);
+    let backlinks_order = outl_config::load().display.backlinks_order;
+    outl_actions::sort_backlinks(&mut backlinks, backlinks_order.newest_first());
+    Ok(crate::state::BacklinksReply {
+        backlinks,
+        backlinks_order,
     })
 }
 

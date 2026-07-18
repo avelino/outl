@@ -10,9 +10,42 @@ use outl_actions::{
 use outl_md::index::WorkspaceIndex;
 use outl_md::{BlockEntry, BlockIndex};
 
-use crate::helpers::{build_page_view, parse_date, with_ws, with_ws_mut};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use outl_core::workspace::Workspace;
+use parking_lot::Mutex;
+
+use crate::helpers::{
+    build_page_view, compute_backlinks, parse_date, parse_node_id, with_ws, with_ws_mut,
+};
 use crate::host::AppHost;
-use crate::state::{BlockHit, PageView};
+use crate::state::{BacklinksReply, BlockHit, PageView, ERR_LOADING};
+
+/// Run the O(blocks) backlinks walk off the Tauri IPC/main thread.
+///
+/// `compute_backlinks` materializes every block's text while scanning for
+/// references — on a large workspace (tens of thousands of blocks) that is
+/// seconds of CPU. Run synchronously in a `#[tauri::command]` it holds the
+/// IPC thread and iOS fires the scene-update watchdog (>10s → SIGKILL): the
+/// "journal paints but nothing is clickable, then the app dies" bug, whose
+/// crash backtrace is `page_backlinks → backlinks_for_page → block_text →
+/// materialize_text_from_log` on `com.apple.main-thread`. Offloading keeps
+/// the WebView responsive; the backlinks panel fills in a beat later.
+async fn compute_backlinks_offloaded(
+    workspace: Arc<Mutex<Option<Workspace>>>,
+    root: PathBuf,
+    slug: String,
+) -> Result<BacklinksReply, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let guard = workspace.lock();
+        let ws = guard.as_ref().ok_or_else(|| ERR_LOADING.to_string())?;
+        let id = find_by_slug(ws, &slug).ok_or_else(|| format!("page not found: {slug}"))?;
+        compute_backlinks(ws, &root, id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("backlinks task join: {e}"))?
+}
 
 pub fn list_all_pages<S: AppHost>(state: &S) -> Result<Vec<PageMeta>, String> {
     with_ws(state, |ws| Ok(list_pages(ws)))
@@ -216,21 +249,35 @@ pub fn open_page_by_slug<S: AppHost>(state: &S, slug: String) -> Result<PageView
     })
 }
 
+/// Compute `slug`'s backlinks lazily, off the page-open path.
+///
+/// The frontend calls this after the outline paints (see
+/// [`crate::state::BacklinksReply`]): `backlinks_for_page` is an
+/// `O(blocks-in-workspace)` scan, so keeping it out of `build_page_view`
+/// is what makes the journal appear instantly on a large workspace. An
+/// unknown slug is a soft error the frontend can ignore (the page may
+/// have just been deleted).
+pub async fn page_backlinks<S: AppHost>(state: &S, slug: String) -> Result<BacklinksReply, String> {
+    let root = state.storage_root()?;
+    let workspace = state.workspace_arc();
+    compute_backlinks_offloaded(workspace, root, slug).await
+}
+
 /// Persist the backlinks-list direction (`[display] backlinks_order`,
-/// issue #142) and return `slug`'s view re-sorted under the new order.
+/// issue #142) and return `slug`'s backlinks re-sorted under the new
+/// order.
 ///
 /// A pure display preference — it lives in `config.toml`, never the op
 /// log, and does not converge between devices (same policy as the
-/// theme). `build_page_view` re-reads the preference and applies
-/// `sort_backlinks`, so the returned `PageView` already reflects the
-/// flip; the frontend just swaps it in. Unknown `order` values fall
-/// back to `newest` rather than erroring — a UI toggle can't produce
-/// anything else.
-pub fn set_backlinks_order<S: AppHost>(
+/// theme). Returns only the re-sorted [`BacklinksReply`] (not a whole
+/// `PageView`): the panel already has the outline, it just swaps the
+/// backlinks list. Unknown `order` values fall back to `newest` rather
+/// than erroring — a UI toggle can't produce anything else.
+pub async fn set_backlinks_order<S: AppHost>(
     state: &S,
     order: String,
     slug: String,
-) -> Result<PageView, String> {
+) -> Result<BacklinksReply, String> {
     let mut cfg = outl_config::load();
     cfg.display.backlinks_order = match order.as_str() {
         "oldest" => outl_config::BacklinksOrder::Oldest,
@@ -239,9 +286,40 @@ pub fn set_backlinks_order<S: AppHost>(
     outl_config::save(&cfg).map_err(|e| e.to_string())?;
 
     let root = state.storage_root()?;
+    let workspace = state.workspace_arc();
+    compute_backlinks_offloaded(workspace, root, slug).await
+}
+
+/// Resolve a batch of block ids to the distinct page/journal slugs they
+/// belong to — the sync-progress feed's "page X synced" labels.
+///
+/// The frontend fires this after a `sync-progress` event whose `phase` is
+/// `received-ops` carries a (small, capped) `nodes` list; the engine only
+/// ships block ids, so the slug resolution happens here where the
+/// materialized workspace is. Best-effort: an id not in the tree yet (the
+/// reload may still be in flight) or under no registered page root is
+/// skipped, so the caller renders whatever resolved. Order-preserving and
+/// deduped, so the panel shows the first distinct pages the sync touched.
+/// Cheap by construction (the engine caps `nodes`), so it runs inline
+/// under the workspace lock rather than off-thread.
+pub fn resolve_page_labels<S: AppHost>(
+    state: &S,
+    node_ids: Vec<String>,
+) -> Result<Vec<String>, String> {
     with_ws(state, |ws| {
-        let id = find_by_slug(ws, &slug).ok_or_else(|| format!("page not found: {slug}"))?;
-        build_page_view(ws, &root, id).map_err(|e| e.to_string())
+        let mut seen = std::collections::HashSet::new();
+        let mut slugs = Vec::new();
+        for id in &node_ids {
+            let Ok(node) = parse_node_id(id) else {
+                continue;
+            };
+            if let Some(slug) = ws.slug_for_node(node) {
+                if seen.insert(slug.clone()) {
+                    slugs.push(slug);
+                }
+            }
+        }
+        Ok(slugs)
     })
 }
 

@@ -5,6 +5,25 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ## [Unreleased]
 
+### Added
+
+- **The pairing screen now shows live sync progress instead of a frozen "Loading…".**
+  Pairing a device to a large workspace transfers a ~15 MB snapshot plus a couple hundred thousand ops, which takes the better part of a minute — and until now the screen gave no sign anything was happening.
+  The Sync section (desktop) and the Devices sheet (mobile) now show, as a pass runs: a **real progress bar** for the snapshot download (the only phase with an honest percentage — the total is known from the frame's length prefix before the body arrives), a **live count** of ops received / sent (op totals are only known once a batch finishes, so they surface as a number, not a bar), and an **activity feed** of "device → what synced".
+  For an incremental live sync the feed names the pages that changed (`MacBook Pro → journals/2026-07-18`); on the initial bulk pair it stays a count, since naming tens of thousands of pages is meaningless.
+  Under the hood this is a second, purely-cosmetic channel out of the iroh transport (`outl_actions::SyncProgress` over the `sync-progress` Tauri event) — entirely separate from the load-bearing reload signal, so a dropped progress update can never affect what actually syncs.
+  The feed's page names come from a new `resolve_page_labels` command that resolves the touched block ids to their page/journal slug; the engine caps how many it ships, so it stays cheap.
+
+### Performance
+
+- **Opening today's journal is instant again on the desktop and mobile apps, even on a large workspace.**
+  A ~66k-block / 211k-op workspace took seconds to paint the journal on first open (desktop noticeably, mobile much worse); the TUI stayed fast.
+  The TUI was the clue: all three clients share the same op-log boot + snapshot, so the boot itself was fine — the GUI clients were paying for something the TUI does lazily.
+  That something was **backlinks**: `build_page_view` (in the shared Tauri backend) computed `backlinks_for_page` synchronously — an `O(blocks-in-workspace)` scan — inside every page-open **and** every block-mutation reply, so the whole journal waited on a full-workspace walk before it could paint.
+  The TUI has always computed backlinks lazily (cached, only when the panel is visible); the GUI now matches it.
+  `PageView` no longer carries backlinks (the field stays in the wire shape but comes back empty); a new `page_backlinks(slug)` command computes them off the first-paint path, and each client fetches them after the outline renders (desktop via a slug-keyed effect, mobile via a `createResource`), so the panel fills in a beat later without ever blocking the journal.
+  Mobile additionally moved its boot-time orphan-`.md` reconcile (a filesystem walk of every page) onto a background thread, the way the desktop already did, so it's off the cold-boot critical path too.
+
 ### Fixed
 
 - **Opening a page with many backlinks is much faster (issue #169).**

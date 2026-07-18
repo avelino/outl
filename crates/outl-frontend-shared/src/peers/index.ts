@@ -13,3 +13,5 @@ export { PairingQR } from "./PairingQR";
 export { PeerList } from "./PeerList";
 export { ticketToSvg, type TicketQrOptions } from "./qr";
 export { peersOnline } from "./status";
+export { SyncProgressView } from "./SyncProgressView";
+export { createSyncProgress, type SyncFeedEntry, type SyncProgressState } from "./sync-progress";

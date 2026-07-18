@@ -138,6 +138,14 @@ export interface Backlink {
 export interface PageView {
   page: PageMeta;
   outline: BlockNode[];
+  /**
+   * **Always empty from the open commands now.** Backlinks moved off the
+   * page-open path (`backlinks_for_page` is an O(blocks-in-workspace)
+   * scan that used to block the first journal paint on a large
+   * workspace). Fetch them lazily with {@link PageBacklinks} via
+   * `pageBacklinks(slug)` after the outline renders — the same lazy
+   * policy the TUI uses. Kept in the wire shape for back-compat.
+   */
   backlinks: Backlink[];
   /** Direction `backlinks` was sorted in (issue #142) — `"newest"` or
    * `"oldest"`. Lets a client's direction toggle show the right arrow
@@ -152,6 +160,18 @@ export interface PageView {
    * markdown). Mirrors `outl_md::ParseWarning` exactly.
    */
   warnings?: ParseWarning[];
+}
+
+/**
+ * Reply from `pageBacklinks(slug)` and `setBacklinksOrder(...)`.
+ *
+ * Backlinks are fetched lazily, decoupled from {@link PageView}, so the
+ * O(blocks-in-workspace) `backlinks_for_page` scan never blocks the
+ * journal appearing. Mirrors the Rust `BacklinksReply`.
+ */
+export interface PageBacklinks {
+  backlinks: Backlink[];
+  backlinks_order: BacklinksOrder;
 }
 
 /**
@@ -269,6 +289,27 @@ export interface PeerStatusDto {
   online: boolean;
   rtt_ms: number | null;
 }
+
+/**
+ * A sync-progress update pushed on the `sync-progress` Tauri event while a
+ * pass runs. Mirrors the Rust `outl_actions::SyncProgress` enum (serialized
+ * with an internal `phase` tag, kebab-case). Purely informational — it drives
+ * the pairing-screen progress feed; the load-bearing reload signal is separate.
+ *
+ * `peer` is the peer's short node id; the UI resolves it to a friendly alias
+ * against the peer list it already holds. `snapshot` is the only phase with an
+ * honest percentage (`received` / `total` in bytes, total known up front); op
+ * counts surface as a live number, not a bar. `received-ops.nodes` carries the
+ * (capped) block ids touched, resolved to page slugs via `resolvePageLabels`;
+ * empty on a bulk pass (the initial pair).
+ */
+export type SyncProgress =
+  | { phase: "connecting"; peer: string }
+  | { phase: "snapshot"; peer: string; received: number; total: number }
+  | { phase: "received-ops"; peer: string; count: number; nodes: string[] }
+  | { phase: "pushed-ops"; peer: string; count: number }
+  | { phase: "synced"; peer: string }
+  | { phase: "failed"; peer: string; error: string };
 
 export interface WorkspaceSummary {
   blocks: number;

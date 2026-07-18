@@ -47,6 +47,23 @@ pub struct PageView {
     pub warnings: Vec<outl_md::ParseWarning>,
 }
 
+/// Reply shape for the lazy `page_backlinks` command.
+///
+/// Backlinks are **not** bundled into [`PageView`] anymore:
+/// `backlinks_for_page` is an `O(blocks-in-workspace)` scan, and computing
+/// it inside `build_page_view` blocked every page open and every block
+/// edit synchronously (a ~66k-node workspace made the first journal paint
+/// take seconds on desktop, more on mobile). The frontend now fetches
+/// backlinks lazily after the outline paints — the same lazy/cached policy
+/// the TUI has always used for its backlinks panel. `PageView.backlinks`
+/// stays in the wire shape but comes back empty from the open commands.
+#[derive(Debug, Clone, Serialize)]
+pub struct BacklinksReply {
+    pub backlinks: Vec<Backlink>,
+    /// Direction the list was sorted in (`[display] backlinks_order`).
+    pub backlinks_order: outl_config::BacklinksOrder,
+}
+
 /// One hit from `search_blocks` — the `((…))` block-ref autocomplete.
 ///
 /// The frontend inserts `handle` wrapped in `((…))` (never the display

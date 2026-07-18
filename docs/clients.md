@@ -347,6 +347,32 @@ The `outl_peer_status` command merges the snapshot onto the full `peers.json` li
 The CLI's `outl peer status` is the lone exception (no running transport), so it keeps the transient-endpoint probe.
 See `crates/outl-sync-iroh/CLAUDE.md` → "One endpoint per identity".
 
+### Sync progress feed (pairing screen)
+
+Desktop's Sync panel and mobile's Devices sheet both show a live feed while a sync pass runs against a paired device.
+It reads a `sync-progress` Tauri event the iroh transport emits as the pass advances — connecting, pulling a snapshot, ingesting or pushing ops, done or failed.
+This is purely cosmetic: a dropped update never breaks anything, because the actual "reload the workspace" trigger is a separate, load-bearing signal the progress feed never touches.
+
+What each phase shows:
+
+| Phase | What the user sees |
+|---|---|
+| Connecting | "Connecting to `<peer>`…" |
+| Snapshot | A real progress bar (%). This is the **only** phase with a true percentage — the total byte count comes from the frame's length prefix, known before the body arrives. |
+| Received ops / Pushed ops | A live count ("Receiving 42 changes from `<peer>`"), never a bar — a batch's size is only known once it finishes landing, so it can't be turned into a percentage. |
+| Synced / Failed | A one-line result for the pass. |
+
+Below the pill, an activity feed lists "device → page" lines as ops land.
+This is **best-effort**: the transport ships only the (capped) block ids a batch touched, and the client resolves them to page/journal slugs with a Tauri round-trip.
+A block id that hasn't materialized on this device yet (the reload may still be in flight) resolves to nothing, and the line just keeps its raw op count instead of a page name.
+
+**The per-page feed is empty during the initial pair.**
+A freshly paired device pulls the whole log in one bulk pass, so naming every page it touched is meaningless — the feed only starts naming pages once ordinary incremental syncs (catch-up ticks, gossip-triggered pushes) run afterward.
+
+Implementation: `outl_actions::SyncProgress` (`crates/outl-actions/src/sync.rs`) is the wire payload, threaded through `SyncTransport::set_progress_sink` and bridged to the `sync-progress` Tauri event by
+`outl-tauri-shared`'s `iroh_sync::start_with_reload_bridge`.
+`@outl/shared/peers` (`createSyncProgress` + `<SyncProgressView />`) is the one shared implementation both clients render, so the two panels can't drift.
+
 See `crates/outl-mobile/CLAUDE.md` for the full bundle ID, signing team, container ID set required to build it, and the `NSFileCoordinator`-based peer-file materialisation step that has to run before any read of a peer `ops-*.jsonl`.
 
 ## Opening a page from a user-typed ref

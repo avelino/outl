@@ -86,6 +86,35 @@ pub fn open_workspace_at(
     let snap_cfg = outl_config::load().snapshot;
     workspace.set_snapshot_policy(snap_cfg.enabled, snap_cfg.op_threshold);
 
+    // Write-through snapshot after a cold full replay.
+    //
+    // A receive-only device (mobile paired to a desktop) gets its ops from
+    // sync ingest, which writes `ops-*.jsonl` straight to disk — never
+    // through `Workspace::apply` — so the background snapshot writer (which
+    // only fires from `apply` crossing the threshold) never runs. Every boot
+    // then full-replays the entire log (200k+ ops → tens of seconds on a
+    // phone), and the post-`workspace-ready` reload replays it AGAIN.
+    // Persist one snapshot here, after the first replay that found none on
+    // disk, so the next boot and that reload are O(delta). Best-effort; a
+    // stale/corrupt snapshot is always safe — boot silently falls back to a
+    // full replay — so this can never corrupt state, only save work.
+    // Re-persist a fresh snapshot whenever this boot FULL-REPLAYED (snapshot
+    // absent, stale, or rejected by the convergence guard). A stale snapshot
+    // the guard keeps rejecting would otherwise full-replay on every open, and
+    // the resident 200k-op log is fine to render now (block_text is index-
+    // driven) — but the NEXT boot should adopt a snapshot instead of replaying.
+    // `save_snapshot` is O(log) now (the block-text index makes
+    // `force_materialize_pending` cheap), not the old O(blocks × log), so this
+    // is safe to do after a full replay.
+    if snap_cfg.enabled
+        && !workspace.booted_from_snapshot()
+        && workspace.log().len() as u32 >= snap_cfg.op_threshold
+    {
+        if let Err(e) = workspace.save_snapshot() {
+            warn!("boot: could not persist snapshot: {e}");
+        }
+    }
+
     Ok(workspace)
 }
 
