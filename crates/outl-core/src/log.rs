@@ -4,13 +4,24 @@
 //! `append`/`pop` directly when reordering; outside code should treat the
 //! log as read-only and route mutations through `Workspace`.
 
+use std::collections::HashMap;
+
 use crate::hlc::Hlc;
-use crate::op::LogOp;
+use crate::id::NodeId;
+use crate::op::{LogOp, Op};
 
 /// In-memory op log, sorted by HLC.
 #[derive(Debug, Default, Clone)]
 pub struct OpLog {
     ops: Vec<LogOp>,
+    /// `node -> positions of that node's `Edit` ops in `ops`. Lets
+    /// [`Self::edit_updates`] rebuild a block's text in O(edits-of-node),
+    /// in memory, instead of scanning the whole log per block (O(log)) or
+    /// hitting the on-disk per-node index (a cold seek per op). Kept in sync
+    /// by `append`/`pop` — the only mutators. Positions stay valid because
+    /// `Edit`s are appended at the tail and popped from the tail during
+    /// reorder, so a node's position list is always tail-consistent.
+    edits_by_node: HashMap<NodeId, Vec<usize>>,
 }
 
 impl OpLog {
@@ -47,17 +58,48 @@ impl OpLog {
                 op.ts
             );
         }
+        if let Op::Edit { node, .. } = &op.op {
+            self.edits_by_node
+                .entry(*node)
+                .or_default()
+                .push(self.ops.len());
+        }
         self.ops.push(op);
     }
 
     /// Pop the most recent op. Used by `Tree::apply_op` while reordering.
     pub fn pop(&mut self) -> Option<LogOp> {
-        self.ops.pop()
+        let op = self.ops.pop()?;
+        // The popped op was at the tail, so if it's an `Edit` its position is
+        // the last entry in that node's list — drop it to keep the index in
+        // sync with the shrunk `ops`.
+        if let Op::Edit { node, .. } = &op.op {
+            if let Some(positions) = self.edits_by_node.get_mut(node) {
+                positions.pop();
+            }
+        }
+        Some(op)
     }
 
     /// Iterate all ops in HLC order.
     pub fn iter(&self) -> impl Iterator<Item = &LogOp> {
         self.ops.iter()
+    }
+
+    /// The `Edit` update bytes for `node`, in HLC order, resolved through the
+    /// per-node index — O(edits-of-node), in memory, no log scan and no disk.
+    /// This is the hot path behind `Workspace::block_text`; scanning the whole
+    /// resident log per block was O(log) each (pathological after a full
+    /// replay), and the on-disk `ops_for_node` cold path did a seek per op.
+    pub fn edit_updates(&self, node: NodeId) -> impl Iterator<Item = &[u8]> {
+        self.edits_by_node
+            .get(&node)
+            .into_iter()
+            .flatten()
+            .filter_map(move |&i| match &self.ops[i].op {
+                Op::Edit { text_op, .. } => Some(text_op.as_slice()),
+                _ => None,
+            })
     }
 
     /// Op at index `i` in HLC order, if any.

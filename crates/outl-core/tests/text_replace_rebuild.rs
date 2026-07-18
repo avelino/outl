@@ -119,6 +119,100 @@ fn reedit_after_snapshot_matches_full_replay() {
     );
 }
 
+/// Regression for the RFC #137 Front A empty-cache-boot defect: after a
+/// snapshot boot the LRU is empty, so a NON-Edit op appended this session
+/// (`SetCollapsed` here) is the *only* warm entry for the node while its
+/// historical `Edit` sits on disk. `ops_for_node` must still return the
+/// COMPLETE set — a warm-only answer drops the disk-resident `Edit`, the
+/// Doc rebuilds from an empty history, and the next edit concatenates
+/// (`"hello worldhello"`) instead of replacing (#129 re-opened).
+#[test]
+fn ops_for_node_complete_after_non_edit_op_on_empty_cache_boot() {
+    let tmp = TempDir::new().unwrap();
+    let ops_dir = tmp.path().join(".outl").join("ops");
+    let snapshots_dir = tmp.path().join(".outl").join("snapshots");
+    let actor = ActorId::new();
+    let g = HlcGenerator::new(actor);
+
+    // 1. Create node, edit to "hello", snapshot.
+    let mut ws = Workspace::open_with_storage(
+        actor,
+        Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
+        Some(tmp.path().to_path_buf()),
+    )
+    .unwrap();
+    let n = NodeId::new();
+    ws.apply(logop(
+        &g,
+        Op::Create {
+            node: n,
+            parent: NodeId::root(),
+            position: Fractional::first(),
+        },
+    ))
+    .unwrap();
+    let u1 = ws.build_text_replace_update(n, "hello");
+    ws.apply(logop(
+        &g,
+        Op::Edit {
+            node: n,
+            text_op: u1,
+        },
+    ))
+    .unwrap();
+    ws.save_snapshot().unwrap();
+    drop(ws);
+
+    // 2. Reopen from snapshot (empty LRU). Append a NON-Edit op to `n`
+    //    FIRST — it becomes the only warm entry for `n`, while the
+    //    "hello" Edit stays on disk — THEN edit to "hello world".
+    let mut ws2 = Workspace::open_with_storage(
+        actor,
+        Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
+        Some(tmp.path().to_path_buf()),
+    )
+    .unwrap();
+    assert_eq!(ws2.block_text(n).as_deref(), Some("hello"));
+    ws2.apply(logop(
+        &g,
+        Op::SetCollapsed {
+            node: n,
+            value: true,
+            old_value: false,
+        },
+    ))
+    .unwrap();
+    let u2 = ws2.build_text_replace_update(n, "hello world");
+    ws2.apply(logop(
+        &g,
+        Op::Edit {
+            node: n,
+            text_op: u2,
+        },
+    ))
+    .unwrap();
+    assert_eq!(
+        ws2.block_text(n).as_deref(),
+        Some("hello world"),
+        "partial warm cache must not drop the disk-resident Edit history"
+    );
+    drop(ws2);
+
+    // 3. Full-replay boot must agree — no concatenation persisted to the log.
+    std::fs::remove_dir_all(&snapshots_dir).unwrap();
+    let from_full = Workspace::open_with_storage(
+        actor,
+        Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
+        Some(tmp.path().to_path_buf()),
+    )
+    .unwrap();
+    assert_eq!(
+        from_full.block_text(n).as_deref(),
+        Some("hello world"),
+        "full replay must produce the replacement, not \"hello worldhello\""
+    );
+}
+
 /// Three sequential edits across two sessions (snapshot after the first,
 /// reopen, second + third edits, reopen again) — the original repro from
 /// the issue body, extended to cover multi-edit chains.

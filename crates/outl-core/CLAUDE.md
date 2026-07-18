@@ -31,6 +31,23 @@ Treat every change as production-bound.
     This is a read-side safety net only; writers must still serialize their appends (the corruption was produced by an unsynchronized `outl-sync-iroh` write).
     Dedup-by-op-id makes re-reading a recovered op harmless.
     See `docs/storage.md` → Concurrency / Failure modes.
+  - **Lazy, index-driven read path (RFC #137 Front A).**
+    `reload` (boot) streams each line with a **parse-lite** pass that extracts only `(ts, node)` per op — it never deserializes `Op::Edit`'s `text_op` bytes — builds the offset + node indexes, and leaves the LRU **empty**.
+    Reparsing/re-allocating the whole log into the cache on every open is exactly what made boot O(log size) and froze the mobile app; the index plus a small snapshot delta is all boot needs.
+    The full ops are read back lazily via the offset index (`read_op_at`, one `seek` + one-line parse), preferring a warm LRU hit.
+    Every `Storage` read method is driven off the index — `all_ops`, `ops_since`, `ops_since_per_actor`, `ops_for_actor`, `ops_for_node`, `last_ts_per_actor`.
+    Each returns the **complete** op set in HLC order regardless of what the LRU holds — the LRU is a RAM bound, the index is the logical view.
+    `MemoryStorage` is unchanged (no disk, no index).
+    See `docs/storage.md` → "Boot reads an index, not the whole log".
+  - **The persisted index is a dotfile, kept off the sync surface (RFC #137 Front B).**
+    The offset + node indexes are saved next to each op log as `.ops-<actor>.idx` / `.ops-<actor>.nodes.idx` so the next boot loads them instead of reparsing the whole log.
+    They are **dot-prefixed on purpose**: a purely local boot cache (every device rebuilds it from its own `.jsonl`) must NOT ride the file-sync surface.
+    iCloud drops `.`-prefixed paths across devices and iroh never ships sidecars, so the index stays local.
+    The freshness check trusts the sidecar's prefix `[0, max_offset)` after validating the tail byte-exactly.
+    A *synced* index could arrive torn-in-the-middle with an intact tail, pass that check, and feed a wrong offset into `read_op_at` → a silently dropped op on the index-driven reads.
+    Keeping it local removes that vector, leaving only universal local bit-rot, which is recoverable (a bad parse → rebuild, or the next full replay).
+    A stale/missing/corrupt index is always safe: it triggers a full rebuild from the `.jsonl`.
+    See `ActorIndex::sidecar_path` and `docs/storage.md` → "Boot reads an index, not the whole log".
 - Domain models: `Workspace`, `Page`, `Journal`, `Block`, `Property`, `Tag`
 - Materialized-state **snapshot** boot cache (`snapshot.rs`): a projection of the tree + block text that short-circuits full op-log replay on boot (#109/#128).
   It is **not** a `Storage` responsibility — the snapshot is a *local* cache and is written straight to `<root>/.outl/snapshots/snap-<actor>.bin` (never on the file-sync surface, never through the op log).
@@ -56,18 +73,24 @@ That was the cause of issue #108: a vault in the hundreds-of-thousands-of-blocks
 
 Instead it keeps two tiers, both reconstructed on open from the op log:
 
-- `text: HashMap<NodeId, String>` — the materialized string of every block.
+- `text: RefCell<HashMap<NodeId, String>>` — the materialized string of a block.
   The hot read path behind `Workspace::block_text`.
   Cheap, roughly the text size.
+  **Lazily populated** on the full-replay boot path (see below); `RefCell` so the `&self` read accessor can cache a rebuilt string without forcing `&mut self` on its ~150 call sites.
 - `cache: DocCache` — a bounded LRU (`DOC_CACHE_CAP = 512`) of live `Doc`s, only for blocks being edited or merged right now.
   A cold block is rebuilt on demand via `ContentStore::ensure_doc` (private, in `src/content.rs`), which replays that block's `Edit` ops from the log into a fresh `Doc`.
   Yrs is a CRDT, so update order does not change the result — convergence is preserved.
 
 `open_with_storage` replays in **two passes**.
-Pass 1 applies every op to the tree/log (`Edit` is a no-op on the tree).
-Pass 2 groups `Edit` ops by node and materializes one `Doc` at a time, so the open-time memory peak is a single live doc rather than one per block.
+Pass 1 applies every op to the tree/log (`Edit` is a no-op on the tree) — the tree comes out **fully materialized**.
+Pass 2 does **not** materialize block text eagerly (that O(all blocks) pass was a major boot freeze on large snapshotless vaults, #179).
+It records which nodes carry `Edit` history in a `pending` set, and `block_text` rebuilds each block's string lazily from the (complete) in-memory log on first read.
+A block never touched since boot reads back byte-identical to the old eager pass; a never-edited node reads back as `None`.
+The snapshot boot path is unchanged — it hydrates the full text map up front (already materialized strings, not a replay) and leaves `pending` empty.
+The snapshot **writer** (`build_snapshot_body`) force-materializes any still-deferred block first, so a snapshot always carries every block's string.
 
 This is a materialization change only: the op log stays the source of truth, the `Doc`/string are projections, and the public surface (`block_text`, `build_text_replace_update`, `apply`) is unchanged.
+`Workspace` is only ever reached through `Arc<Mutex<..>>`, so it needs `Send` (which `RefCell<T: Send>` keeps) but never `Sync`.
 The resident `OpLog` still holds every `Op::Edit`'s `text_op` bytes (the cheaper second copy of history); shrinking that is the separate per-page op-log shards work, not this change.
 
 ## What this crate does NOT own

@@ -71,6 +71,19 @@ impl NodeIndex {
         self.entries.values().map(|v| v.len()).sum()
     }
 
+    /// The largest byte offset recorded across every node, or `None` when
+    /// empty. Mirrors [`super::index::OffsetIndex::max_offset`]: boot uses
+    /// it to confirm the node index reaches the same extent of the `.jsonl`
+    /// as the offset index. Every op targets a node, so a consistent pair
+    /// shares the same max offset; a lag means a crash landed between the
+    /// two sidecar appends and the node index must be rebuilt.
+    pub fn max_offset(&self) -> Option<u64> {
+        self.entries
+            .values()
+            .flat_map(|v| v.iter().map(|(_, o)| *o))
+            .max()
+    }
+
     /// Load from a `ops-<actor>.nodes.idx` sidecar. Returns:
     /// - `Ok(Some)` when the file exists and parses.
     /// - `Ok(None)` when missing, empty, or corrupt (caller rebuilds).
@@ -243,8 +256,15 @@ impl ActorNodeIndex {
     }
 
     /// Path of the `.nodes.idx` sidecar for `actor` inside `ops_dir`.
+    /// Path of the `.nodes.idx` sidecar for a given actor inside `ops_dir`.
+    ///
+    /// Dot-prefixed for the same reason as [`crate::storage::index::ActorIndex::sidecar_path`]: a
+    /// purely local boot cache must stay off the file-sync surface so a
+    /// torn-in-the-middle synced copy can never pass the freshness check and
+    /// feed a wrong offset into `read_op_at`. See that doc for the full
+    /// silent-loss argument.
     pub fn sidecar_path(ops_dir: &Path, actor: ActorId) -> PathBuf {
-        ops_dir.join(format!("ops-{actor}.nodes.idx"))
+        ops_dir.join(format!(".ops-{actor}.nodes.idx"))
     }
 
     /// Snapshot of every actor known to the index. Used by

@@ -89,9 +89,43 @@ impl OffsetIndex {
         self.entries.len()
     }
 
+    /// The most recent HLC in this actor's index, or `None` when empty.
+    /// `BTreeMap` keeps keys in HLC order, so this is the last key.
+    pub fn last_ts(&self) -> Option<Hlc> {
+        self.entries.keys().next_back().copied()
+    }
+
+    /// Every indexed HLC, in ascending HLC order.
+    pub fn timestamps(&self) -> impl Iterator<Item = &Hlc> {
+        self.entries.keys()
+    }
+
     /// Whether the index holds zero ops.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// The largest byte offset recorded, or `None` when empty.
+    ///
+    /// This is the on-disk position of the LAST physical record the index
+    /// covers. Boot's freshness check seeks here to measure how far into
+    /// the `.jsonl` the index actually reaches (`max_offset + line_len`).
+    /// Scanning the values (not `.last()`) is robust even if append order
+    /// and HLC order ever diverge.
+    pub fn max_offset(&self) -> Option<u64> {
+        self.entries.values().copied().max()
+    }
+
+    /// `(max_offset, how many entries map to it)`, or `None` when empty.
+    ///
+    /// The count lets the freshness check confirm the physical record at
+    /// `max_offset` yields *exactly* the ops the index attributes to it —
+    /// a glued line recovers several ops at one offset, so the record's op
+    /// count must match the number of index entries pinned to that offset.
+    pub fn max_offset_and_count(&self) -> Option<(u64, usize)> {
+        let max = self.entries.values().copied().max()?;
+        let count = self.entries.values().filter(|&&o| o == max).count();
+        Some((max, count))
     }
 
     /// Load the index from `path`. Returns:
@@ -287,11 +321,84 @@ impl ActorIndex {
         self.inner.read().values().map(|i| i.len()).sum()
     }
 
+    /// The most recent HLC recorded per actor, straight from the offset
+    /// index keys. This is the complete per-actor high-water mark — it
+    /// does not depend on which ops are currently warm in the LRU, so a
+    /// storage that boots with an empty cache still answers correctly.
+    pub fn last_ts_per_actor(&self) -> std::collections::HashMap<crate::id::ActorId, Hlc> {
+        self.inner
+            .read()
+            .iter()
+            .filter_map(|(actor, idx)| idx.last_ts().map(|ts| (*actor, ts)))
+            .collect()
+    }
+
+    /// Every `(actor, ts)` the index knows about, in no particular
+    /// order. Callers rehydrate each op and sort by HLC afterwards.
+    pub fn ts_iter(&self) -> Vec<(crate::id::ActorId, Hlc)> {
+        let mut out = Vec::new();
+        for (actor, idx) in self.inner.read().iter() {
+            out.extend(idx.timestamps().map(|ts| (*actor, *ts)));
+        }
+        out
+    }
+
+    /// Every `(actor, ts)` whose HLC sorts strictly after `cutoff`,
+    /// across every actor.
+    pub fn ts_after(&self, cutoff: Hlc) -> Vec<(crate::id::ActorId, Hlc)> {
+        let mut out = Vec::new();
+        for (actor, idx) in self.inner.read().iter() {
+            out.extend(idx.after(cutoff).map(|(ts, _)| (*actor, *ts)));
+        }
+        out
+    }
+
+    /// Every HLC recorded for `actor`, in ascending HLC order.
+    pub fn ts_for_actor(&self, actor: crate::id::ActorId) -> Vec<Hlc> {
+        self.inner
+            .read()
+            .get(&actor)
+            .map(|idx| idx.timestamps().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// The per-actor delta: for each actor, every HLC strictly after its
+    /// mark in `cutoff`, or all of its HLCs when the actor is absent
+    /// from `cutoff` (unseen — all its ops are still pending). Mirrors
+    /// [`crate::storage::Storage::ops_since_per_actor`]'s semantics on
+    /// the index so the `JsonlStorage` override never drops a lagging
+    /// peer's low-HLC op below another actor's mark.
+    pub fn ts_since_per_actor(
+        &self,
+        cutoff: &BTreeMap<crate::id::ActorId, Hlc>,
+    ) -> Vec<(crate::id::ActorId, Hlc)> {
+        let mut out = Vec::new();
+        for (actor, idx) in self.inner.read().iter() {
+            match cutoff.get(actor) {
+                Some(c) => out.extend(idx.after(*c).map(|(ts, _)| (*actor, *ts))),
+                None => out.extend(idx.timestamps().map(|ts| (*actor, *ts))),
+            }
+        }
+        out
+    }
+
     /// Path of the `.idx` sidecar for a given actor inside `ops_dir`.
     /// Public so `JsonlStorage` can compute the same path the index
     /// layer would.
+    /// Path of the `.idx` sidecar for a given actor inside `ops_dir`.
+    ///
+    /// **Dot-prefixed on purpose.** The offset index is a purely *local*
+    /// boot cache (every device rebuilds it from its own `.jsonl`), so it
+    /// must NOT ride the file-sync surface: iCloud Documents drops
+    /// `.`-prefixed paths across devices, keeping this local, and iroh (the
+    /// default transport) never ships sidecars. A synced index could arrive
+    /// torn-in-the-middle with an intact tail and pass the freshness check
+    /// while carrying a wrong middle offset → silent op loss on the
+    /// index-driven reads. Keeping it off the sync surface removes that
+    /// vector, leaving only universal local bit-rot (recoverable: a bad
+    /// parse → rebuild, or the next full replay).
     pub fn sidecar_path(ops_dir: &Path, actor: crate::id::ActorId) -> PathBuf {
-        ops_dir.join(format!("ops-{actor}.idx"))
+        ops_dir.join(format!(".ops-{actor}.idx"))
     }
 }
 

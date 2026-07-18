@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tracing::{debug, warn};
 
@@ -20,9 +20,13 @@ use crate::op::LogOp;
 use crate::storage::{ActorIndex, ActorNodeIndex, NodeIndex, OffsetIndex, PageScope, StorageError};
 
 use super::{
-    op_node, parse_actor_from_ops_filename, parse_log_line, read_log_record, JsonlStorage,
-    RecordRead,
+    parse_actor_from_ops_filename, parse_log_line, read_log_record, JsonlStorage, RecordRead,
 };
+
+/// Parse-lite ops recovered from one physical record: `(ts, node)` per op
+/// (several when a glued line is recovered). Same shape as
+/// [`RecordRead::Ops`]'s payload.
+type LiteOps = Vec<(Hlc, Option<NodeId>)>;
 
 impl JsonlStorage {
     /// Read a single op from disk by `(actor, ts)`. Returns `None`
@@ -50,6 +54,20 @@ impl JsonlStorage {
         // matches (same recovery semantics as the boot path).
         let ops = parse_log_line(line.trim()).ok()?;
         ops.into_iter().find(|o| o.ts == ts)
+    }
+
+    /// Read one op, preferring a warm LRU entry over a disk seek.
+    ///
+    /// Cache is keyed by the globally-unique HLC, so a hit is the exact
+    /// op. On a miss (the common case right after boot, when the LRU is
+    /// empty) it falls through to [`Self::read_op_at`]. Returns `None`
+    /// when neither source can produce the op (e.g. a torn line the full
+    /// parse rejects). Used by the cold-fallback `Storage` read methods.
+    pub(super) fn read_op_hybrid(&self, actor: ActorId, ts: Hlc) -> Option<LogOp> {
+        if let Some(op) = self.cache.read().peek(&ts).cloned() {
+            return Some(op);
+        }
+        self.read_op_at(actor, ts)
     }
 
     /// Path of the `.jsonl` for `actor` under this storage's scope.
@@ -93,7 +111,6 @@ impl JsonlStorage {
     }
 
     fn reload_global(&mut self) -> Result<(), StorageError> {
-        let mut all: Vec<LogOp> = Vec::new();
         let mut per_file: Vec<(String, u64, usize, usize)> = Vec::new();
         let dir = std::fs::read_dir(&self.ops_dir)
             .map_err(|e| StorageError::Backend(format!("read {}: {e}", self.ops_dir.display())))?;
@@ -121,14 +138,13 @@ impl JsonlStorage {
             }
             let file_size = entry.metadata().map(|m| m.len()).unwrap_or(0);
 
-            let file = match File::open(&path) {
-                Ok(f) => f,
-                Err(e) => {
-                    warn!("cannot open {}: {e}", path.display());
-                    per_file.push((name, file_size, 0, 0));
-                    continue;
-                }
-            };
+            // Readability guard: a file we can't open contributes nothing,
+            // but must not fail the whole workspace open.
+            if let Err(e) = File::open(&path) {
+                warn!("cannot open {}: {e}", path.display());
+                per_file.push((name, file_size, 0, 0));
+                continue;
+            }
             let file_actor = match parse_actor_from_ops_filename(&name) {
                 Some(actor) => actor,
                 None => {
@@ -142,87 +158,37 @@ impl JsonlStorage {
                 }
             };
 
-            let mut lines_read = 0usize;
-            let mut ops_parsed = 0usize;
-            let mut rebuilt_hlc = OffsetIndex::new();
-            let mut rebuilt_node = NodeIndex::new();
-            let mut offset: u64 = 0;
-            let mut reader = BufReader::new(file);
-            let mut buf: Vec<u8> = Vec::new();
-            loop {
-                let start = offset;
-                let record = match read_log_record(&mut reader, &mut buf) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        warn!("io error {}:{}: {e}", path.display(), lines_read + 1);
-                        break;
-                    }
-                };
-                match record {
-                    RecordRead::Eof => break,
-                    RecordRead::Skip { consumed, reason } => {
-                        lines_read += 1;
-                        if let Some(reason) = reason {
-                            warn!("skipping {}:{}: {reason}", path.display(), lines_read);
-                        }
-                        offset += consumed;
-                    }
-                    RecordRead::Ops { consumed, ops } => {
-                        lines_read += 1;
-                        if ops.len() > 1 {
-                            warn!(
-                                "recovered {} glued ops on {}:{} (concatenated JSON with no \
-                                 newline — likely an interleaved concurrent append)",
-                                ops.len(),
-                                path.display(),
-                                lines_read
-                            );
-                        }
-                        for op in &ops {
-                            rebuilt_hlc.insert(op.ts, start);
-                            if let Some(node) = op_node(&op.op) {
-                                rebuilt_node.insert(node, op.ts, start);
-                            }
-                        }
-                        ops_parsed += ops.len();
-                        all.extend(ops);
-                        offset += consumed;
-                    }
-                }
-            }
-            // Persist both sidecars next to the .jsonl.
+            // Load the persisted sidecars when they exactly cover the
+            // `.jsonl`; rebuild via parse-lite otherwise. The `.idx` bytes are
+            // the ~4.3s reload win — we skip re-tokenizing every `text_op`.
             let hlc_path = ActorIndex::sidecar_path(&self.ops_dir, file_actor);
-            if let Err(e) = rebuilt_hlc.save(&hlc_path) {
-                warn!("could not persist index {}: {e}", hlc_path.display());
-            }
             let node_path = ActorNodeIndex::sidecar_path(&self.ops_dir, file_actor);
-            if let Err(e) = rebuilt_node.save(&node_path) {
-                warn!("could not persist node index {}: {e}", node_path.display());
-            }
-            seen_hlc.insert(file_actor, rebuilt_hlc);
-            seen_node.insert(file_actor, rebuilt_node);
+            let (hlc_idx, node_idx) = Self::load_actor_indexes(&path, &hlc_path, &node_path);
+            let ops_indexed = hlc_idx.len();
+            seen_hlc.insert(file_actor, hlc_idx);
+            seen_node.insert(file_actor, node_idx);
             debug!(
-                "jsonl file {} size={} lines={} ops_parsed={}",
-                name, file_size, lines_read, ops_parsed
+                "jsonl file {} size={} ops_indexed={}",
+                name, file_size, ops_indexed
             );
-            per_file.push((name, file_size, lines_read, ops_parsed));
+            per_file.push((name, file_size, ops_indexed, ops_indexed));
         }
 
-        all.sort_by_key(|op| op.ts);
+        let total_ops: usize = per_file.iter().map(|(_, _, _, ops)| ops).sum();
         debug!(
-            "jsonl storage (global) loaded {} ops from {} ({} files)",
-            all.len(),
+            "jsonl storage (global) indexed {} ops from {} ({} files)",
+            total_ops,
             self.ops_dir.display(),
             per_file.len()
         );
 
-        {
-            let mut cache = self.cache.write();
-            cache.clear();
-            for op in &all {
-                cache.put(op.ts, op.clone());
-            }
-        }
+        // Boot leaves the LRU empty. The offset/node indexes above are all
+        // boot needs; the full ops (with their heavy `text_op` bytes) are
+        // read back lazily from disk on demand via the offset index (see
+        // `read_op_at` / the cold-fallback `Storage` methods). Filling the
+        // cache here is what reparsed and re-allocated the whole log on
+        // every open — RFC #137 Front A removes that.
+        self.cache.write().clear();
         for (actor, idx) in seen_hlc {
             self.index.replace(actor, idx);
         }
@@ -237,24 +203,219 @@ impl JsonlStorage {
     /// not O(workspace history).
     fn reload_per_page(&mut self, slug: &str) -> Result<(), StorageError> {
         let path = self.own_ops_path();
-        let mut all: Vec<LogOp> = Vec::new();
-        let mut rebuilt_hlc = OffsetIndex::new();
-        let mut rebuilt_node = NodeIndex::new();
+        let own_dir = self.own_ops_dir();
+        let hlc_path = ActorIndex::sidecar_path(&own_dir, self.actor);
+        let node_path = ActorNodeIndex::sidecar_path(&own_dir, self.actor);
 
-        let file = match File::open(&path) {
+        // Same load-or-rebuild path as `reload_global`, over the single
+        // `<actor>/<slug>.jsonl` this storage owns. A missing file (fresh
+        // page) yields empty indexes without writing spurious sidecars.
+        let (hlc_idx, node_idx) = Self::load_actor_indexes(&path, &hlc_path, &node_path);
+
+        debug!(
+            "jsonl storage (per-page {}) indexed {} ops from {}",
+            slug,
+            hlc_idx.len(),
+            path.display()
+        );
+
+        // Boot leaves the LRU empty — see `reload_global`. Cold ops come
+        // back from disk on demand via the offset index.
+        self.cache.write().clear();
+        self.index.replace(self.actor, hlc_idx);
+        self.node_index.replace(self.actor, node_idx);
+        Ok(())
+    }
+
+    /// Build the offset + node index pair for one `.jsonl`, preferring the
+    /// persisted sidecars over a full parse-lite rebuild.
+    ///
+    /// The `.idx` / `.nodes.idx` are a **cache**, never source of truth, so
+    /// this is deliberately conservative: a wrong "fresh" verdict silently
+    /// loses ops (this is the CRDT op log — there is no second chance), while
+    /// a needless rebuild is only slower. When in doubt, rebuild.
+    ///
+    /// Decision ladder (see [`Self::try_fresh_actor_indexes`]):
+    /// 1. Load both sidecars. Missing / corrupt / I/O error on either →
+    ///    rebuild.
+    /// 2. Validate the loaded pair exactly covers the `.jsonl`. Byte-exact
+    ///    coverage → use as-is (no reparse). Appended-since (file grew) →
+    ///    index only the TAIL and persist. Anything suspicious (truncated
+    ///    file, index past EOF, tail record doesn't parse, tail ts/offset
+    ///    disagree, node index lags) → rebuild.
+    fn load_actor_indexes(
+        jsonl_path: &Path,
+        idx_path: &Path,
+        node_idx_path: &Path,
+    ) -> (OffsetIndex, NodeIndex) {
+        match Self::try_fresh_actor_indexes(jsonl_path, idx_path, node_idx_path) {
+            Some(pair) => pair,
+            None => Self::rebuild_actor_indexes(jsonl_path, idx_path, node_idx_path),
+        }
+    }
+
+    /// Attempt to satisfy the load from the persisted sidecars. Returns
+    /// `Some((offset, node))` when the sidecars can be trusted — either
+    /// byte-exact fresh, or grown-and-tail-reindexed — and `None` to signal
+    /// the caller must rebuild from scratch. See [`Self::load_actor_indexes`]
+    /// for the full rationale; every `None` branch is a conservative "the
+    /// cache disagrees with the file, don't trust it".
+    fn try_fresh_actor_indexes(
+        jsonl_path: &Path,
+        idx_path: &Path,
+        node_idx_path: &Path,
+    ) -> Option<(OffsetIndex, NodeIndex)> {
+        // Both sidecars must load cleanly. A `None` (missing / corrupt) or a
+        // real I/O `Err` on either side falls through to a full rebuild.
+        let mut offset_index = OffsetIndex::load(idx_path).ok().flatten()?;
+        let mut node_index = NodeIndex::load(node_idx_path).ok().flatten()?;
+
+        let file_size = std::fs::metadata(jsonl_path).ok()?.len();
+
+        // Extent the offset index claims to cover: the record at its MAX
+        // offset. An empty index is only trustworthy over an empty file.
+        let (off_max, entries_at_max) = match offset_index.max_offset_and_count() {
+            Some(v) => v,
+            None => {
+                return if file_size == 0 {
+                    Some((offset_index, node_index))
+                } else {
+                    None
+                }
+            }
+        };
+
+        // A non-empty index over an empty file is inconsistent.
+        if file_size == 0 {
+            return None;
+        }
+
+        // The node index must reach the same extent. Every op targets a node,
+        // so a consistent pair shares the same max offset; a lag (a crash
+        // between the two sidecar appends) means the node index is missing the
+        // tail — rebuild rather than trust a partial one (`ops_for_node` feeds
+        // block-text rebuild, #129).
+        if node_index.max_offset() != Some(off_max) {
+            return None;
+        }
+
+        // Read the physical record at `off_max`. It must parse, its byte
+        // length gives the covered extent, and its ops must be exactly the
+        // entries the index pins to `off_max`.
+        let (consumed, ops_at_max) = Self::read_record_at(jsonl_path, off_max)?;
+        if ops_at_max.len() != entries_at_max {
+            return None;
+        }
+        for (ts, _) in &ops_at_max {
+            if offset_index.get(ts) != Some(off_max) {
+                return None;
+            }
+        }
+        let covered_end = off_max + consumed;
+
+        if covered_end == file_size {
+            // Fresh: byte-exact coverage. Use as-is, no reparse — this is the
+            // whole point of the optimization.
+            return Some((offset_index, node_index));
+        }
+        if covered_end > file_size {
+            // Index points past EOF (the `.jsonl` was truncated / shrank).
+            return None;
+        }
+
+        // Grew: the log appended since the sidecars were last written. The op
+        // log only ever appends, so the prefix `[0, covered_end)` is already
+        // indexed identically — index only the TAIL `[covered_end, EOF)` and
+        // merge it into the loaded pair. O(delta), not O(log).
+        Self::reindex_tail(jsonl_path, covered_end, &mut offset_index, &mut node_index)?;
+        // Persist the extended sidecars so the next boot is byte-exact fresh.
+        if let Err(e) = offset_index.save(idx_path) {
+            warn!("could not persist index {}: {e}", idx_path.display());
+        }
+        if let Err(e) = node_index.save(node_idx_path) {
+            warn!(
+                "could not persist node index {}: {e}",
+                node_idx_path.display()
+            );
+        }
+        Some((offset_index, node_index))
+    }
+
+    /// Read the single record starting at `offset` in the `.jsonl`, returning
+    /// its byte length and parse-lite ops. `None` on any seek/read failure or
+    /// when the bytes there don't parse as an op record — both of which mean
+    /// the index disagrees with the file and the caller must rebuild.
+    fn read_record_at(path: &Path, offset: u64) -> Option<(u64, LiteOps)> {
+        let mut file = File::open(path).ok()?;
+        file.seek(SeekFrom::Start(offset)).ok()?;
+        let mut reader = BufReader::new(file);
+        let mut buf: Vec<u8> = Vec::new();
+        match read_log_record(&mut reader, &mut buf).ok()? {
+            RecordRead::Ops { consumed, ops } => Some((consumed, ops)),
+            // A blank/non-UTF8/unparseable record, or EOF, where the index
+            // says an op lives is suspicious → rebuild.
+            RecordRead::Skip { .. } | RecordRead::Eof => None,
+        }
+    }
+
+    /// Index the tail of a `.jsonl` starting at `start_offset` into the given
+    /// (already-loaded) indexes, using the same parse-lite pass and offset
+    /// accounting as a full rebuild. `None` on a hard I/O error (caller
+    /// rebuilds). Malformed lines are skipped exactly as the rebuild does.
+    fn reindex_tail(
+        path: &Path,
+        start_offset: u64,
+        offset_index: &mut OffsetIndex,
+        node_index: &mut NodeIndex,
+    ) -> Option<()> {
+        let mut file = File::open(path).ok()?;
+        file.seek(SeekFrom::Start(start_offset)).ok()?;
+        let mut reader = BufReader::new(file);
+        let mut buf: Vec<u8> = Vec::new();
+        let mut offset = start_offset;
+        loop {
+            let start = offset;
+            let record = read_log_record(&mut reader, &mut buf).ok()?;
+            match record {
+                RecordRead::Eof => break,
+                RecordRead::Skip { consumed, .. } => offset += consumed,
+                RecordRead::Ops { consumed, ops } => {
+                    for (ts, node) in &ops {
+                        offset_index.insert(*ts, start);
+                        if let Some(node) = node {
+                            node_index.insert(*node, *ts, start);
+                        }
+                    }
+                    offset += consumed;
+                }
+            }
+        }
+        Some(())
+    }
+
+    /// Rebuild both indexes from scratch by streaming the `.jsonl` once with
+    /// the parse-lite pass (extracts `(ts, node)` per op; never tokenizes
+    /// `Op::Edit`'s `text_op`). Same cost as the legacy full load, so a
+    /// missing/stale sidecar never makes boot slower than before this
+    /// optimization. Persists both sidecars unless the file doesn't exist.
+    fn rebuild_actor_indexes(
+        jsonl_path: &Path,
+        idx_path: &Path,
+        node_idx_path: &Path,
+    ) -> (OffsetIndex, NodeIndex) {
+        let mut hlc = OffsetIndex::new();
+        let mut node = NodeIndex::new();
+
+        let file = match File::open(jsonl_path) {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // Page has no ops yet — fresh workspace, nothing to load.
-                self.cache.write().clear();
-                self.index.replace(self.actor, OffsetIndex::new());
-                self.node_index.replace(self.actor, NodeIndex::new());
-                return Ok(());
+                // No file yet (fresh page / peer not synced). Empty indexes,
+                // and DON'T write sidecars for a file that isn't there.
+                return (hlc, node);
             }
             Err(e) => {
-                return Err(StorageError::Backend(format!(
-                    "open {}: {e}",
-                    path.display()
-                )))
+                warn!("cannot open {} to rebuild index: {e}", jsonl_path.display());
+                return (hlc, node);
             }
         };
 
@@ -267,7 +428,7 @@ impl JsonlStorage {
             let record = match read_log_record(&mut reader, &mut buf) {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!("io error {}:{}: {e}", path.display(), lines_read + 1);
+                    warn!("io error {}:{}: {e}", jsonl_path.display(), lines_read + 1);
                     break;
                 }
             };
@@ -276,52 +437,141 @@ impl JsonlStorage {
                 RecordRead::Skip { consumed, reason } => {
                     lines_read += 1;
                     if let Some(reason) = reason {
-                        warn!("skipping {}:{}: {reason}", path.display(), lines_read);
+                        warn!("skipping {}:{}: {reason}", jsonl_path.display(), lines_read);
                     }
                     offset += consumed;
                 }
                 RecordRead::Ops { consumed, ops } => {
                     lines_read += 1;
-                    for op in &ops {
-                        rebuilt_hlc.insert(op.ts, start);
-                        if let Some(node) = op_node(&op.op) {
-                            rebuilt_node.insert(node, op.ts, start);
+                    if ops.len() > 1 {
+                        warn!(
+                            "recovered {} glued ops on {}:{} (concatenated JSON with no \
+                             newline — likely an interleaved concurrent append)",
+                            ops.len(),
+                            jsonl_path.display(),
+                            lines_read
+                        );
+                    }
+                    for (ts, n) in &ops {
+                        hlc.insert(*ts, start);
+                        if let Some(n) = n {
+                            node.insert(*n, *ts, start);
                         }
                     }
-                    all.extend(ops);
                     offset += consumed;
                 }
             }
         }
 
-        let own_dir = self.own_ops_dir();
-        let hlc_path = ActorIndex::sidecar_path(&own_dir, self.actor);
-        if let Err(e) = rebuilt_hlc.save(&hlc_path) {
-            warn!("could not persist index {}: {e}", hlc_path.display());
+        // Persist both sidecars next to the `.jsonl`.
+        if let Err(e) = hlc.save(idx_path) {
+            warn!("could not persist index {}: {e}", idx_path.display());
         }
-        let node_path = ActorNodeIndex::sidecar_path(&own_dir, self.actor);
-        if let Err(e) = rebuilt_node.save(&node_path) {
-            warn!("could not persist node index {}: {e}", node_path.display());
+        if let Err(e) = node.save(node_idx_path) {
+            warn!(
+                "could not persist node index {}: {e}",
+                node_idx_path.display()
+            );
         }
+        (hlc, node)
+    }
 
-        debug!(
-            "jsonl storage (per-page {}) loaded {} ops from {} ({} lines)",
-            slug,
-            all.len(),
-            path.display(),
-            lines_read
-        );
-
-        {
-            let mut cache = self.cache.write();
-            cache.clear();
-            for op in &all {
-                cache.put(op.ts, op.clone());
+    /// Cold-path `all_ops`: read every `.jsonl` this storage is
+    /// responsible for SEQUENTIALLY — one open per file, streaming lines
+    /// in order — instead of one `File::open` + seek per op.
+    ///
+    /// This is the full-replay boot path (211k ops on a mobile
+    /// install-clean). Seeking per op via the offset index turns that into
+    /// 211k `File::open` syscalls; a sequential stream reads each file
+    /// once. Uses the FULL [`parse_log_line`] (not the parse-lite reload
+    /// pass) because these ops are applied/sent — they need `text_op`.
+    ///
+    /// Files walked mirror `reload_global` / `reload_per_page`: every
+    /// `ops-<actor>.jsonl` under Global, the single `<actor>/<slug>.jsonl`
+    /// under PerPage. Disk is complete (`append_op` writes the line before
+    /// caching), so this returns the full op set.
+    pub(super) fn read_all_ops_sequential(&self) -> Result<Vec<LogOp>, StorageError> {
+        let mut out: Vec<LogOp> = Vec::new();
+        match &self.scope {
+            PageScope::Global => {
+                let dir = std::fs::read_dir(&self.ops_dir).map_err(|e| {
+                    StorageError::Backend(format!("read {}: {e}", self.ops_dir.display()))
+                })?;
+                for entry in dir {
+                    let entry = match entry {
+                        Ok(e) => e,
+                        Err(e) => {
+                            warn!("skipping unreadable entry: {e}");
+                            continue;
+                        }
+                    };
+                    let path = entry.path();
+                    let name = path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or_default();
+                    if !name.starts_with("ops-") || !name.ends_with(".jsonl") {
+                        continue;
+                    }
+                    if parse_actor_from_ops_filename(name).is_none() {
+                        // Conflict copy (`ops-<id> 2.jsonl`, sync-conflict);
+                        // reload skips these, so must we.
+                        continue;
+                    }
+                    Self::read_ops_file_into(&path, &mut out);
+                }
+            }
+            PageScope::PerPage(_) => {
+                let path = self.own_ops_path();
+                Self::read_ops_file_into(&path, &mut out);
             }
         }
-        self.index.replace(self.actor, rebuilt_hlc);
-        self.node_index.replace(self.actor, rebuilt_node);
-        Ok(())
+        out.sort_by_key(|op| op.ts);
+        Ok(out)
+    }
+
+    /// Stream one `.jsonl` file's ops into `out`, tolerating the same
+    /// malformations as the reload path (non-UTF8 spans, blank lines, torn
+    /// tails). A missing file is not an error (a peer file can vanish
+    /// mid-sync, a PerPage page may have no ops yet) — it contributes
+    /// nothing.
+    fn read_ops_file_into(path: &std::path::Path, out: &mut Vec<LogOp>) {
+        let file = match File::open(path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) => {
+                warn!("cannot open {}: {e}", path.display());
+                return;
+            }
+        };
+        let mut reader = BufReader::new(file);
+        let mut buf: Vec<u8> = Vec::new();
+        let mut line = 0usize;
+        loop {
+            buf.clear();
+            let n = match reader.read_until(b'\n', &mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) => {
+                    warn!("io error {}:{}: {e}", path.display(), line + 1);
+                    break;
+                }
+            };
+            line += 1;
+            let _ = n;
+            let Ok(text) = std::str::from_utf8(&buf) else {
+                warn!("skipping {}:{}: non-UTF8 bytes", path.display(), line);
+                continue;
+            };
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            match parse_log_line(trimmed) {
+                Ok(ops) => out.extend(ops),
+                Err(e) => warn!("skipping {}:{}: {e}", path.display(), line),
+            }
+        }
     }
 
     /// Cold-path `ops_for_node` when the LRU has no warm entry for the
@@ -348,6 +598,10 @@ impl JsonlStorage {
             }
         }
         out.sort_by_key(|op| op.ts);
+        // HLCs are globally unique, so equal `ts` means the same op reached
+        // us twice (e.g. a glued-line recovery that duplicated an index
+        // entry). Dedup by HLC so the caller replays each op exactly once.
+        out.dedup_by_key(|op| op.ts);
         Ok(out)
     }
 }

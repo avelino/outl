@@ -281,6 +281,78 @@ pub fn read_from_disk(
     SnapshotBody::decode(&bytes).map(Some)
 }
 
+/// Read the best snapshot available in `snapshots_dir`, preferring this
+/// device's own.
+///
+/// **Phase 2 — peer snapshot adoption.** A freshly-paired device receives
+/// a huge op log (200k+ ops / tens of MB) that is slow to transfer AND slow
+/// to replay. A peer's snapshot is ~5× smaller (settled state, no `Edit`
+/// history) and lets this device skip the full replay. So when this
+/// device has no snapshot of its own yet, adopt a peer's `snap-*.bin`.
+///
+/// **No local input is ever lost by adopting a peer snapshot.** The
+/// snapshot only pre-loads the materialized tree; `boot_from_snapshot`
+/// then replays `ops_since_per_actor_combined(body.cutoff)` — every op of
+/// every actor above the snapshot's per-actor cutoff, INCLUDING this
+/// device's own ops that the peer hadn't seen when it wrote the snapshot.
+/// Idempotency dedups the ops the snapshot already covers. A corrupt /
+/// incompatible peer snapshot is skipped (never fatal — full replay).
+///
+/// Selection is deterministic: own snapshot first; otherwise the peer
+/// snapshot whose per-actor cutoff reaches the highest HLC (the most
+/// up-to-date, smallest delta), with the actor id as a tie-break.
+pub fn read_best_from_disk(
+    snapshots_dir: &Path,
+    prefer_actor: ActorId,
+) -> Result<Option<SnapshotBody>, SnapshotError> {
+    // This device's own snapshot has the tightest cutoff for its local
+    // ops, so prefer it and skip the directory scan entirely.
+    if let Some(body) = read_from_disk(snapshots_dir, prefer_actor)? {
+        return Ok(Some(body));
+    }
+
+    let entries = match std::fs::read_dir(snapshots_dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(SnapshotError::Io(format!(
+                "read dir {}: {e}",
+                snapshots_dir.display()
+            )))
+        }
+    };
+
+    // Adopt the most up-to-date peer snapshot. Key on (max cutoff HLC,
+    // filename) so two boots pick the same one; a snapshot that fails to
+    // decode (corrupt, future schema) is skipped, never fatal.
+    let mut best: Option<(Hlc, String, SnapshotBody)> = None;
+    for entry in entries.flatten() {
+        let fname = entry.file_name().to_string_lossy().into_owned();
+        if !fname.starts_with("snap-") || !fname.ends_with(".bin") {
+            continue;
+        }
+        let bytes = match std::fs::read(entry.path()) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let body = match SnapshotBody::decode(&bytes) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let Some(max_hlc) = body.cutoff.values().copied().max() else {
+            continue; // an empty-cutoff snapshot buys us nothing
+        };
+        let better = match &best {
+            None => true,
+            Some((best_hlc, best_name, _)) => (max_hlc, &fname) > (*best_hlc, best_name),
+        };
+        if better {
+            best = Some((max_hlc, fname, body));
+        }
+    }
+    Ok(best.map(|(_, _, body)| body))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

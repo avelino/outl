@@ -82,6 +82,21 @@ Zero coordination, zero conflicts, zero data loss.
 - **`serde_json` already in the dependency graph** for the JSON envelope.
   Zero new C dependencies.
 
+### Boot reads an index, not the whole log (RFC #137 Front A)
+
+`JsonlStorage` keeps a bounded LRU of hot ops plus a per-actor **offset index** (`ops-<actor>.idx`, HLC → byte offset) and a per-node **secondary index** (`ops-<actor>.nodes.idx`).
+
+On `reload` (boot) the loader streams each `.jsonl` line with a **parse-lite** pass.
+That pass pulls only the two fields index-building needs — the op's HLC and the node it touches — and deliberately skips deserializing the heavy payload (`Op::Edit`'s `text_op` byte array above all).
+It builds the offset + node indexes and leaves the LRU **empty**.
+It does not reparse or re-allocate every op into RAM, which is what made open time (and iOS memory) scale with total history rather than with what boot actually needs — the offset index plus a small snapshot delta.
+
+The full ops are read back **lazily on demand** through the offset index: a single `seek` + one-line parse per op (`read_op_at`), preferring a warm LRU hit when there is one.
+The `Storage` read methods are driven off the index — `all_ops`, `ops_since`, `ops_since_per_actor`, `ops_for_actor`, `ops_for_node`, `last_ts_per_actor`.
+So they return the **complete** op set — the same set + HLC order as before — regardless of what the LRU currently holds.
+The LRU is purely a RAM bound now; the index is the complete logical view.
+`last_ts_per_actor` and `ops_since_per_actor` (the snapshot-boot delta) answer straight from the index keys, so the common boot touches only the index and the recent tail, never the full log.
+
 ### Why the directory is named `ops/`, not `.ops/`
 
 iCloud Documents and a few other sync transports skip dot-prefixed paths during cross-device sync.
