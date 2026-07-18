@@ -10,6 +10,7 @@ import {
   openPageBySlug,
   openRef,
   outdentBlock,
+  pageBacklinks,
   pasteMarkdown,
   pastePlain,
   pluginRun,
@@ -31,6 +32,37 @@ import { playPluginViews } from "../lib/plugin-views";
 import { appState, setAppState } from "../lib/store";
 import { BlockRow, type BlockCallbacks } from "./BlockRow";
 import { InlineBacklinks } from "./InlineBacklinks";
+
+/**
+ * Boot placeholder for the outline body.
+ *
+ * Rendered only while `appState.page` is still null (the background
+ * opener hasn't handed us today's journal yet). It occupies the same
+ * column the real rows fill, so the content area reads as "already
+ * laid out, filling in" instead of a bare `Loading…` that the outline
+ * then displaces. Purely decorative — `aria-hidden` keeps it off the
+ * a11y tree.
+ */
+function OutlineSkeleton() {
+  // Row widths (percent) picked to look like natural outline text,
+  // not a uniform block. Static list → stable across renders.
+  const widths = [86, 68, 92, 54, 78, 64];
+  return (
+    <div class="animate-pulse space-y-3 pt-1" aria-hidden="true">
+      <For each={widths}>
+        {(w) => (
+          <div class="flex items-center gap-2">
+            <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-(--color-outl-fg)/15" />
+            <span
+              class="h-3.5 rounded bg-(--color-outl-fg)/10"
+              style={{ width: `${w}%` }}
+            />
+          </div>
+        )}
+      </For>
+    </div>
+  );
+}
 
 /**
  * Center pane — title, breadcrumb, editable outline.
@@ -109,11 +141,30 @@ export function OutlineView() {
     }
   });
 
+  /**
+   * Lazily fetch backlinks once per page navigation. The open commands
+   * (`open_today` / `open_page` / `open_ref` / peer reload) now return an
+   * empty `backlinks` array — `backlinks_for_page` is an O(blocks) scan
+   * that used to block the first journal paint on a large workspace, so
+   * it moved off the page-open path. Keyed on `slug` (not `id`) because
+   * that's the argument the command takes, and it's the single place
+   * backlinks get populated on navigation: today/journal/page/openRef and
+   * peer-driven reloads all change the slug.
+   */
+  createEffect(() => {
+    const slug = appState.page?.slug;
+    if (!slug) return;
+    pageBacklinks(slug)
+      .then((r) =>
+        setAppState({ backlinks: r.backlinks, backlinksOrder: r.backlinks_order }),
+      )
+      .catch(() => {});
+  });
+
   function applyView(view: PageView) {
     setAppState({
       page: view.page,
       outline: view.outline,
-      backlinks: view.backlinks,
       parseWarnings: view.warnings ?? [],
     });
     // Auto-run query blocks after page load / commit, then re-resolve
@@ -125,7 +176,6 @@ export function OutlineView() {
           setAppState({
             page: updated.page,
             outline: updated.outline,
-            backlinks: updated.backlinks,
             parseWarnings: updated.warnings ?? [],
           });
           void resolvePageEmbeds(updated.outline);
@@ -503,19 +553,25 @@ export function OutlineView() {
                  * Breadcrumb — mirrors the TUI's
                  * `📅 Journal · Thursday, 2026-06-04` header. For pages,
                  * it carries the slug instead.
+                 *
+                 * The eyebrow slot always reserves its row height
+                 * (`min-h-5`), even before the page loads (both inner
+                 * `<Show>`s off). Without the reserved height the row
+                 * collapses to 0 while `appState.page` is null at boot,
+                 * then pops in once the journal arrives and shoves the
+                 * `<h1>` title down — a visible layout shift. A stable
+                 * slot keeps the title pinned from the first frame.
                  */}
-                <Show when={appState.page?.kind === "journal"}>
-                  <div class="mb-2 flex items-baseline gap-1.5 text-[12.5px] text-(--color-outl-fg-dim)">
+                <div class="mb-2 flex min-h-5 items-baseline gap-1.5 text-[12.5px] text-(--color-outl-fg-dim)">
+                  <Show when={appState.page?.kind === "journal"}>
                     <span>{pageIcon()}</span>
                     <span>Journal · {journalWeekday()}</span>
-                  </div>
-                </Show>
-                <Show when={appState.page && appState.page.kind !== "journal"}>
-                  <div class="mb-2 flex items-baseline gap-1.5 text-[12.5px] text-(--color-outl-fg-dim)">
+                  </Show>
+                  <Show when={appState.page && appState.page.kind !== "journal"}>
                     <span>{pageIcon()}</span>
                     <span class="font-mono">{appState.page?.slug}</span>
-                  </div>
-                </Show>
+                  </Show>
+                </div>
 
                 <h1 class="font-mono text-[28px] font-semibold leading-[1.15] tracking-tight">
                   <Show
@@ -601,13 +657,19 @@ export function OutlineView() {
           <Show
             when={rootBlocks().length > 0}
             fallback={
-              <button
-                type="button"
-                onClick={addFirstBlock}
-                class="rounded px-3 py-2 text-sm opacity-60 hover:bg-(--color-outl-fg)/5 hover:opacity-100"
-              >
-                {appState.page ? "Click to add the first block" : "Loading…"}
-              </button>
+              // Page still loading (null) → skeleton that reserves the
+              // outline's shape so nothing jumps when the rows arrive.
+              // Page loaded but genuinely empty → the add-first-block
+              // affordance (also the zoomed-into-a-leaf case).
+              <Show when={appState.page} fallback={<OutlineSkeleton />}>
+                <button
+                  type="button"
+                  onClick={addFirstBlock}
+                  class="rounded px-3 py-2 text-sm opacity-60 hover:bg-(--color-outl-fg)/5 hover:opacity-100"
+                >
+                  Click to add the first block
+                </button>
+              </Show>
             }
           >
             <For each={rootBlocks()}>

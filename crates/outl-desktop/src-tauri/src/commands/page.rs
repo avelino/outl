@@ -6,7 +6,7 @@ use tauri::State;
 
 use crate::state::{AppState, PageView};
 use outl_tauri_shared::commands::page as shared;
-use outl_tauri_shared::state::BlockHit;
+use outl_tauri_shared::state::{BacklinksReply, BlockHit};
 
 #[tauri::command]
 pub(crate) fn list_all_pages(state: State<'_, AppState>) -> Result<Vec<PageMeta>, String> {
@@ -117,13 +117,34 @@ pub(crate) fn delete_page(slug: String, state: State<'_, AppState>) -> Result<Pa
     shared::delete_page(state.inner(), slug)
 }
 
-/// Persist the backlinks-list direction and return `slug`'s re-sorted
-/// view (issue #142). `order` is `"newest"` | `"oldest"`.
+/// Compute a page's backlinks lazily, off the page-open path (the
+/// O(blocks) scan that used to block the first journal paint). The
+/// frontend calls this after the outline renders.
 #[tauri::command]
-pub(crate) fn set_backlinks_order(
+pub(crate) async fn page_backlinks(
+    slug: String,
+    state: State<'_, AppState>,
+) -> Result<BacklinksReply, String> {
+    shared::page_backlinks(state.inner(), slug).await
+}
+
+/// Persist the backlinks-list direction and return `slug`'s re-sorted
+/// backlinks (issue #142). `order` is `"newest"` | `"oldest"`.
+#[tauri::command]
+pub(crate) async fn set_backlinks_order(
     order: String,
     slug: String,
     state: State<'_, AppState>,
-) -> Result<PageView, String> {
-    shared::set_backlinks_order(state.inner(), order, slug)
+) -> Result<BacklinksReply, String> {
+    shared::set_backlinks_order(state.inner(), order, slug).await
+}
+
+/// Resolve a batch of block ids to the distinct page/journal slugs they
+/// belong to — the sync-progress feed's "page X synced" labels.
+#[tauri::command]
+pub(crate) fn resolve_page_labels(
+    node_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    shared::resolve_page_labels(state.inner(), node_ids)
 }

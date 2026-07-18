@@ -161,17 +161,34 @@ pub(crate) fn update_settings(
 /// stays cheap. `app` is passed in only so the background thread can
 /// emit `workspace-reconciled` on completion.
 #[tauri::command]
-pub(crate) fn reload_workspace(
+pub(crate) async fn reload_workspace(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let root = storage_root_or_err(state.inner())?;
-    let engine = outl_actions::SyncEngine::new(root.clone(), state.hlc.actor());
-    let mut fresh = engine
-        .reload_workspace()
-        .map_err(|e| format!("reload workspace: {e}"))?;
-    let today_id = open_today(&mut fresh, &state.hlc).map_err(|e| e.to_string())?;
-    let _ = engine.reproject_page(&fresh, today_id);
+    // The full op-log replay (`SyncEngine::reload_workspace`) is O(all ops)
+    // and CPU-bound — seconds on a large / freshly-synced workspace. A
+    // synchronous command runs it on the Tauri IPC thread and freezes the
+    // window through the whole rebuild (on iOS the same shape trips the
+    // scene-update watchdog and SIGKILLs the app). Offload the replay to a
+    // blocking pool thread so the UI keeps painting; the cheap tail
+    // (history invalidation + swap) runs back here where it needs the live
+    // `AppState` guards.
+    let replay_root = root.clone();
+    let replay_hlc = state.hlc.clone();
+    let fresh = tauri::async_runtime::spawn_blocking(
+        move || -> Result<outl_core::workspace::Workspace, String> {
+            let engine = outl_actions::SyncEngine::new(replay_root, replay_hlc.actor());
+            let mut fresh = engine
+                .reload_workspace()
+                .map_err(|e| format!("reload workspace: {e}"))?;
+            let today_id = open_today(&mut fresh, &replay_hlc).map_err(|e| e.to_string())?;
+            let _ = engine.reproject_page(&fresh, today_id);
+            Ok(fresh)
+        },
+    )
+    .await
+    .map_err(|e| format!("reload task join: {e}"))??;
     // Surgical undo invalidation: only pages whose projection actually
     // changed across the reload lose their stacks. Restoring a
     // snapshot of a page the peer DID change would silently revert the

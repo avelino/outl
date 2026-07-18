@@ -30,6 +30,7 @@ import {
   openRef,
   openTodayJournal,
   outdentBlock,
+  pageBacklinks,
   pasteMarkdown,
   peerStatus,
   pluginRun,
@@ -80,6 +81,11 @@ type DeepLinkNavigate =
  *  surfacing a timeout error. Keeps the UI from getting stuck in
  *  "syncing…" forever when iCloud coordination stalls. */
 const EDIT_TIMEOUT_MS = 8000;
+/** Cap on a `syncNow` force-sync pass. With an unreachable peer the connect
+ *  waits out a 10–30s timeout; awaiting that in the reload path froze the UI.
+ *  6s lets a healthy pass through and bounds a dead one so the local reload
+ *  always proceeds. */
+const SYNC_TIMEOUT_MS = 6000;
 import {
   HIDE_MESSAGE,
   buildEmojiShowMessage,
@@ -122,6 +128,14 @@ function detectAndroid(): boolean {
 export function Journal() {
   const isAndroid = detectAndroid();
   const [view, setView] = createSignal<PageView | null>(null);
+  // Backlinks are fetched lazily, off the page-open path — `view().backlinks`
+  // is always empty now (the O(blocks-in-workspace) scan blocked the first
+  // journal paint). The resource re-fires on every slug change, so every
+  // navigation path is covered without touching `applyView`.
+  const [backlinks, { mutate: mutateBacklinks }] = createResource(
+    () => view()?.page.slug,
+    pageBacklinks,
+  );
   const [loaded, setLoaded] = createSignal(false);
   const [refreshing, setRefreshing] = createSignal(false);
   // Loading message + failure flag drive the initial-load placeholder.
@@ -205,11 +219,6 @@ export function Journal() {
     HTMLTextAreaElement | null
   >(null);
   let activeTextarea: HTMLTextAreaElement | undefined;
-  // Hidden textarea used to capture focus synchronously inside a user
-  // gesture handler. iOS WKWebView refuses to open the keyboard if
-  // `focus()` is called outside a tap event, so we focus this first
-  // and let the real block's textarea steal focus once it mounts.
-  let ghostInput: HTMLTextAreaElement | undefined;
   // Today's journal slug. Re-resolved on mount and whenever the app
   // returns to the foreground, so the affordance stays correct across a
   // midnight rollover (the app can sit open past midnight: "today"
@@ -219,17 +228,16 @@ export function Journal() {
   // independently and risking disagreement.
   const [todaySlugValue, setTodaySlugValue] = createSignal<string | null>(null);
 
-  function focusGhost() {
-    // Must run synchronously inside the tap to keep iOS in
-    // "keyboard mode".
-    ghostInput?.focus({ preventScroll: true });
-  }
-
   // Monotonic reload generation. Every async reload path captures this at
   // start; a reload whose generation is no longer the latest is a stale read
   // that must NOT clobber a newer one (the mobile "flicker" was an unguarded
   // slow reload applying an older op-log state after a fresh one landed).
   let reloadGen = 0;
+  // Set when a peer-driven reload was suppressed because the user was editing.
+  // A `createEffect` on `editingId` drains it the moment they leave edit mode,
+  // so a sync never swaps the workspace out from under an active edit (that
+  // swap re-mints the block id → the `block <id> [Retry]` error + the freeze).
+  let reloadPendingWhileEditing = false;
 
   function applyView(v: PageView) {
     // Dropping the zoom on a page switch keeps focus scoped to the page
@@ -360,7 +368,26 @@ export function Journal() {
     });
   }
 
+  // Drain a reload that was deferred because the user was editing. The moment
+  // they leave edit mode (`editingId()` → null), apply the peer's changes that
+  // arrived meanwhile — in the background so it doesn't flash the spinner.
+  // Guarded so it only fires on the edit→idle transition, not on every keypress.
+  createEffect(() => {
+    if (editingId() === null && reloadPendingWhileEditing) {
+      reloadPendingWhileEditing = false;
+      void pullAndReload({ background: true });
+    }
+  });
+
   onMount(async () => {
+    // Kick P2P sync in the very first tick — BEFORE the journal loads — so the
+    // connect starts punching the NAT path immediately instead of waiting for
+    // the local load to finish. iOS accepts inbound poorly, so the mobile side
+    // dialing first is what actually opens the path; starting it here (not
+    // after `loadTodayWithRetry`) shaves that wait off. Fully background +
+    // capped + silent (no boot toast): it never blocks the boot or first paint,
+    // and the ops it pulls arrive via `workspace-ready` / the next reload.
+    void withTimeout(syncNow(), SYNC_TIMEOUT_MS, "sync timed out").catch(() => {});
     listenForWorkspaceReady();
     listenForDeepLink();
     await loadTodayWithRetry();
@@ -993,9 +1020,14 @@ export function Journal() {
     const pid = pageId();
     if (!pid) return;
     haptic("light");
-    // Keep keyboard up across the async create by parking focus on
-    // the ghost textarea first.
-    focusGhost();
+    // Commit the current block, THEN create + focus the new one. The "keep
+    // editing across the create" experiment (to avoid the iOS keyboard bounce)
+    // was reverted: it kept `editingId` on the OLD block during the async
+    // create, so anything typed before the create returned landed on the wrong
+    // block and was discarded when focus jumped to the new one — with a slow
+    // sync that meant lost text + leftover empty blocks. Correctness wins; the
+    // keyboard bounce needs a truly optimistic create (mount+focus the new
+    // block synchronously), which is a separate, carefully-validated change.
     if (editingId()) await commitEdit();
     const reply = await withError(() =>
       createBlock(pid, { afterId: id, text: null }),
@@ -1009,15 +1041,16 @@ export function Journal() {
   async function handleAppendBlock() {
     const pid = pageId();
     if (!pid) return;
-    focusGhost();
-    if (editingId()) await commitEdit();
     haptic("medium");
+    if (editingId()) await commitEdit();
     const reply = await withError(() =>
       createBlock(pid, { afterId: null, parentId: null, text: null }),
     );
     if (reply) {
-      applyView(reply.view);
-      startEdit(reply.new_id, "");
+      batch(() => {
+        applyView(reply.view);
+        startEdit(reply.new_id, "");
+      });
     }
   }
 
@@ -1036,10 +1069,25 @@ export function Journal() {
     // jump, no cursor churn) and a desktop/TUI edit arriving mid-typing never
     // yanks the textarea out from under the user. The foreground paths (button,
     // app open, resume) always apply and show the spinner.
+    // Input is sacred: never swap the workspace while the user is editing.
+    // Reloading re-materializes the tree (which can re-mint the block id under
+    // the cursor → `block <id> [Retry]`) and a slow reload freezes the UI. So
+    // if a block is being edited, pull the peer's ops to disk in the background
+    // (no `await` that blocks the user, capped so a dead peer can't hang it)
+    // and mark the reload pending — the `editingId` effect below drains it the
+    // instant they leave edit mode.
+    if (editingId()) {
+      reloadPendingWhileEditing = true;
+      void withError(() => withTimeout(syncNow(), SYNC_TIMEOUT_MS, "Sync timed out"));
+      return;
+    }
     const bg = opts?.background ?? false;
     const gen = ++reloadGen;
     if (!bg) setSyncing(true);
-    await withError(syncNow);
+    // Cap the force-sync: with an unreachable peer, `syncNow` waits out the
+    // 10–30s connect timeout, and awaiting it here froze the reload for that
+    // whole window. Time it out so the local reload always proceeds promptly.
+    await withError(() => withTimeout(syncNow(), SYNC_TIMEOUT_MS, "Sync timed out"));
     await withError(reloadWorkspace);
     const cur = view();
     if (cur) {
@@ -1568,23 +1616,25 @@ export function Journal() {
             enough without an empty box every day). */}
         <Show
           when={
-            view() &&
-            (view()!.backlinks.length > 0 || view()!.page.kind === "page")
+            view()?.page.kind === "page" ||
+            (backlinks()?.backlinks.length ?? 0) > 0
           }
         >
           <BacklinksSection
-            backlinks={view()!.backlinks}
-            order={view()!.backlinks_order}
+            backlinks={backlinks()?.backlinks ?? []}
+            order={backlinks()?.backlinks_order ?? "newest"}
             onToggleOrder={async () => {
               const v = view();
               if (!v) return;
               haptic("light");
               const next =
-                v.backlinks_order === "newest" ? "oldest" : "newest";
-              const updated = await withError(() =>
+                (backlinks()?.backlinks_order ?? "newest") === "newest"
+                  ? "oldest"
+                  : "newest";
+              const r = await withError(() =>
                 setBacklinksOrder(next, v.page.slug),
               );
-              if (updated) applyView(updated);
+              if (r) mutateBacklinks(r);
             }}
             onJump={async (link) => {
               if (!link.source_page) return;
@@ -1639,17 +1689,6 @@ export function Journal() {
       <KeyboardAccessory
         active={isAndroid && editingId() !== null}
         onAction={(action: ToolbarAction) => dispatchToolbarAction(action)}
-      />
-
-      {/* Ghost textarea kept off-screen, focused inside tap handlers
-          to preserve iOS keyboard state across async work. */}
-      <textarea
-        ref={ghostInput}
-        aria-hidden="true"
-        tabindex="-1"
-        readonly
-        class="pointer-events-none absolute h-0 w-0 -translate-y-full opacity-0"
-        style="left: -9999px; top: -9999px;"
       />
 
       <Toast

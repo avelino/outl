@@ -7,7 +7,7 @@
 
 use outl_actions::{
     append_block, apply_page_md_with_sidecar, copy_markdown as action_copy_markdown,
-    create_after_or_append, create_before, delete, edit_text, enclosing_page_id, indent,
+    create_after_or_append, create_before_or_append, delete, edit_text, enclosing_page_id, indent,
     move_after, move_down, move_up, outdent, paste_markdown as action_paste_markdown,
     paste_plain as action_paste_plain, render_block_md,
     set_block_collapsed as action_set_block_collapsed, toggle_quote as action_toggle_quote,
@@ -43,7 +43,7 @@ pub fn create_block<S: AppHost>(
     let (new_id, view) = finish_in_page_with(state, page, |ws| {
         if let Some(id) = &before_id {
             let node = parse_node_id(id).map_err(ActionError::NotInTree)?;
-            create_before(ws, state.hlc(), node, text_owned.as_deref())
+            create_before_or_append(ws, state.hlc(), page, node, text_owned.as_deref())
         } else if let Some(id) = &after_id {
             let node = parse_node_id(id).map_err(ActionError::NotInTree)?;
             create_after_or_append(ws, state.hlc(), page, node, text_owned.as_deref())
@@ -71,7 +71,25 @@ pub fn edit_block<S: AppHost>(
     let node = parse_node_id(&id)?;
     let registry = state.exec_registry();
     finish_in_page(state, page, |ws| {
-        edit_text(ws, state.hlc(), node, &text)?;
+        // Tolerate a stale block id. Between the frontend reading the block's
+        // id and this commit landing, a concurrent sync reload can re-mint or
+        // trash that node (its content already converged via the peer's ops),
+        // leaving `edit_text` with nowhere to write. Surfacing the raw
+        // `block <id> is not in the tree` as a Retry toast is the wrong UX —
+        // Retry re-fails forever against the same dead id. Treat it as a no-op
+        // and let the projection below refresh the page to the merged state, so
+        // the client swaps its stale `editingId` for the live tree. This mirrors
+        // the stale-anchor tolerance `create_after_or_append` already has.
+        match edit_text(ws, state.hlc(), node, &text) {
+            Ok(()) => {}
+            Err(ActionError::NotInTree(_)) => {
+                warn!(
+                    "edit_block: node {node} not in tree (re-minted by a sync reload?); skipping"
+                );
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        }
         // Finishing an edit on a `call:<name>` block re-runs it so the
         // `> **result:**` reflects the freshly-typed params. Best-effort:
         // a failing template must never drop the edit itself.

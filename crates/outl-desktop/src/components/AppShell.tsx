@@ -1,4 +1,4 @@
-import { Show, createSignal, onCleanup, onMount } from "solid-js";
+import { Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 
 import {
   openJournalFor,
@@ -54,7 +54,6 @@ export function AppShell() {
     setAppState({
       page: view.page,
       outline: view.outline,
-      backlinks: view.backlinks,
     });
     // Drop editing / selection cursors that the new outline no longer
     // contains. This path fires on peer-driven reloads (onPeerChange →
@@ -122,15 +121,48 @@ export function AppShell() {
     }
   }
 
+  // Coalesce peer-driven reloads and never run one mid-edit. A peer streaming
+  // its op log fires many `peer-ops-changed` events; firing a full
+  // `reloadWorkspace` per event pegged the CPU and queued the workspace lock
+  // that `create_block` needs (the `esc+o` delay). And reloading while the user
+  // edits re-materializes the tree under the cursor. So: defer while
+  // `editingBlockId` is set, run at most one reload at a time, and collapse any
+  // events that arrive during a reload into a single follow-up.
+  let peerChangeInFlight = false;
+  let peerChangePending = false;
+
   async function onPeerChange() {
+    if (appState.editingBlockId !== null || peerChangeInFlight) {
+      peerChangePending = true;
+      return;
+    }
+    peerChangeInFlight = true;
     try {
-      await reloadWorkspace();
-      await refreshActivePage();
-      await refreshStats();
+      do {
+        peerChangePending = false;
+        await reloadWorkspace();
+        await refreshActivePage();
+        await refreshStats();
+      } while (peerChangePending && appState.editingBlockId === null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      peerChangeInFlight = false;
     }
   }
+
+  // Drain a peer reload that was deferred because the user was editing, the
+  // moment they leave edit mode. Guarded so it only fires on the edit→idle
+  // transition, and only when a reload is actually pending.
+  createEffect(() => {
+    if (
+      appState.editingBlockId === null &&
+      peerChangePending &&
+      !peerChangeInFlight
+    ) {
+      void onPeerChange();
+    }
+  });
 
   /**
    * Navigate in response to an `outl://` deep link (issue #98). The

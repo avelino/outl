@@ -80,8 +80,8 @@ pub use backlinks::{backlinks_for_page, backlinks_for_target, extract_refs, Back
 pub use backlinks_sort::sort_backlinks;
 pub use block::{
     append_block, append_forest, append_tree, create_after, create_after_or_append, create_before,
-    create_under, delete, edit_text, indent, move_after, move_down, move_under, move_up, outdent,
-    toggle_quote, toggle_todo, BlockTreeOutcome, BlockTreeSpec,
+    create_before_or_append, create_under, delete, edit_text, indent, move_after, move_down,
+    move_under, move_up, outdent, toggle_quote, toggle_todo, BlockTreeOutcome, BlockTreeSpec,
 };
 pub use clipboard::{copy_markdown, copy_markdown_nodes};
 pub use collapsed::{set_block_collapsed, toggle_block_collapsed};
@@ -120,7 +120,9 @@ pub use paste::{
 };
 pub use person::{search_persons, PERSON_TYPE, TYPE_KEY};
 pub use resolve::{open_or_create_by_name, open_or_create_by_ref};
-pub use sync::{FileSyncTransport, OpsFileSnapshot, PeerHealthSnapshot, SyncEngine, SyncTransport};
+pub use sync::{
+    FileSyncTransport, OpsFileSnapshot, PeerHealthSnapshot, SyncEngine, SyncProgress, SyncTransport,
+};
 pub use template::{
     instantiate_template, list_templates, parse_call_invocation, resolve_call, run_callable_block,
     TemplateEntry, FROM_TEMPLATE_KEY, JOURNAL_TEMPLATE_NAME, PARAMS_KEY, TEMPLATE_KEY,
