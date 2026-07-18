@@ -159,6 +159,89 @@ pub fn spawn_responder(
         .spawn()
 }
 
+/// Mount the production `SnapshotProtocolHandler` on a `Router` and return it.
+///
+/// The responder serves `<workspace_root>/.outl/snapshots/snap-<actor>.bin` to
+/// any dialer on [`crate::SNAPSHOT_ALPN`] — an empty frame when it has no
+/// snapshot. Keep the returned `Router` alive for as long as it must accept
+/// connections. Lets a loopback test exercise the real Phase-2 snapshot transfer
+/// (server side) over real QUIC.
+pub fn spawn_snapshot_responder(
+    endpoint: iroh::Endpoint,
+    workspace_root: PathBuf,
+    actor: ActorId,
+) -> Router {
+    Router::builder(endpoint)
+        .accept(
+            crate::protocol::SNAPSHOT_ALPN,
+            crate::engine_snapshot::SnapshotProtocolHandler {
+                workspace_root,
+                actor,
+            },
+        )
+        .spawn()
+}
+
+/// Mount BOTH the sync and snapshot responders on ONE `Router` — the exact
+/// shape `run_iroh` stands up (one endpoint per identity, several ALPNs). Lets a
+/// loopback test prove op-sync still works while the snapshot ALPN is also
+/// accepted on the same endpoint.
+pub fn spawn_sync_and_snapshot_responder(
+    endpoint: iroh::Endpoint,
+    workspace_root: PathBuf,
+    workspace_id: WorkspaceId,
+    actor: ActorId,
+    peer_ready_tx: std::sync::mpsc::Sender<()>,
+    authorized_peers: &[iroh::EndpointId],
+) -> Router {
+    for peer in authorized_peers {
+        authorize_peer(&workspace_root, *peer);
+    }
+    Router::builder(endpoint)
+        .accept(
+            SYNC_ALPN,
+            SyncProtocolHandler {
+                workspace_root: workspace_root.clone(),
+                workspace_id: Arc::new(RwLock::new(workspace_id)),
+                actor,
+                peer_ready_tx,
+                append_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            },
+        )
+        .accept(
+            crate::protocol::SNAPSHOT_ALPN,
+            crate::engine_snapshot::SnapshotProtocolHandler {
+                workspace_root,
+                actor,
+            },
+        )
+        .spawn()
+}
+
+/// Run the production snapshot pull (initiator side) against `peer` — the exact
+/// call `drain_pair_completions` makes after the immediate delta-sync.
+///
+/// Dials `peer` on [`crate::SNAPSHOT_ALPN`], reads the snapshot frame, and (when
+/// non-empty + decodable) writes it to
+/// `<workspace_root>/.outl/snapshots/snap-<peer-actor>.bin`, firing
+/// `peer_ready_tx`. Returns `true` when a snapshot was written, `false` when the
+/// peer had none.
+pub async fn run_snapshot_pull(
+    endpoint: &iroh::Endpoint,
+    peer: impl Into<iroh::EndpointAddr>,
+    workspace_root: &Path,
+    peer_ready_tx: std::sync::mpsc::Sender<()>,
+) -> Result<bool> {
+    crate::engine_snapshot::pull_snapshot_from_peer(
+        endpoint,
+        peer.into(),
+        workspace_root,
+        &peer_ready_tx,
+        &crate::progress::ProgressSink::default(),
+    )
+    .await
+}
+
 /// Run the production `delta_sync` initiator against `peer` (a full
 /// [`iroh::EndpointAddr`] from the responder's `endpoint.addr()`).
 pub async fn run_delta_sync(
@@ -178,6 +261,7 @@ pub async fn run_delta_sync(
         actor,
         peer_ready_tx,
         &append_lock,
+        &crate::progress::ProgressSink::default(),
     )
     .await
 }
@@ -229,6 +313,7 @@ pub async fn run_catch_up_loop<F>(
         std::sync::Arc::new(tokio::sync::Mutex::new(())),
         None,
         wid_changed,
+        crate::progress::ProgressSink::default(),
     )
     .await
 }

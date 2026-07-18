@@ -314,6 +314,7 @@ pub(crate) async fn drain_pair_completions(
     health: crate::health::PeerHealthMap,
     append_lock: crate::engine::AppendLock,
     in_flight: crate::engine::InFlightPeers,
+    progress: crate::progress::ProgressSink,
 ) {
     while let Some(addr) = rx.recv().await {
         let nid = addr.id;
@@ -331,12 +332,13 @@ pub(crate) async fn drain_pair_completions(
             .clone();
         match crate::engine::delta_sync(
             &endpoint,
-            addr,
+            addr.clone(),
             &workspace_root,
             &wid_snapshot,
             actor,
             peer_ready_tx.clone(),
             &append_lock,
+            &progress,
         )
         .await
         {
@@ -345,6 +347,31 @@ pub(crate) async fn drain_pair_completions(
                 warn!("pairing: immediate sync to {} failed: {e}", nid.fmt_short());
                 health.record_failure(nid);
             }
+        }
+
+        // Phase 2 snapshot sync: also pull the peer's materialized snapshot so a
+        // freshly-paired device boots from settled state instead of replaying the
+        // (potentially 76 MB) op log the delta-sync just streamed. A separate
+        // connection on `SNAPSHOT_ALPN`; kept sequential (still inside this
+        // peer's in-flight guard) after the delta-sync. Best-effort: an absent
+        // peer snapshot or any transfer error is harmless — the op log stays the
+        // source of truth and boot falls back to full replay. On success it fires
+        // its own `peer_ready_tx` so the reload adopts the cached snapshot.
+        match crate::engine_snapshot::pull_snapshot_from_peer(
+            &endpoint,
+            addr,
+            &workspace_root,
+            &peer_ready_tx,
+            &progress,
+        )
+        .await
+        {
+            Ok(true) => info!("pairing: pulled snapshot from {}", nid.fmt_short()),
+            Ok(false) => {}
+            Err(e) => warn!(
+                "pairing: snapshot pull from {} failed: {e}",
+                nid.fmt_short()
+            ),
         }
     }
 }

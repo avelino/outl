@@ -882,3 +882,189 @@ async fn removed_peer_is_denied_sync() {
         );
     }
 }
+
+// ── Phase 2: snapshot sync (peer snapshot transfer over iroh) ─────────────────
+
+/// Write a small but non-trivial materialized snapshot for `actor` into
+/// `snapshots_dir` via outl-core's OWN writer — the exact `snap-<actor>.bin` a
+/// real device holds. One node + a per-actor cutoff so it is a realistic,
+/// adoptable snapshot (not an empty one boot would ignore).
+fn write_test_snapshot(snapshots_dir: &Path, actor: ActorId) {
+    use std::collections::{BTreeMap, BTreeSet};
+    let node = NodeId::new();
+    let mut nodes = BTreeMap::new();
+    nodes.insert(node, (NodeId::root(), Fractional::first()));
+    let mut cutoff = BTreeMap::new();
+    cutoff.insert(actor, Hlc::new(common::now_ms(), 0, actor));
+    let mut block_text = BTreeMap::new();
+    block_text.insert(node, "hello from the snapshot".to_string());
+    let body = outl_core::SnapshotBody::from_parts(
+        actor,
+        cutoff,
+        nodes,
+        BTreeMap::new(),
+        BTreeSet::new(),
+        block_text,
+    );
+    outl_core::snapshot::write_to_disk(snapshots_dir, &body).expect("write test snapshot");
+}
+
+/// Phase 2 — a freshly-paired device pulls a peer's materialized snapshot over
+/// `SNAPSHOT_ALPN` and ends up with it byte-identical in its own
+/// `.outl/snapshots/`, so it can boot from settled state instead of receiving +
+/// replaying the full op log. Also asserts the reload signal fires so boot
+/// adopts it. Runs against the production endpoint shape (sync + snapshot ALPN
+/// on ONE endpoint).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn snapshot_transfers_from_peer_on_pair() {
+    let dir_host = tempfile::tempdir().expect("host tempdir");
+    let dir_joiner = tempfile::tempdir().expect("joiner tempdir");
+    let host_actor = ActorId::new();
+
+    // Host holds a real materialized snapshot on disk.
+    let host_snap_dir = dir_host.path().join(".outl").join("snapshots");
+    write_test_snapshot(&host_snap_dir, host_actor);
+    let host_snap_path = host_snap_dir.join(format!("snap-{host_actor}.bin"));
+    let host_bytes = std::fs::read(&host_snap_path).expect("read host snapshot");
+
+    let id_host = fresh_identity(dir_host.path(), "host");
+    let id_joiner = fresh_identity(dir_joiner.path(), "joiner");
+
+    let (host_ready_tx, _host_ready_rx) = mpsc::channel::<()>();
+    let ep_host = test_support::bind_sync_endpoint(&id_host)
+        .await
+        .expect("bind host endpoint");
+    let host_addr = ep_host.addr();
+    let _router_host = test_support::spawn_sync_and_snapshot_responder(
+        ep_host,
+        dir_host.path().to_path_buf(),
+        shared_wid(),
+        host_actor,
+        host_ready_tx,
+        &[id_joiner.node_id()],
+    );
+
+    let ep_joiner = test_support::bind_sync_endpoint(&id_joiner)
+        .await
+        .expect("bind joiner endpoint");
+    let (joiner_ready_tx, joiner_ready_rx) = mpsc::channel::<()>();
+    let wrote = tokio::time::timeout(
+        STEP_TIMEOUT,
+        test_support::run_snapshot_pull(&ep_joiner, host_addr, dir_joiner.path(), joiner_ready_tx),
+    )
+    .await
+    .expect("snapshot pull timed out")
+    .expect("snapshot pull failed");
+    assert!(wrote, "joiner must receive and write the host's snapshot");
+
+    // The joiner ends up with snap-<host_actor>.bin byte-identical to the host's.
+    let joiner_snap_path = dir_joiner
+        .path()
+        .join(".outl")
+        .join("snapshots")
+        .join(format!("snap-{host_actor}.bin"));
+    assert!(
+        wait_until(STEP_TIMEOUT, || joiner_snap_path.exists()),
+        "the joiner must end up with the peer's snap-<actor>.bin on disk"
+    );
+    let joiner_bytes = std::fs::read(&joiner_snap_path).expect("read joiner snapshot");
+    assert_eq!(
+        joiner_bytes, host_bytes,
+        "the pulled snapshot must be byte-identical to the peer's"
+    );
+
+    // The reload signal fired so boot/reload adopts the freshly cached snapshot.
+    assert!(
+        joiner_ready_rx.recv_timeout(STEP_TIMEOUT).is_ok(),
+        "a received snapshot must fire the reload signal"
+    );
+}
+
+/// Phase 2 — pulling from a peer that has NO snapshot is harmless: the peer
+/// replies with an empty frame, the joiner writes nothing and does not error,
+/// and normal op-sync still works with the snapshot ALPN mounted on the same
+/// endpoint.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn snapshot_pull_absent_is_harmless() {
+    let dir_host = tempfile::tempdir().expect("host tempdir");
+    let dir_joiner = tempfile::tempdir().expect("joiner tempdir");
+    let host_actor = ActorId::new();
+    let joiner_actor = ActorId::new();
+
+    // Host has NO snapshot, but DOES have op-log history to sync.
+    let host_nodes = seed_ops(dir_host.path(), host_actor, 4);
+
+    let id_host = fresh_identity(dir_host.path(), "host");
+    let id_joiner = fresh_identity(dir_joiner.path(), "joiner");
+
+    let (host_ready_tx, _host_ready_rx) = mpsc::channel::<()>();
+    let ep_host = test_support::bind_sync_endpoint(&id_host)
+        .await
+        .expect("bind host endpoint");
+    let host_addr = ep_host.addr();
+    let _router_host = test_support::spawn_sync_and_snapshot_responder(
+        ep_host,
+        dir_host.path().to_path_buf(),
+        shared_wid(),
+        host_actor,
+        host_ready_tx,
+        &[id_joiner.node_id()],
+    );
+
+    let ep_joiner = test_support::bind_sync_endpoint(&id_joiner)
+        .await
+        .expect("bind joiner endpoint");
+
+    // Snapshot pull against a peer with no snapshot: Ok(false), no error.
+    let (snap_ready_tx, _snap_ready_rx) = mpsc::channel::<()>();
+    let wrote = tokio::time::timeout(
+        STEP_TIMEOUT,
+        test_support::run_snapshot_pull(
+            &ep_joiner,
+            host_addr.clone(),
+            dir_joiner.path(),
+            snap_ready_tx,
+        ),
+    )
+    .await
+    .expect("snapshot pull timed out")
+    .expect("an absent peer snapshot must not error");
+    assert!(!wrote, "no snapshot may be written when the peer has none");
+
+    // Nothing was written into the joiner's snapshots dir.
+    let joiner_snap_dir = dir_joiner.path().join(".outl").join("snapshots");
+    let empty = std::fs::read_dir(&joiner_snap_dir)
+        .map(|mut it| it.next().is_none())
+        .unwrap_or(true);
+    assert!(
+        empty,
+        "no snapshot file may be written when the peer has none"
+    );
+
+    // Op-sync still works over the same endpoints (snapshot ALPN coexists).
+    let (a_ready_tx, _a_ready_rx) = mpsc::channel::<()>();
+    tokio::time::timeout(
+        STEP_TIMEOUT,
+        test_support::run_delta_sync(
+            &ep_joiner,
+            host_addr,
+            dir_joiner.path(),
+            &shared_wid(),
+            joiner_actor,
+            a_ready_tx,
+        ),
+    )
+    .await
+    .expect("delta sync timed out")
+    .expect("delta sync failed");
+
+    let expected: BTreeSet<String> = host_nodes.iter().map(|n| n.to_string()).collect();
+    assert!(
+        wait_until(STEP_TIMEOUT, || disk_has_all_nodes(
+            dir_joiner.path(),
+            joiner_actor,
+            &expected
+        )),
+        "op-sync must still work with the snapshot ALPN mounted on the same endpoint"
+    );
+}

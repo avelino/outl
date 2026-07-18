@@ -61,6 +61,14 @@ pub const SYNC_ALPN: &[u8] = b"outl-sync/2";
 /// ALPN for device pairing.
 pub const PAIRING_ALPN: &[u8] = b"outl-sync/pair/1";
 
+/// ALPN for peer snapshot transfer (Phase 2 snapshot sync).
+///
+/// A freshly-paired device pulls a peer's materialized snapshot
+/// (`snap-<actor>.bin`) over this ALPN so it can boot from settled state
+/// instead of receiving + replaying the full op log. Carried on the SAME sync
+/// endpoint's router (one endpoint per identity). See `crate::engine_snapshot`.
+pub const SNAPSHOT_ALPN: &[u8] = b"outl-snapshot/1";
+
 /// What one side knows about one actor's ops: the highest HLC it holds and
 /// how many DISTINCT ops (by HLC) it holds for that actor — all `<= max` by
 /// definition.
@@ -162,6 +170,21 @@ pub fn encode_ops_blob(ops: &[LogOp]) -> Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(4 + body.len());
     buf.extend_from_slice(&len);
     buf.extend_from_slice(&body);
+    Ok(buf)
+}
+
+/// Frame an arbitrary byte blob with a 4-byte big-endian length prefix.
+///
+/// Same framing as [`encode_ops_blob`], but over raw bytes rather than encoded
+/// ops — used by [`crate::engine_snapshot`] to ship a materialized snapshot
+/// (`snap-<actor>.bin`) as one frame on a bi stream. An empty slice yields a
+/// valid zero-length body, so "no snapshot to send" is still an unambiguous
+/// frame the reader can skip.
+pub fn encode_blob_frame(body: &[u8]) -> Result<Vec<u8>> {
+    let len = u32::try_from(body.len())?.to_be_bytes();
+    let mut buf = Vec::with_capacity(4 + body.len());
+    buf.extend_from_slice(&len);
+    buf.extend_from_slice(body);
     Ok(buf)
 }
 
