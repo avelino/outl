@@ -116,8 +116,6 @@ struct ServerState {
     /// Whether we already attempted to bring the transport up (so a device
     /// with no peers doesn't retry every call).
     transport_tried: bool,
-    /// Stable workspace id, for the gossip announce payload.
-    workspace_id: Option<String>,
 }
 
 impl ServerCtx {
@@ -203,21 +201,6 @@ impl ServerCtx {
         transport.start(wc.root.clone(), wc.actor, tx);
         state.transport = Some(transport);
         debug!("mcp: passive file-poll transport up (no iroh endpoint — see doc)");
-    }
-
-    /// After a mutating tool commits, wake connected peers so they pull the
-    /// new ops over gossip instead of waiting for the catch-up re-sync.
-    /// No-op when the transport is off (no peers / not yet up).
-    pub(crate) fn announce_after_mutation(self: &Arc<Self>) {
-        let state = self.state.lock();
-        let (Some(transport), Some(workspace_id), Some(wc)) =
-            (&state.transport, &state.workspace_id, &state.workspace)
-        else {
-            return;
-        };
-        // `next()` mints an HLC that sorts after everything the mutation just
-        // committed — the high-water mark peers pull up to.
-        transport.announce_local_ops(workspace_id, wc.hlc.next());
     }
 
     /// Tear the transport down (called when the stdio pipe closes).
