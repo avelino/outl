@@ -23,10 +23,11 @@
 //!
 //! ## Other mobile divergences from desktop
 //!
-//! - Orphan `.md` reconcile runs **inline** in the boot path (desktop
-//!   spawns a background thread). Mobile workspaces are smaller and
-//!   the UI waits on `workspace-ready` anyway, so blocking the opener
-//!   keeps the first paint deterministic.
+//! - Orphan `.md` reconcile runs on a **background thread**, AFTER the
+//!   workspace is published and `workspace-ready` fires (mirrors the
+//!   desktop). On a large workspace the filesystem walk is the
+//!   cold-boot bottleneck; deferring it past first paint keeps the
+//!   very first journal render off the critical path.
 //! - There is no filesystem watcher: a single device needs none, and
 //!   peer ops arrive through iroh, which pokes the reload itself (see
 //!   `iroh_sync::wire_iroh_transport`).
@@ -41,9 +42,7 @@ use parking_lot::Mutex;
 use tauri::Emitter;
 use tracing::{info, warn};
 
-pub(crate) use outl_tauri_shared::workspace_open::{
-    load_or_create_actor, open_workspace_at, reconcile_orphan_md,
-};
+pub(crate) use outl_tauri_shared::workspace_open::{load_or_create_actor, open_workspace_at};
 
 /// Folder name for the **local** default workspace, created under the
 /// app's data dir when the user hasn't picked anything yet.
@@ -116,10 +115,13 @@ pub(crate) fn persist_workspace_path(path: &Path) {
 /// Background opener. Runs once per process; sets the inner
 /// `Option<Workspace>` and emits the `workspace-ready` event when done.
 ///
-/// Unlike the desktop opener, the orphan-md reconcile runs **inline**
-/// here (before publishing the workspace) so the very first
-/// `build_page_view` call already sees imported / peer-written blocks —
-/// e.g. backlinks on today's journal include yesterday's imports.
+/// Publishes the workspace and fires `workspace-ready` **before** the
+/// orphan-md reconcile, then defers that filesystem walk to
+/// [`spawn_background_reconcile`]. The first `build_page_view` (today's
+/// journal) paints without waiting on the walk — on a large workspace it
+/// is the cold-boot bottleneck. Backlinks are fetched lazily off the
+/// page-open path anyway (`page_backlinks`), so they no longer depend on
+/// the reconcile finishing before first paint.
 pub(crate) fn spawn_workspace_opener(
     workspace_slot: Arc<Mutex<Option<Workspace>>>,
     storage_root: PathBuf,
@@ -133,31 +135,93 @@ pub(crate) fn spawn_workspace_opener(
     // index. Keeps the long-lived client well under iOS jetsam.
     let lru_cap = outl_config::load().storage.lru_cap.min(5_000);
     thread::spawn(move || {
-        let mut workspace = match open_workspace_at(actor, &hlc, &storage_root, lru_cap) {
+        let workspace = match open_workspace_at(actor, &hlc, &storage_root, lru_cap) {
             Ok(w) => w,
             Err(e) => {
                 warn!("background open failed for {}: {e}", storage_root.display());
                 return;
             }
         };
-        // Reconcile any `.md` files the op log doesn't know about yet —
-        // imported journals (Roam dump, Logseq move), peer-written `.md`
-        // that arrived without its sidecar, or files edited externally
-        // in vim / VS Code.
-        reconcile_orphan_md(&mut workspace, &hlc, &storage_root);
-        // Repair journal titles doubled by concurrent offline creation
-        // (two devices auto-created the same day's journal; each wrote the
-        // slug as the root's Yrs text and the concurrent inserts
-        // concatenated). Cheap no-op once clean; converges via the op log.
-        match outl_actions::repair_doubled_journal_titles(&mut workspace, &hlc) {
-            Ok(0) => {}
-            Ok(n) => info!("repaired {n} doubled journal title(s)"),
-            Err(e) => warn!("doubled-title repair: {e}"),
-        }
+        // Publish + fire `workspace-ready` FIRST so today's journal paints
+        // immediately; the orphan reconcile runs after (see below).
         *workspace_slot.lock() = Some(workspace);
         if let Err(e) = app.emit("workspace-ready", ()) {
             warn!("emit workspace-ready: {e}");
         }
         info!("background workspace opener complete");
+
+        // Reconcile orphan `.md` + repair doubled journal titles off the
+        // boot path, on its own thread (mirrors desktop). The workspace is
+        // already live; pages materialised by the reconcile surface on the
+        // next read.
+        spawn_background_reconcile(workspace_slot, storage_root, hlc);
+    });
+}
+
+/// Deferred boot work: reconcile orphan `.md` files and repair doubled
+/// journal titles, on a worker thread so first paint is never blocked.
+///
+/// Runs after [`spawn_workspace_opener`] has published the workspace and
+/// fired `workspace-ready`. Best-effort: a workspace closed between
+/// publish and this pass (user picked another root) aborts cleanly.
+fn spawn_background_reconcile(
+    workspace_slot: Arc<Mutex<Option<Workspace>>>,
+    storage_root: PathBuf,
+    hlc: HlcGenerator,
+) {
+    thread::spawn(move || {
+        let engine = outl_actions::SyncEngine::new(storage_root.clone(), hlc.actor());
+        // Orphan `.md` reconcile — imported journals (Roam / Logseq),
+        // peer-written `.md` without a sidecar, or files edited externally.
+        // Lock PER PAGE and drop between iterations so the frontend can
+        // grab the workspace between reconciles: holding one lock across a
+        // 2800-page walk blocks the first journal paint (the reason this
+        // runs off the boot thread at all). Mirrors the desktop's
+        // `spawn_background_reconcile`.
+        for path in &engine.scan_for_orphans() {
+            let mut slot = workspace_slot.lock();
+            let Some(ws) = slot.as_mut() else {
+                return;
+            };
+            if let Err(e) = outl_md::reconcile::reconcile_md(ws, &hlc, path, None) {
+                warn!("orphan reconcile failed for {}: {e}", path.display());
+            }
+        }
+        // Desynced projections: snapshot the list under one brief lock,
+        // then recover each under its own so first paint isn't blocked.
+        let desynced = {
+            let mut slot = workspace_slot.lock();
+            let Some(ws) = slot.as_mut() else {
+                return;
+            };
+            engine.scan_for_desynced_projections(ws)
+        };
+        for path in &desynced {
+            let mut slot = workspace_slot.lock();
+            let Some(ws) = slot.as_mut() else {
+                return;
+            };
+            match outl_actions::recover_desynced_projection(ws, &hlc, &storage_root, path) {
+                Ok(n) if n > 0 => info!(
+                    "recovered {n} lost op(s) from desynced projection {}",
+                    path.display()
+                ),
+                Ok(_) => {}
+                Err(e) => warn!("desync recovery failed for {}: {e}", path.display()),
+            }
+        }
+        // Repair journal titles doubled by concurrent offline creation.
+        // Cheap no-op once clean; converges via the op log. One brief lock.
+        {
+            let mut slot = workspace_slot.lock();
+            let Some(ws) = slot.as_mut() else {
+                return;
+            };
+            match outl_actions::repair_doubled_journal_titles(ws, &hlc) {
+                Ok(0) => {}
+                Ok(n) => info!("repaired {n} doubled journal title(s)"),
+                Err(e) => warn!("doubled-title repair: {e}"),
+            }
+        }
     });
 }

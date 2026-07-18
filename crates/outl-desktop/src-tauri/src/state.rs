@@ -90,6 +90,10 @@ impl AppHost for AppState {
         &self.workspace
     }
 
+    fn workspace_arc(&self) -> std::sync::Arc<Mutex<Option<Workspace>>> {
+        self.workspace.clone()
+    }
+
     fn hlc(&self) -> &HlcGenerator {
         &self.hlc
     }

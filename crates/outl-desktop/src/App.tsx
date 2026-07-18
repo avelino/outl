@@ -59,6 +59,13 @@ function App() {
   const [ready, setReady] = createSignal(false);
   const [checked, setChecked] = createSignal(false);
   const [onboarded, setOnboarded] = createSignal(hasOnboarded());
+  // Whether a workspace is already configured (`settings.last_workspace`).
+  // Distinct from `ready` (the workspace has finished materializing): during
+  // boot the config is known instantly but the background opener is still
+  // replaying the op log, so `hasConfig && !ready` is the "opening" state — it
+  // must render a loading screen, NOT the workspace picker. Showing the picker
+  // there makes a returning user think their config was lost.
+  const [hasConfig, setHasConfig] = createSignal(false);
 
   function finishOnboarding() {
     markOnboarded();
@@ -93,6 +100,13 @@ function App() {
   async function hydrateTheme() {
     try {
       const s = await getSettings();
+      // A configured workspace is known from `settings.last_workspace` on disk
+      // IMMEDIATELY — long before the background opener publishes the live
+      // `storage_root` (that only happens after the op-log replay). This is the
+      // signal the gate uses to show "opening…" instead of the picker, so read
+      // it here, in the earliest boot step. `null` (or unreadable settings on a
+      // true first run) leaves it false → the picker, correctly.
+      setHasConfig(s.last_workspace != null);
       // Backlinks direction is a display preference read from the same
       // settings file (issue #142); hydrate it here so the first render
       // already orders correctly.
@@ -130,15 +144,17 @@ function App() {
     });
     onCleanup(() => unlisten());
 
-    // While the background opener is still in flight, poll every
-    // 500 ms so the picker → shell transition isn't blocked on a
-    // missed event. Cap at 10 attempts.
+    // While the background opener is still in flight, poll every 500 ms so the
+    // loading → shell transition isn't blocked on a missed `workspace-ready`
+    // event. Cap at 40 attempts (20 s) — the first boot after a big sync can
+    // full-replay for a few seconds before `ready`, and we must not fall back
+    // to the picker while that's happening.
     if (!ready()) {
       let tries = 0;
       const id = setInterval(async () => {
         tries += 1;
         await refresh();
-        if (ready() || tries >= 10) clearInterval(id);
+        if (ready() || tries >= 40) clearInterval(id);
       }, 500);
       onCleanup(() => clearInterval(id));
     }
@@ -150,16 +166,30 @@ function App() {
         when={checked()}
         fallback={<div class="p-8 opacity-50">Loading…</div>}
       >
-        {/* Ready + onboarded → the app. Otherwise run onboarding: it
-            owns the storage pick (reusing <WorkspacePicker />) and the
-            optional pairing step before handing off to <AppShell />. */}
+        {/* Ready + onboarded → the app. Not ready yet, but a workspace IS
+            configured → the background opener is still replaying; show a
+            loading screen, never the picker (that reads as "my config was
+            lost"). Only run onboarding when there's truly no config (first
+            run, or the picked folder was removed). */}
         <Show
           when={ready() && onboarded()}
           fallback={
-            <Onboarding
-              onWorkspacePicked={refresh}
-              onFinish={finishOnboarding}
-            />
+            <Show
+              when={hasConfig()}
+              fallback={
+                <Onboarding
+                  onWorkspacePicked={refresh}
+                  onFinish={finishOnboarding}
+                />
+              }
+            >
+              <div class="flex h-full items-center justify-center">
+                <div class="flex items-center gap-3 opacity-60">
+                  <div class="h-4 w-4 animate-spin rounded-full border-2 border-(--color-outl-fg)/30 border-t-(--color-outl-fg)/70" />
+                  <span class="text-sm">Opening your workspace…</span>
+                </div>
+              </div>
+            </Show>
           }
         >
           <AppShell />

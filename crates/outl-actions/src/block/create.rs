@@ -198,6 +198,29 @@ pub fn create_before(
     create_with_position(workspace, hlc, parent, floor, text)
 }
 
+/// Insert a sibling before `before`, falling back to appending at the end
+/// of `page` when `before` is no longer in the tree.
+///
+/// The `create_before` counterpart of [`create_after_or_append`], for the
+/// "open a block above this one" gesture (vim `O`, `Cmd/Ctrl+Shift+Enter` at
+/// column 0). Same stale-anchor reality: a peer reload / re-mint can leave
+/// `before` pointing at a node no longer in the tree, and appending the new
+/// block at the page end beats surfacing `block <id> is not in the tree` when
+/// the user just hit `O`. Every GUI client routes "new block above" through
+/// here so the fallback can't drift.
+pub fn create_before_or_append(
+    workspace: &mut Workspace,
+    hlc: &HlcGenerator,
+    page: NodeId,
+    before: NodeId,
+    text: Option<&str>,
+) -> Result<NodeId, ActionError> {
+    match create_before(workspace, hlc, before, text) {
+        Err(ActionError::NotInTree(_)) => append_block(workspace, hlc, Some(page), text),
+        other => other,
+    }
+}
+
 /// Append a new block as the last child of `parent`. Synonym for
 /// [`append_block`] when the parent is explicit.
 pub fn create_under(
@@ -329,6 +352,41 @@ mod tests {
         // fallback must append at the page end, never error.
         let ghost = NodeId::new();
         let created = create_after_or_append(&mut ws, &hlc, page, ghost, Some("new")).unwrap();
+        let kids: Vec<String> = crate::tree::children_of(&ws, page)
+            .into_iter()
+            .map(|(id, _)| ws.block_text(id).unwrap_or_default())
+            .collect();
+        assert_eq!(kids, vec!["a", "new"]);
+        assert_eq!(ws.block_text(created).as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn create_before_or_append_inserts_sibling_when_anchor_is_live() {
+        use crate::page::{open_or_create, PageKind};
+        let (mut ws, hlc) = new_workspace();
+        let page = open_or_create(&mut ws, &hlc, "p", "P", PageKind::Page).unwrap();
+        let a = append_block(&mut ws, &hlc, Some(page), Some("a")).unwrap();
+        // Live anchor → ordinary sibling right before `a`.
+        let b = create_before_or_append(&mut ws, &hlc, page, a, Some("b")).unwrap();
+        let kids: Vec<String> = crate::tree::children_of(&ws, page)
+            .into_iter()
+            .map(|(id, _)| ws.block_text(id).unwrap_or_default())
+            .collect();
+        assert_eq!(kids, vec!["b", "a"]);
+        assert_eq!(ws.block_text(b).as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn create_before_or_append_falls_back_to_page_end_when_anchor_missing() {
+        use crate::page::{open_or_create, PageKind};
+        let (mut ws, hlc) = new_workspace();
+        let page = open_or_create(&mut ws, &hlc, "p", "P", PageKind::Page).unwrap();
+        let _a = append_block(&mut ws, &hlc, Some(page), Some("a")).unwrap();
+        // A stale/re-minted id (a concurrent sync reload dropped the block the
+        // frontend still points at): the `O`/new-block-above counterpart of the
+        // `o` crash. The fallback must append at the page end, never error.
+        let ghost = NodeId::new();
+        let created = create_before_or_append(&mut ws, &hlc, page, ghost, Some("new")).unwrap();
         let kids: Vec<String> = crate::tree::children_of(&ws, page)
             .into_iter()
             .map(|(id, _)| ws.block_text(id).unwrap_or_default())
