@@ -1,6 +1,6 @@
 {
   "name": "@outl/plugin-sdk",
-  "version": "1.0.0",
+  "version": "0.8.0-beta.130",
   "description": "TypeScript SDK for authoring outl plugins. Types-only contract — the host implementation is injected by the outl runtime (Boa/Rust) at load time.",
   "license": "MIT",
   "type": "module",

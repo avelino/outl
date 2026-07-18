@@ -770,9 +770,18 @@ jobs:
           # Stamp the release version into package.json in place — no git
           # commit/tag, same throwaway-patch approach the binaries use for
           # Cargo.toml. The repo keeps its own version untouched.
-          npm version "${VERSION}" --no-git-tag-version --allow-same-version
+          #
+          # `--no-workspaces` is load-bearing: the repo root is a bun workspace
+          # whose siblings (examples/*, outl-desktop) declare `workspace:*`
+          # deps, a protocol npm can't resolve. Without the flag, npm runs
+          # these commands workspace-aware, walks up to the root, tries to
+          # build the whole monorepo tree, and dies with EUNSUPPORTEDPROTOCOL
+          # on `workspace:*` — even though the SDK itself has zero deps. On a
+          # clean CI checkout (no node_modules to short-circuit resolution)
+          # this is a hard failure.
+          npm version "${VERSION}" --no-git-tag-version --allow-same-version --no-workspaces
           # Scoped package: `--access public` (the first publish would else
           # default to a private, paid publish). `latest` keeps main the
           # default `npm install` resolves.
-          npm publish --access public --tag latest
+          npm publish --access public --tag latest --no-workspaces
           echo "::notice::Published @outl/plugin-sdk@${VERSION}"
