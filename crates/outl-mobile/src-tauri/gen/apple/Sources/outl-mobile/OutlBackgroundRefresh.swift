@@ -65,28 +65,37 @@ public final class OutlBackgroundRefresh: NSObject {
     private static let refreshIdentifier = "app.outl.mobile-app.refresh"
     private static let syncIdentifier = "app.outl.mobile-app.sync"
 
-    /// Floor, not a guarantee — iOS schedules when it can.
-    private static let interval: TimeInterval = 60 * 60
+    /// Floor, not a guarantee — iOS schedules when it can. Kept modest (15 min,
+    /// not 1 h) so the scheduler has more latitude to grant a window; a larger
+    /// floor is a self-imposed ceiling on how soon a background sync can run.
+    private static let interval: TimeInterval = 15 * 60
 
     /// Single entry point called by `OutlBootstrap.+load` in `main.mm`.
     @objc public static func install() {
         guard #available(iOS 13.0, *) else { return }
-        DispatchQueue.main.async {
-            registerTasks()
-            // Re-arm on every backgrounding: at launch `registerTasks` runs
-            // BEFORE the Rust side registers the transport (peer count reads
-            // 0, so nothing is submitted), and pairing the first peer happens
-            // with the app open. Both cases arm here, the moment the app
-            // actually goes to background. Re-submitting an already-pending
-            // identifier just replaces the request, so this is idempotent.
-            NotificationCenter.default.addObserver(
-                forName: UIApplication.didEnterBackgroundNotification,
-                object: nil,
-                queue: .main
-            ) { _ in
-                scheduleRefresh()
-                scheduleSync()
-            }
+        // Register the launch handlers SYNCHRONOUSLY, right here. Apple requires
+        // every `BGTaskScheduler` handler to be registered before the app
+        // finishes launching — otherwise a COLD background launch for that task
+        // can't find its handler and iOS silently drops the window (the likely
+        // cause of "doesn't sync while closed"). `register` needs no UIKit state
+        // (only `submit`/scheduling touch app state), and `install()` is already
+        // hopped onto the main queue by `main.mm`'s `+load`, so the previous
+        // extra `DispatchQueue.main.async` here only pushed registration a
+        // runloop turn too late. Keep only the observer registration inline too.
+        registerTasks()
+        // Re-arm on every backgrounding: at launch `registerTasks` runs BEFORE
+        // the Rust side registers the transport (peer count reads 0, so nothing
+        // is submitted), and pairing the first peer happens with the app open.
+        // Both cases arm here, the moment the app actually goes to background.
+        // Re-submitting an already-pending identifier just replaces the request,
+        // so this is idempotent.
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            scheduleRefresh()
+            scheduleSync()
         }
     }
 
