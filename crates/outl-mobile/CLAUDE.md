@@ -181,7 +181,7 @@ Journals are excluded — only regular pages can be deleted from the switcher.
 The backend command is the shared `outl_tauri_shared::commands::page::delete_page` body — no mobile-specific logic.
 `Action::DeletePage` carries a `g d` chord in the shared catalog (Normal mode), but mobile has no keyboard surface — long-press in the page switcher remains the only trigger on touch devices.
 
-`BacklinksSection.tsx`'s header button (`order`/`onToggleOrder`) flips newest/oldest via `setBacklinksOrder`; `Journal.tsx` wires `backlinks_order`.
+`BacklinksSection.tsx`'s `order`/`onToggleOrder` flips order via `setBacklinksOrder` (returns `PageBacklinks`); backlinks are lazy in `Journal.tsx` via `createResource(slug, pageBacklinks)` since `PageView.backlinks` is empty.
 
 ## Opening an external `[label](url)` link
 

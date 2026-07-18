@@ -213,14 +213,13 @@ async function runPluginChord(kb: PluginKeybinding) {
     for (const note of reply.notifications) setAppState("lastError", note);
     for (const err of reply.errors)
       setAppState("lastError", `plugin: ${err}`);
-    // Re-render the on-screen page from the refreshed view — same three
-    // fields `<AppShell>`'s `applyView` writes (a plugin can move blocks,
-    // so backlinks refresh too).
+    // Re-render the on-screen page from the refreshed view — same fields
+    // `<AppShell>`'s `applyView` writes. Backlinks are fetched lazily by
+    // OutlineView's per-slug effect, not carried on the view.
     if (reply.view) {
       setAppState({
         page: reply.view.page,
         outline: reply.view.outline,
-        backlinks: reply.view.backlinks,
       });
     }
     playPluginViews(reply.views);

@@ -456,6 +456,12 @@ Only `identity.key` stays global (`~/.outl/`).
 The panel header shows a small status dot derived from the shared `peersOnline(statuses())` helper (`@outl/shared/peers`) — green when at least one iroh peer is reachable, orange when none are (no peers paired, or all unreachable).
 The **Refresh** button calls `forceSync()`: `syncNow()` (force a P2P pull) → `reloadWorkspace()` (re-render) → `refresh()` (re-read the device list + health for the dots).
 `syncNow` / `reloadWorkspace` failures land on `appState.lastError` but never block the status read.
+
+**`reload_workspace` offloads the replay off the IPC thread.**
+Its heavy half — `SyncEngine::reload_workspace`, a full O(all-ops) replay — runs in `tauri::async_runtime::spawn_blocking`, not inline on the IPC worker.
+A synchronous command froze the window through the rebuild.
+On iOS the same shape trips the scene-update watchdog (>10s → SIGKILL) after a big peer push, so mobile mirrors it.
+Only the cheap tail (history invalidation + `Mutex` swap + reconcile spawn) runs on the command thread.
 `syncNow()` + `peersOnline()` live in `@outl/shared` so desktop and mobile derive the dot + drive the refresh identically — see [`outl-sync-iroh/CLAUDE.md`](../outl-sync-iroh/CLAUDE.md) → "Force-sync trigger (`sync_now`)".
 
 ## Deep links (`outl://`)
