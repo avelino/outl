@@ -126,7 +126,7 @@ So **neither** the MCP nor the ephemeral CLI binds an iroh endpoint — the GUI 
   `outl mcp serve` is long-lived, but on first workspace open it brings up **`outl_actions::FileSyncTransport`**, NOT `IrohSyncTransport` — a disk poller that binds no endpoint (`mcp/mod.rs::ensure_transport`).
   It writes `ops-<actor>.jsonl` to the shared `ops/` dir; a co-resident GUI's fs-watcher picks those up and **its** transport announces/serves them to remote peers.
   The file poller only flips the `peer_dirty` flag when another process (GUI / CLI / a GUI-delivered peer op) changes the on-disk ops, so the next tool call reopens and the MCP's reads stay fresh.
-  `announce_after_mutation` / `shutdown_transport` become clean no-ops on the file transport.
+  There is no peer announce after a mutation (the file transport has nothing to announce); `shutdown_transport` is a clean no-op on it.
   A **headless** MCP (no GUI running) therefore has no real-time push — its ops sit on disk until a long-lived endpoint (the GUI) opens or the user runs `outl sync`, then converge via each peer's `MAINTENANCE_RESYNC`.
   That's the accepted trade-off for never breaking a running GUI's sync.
 - **The ephemeral CLI stays a passive writer.**

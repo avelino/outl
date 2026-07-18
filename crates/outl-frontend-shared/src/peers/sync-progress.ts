@@ -34,8 +34,6 @@ export interface SyncProgressState {
   current: () => SyncProgress | null;
   /** Recent "milestone" events (ops received/pushed, synced, failed), newest first. */
   feed: () => SyncFeedEntry[];
-  /** Reset both signals (e.g. when the pairing sheet closes). */
-  clear: () => void;
 }
 
 /** How many feed lines to keep. Older ones fall off. */
@@ -93,9 +91,5 @@ export function createSyncProgress(): SyncProgressState {
   return {
     current,
     feed,
-    clear: () => {
-      setCurrent(null);
-      setFeed([]);
-    },
   };
 }

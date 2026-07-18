@@ -70,9 +70,9 @@ pub fn call(params: Value, ctx: &Arc<ServerCtx>) -> Result<Value, JsonRpcError> 
 
     if outcome.is_ok() && MUTATING.contains(&name) {
         ctx.invalidate_index();
-        // Wake connected peers so they pull these ops in real time (iroh
-        // gossip). No-op when the device has no peers / the transport is off.
-        ctx.announce_after_mutation();
+        // No peer announce here: the MCP is a passive writer (file transport,
+        // no iroh endpoint), so a co-resident GUI syncs these ops out. See
+        // `ServerCtx::ensure_transport`.
     }
 
     Ok(match outcome {
