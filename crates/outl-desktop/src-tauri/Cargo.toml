@@ -37,6 +37,8 @@ dirs = { workspace = true }
 rustls = { workspace = true }
 
 tauri = { workspace = true }
+tauri-plugin-log = { workspace = true }
+log = { workspace = true }
 tauri-plugin-dialog = "2"
 # Backend clipboard read for "paste without formatting" (Cmd+Shift+V).
 # `navigator.clipboard.readText()` in the macOS WKWebview pops the native

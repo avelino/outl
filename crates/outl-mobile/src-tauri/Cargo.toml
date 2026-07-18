@@ -51,8 +51,10 @@ outl-exec = { path = "../../outl-exec", default-features = false, features = [
 ] }
 
 tauri = { workspace = true }
+tauri-plugin-log = { workspace = true }
 tauri-plugin-opener = { workspace = true }
 tauri-plugin-os = { workspace = true }
+log = { workspace = true }
 # `outl://` deep links (links shared into the app, parity with desktop).
 # iOS has no second-instance problem, so no single-instance plugin here.
 tauri-plugin-deep-link = "2"

@@ -45,14 +45,17 @@ outl-tui = { path = "crates/outl-tui", version = "0.8.0" }
 # IDs and time
 ulid = { version = "1", features = ["serde"] }
 
-# OS keychain for per-plugin secrets (`ctx.secrets`). Native stores on every
-# platform; `sync-secret-service` + `crypto-rust` keep Linux off OpenSSL,
-# matching the workspace TLS policy.
-keyring = { version = "3", features = [
+# OS keychain for per-plugin secrets (`ctx.secrets`). Native stores on macOS /
+# Windows; on Linux the Secret Service via `async-secret-service` (zbus, pure
+# Rust) + `crypto-rust` — NOT `sync-secret-service`, which pulls the C
+# `libdbus-sys` and needs `libdbus-1-dev` on every Linux build (CI has none).
+# `async-io` gives the blocking wrapper its reactor; the keyring API stays sync.
+keyring = { version = "3", default-features = false, features = [
     "apple-native",
     "windows-native",
-    "sync-secret-service",
+    "async-secret-service",
     "crypto-rust",
+    "async-io",
 ] }
 # Hidden-input prompt for `outl plugin secret set` (never echo a token).
 rpassword = "7"
@@ -128,8 +131,10 @@ chrono-tz = "0.10"
 dirs = "6"
 
 # Tauri clients (desktop + mobile src-tauri)
+log = "0.4"
 rustls = { version = "0.23", features = ["ring"] }
 tauri = { version = "2", features = [] }
+tauri-plugin-log = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-os = "2"
 

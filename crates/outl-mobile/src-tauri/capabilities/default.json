@@ -5,6 +5,7 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "log:default",
     "deep-link:default",
     {
       "identifier": "opener:allow-open-url",
