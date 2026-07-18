@@ -10,6 +10,24 @@ If you've never written a line of JavaScript for outl, start at the top and foll
 If you want the dry reference instead of the walkthrough, read [Plugin API](plugin-api.md).
 If you want to understand the runtime internals (the Boa engine, the describe→apply model under the hood), read [Plugin architecture](plugin-architecture.md).
 
+## Quickstart — a running plugin in 60 seconds
+
+If you just want to see a plugin run before reading the whole thing, scaffold one and install it:
+
+```sh
+outl plugin init hello                       # writes ./hello (manifest + build + a `hello` command)
+cd hello
+bun install && bun run build                 # bundles src/index.ts → index.js  (npm works too)
+outl -w ~/notes plugin install . --yes       # install into your workspace
+outl -w ~/notes plugin run com.example.hello hello
+```
+
+That last line prints the toast the starter command fires; in the TUI / desktop, type `/hello` in a block instead.
+`outl plugin init` writes a complete, buildable project — manifest, `package.json`, `tsconfig`, `src/index.ts`, README — so you have a real plugin to grow from.
+
+The rest of this page builds a plugin **from an empty folder by hand**, so you touch every field and every host call once and nothing is magic.
+If you'd rather start from the scaffold and read the reference alongside, that's the [Plugin API](plugin-api.md).
+
 ## What we're going to build
 
 We'll build **`tag-counter`** — a small but genuinely useful plugin that exercises both day-zero capabilities you'll reach for most:
@@ -171,10 +189,11 @@ Create `tag-counter/config.schema.json`:
 
 You read this config at runtime with `ctx.config.get()`.
 
-> **Where the config value actually comes from, today.**
-> A form UI to *edit* this config doesn't exist yet.
-> The value `ctx.config.get()` returns is read from the workspace lockfile (`installed.json`, the `config` field for your plugin).
-> The schema is still worth writing — it documents the shape, and the form-render path will use it later — but for now, treat the default in your code as the value you'll usually get unless you hand-edit the lockfile.
+> **Where the config value actually comes from.**
+> `ctx.config.get()` reads the `config` field for your plugin from the workspace lockfile (`installed.json`).
+> The user edits it on **every client**: `outl plugin config set <id> <key> <value>` on the CLI, the settings form in the desktop / mobile plugin browser, or the TUI `plugin-settings` overlay.
+> All of them render this JSON Schema as a form and coerce each value to its field type, so the schema you write here *is* the settings UI.
+> A field marked `"x-outl-secret": true` is routed to the OS keychain instead of the lockfile and read with `ctx.secrets.get()` — see [Plugin API → Secrets, the full flow](plugin-api.md#secrets--the-full-flow).
 
 ## Step 4 — Set up the build (`package.json` + `tsconfig.json`)
 
@@ -297,34 +316,23 @@ export default definePlugin({
       );
 
       // --- WRITE PHASE: now emit the mutations. ---
-      ctx.page.create(summaryPage); // idempotent on the slug
-
       if (ranked.length === 0) {
         ctx.ui.notify("No #tags found in the workspace");
         return;
       }
 
-      for (const [tag, n] of ranked) {
-        // We don't have the page's block ids in hand, so we move blocks
-        // onto the page with `create`-then-`move`… but the simplest path
-        // is to create top-level blocks via move targeting the page.
-        // See the describe→apply note below for why we batch reads first.
-        ctx.blocks.create(summaryPageRootId(summaryPage), `#${tag} — ${n}`);
-      }
+      // `appendTree` seeds the whole page in a single turn: it creates
+      // `summaryPage` if it's missing and threads the new block ids through
+      // internally, so we never need a parent id we couldn't obtain mid-turn.
+      ctx.page.appendTree(
+        summaryPage,
+        ranked.map(([tag, n]) => ({ text: `#${tag} — ${n}` })),
+      );
 
       ctx.ui.notify(`Counted ${ranked.length} distinct tag(s)`);
     });
   },
 });
-
-/**
- * The page's root needs a block id to parent under. In day-zero the simplest
- * reliable target is the page slug via `move`, but `create` needs a parent id.
- * For this tutorial we keep it explicit: see the note on page roots below.
- */
-function summaryPageRootId(slug: string): string {
-  return slug; // see "A honest caveat" below
-}
 ```
 
 ### Walking through every API call
@@ -352,11 +360,9 @@ The filter is `{ page?, todo?, textContains? }`, all optional and ANDed; an empt
 Each `Block` is `{ id, text, todo?, page }` — note `text` is **clean**, with no `TODO `/`DONE ` prefix.
 Needs `read-page`.
 
-**`ctx.page.create(slug)`** — creates a page, idempotent on the slug (safe to call every run).
+**`ctx.page.appendTree(slug, tree)`** — appends a whole `TreeNode[]` (`{ text, children? }`, recursive) under a page, creating the page if it's missing.
+This is the call that lets us seed a brand-new `tags/summary` page in a single run: it creates the page and all the tally blocks in one turn, threading the new block ids through internally.
 Needs `write-page`.
-
-**`ctx.blocks.create(parentId, text)`** — creates a block as the last child of `parentId`.
-Needs `write-page` + `submit-op`.
 
 **`ctx.ui.notify(msg)`** and **`ctx.log.info(msg)`** — user-facing toast / status line, and a line in the host's plugin log, respectively.
 Neither needs a permission.
@@ -382,19 +388,18 @@ The rule that follows: **collect everything you're going to change first (the re
 Our `count-tags` does exactly that — it builds the full `counts` map from the snapshot before it creates a single block.
 Don't interleave reads and writes expecting to see your own changes; you won't.
 
-### A honest caveat about this example
+### Why `appendTree` and not `create`
 
-The block-creation half of `count-tags` above leans on `ctx.blocks.create(parentId, text)`, which needs a **parent block id**.
-A freshly-`create`d page has no block you can address yet in the same turn (describe→apply again — the page doesn't materialize until after the handler returns).
-For a real plugin you'd typically:
+`ctx.blocks.create(parentId, text)` needs a **parent block id**, and describe→apply is exactly why that bites here.
+A page you create this turn has no block you can address yet — it doesn't materialize until after your handler returns.
+`ctx.page.appendTree(slug, tree)` is the escape hatch: the host applies the tree *and* creates the page if missing in one pass, threading the new ids internally, so you seed a brand-new page in a single run — no "run it twice" rough edge.
 
-- Write the summary into a page that already has a known anchor block, or
-- Split the work across two command runs (run once to create the page + first blocks, again to refresh), or
-- Use `ctx.blocks.move(id, { toPage: summaryPage })` to relocate existing blocks onto the page (this *does* take a page slug and creates the page if missing).
+The other write calls are still the right tool when you already hold block ids:
 
-The `move`-to-page path is the cleanest day-zero pattern when you're relocating blocks you already have ids for — it's exactly what the shipped `todo-archiver` example does.
-For brand-new content on a brand-new page, expect to run the command twice on the very first use.
-This is a known day-zero rough edge, not a bug in your plugin.
+- `ctx.blocks.create(parentId, text)` / `createAfter(afterId, text)` when you have a real parent or sibling id (e.g. one you got from `query`).
+- `ctx.blocks.move(id, { toPage })` to relocate existing blocks onto a page — it takes a page slug and creates the page if missing (this is what the shipped `todo-archiver` example does).
+
+Rule of thumb: **new content on a fresh page → `appendTree`; editing or relocating blocks you already found → `create` / `move`.**
 
 The host API you have to work with, in full:
 
@@ -407,11 +412,13 @@ The host API you have to work with, in full:
 | `ctx.blocks.edit(id, text)` | replace text (include `TODO `/`DONE ` to keep a prefix) | `write-page` + `submit-op` |
 | `ctx.blocks.create(parentId, text)` | new last child | `write-page` + `submit-op` |
 | `ctx.blocks.createAfter(afterId, text)` | new sibling after a block | `write-page` + `submit-op` |
+| `ctx.blocks.appendTree(parentId, tree)` | append a nested `TreeNode[]` under a block, one turn | `write-page` + `submit-op` |
 | `ctx.blocks.move(id, target)` | `{ toPage }` (creates page) or `{ toParent }` | `write-page` + `submit-op` |
 | `ctx.blocks.toggleTodo(id)` | cycle None→TODO→DONE→None | `write-page` + `submit-op` |
 | `ctx.blocks.delete(id)` | move to trash | `write-page` + `submit-op` |
 | `ctx.page.list()` → `Page[]` | `{ slug, title, kind }` | `read-page` |
 | `ctx.page.create(slug)` | idempotent page create | `write-page` |
+| `ctx.page.appendTree(slug, tree)` | append a `TreeNode[]`, creating the page if missing | `write-page` |
 | `ctx.config.get()` | your config object | — |
 | `ctx.log.info/warn/error(m)` | host log | — |
 | `ctx.ui.notify(m)` | user toast / status line | — |

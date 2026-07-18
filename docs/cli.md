@@ -250,7 +250,7 @@ CLI exit code is `1` in that case; MCP returns the payload via the normal envelo
 | `outl reconcile`                             | —                       |
 | `outl mcp serve [--workspace=…]`             | —                       |
 | `outl peer pair\|list\|remove\|status`        | —                       |
-| `outl plugin list\|install\|run\|enable\|disable` | —                   |
+| `outl plugin init\|search\|list\|install\|run\|config\|secret\|enable\|disable\|remove` | — |
 | `outl sync`                                  | —                       |
 | `outl workspace info [--json]`               | `outl_workspace_info`   |
 | `outl import logseq <src> <dst>`             | —                       |
@@ -260,13 +260,20 @@ CLI exit code is `1` in that case; MCP returns the payload via the normal envelo
 `init`, `serve`, `reconcile`, `import`, `mcp serve`, `peer`, `plugin`, and `sync` are CLI-only on purpose — they're either interactive, long-running, or bootstrap commands that don't fit a tool-call shape.
 
 `outl plugin` manages the workspace's JS plugins (under `<workspace>/.outl/plugins/`), wrapping `outl-plugins`.
+`init <NAME> [--id <ID>] [--dir <PATH>]` scaffolds a buildable starter project (manifest + `package.json` + `tsconfig` + `src/index.ts` + README); run `bun install && bun run build` inside it for an installable bundle.
+`search [QUERY]` lists installable example plugins from the repo (filtered by `QUERY` when given).
 `list` loads every installed plugin and prints each one's version, enabled state, and the slash commands it contributes.
-`install <DIR>` takes a local directory holding a `plugin.json` plus its bundle (the installed shape).
+`install <SOURCE>` takes a local directory holding a `plugin.json` plus its bundle (the installed shape), **or** a `github:owner/repo[/subdir][#tag]` source.
+A `github:` source is cloned at an immutable semver tag — the newest published tag when none is pinned, never a mutable branch.
 It prints the permissions the manifest requests and asks for approval before copying the plugin in and freezing those permissions in the lockfile.
 Pass `--yes` to approve non-interactively (required when stdin is not a TTY).
-`github:user/repo` sources are not wired yet; clone the repo and point at the local checkout.
 `run <PLUGIN_ID> <COMMAND_ID>` runs a contributed command and re-renders every page's `.md` afterwards, because the op log is the source of truth and the files are a projection.
+`config show <ID>` / `config set <ID> <KEY> <VALUE>` read and write the plugin's plaintext config in the lockfile (value coerced to the field's schema type).
+`secret set <ID> <KEY> [--value <V>]` / `secret remove <ID> <KEY>` (alias `rm`) manage the plugin's secrets in the **OS keychain** — never in the workspace on disk.
+`secret set` prompts for the value on a hidden line when `--value` is omitted (prefer that: a `--value` on the command line lands in your shell history).
 `enable <ID>` / `disable <ID>` flip the plugin's `enabled` flag in the lockfile without uninstalling it.
+`remove <ID>` (aliases `uninstall`, `rm`) deletes the plugin's directory and its lockfile entry.
+`remove <ID>` (aliases `uninstall`, `rm`) deletes the plugin's directory and its lockfile entry.
 
 `outl peer pair` takes an optional `--name <NAME>` — the label this device advertises to the other (shown in the peer's `outl peer list`).
 It defaults to the machine hostname; the GUI clients default it to "desktop" / "mobile" and let the user edit it before pairing.

@@ -191,3 +191,4 @@ When you save and reopen the TUI, outl matches each block back to its sidecar en
 - The [TUI manual](tui.md) — every key, every overlay, persistence rules, gotchas.
 - [Why outl](why-outl.md) — the pitch vs. Roam and Logseq.
 - [Sync, done right](sync.md) — what makes the algorithm interesting.
+- [Build your first plugin](plugin-tutorial.md) — extend outl in JavaScript; `outl plugin init` scaffolds a running plugin in 60 seconds.

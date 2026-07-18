@@ -36,7 +36,7 @@ Either way, install validates `plugin.json`, copies the installed shape into the
 The resolved version, source, approved permissions, and bundle hash are recorded in the lockfile (see [Where plugins live](#where-plugins-live)).
 
 > **Scaffolding a new plugin:** `outl plugin init <name>` writes a buildable starter project (manifest + `package.json` + `tsconfig` + `src/index.ts`); run `bun install && bun run build` inside it for an installable bundle.
-> Today's CLI surface is `init`, `list`, `install`, `run`, `enable`, `disable`, `remove`.
+> Today's CLI surface is `init`, `search`, `list`, `install`, `run`, `config`, `secret`, `enable`, `disable`, `remove` — see [CLI → plugin](cli.md#workspace--admin) for every flag.
 > `outl plugin update` and `.outlpkg` packaging are still roadmap.
 
 ### Running a command
@@ -89,6 +89,7 @@ Every host call is gated against that set — a plugin that didn't get `write-pa
 | `read-op-log` | Observe ops as they're applied (the `onOp` hook). |
 | `submit-op` | Submit mutations to the op log. |
 | `storage:local` | Per-plugin local key/value storage (this device only — does **not** sync). |
+| `secrets` | Read the plugin's own secret from the OS keychain (`ctx.secrets.get`); the value is set out-of-band and never touches the workspace on disk. |
 | `network:<domain>` | Network access scoped to one domain. |
 
 Network is always scoped to a domain.
@@ -239,6 +240,7 @@ The CLI is headless, so anything visual or chord-driven (`keybinding`, `toolbar-
 | `read-op-log` | Observe applied ops |
 | `submit-op` | Submit ops to the log |
 | `storage:local` | Per-plugin local KV (no sync) |
+| `secrets` | Read the plugin's own keychain secret (`ctx.secrets.get`) |
 | `network:<domain>` | Network to one domain (`network:*` rejected) |
 
 ## See also

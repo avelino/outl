@@ -91,3 +91,8 @@ const r = await ctx.net.fetch("https://api.openai.com/v1/chat/completions", {
 ```
 
 Two manifest changes follow from that: change the permission to `network:api.openai.com`, and add an `apiKey` field to a `config.schema.json` so the host renders a settings form and validates the value before `ctx.config.get` hands it back.
+
+> **For a real API token, don't use plaintext config.**
+> `ctx.config` lives in the lockfile — fine for a model name or a page prefix, wrong for a credential.
+> Mark the field `"x-outl-secret": true` and read it with `ctx.secrets.get()` so it lands in the OS keychain instead, never on disk.
+> See [Plugin API → Secrets, the full flow](../plugin-api.md#secrets--the-full-flow) for the end-to-end contract.

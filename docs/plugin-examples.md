@@ -23,6 +23,18 @@ Read the [tutorial](plugin-tutorial.md) first, then the [API reference](plugin-a
 | `sync-transport` | [Echo Sync](plugin-examples/echo-sync.md) | A push/pull transport skeleton |
 | _several at once_ | [TODO Archiver](plugin-examples/todo-archiver.md) | op-hook + slash-command + keybinding + config-schema in one plugin |
 
+## Real integrations (external plugins)
+
+The examples above live in this repo so you can read them next to the source.
+A production plugin lives in **its own repo** and depends on the published `@outl/plugin-sdk` from npm — that's the shape you ship.
+
+| Plugin | Capabilities | What it shows |
+|---|---|---|
+| [outl-plugin-ouraring](https://github.com/avelino/outl-plugin-ouraring) | `secrets` + `network` + `config-schema` | Syncs Oura Ring health metrics into daily pages — the canonical template for an **authenticated external integration**: an API token in the OS keychain (`ctx.secrets.get`), plaintext config in the lockfile, a gated `ctx.net.fetch`, and `appendTree` to write the results in one turn. |
+
+Building your own integration?
+Start from that repo, and see [Plugin API → Secrets, the full flow](plugin-api.md#secrets--the-full-flow) for the token contract.
+
 ## The shape of an example
 
 Every example follows the same layout (the dev shape — see the [tutorial](plugin-tutorial.md)):
