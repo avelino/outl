@@ -46,7 +46,7 @@ import {
   peerPairJoin,
 } from "@outl/shared/api/commands";
 import type { PeerDto, PeerStatusDto } from "@outl/shared/api/types";
-import { PeerList, PairingQR } from "@outl/shared/peers";
+import { PeerList, PairingQR, SyncProgressView, createSyncProgress } from "@outl/shared/peers";
 
 import { createSheetDrag } from "../lib/sheet-drag";
 import { haptic } from "../lib/haptics";
@@ -144,6 +144,9 @@ export function DevicesSheet(props: DevicesSheetProps) {
   const [hostTicket, setHostTicket] = createSignal<string | null>(null);
   const [toast, setToast] = createSignal<string | null>(null);
   const [deviceName, setDeviceName] = createSignal(loadDeviceName());
+  // Live sync progress (snapshot %, ops counts, "page X synced" feed). Cosmetic;
+  // subscribes to the `sync-progress` event, unsubscribes on cleanup.
+  const sync = createSyncProgress();
 
   function updateDeviceName(value: string) {
     setDeviceName(value);
@@ -407,6 +410,15 @@ export function DevicesSheet(props: DevicesSheetProps) {
                 </button>
               </div>
             )}
+          </Show>
+
+          <Show when={sync.current() || sync.feed().length > 0}>
+            <div class="mb-2 text-[13px] font-semibold uppercase tracking-wider text-(--color-ios-text-secondary) dark:text-(--color-iosd-text-secondary)">
+              Syncing
+            </div>
+            <div class="mb-4">
+              <SyncProgressView current={sync.current()} feed={sync.feed()} peers={peers()} />
+            </div>
           </Show>
 
           <div class="mb-2 text-[13px] font-semibold uppercase tracking-wider text-(--color-ios-text-secondary) dark:text-(--color-iosd-text-secondary)">

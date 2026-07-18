@@ -20,6 +20,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   BacklinksOrder,
   CreateBlockReply,
+  PageBacklinks,
   PageMeta,
   PageView,
   PeerDto,
@@ -184,17 +185,41 @@ export function deletePage(slug: string): Promise<PageView> {
 }
 
 /**
+ * Compute a page's backlinks lazily, off the page-open path.
+ *
+ * `backlinks_for_page` is an O(blocks-in-workspace) scan, so it's no
+ * longer bundled into {@link PageView} — computing it there blocked the
+ * first journal paint on a large workspace. Call this after the outline
+ * renders (keyed on the current page slug) and fill the backlinks panel
+ * when it resolves. Mirrors the TUI's lazy/cached backlinks.
+ */
+export function pageBacklinks(slug: string): Promise<PageBacklinks> {
+  return invoke<PageBacklinks>("page_backlinks", { slug });
+}
+
+/**
  * Persist the backlinks-list direction (issue #142) and get `slug`'s
- * view back re-sorted under it. A pure display preference — it lives in
- * `config.toml`, never the op log, so it does not converge between
- * devices (same policy as the theme). The returned `PageView` already
- * reflects the new order; the caller just swaps it into its store.
+ * backlinks back re-sorted under it. A pure display preference — it lives
+ * in `config.toml`, never the op log, so it does not converge between
+ * devices (same policy as the theme). Returns only the re-sorted
+ * backlinks (not a whole `PageView`): the panel already has the outline.
  */
 export function setBacklinksOrder(
   order: BacklinksOrder,
   slug: string,
-): Promise<PageView> {
-  return invoke<PageView>("set_backlinks_order", { order, slug });
+): Promise<PageBacklinks> {
+  return invoke<PageBacklinks>("set_backlinks_order", { order, slug });
+}
+
+/**
+ * Resolve a batch of block ids (from a `sync-progress` `received-ops` event)
+ * to the distinct page/journal slugs they belong to — the "page X synced"
+ * labels in the pairing-screen feed. Best-effort: ids not yet materialized (a
+ * reload may still be in flight) are dropped, so the caller renders whatever
+ * resolved. The engine caps the id list, so this stays cheap.
+ */
+export function resolvePageLabels(nodeIds: string[]): Promise<string[]> {
+  return invoke<string[]>("resolve_page_labels", { nodeIds });
 }
 
 // ---------------------------------------------------------------------------

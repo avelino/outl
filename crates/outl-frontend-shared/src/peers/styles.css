@@ -126,3 +126,125 @@
   background: rgb(239 68 68 / 0.1);
   border-color: rgb(239 68 68 / 0.5);
 }
+
+/* ---- SyncProgressView ------------------------------------------------- */
+
+.outl-syncprog {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.outl-syncprog__current {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.outl-syncprog__pill {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  padding: 0.1875rem 0.625rem;
+  border-radius: 999px;
+  background: rgb(31 158 143 / 0.14); /* teal wash — "flowing" */
+  color: rgb(14 122 110);
+}
+
+.outl-syncprog__pill[data-state="done"] {
+  background: rgb(34 197 94 / 0.14);
+  color: rgb(21 128 61);
+}
+
+.outl-syncprog__pill[data-state="error"] {
+  background: rgb(239 68 68 / 0.14);
+  color: rgb(185 28 28);
+}
+
+.outl-syncprog__bar-row {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.outl-syncprog__bar {
+  flex: 1;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: rgb(148 163 184 / 0.25);
+  overflow: hidden;
+}
+
+.outl-syncprog__bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: rgb(31 158 143);
+  transition: width 0.4s ease;
+}
+
+.outl-syncprog__bytes {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
+.outl-syncprog__feed {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.outl-syncprog__item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.375rem 0.125rem;
+  font-size: 0.8125rem;
+  border-top: 1px solid rgb(148 163 184 / 0.15);
+}
+
+.outl-syncprog__item:first-child {
+  border-top: 0;
+}
+
+.outl-syncprog__from {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.outl-syncprog__arrow {
+  opacity: 0.4;
+}
+
+.outl-syncprog__detail {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+.outl-syncprog__item[data-phase="failed"] .outl-syncprog__detail {
+  color: rgb(185 28 28);
+}
+
+.outl-syncprog__pages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.outl-syncprog__page {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  padding: 0 0.3125rem;
+  border-radius: 0.25rem;
+  background: rgb(148 163 184 / 0.2);
+}

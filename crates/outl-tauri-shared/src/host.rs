@@ -24,6 +24,15 @@ pub trait AppHost: Send + Sync {
     /// the user's picker) publishes one.
     fn workspace(&self) -> &Mutex<Option<Workspace>>;
 
+    /// A cloneable handle to the same workspace slot, so a heavy read can
+    /// be moved onto a blocking pool thread instead of running on the
+    /// Tauri IPC/main thread. The O(blocks) backlinks walk
+    /// (`compute_backlinks`, which materializes every block's text) blocks
+    /// the main thread long enough to trip the iOS scene-update watchdog on
+    /// a large workspace; offloading it needs an owned `Arc`, not the
+    /// borrow `workspace()` returns.
+    fn workspace_arc(&self) -> Arc<Mutex<Option<Workspace>>>;
+
     /// Per-device HLC generator (actors identify devices, not workspaces).
     fn hlc(&self) -> &HlcGenerator;
 

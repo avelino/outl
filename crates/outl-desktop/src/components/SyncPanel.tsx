@@ -36,7 +36,13 @@ import {
   reloadWorkspace,
   syncNow,
 } from "@outl/shared/api/commands";
-import { PairingQR, PeerList, peersOnline } from "@outl/shared/peers";
+import {
+  PairingQR,
+  PeerList,
+  SyncProgressView,
+  createSyncProgress,
+  peersOnline,
+} from "@outl/shared/peers";
 import type { PeerDto, PeerStatusDto } from "@outl/shared/api/types";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { hostname } from "@tauri-apps/plugin-os";
@@ -104,6 +110,9 @@ export function SyncPanel() {
   const [pair, setPair] = createSignal<PairState>({ phase: "idle" });
   const [copied, setCopied] = createSignal(false);
   const [deviceName, setDeviceName] = createSignal(loadDeviceName());
+  // Live sync progress (snapshot %, ops counts, "page X synced" feed). Cosmetic;
+  // subscribes to the `sync-progress` event, unsubscribes on cleanup.
+  const sync = createSyncProgress();
 
   function updateDeviceName(value: string) {
     setDeviceName(value);
@@ -284,6 +293,14 @@ export function SyncPanel() {
           {loading() ? "Refreshing…" : "Refresh"}
         </button>
       </div>
+
+      {/* Live sync progress (snapshot %, ops counts, "page X synced" feed).
+          Only shows while a pass is running or has recent activity. */}
+      <Show when={sync.current() || sync.feed().length > 0}>
+        <div class="rounded border border-(--color-outl-fg)/10 bg-(--color-outl-fg)/[0.03] px-3 py-2">
+          <SyncProgressView current={sync.current()} feed={sync.feed()} peers={peers()} />
+        </div>
+      </Show>
 
       {/* Paired devices. The shared <PeerList /> is pure; we feed it the
           list + the status map and handle remove here. */}
