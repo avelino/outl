@@ -31,12 +31,13 @@ mod read;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::num::NonZero;
 use std::path::PathBuf;
 
 use lru::LruCache;
 use parking_lot::RwLock;
+use serde::Deserialize;
 
 use crate::hlc::Hlc;
 use crate::id::{ActorId, NodeId};
@@ -233,14 +234,83 @@ pub(super) fn parse_log_line(raw: &str) -> Result<Vec<LogOp>, serde_json::Error>
     Ok(ops)
 }
 
+/// Parse-lite view of a `LogOp`: only the two fields the boot-time index
+/// build needs — the HLC and the node the op touches — leaving the heavy
+/// payload (`Op::Edit`'s `text_op` byte array above all) undeserialized.
+///
+/// serde ignores every field not named here by default, so `text_op`,
+/// `position`, `new_parent`, `value`, … are walked-and-dropped instead
+/// of allocated. Skipping the `Vec<u8>` allocation per `Edit` is what
+/// turns `reload` from an O(log size, allocating) reparse — seconds and
+/// a memory spike on a 150 MB / 200k-op log — into an index build that
+/// touches the same bytes without allocating them a second time.
+#[derive(Deserialize)]
+struct LiteLogOp {
+    ts: Hlc,
+    op: LiteOp,
+}
+
+/// Externally-tagged mirror of [`Op`] carrying only each variant's
+/// `node`. The variant names must match [`Op`] exactly so serde routes
+/// the same JSON; every other field of each variant is an ignored key.
+#[derive(Deserialize)]
+enum LiteOp {
+    Move { node: NodeId },
+    Edit { node: NodeId },
+    SetProp { node: NodeId },
+    Create { node: NodeId },
+    SetCollapsed { node: NodeId },
+}
+
+impl LiteOp {
+    /// The node this op touches. Every [`Op`] variant carries one.
+    fn node(&self) -> NodeId {
+        match self {
+            LiteOp::Move { node }
+            | LiteOp::Edit { node }
+            | LiteOp::SetProp { node }
+            | LiteOp::Create { node }
+            | LiteOp::SetCollapsed { node } => *node,
+        }
+    }
+}
+
+/// Parse-lite sibling of [`parse_log_line`]: extract only `(ts, node)`
+/// per op via [`LiteLogOp`], streaming the same concatenated-JSON
+/// recovery so a glued line yields every op's `(ts, node)` instead of
+/// dropping the line. Returns the same `Result` shape as
+/// [`parse_log_line`] so the record framing (skip-on-parse-error, offset
+/// accounting) stays byte-identical to the full path. `node` is always
+/// `Some` today (every `Op` targets a node) but kept `Option` to mirror
+/// [`op_node`].
+pub(super) fn parse_log_line_lite(
+    raw: &str,
+) -> Result<Vec<(Hlc, Option<NodeId>)>, serde_json::Error> {
+    let mut out = Vec::new();
+    let stream = serde_json::Deserializer::from_str(raw).into_iter::<LiteLogOp>();
+    for item in stream {
+        let lite = item?;
+        out.push((lite.ts, Some(lite.op.node())));
+    }
+    Ok(out)
+}
+
 /// One physical record read from an op-log file, tolerant of the ways a
 /// synced or crash-interrupted `.jsonl` can be malformed.
+///
+/// Reload only needs each op's `(ts, node)` to build the offset/node
+/// indexes, so `Ops` carries the parse-lite tuples rather than full
+/// [`LogOp`]s — the full op is read back lazily on demand via the
+/// offset index (see [`JsonlStorage::read_op_at`]).
 pub(super) enum RecordRead {
     /// Clean end of file.
     Eof,
-    /// A parsed record (one op, or several recovered from a glued line) and
-    /// the number of bytes it spanned on disk.
-    Ops { consumed: u64, ops: Vec<LogOp> },
+    /// A parsed record (one op's `(ts, node)`, or several recovered from
+    /// a glued line) and the number of bytes it spanned on disk.
+    Ops {
+        consumed: u64,
+        ops: Vec<(Hlc, Option<NodeId>)>,
+    },
     /// A byte span carrying no usable op — a blank line, non-UTF8 bytes (a
     /// partial sync can leave them mid-file), or JSON that didn't parse. The
     /// span length is still reported so the caller keeps a correct offset and
@@ -282,22 +352,12 @@ pub(super) fn read_log_record<R: std::io::BufRead>(
             reason: None,
         });
     }
-    match parse_log_line(trimmed) {
+    match parse_log_line_lite(trimmed) {
         Ok(ops) => Ok(RecordRead::Ops { consumed, ops }),
         Err(e) => Ok(RecordRead::Skip {
             consumed,
             reason: Some(e.to_string()),
         }),
-    }
-}
-
-pub(super) fn op_touches_node(op: &Op, id: NodeId) -> bool {
-    match op {
-        Op::Move { node, .. }
-        | Op::Edit { node, .. }
-        | Op::SetProp { node, .. }
-        | Op::Create { node, .. }
-        | Op::SetCollapsed { node, .. } => *node == id,
     }
 }
 
@@ -330,61 +390,87 @@ impl Storage for JsonlStorage {
     }
 
     fn ops_since(&self, ts: Hlc) -> Result<Vec<LogOp>, StorageError> {
-        let mut out: Vec<LogOp> = self
-            .cache
-            .read()
-            .iter()
-            .filter(|(hlc, _)| **hlc > ts)
-            .map(|(_, op)| op.clone())
-            .collect();
+        // The offset index is the complete op set; the LRU is only a warm
+        // accelerator (empty right after boot). Drive the result off the
+        // index so an evicted op is never dropped, preferring a cache hit
+        // over a disk seek per op.
+        let mut out = Vec::new();
+        for (actor, hlc) in self.index.ts_after(ts) {
+            if let Some(op) = self.read_op_hybrid(actor, hlc) {
+                out.push(op);
+            }
+        }
         out.sort_by_key(|op| op.ts);
         Ok(out)
     }
     fn ops_for_node(&self, id: NodeId) -> Result<Vec<LogOp>, StorageError> {
-        // Hot path: cache hits cover recent ops.
-        let cache = self.cache.read();
-        let mut warm: Vec<LogOp> = cache
-            .iter()
-            .filter(|(_, op)| op_touches_node(&op.op, id))
-            .map(|(_, op)| op.clone())
-            .collect();
-        drop(cache);
-        if warm.is_empty() {
-            // No warm hits at all; fall back to the per-node index.
-            return self.cold_ops_for_node(id);
-        }
-        warm.sort_by_key(|op| op.ts);
-        Ok(warm)
+        // MUST be the COMPLETE op set for `id`. After an empty-cache boot
+        // the LRU can hold a proper SUBSET of a node's ops (e.g. a
+        // `SetCollapsed`/`SetProp` appended this session) while the node's
+        // historical `Edit` ops sit on disk. A warm-only answer would then
+        // drop that Edit history and corrupt the block's text on Doc
+        // rebuild (#129). Always drive off the per-node index, which is
+        // complete; `cold_ops_for_node` prefers a warm LRU hit per op.
+        self.cold_ops_for_node(id)
     }
 
     fn ops_for_actor(&self, id: ActorId) -> Result<Vec<LogOp>, StorageError> {
-        let mut out: Vec<LogOp> = self
-            .cache
-            .read()
-            .iter()
-            .filter(|(_, op)| op.actor == id)
-            .map(|(_, op)| op.clone())
-            .collect();
+        // Index-driven: read every op this actor authored, from the cache
+        // when warm and disk otherwise. Returns the complete set even
+        // after the LRU has shed the actor's older ops.
+        let mut out = Vec::new();
+        for ts in self.index.ts_for_actor(id) {
+            if let Some(op) = self.read_op_hybrid(id, ts) {
+                out.push(op);
+            }
+        }
         out.sort_by_key(|op| op.ts);
         Ok(out)
     }
 
     fn last_ts_per_actor(&self) -> Result<HashMap<ActorId, Hlc>, StorageError> {
-        let mut map: HashMap<ActorId, Hlc> = HashMap::new();
-        for (_, op) in self.cache.read().iter() {
-            map.entry(op.actor)
-                .and_modify(|h| {
-                    if op.ts > *h {
-                        *h = op.ts;
-                    }
-                })
-                .or_insert(op.ts);
-        }
-        Ok(map)
+        // The offset index keys ARE the per-actor high-water marks, so no
+        // op reads are needed. The index is complete (the cache is only a
+        // subset), so this is correct even with an empty LRU after boot.
+        Ok(self.index.last_ts_per_actor())
     }
 
     fn all_ops(&self) -> Result<Vec<LogOp>, StorageError> {
-        let mut out: Vec<LogOp> = self.cache.read().iter().map(|(_, op)| op.clone()).collect();
+        // Fast path: the cache holds the complete op set (unbounded and
+        // warm). `cache ⊆ index` always, so equal counts mean equal sets.
+        {
+            let cache = self.cache.read();
+            if cache.len() == self.index.total_len() {
+                let mut out: Vec<LogOp> = cache.iter().map(|(_, op)| op.clone()).collect();
+                drop(cache);
+                out.sort_by_key(|op| op.ts);
+                return Ok(out);
+            }
+        }
+        // Cold path (full-replay boot): read each `.jsonl` SEQUENTIALLY,
+        // one open per file, instead of an index-driven `File::open` +
+        // seek PER OP. On a 211k-op install-clean boot the seek-per-op
+        // path is 211k `File::open` syscalls — far worse than a single
+        // streaming pass over each file.
+        self.read_all_ops_sequential()
+    }
+
+    fn ops_since_per_actor(
+        &self,
+        cutoff: &BTreeMap<ActorId, Hlc>,
+    ) -> Result<Vec<LogOp>, StorageError> {
+        // The snapshot-boot delta path. The default impl clones `all_ops`
+        // and filters — O(whole log). Override to read only the per-actor
+        // tail the index reports (all ops for an actor unseen by the
+        // snapshot; the strictly-after-cutoff slice otherwise), a small,
+        // recent set on a healthy boot. Preferring warm cache entries
+        // keeps a same-process re-read cheap.
+        let mut out = Vec::new();
+        for (actor, ts) in self.index.ts_since_per_actor(cutoff) {
+            if let Some(op) = self.read_op_hybrid(actor, ts) {
+                out.push(op);
+            }
+        }
         out.sort_by_key(|op| op.ts);
         Ok(out)
     }

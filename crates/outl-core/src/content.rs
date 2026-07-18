@@ -5,8 +5,18 @@
 //! deliberately the *only* thing that writes the two text tiers so they
 //! can't drift:
 //!
-//! - `text`: the materialized string of every block, the hot read path.
-//!   Cheap, roughly the text size.
+//! - `text`: the materialized string of a block, the hot read path.
+//!   Cheap, roughly the text size. Populated lazily: the full-replay boot
+//!   path does **not** materialize every block up front (that O(all
+//!   blocks) pass was a major boot freeze on large snapshotless vaults,
+//!   #179). Instead boot records which nodes carry `Edit` history in
+//!   `pending`, and [`ContentStore::text`] rebuilds a node's string on
+//!   first read. Snapshot boot still hydrates the whole map eagerly (it's
+//!   already materialized strings, not a replay).
+//! - `pending`: nodes known to have `Edit` ops whose string hasn't been
+//!   materialized yet. Membership answers "does this node have text?"
+//!   in O(1) so a never-edited node reads back as `None` without a log
+//!   scan; a pending node materializes on demand and drops out of the set.
 //! - `cache`: a bounded LRU of live Yrs `Doc`s, only for blocks being
 //!   edited or merged right now. Rebuilt on demand from the op log.
 //!
@@ -14,12 +24,22 @@
 //! the iOS memory limit (issue #108); the materialized string keeps
 //! steady-state RAM flat regardless of vault size.
 //!
+//! `text` and `pending` sit behind [`RefCell`] so `text` (an `&self` read
+//! accessor with ~150 call sites, many holding an immutable tree borrow in
+//! a loop) can populate the cache on a read without forcing `&mut self` up
+//! the whole stack. A `Workspace` is only ever reached through
+//! `Arc<Mutex<..>>`, so it needs `Send` (which `RefCell<T: Send>` keeps),
+//! never `Sync`; there is no cross-thread sharing of a bare `&ContentStore`
+//! to race on.
+//!
 //! [`Workspace`]: crate::workspace::Workspace
+//! [`RefCell`]: std::cell::RefCell
 
 use crate::id::NodeId;
 use crate::log::OpLog;
 use crate::op::Op;
-use std::collections::{HashMap, VecDeque};
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet, VecDeque};
 use yrs::updates::decoder::Decode;
 use yrs::{Doc, GetString, ReadTxn, Text, Transact};
 
@@ -54,6 +74,20 @@ fn doc_string(doc: &Doc) -> String {
     let text = doc.get_or_insert_text("content");
     let txn = doc.transact();
     text.get_string(&txn)
+}
+
+/// Rebuild a node's block text by replaying its `Edit` updates from `log`
+/// through a fresh `Doc`. The lazy read-path twin of the boot pass this
+/// replaces: Yrs is a CRDT, so this produces byte-identical text to the
+/// old eager materialization regardless of replay order (#179). `log`
+/// must carry the node's complete `Edit` history — the full-replay boot
+/// path guarantees that (`log_complete == true`).
+fn materialize_text_from_log(node: NodeId, log: &OpLog) -> String {
+    let doc = build_doc(log.iter().filter_map(|logged| match &logged.op {
+        Op::Edit { node: n, text_op } if *n == node => Some(text_op.as_slice()),
+        _ => None,
+    }));
+    doc_string(&doc)
 }
 
 /// Bounded LRU of live Yrs documents.
@@ -111,23 +145,72 @@ impl DocCache {
 
 /// Per-node block text, the two-tier store behind `Workspace`'s text API.
 pub(crate) struct ContentStore {
-    text: HashMap<NodeId, String>,
+    /// Materialized block strings. Lazily populated on read (see the
+    /// module docs); `RefCell` so the `&self` read path can cache.
+    text: RefCell<HashMap<NodeId, String>>,
     cache: DocCache,
+    /// Nodes with `Edit` history whose string hasn't been materialized
+    /// yet (deferred by the full-replay boot path). Drained on read.
+    pending: RefCell<HashSet<NodeId>>,
 }
 
 impl Default for ContentStore {
     fn default() -> Self {
         Self {
-            text: HashMap::new(),
+            text: RefCell::new(HashMap::new()),
             cache: DocCache::new(DOC_CACHE_CAP),
+            pending: RefCell::new(HashSet::new()),
         }
     }
 }
 
 impl ContentStore {
     /// Materialized text of a block, if it has any.
-    pub(crate) fn text(&self, node: NodeId) -> Option<String> {
-        self.text.get(&node).cloned()
+    ///
+    /// The cached string for `node`, if already resident (snapshot body or a
+    /// prior read). Cheap `&self` cache probe — no log scan, no materialize.
+    pub(crate) fn cached(&self, node: NodeId) -> Option<String> {
+        self.text.borrow().get(&node).cloned()
+    }
+
+    /// Whether `node` was recorded as carrying `Edit` history at boot but
+    /// hasn't been materialized yet. A non-pending, non-cached node never had
+    /// any `Edit` (reads back as `None`).
+    pub(crate) fn is_pending(&self, node: NodeId) -> bool {
+        self.pending.borrow().contains(&node)
+    }
+
+    /// Snapshot of the still-deferred nodes, so a caller can materialize each
+    /// via the per-node index (`Workspace::force_materialize_pending`) before
+    /// building a snapshot — avoiding `materialized_text`'s O(log)-per-block
+    /// fallback.
+    pub(crate) fn pending_snapshot(&self) -> Vec<NodeId> {
+        self.pending.borrow().iter().copied().collect()
+    }
+
+    /// Materialize a pending node's string from its `Edit` updates (resolved
+    /// by the caller from the per-node INDEX, `Storage::ops_for_node`), cache
+    /// it, and drop it from `pending`. The `&self` counterpart of
+    /// [`Self::text`] that does NOT scan the log: O(edits of the node), not
+    /// O(whole log) per block — the difference between a cheap open and a
+    /// pathological one on a full-replay boot of a 200k-op vault.
+    pub(crate) fn text_from_edits<'a>(
+        &self,
+        node: NodeId,
+        updates: impl Iterator<Item = &'a [u8]>,
+    ) -> String {
+        let s = doc_string(&build_doc(updates));
+        self.text.borrow_mut().insert(node, s.clone());
+        self.pending.borrow_mut().remove(&node);
+        s
+    }
+
+    /// Record the set of nodes that carry `Edit` history but haven't been
+    /// materialized yet. The full-replay boot path calls this instead of
+    /// eagerly building every block's `Doc` (#179); [`Self::text`] then
+    /// rebuilds each string on first read.
+    pub(crate) fn set_pending(&mut self, nodes: HashSet<NodeId>) {
+        *self.pending.borrow_mut() = nodes;
     }
 
     /// Materialize a node's text from its `Edit` updates without caching
@@ -139,7 +222,8 @@ impl ContentStore {
         updates: impl Iterator<Item = &'a [u8]>,
     ) {
         let doc = build_doc(updates);
-        self.text.insert(node, doc_string(&doc));
+        self.text.borrow_mut().insert(node, doc_string(&doc));
+        self.pending.borrow_mut().remove(&node);
     }
 
     /// Ensure `node`'s `Doc` is resident in the cache, rebuilding it from
@@ -173,7 +257,11 @@ impl ContentStore {
                     let _ = txn.apply_update(decoded);
                 }
             }
-            self.text.insert(node, doc_string(doc));
+            self.text.borrow_mut().insert(node, doc_string(doc));
+            // The node now has a resident, up-to-date string; drop any
+            // deferred-materialization marker so it can't linger (symmetry
+            // with `materialize`/`replace_text`/`cache_doc`).
+            self.pending.borrow_mut().remove(&node);
         }
     }
 
@@ -213,7 +301,8 @@ impl ContentStore {
             let txn = doc.transact();
             txn.encode_state_as_update_v1(&sv_before)
         };
-        self.text.insert(node, new_text.to_string());
+        self.text.borrow_mut().insert(node, new_text.to_string());
+        self.pending.borrow_mut().remove(&node);
         update
     }
 
@@ -222,6 +311,14 @@ impl ContentStore {
     #[cfg(test)]
     pub(crate) fn live_doc_count(&self) -> usize {
         self.cache.docs.len()
+    }
+
+    /// Number of block strings currently materialized. Test-only window
+    /// into the lazy read path (#179): after a full-replay boot this is
+    /// `0` until the first `block_text` read.
+    #[cfg(test)]
+    pub(crate) fn resident_text_count(&self) -> usize {
+        self.text.borrow().len()
     }
 
     /// Whether `node`'s `Doc` is currently resident in the cache.
@@ -239,24 +336,43 @@ impl ContentStore {
         }
         let doc = build_doc(updates);
         let s = doc_string(&doc);
-        self.text.insert(node, s);
+        self.text.borrow_mut().insert(node, s);
+        self.pending.borrow_mut().remove(&node);
         self.cache.insert(node, doc);
     }
 
-    /// Borrow the materialized text map. The snapshot path serializes it
-    /// directly so a snapshot-opened workspace can serve reads without
-    /// replaying every `Edit` op.
-    pub(crate) fn text_map(&self) -> &HashMap<NodeId, String> {
-        &self.text
+    /// Fully materialize every deferred (`pending`) block and return a
+    /// clone of the complete text map. The snapshot writer serializes
+    /// this so a snapshot-opened workspace can serve reads without
+    /// replaying any `Edit` op — which means the map must carry **every**
+    /// block's string, including ones the lazy read path hasn't touched
+    /// yet (#179). This is the one place the deferred O(all blocks) work
+    /// is paid; it runs off the boot hot path (snapshot build), once, and
+    /// makes every subsequent boot a fast snapshot boot.
+    pub(crate) fn materialized_text(&self, log: &OpLog) -> HashMap<NodeId, String> {
+        let pending: Vec<NodeId> = self.pending.borrow().iter().copied().collect();
+        for node in pending {
+            // A node already resident (e.g. edited via `apply` after boot)
+            // wins over a replay; just drop it from `pending`.
+            if !self.text.borrow().contains_key(&node) {
+                let s = materialize_text_from_log(node, log);
+                self.text.borrow_mut().insert(node, s);
+            }
+            self.pending.borrow_mut().remove(&node);
+        }
+        self.text.borrow().clone()
     }
 
     /// Rebuild a `ContentStore` from a pre-materialized text map. The
     /// LRU `Doc` cache starts empty; cold blocks rebuild on demand from
-    /// the op log via `ensure_doc`. Used by the snapshot boot path.
+    /// the op log via `ensure_doc`. `pending` starts empty — the snapshot
+    /// map already carries every block's string, so no lazy materialization
+    /// is needed on this boot path. Used by the snapshot boot path.
     pub(crate) fn from_text_map(text: HashMap<NodeId, String>) -> Self {
         Self {
-            text,
+            text: RefCell::new(text),
             cache: DocCache::new(DOC_CACHE_CAP),
+            pending: RefCell::new(HashSet::new()),
         }
     }
 }

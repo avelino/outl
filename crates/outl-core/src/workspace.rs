@@ -151,6 +151,20 @@ impl Workspace {
         Ok(ws)
     }
 
+    /// Whether this workspace booted by adopting a snapshot (so the
+    /// in-memory log holds only the post-cutoff delta) rather than a full
+    /// replay (log holds every op).
+    ///
+    /// A receive-only device whose snapshot was rejected/absent/stale
+    /// full-replays, leaving a huge resident log that makes `block_text`
+    /// materialization O(log) per block (it scans the log for each node's
+    /// `Edit`s). The caller uses this to persist a FRESH snapshot right
+    /// after such a boot, so the next boot adopts it (delta-only log) and
+    /// materialization stays cheap.
+    pub fn booted_from_snapshot(&self) -> bool {
+        !self.log_complete
+    }
+
     /// Default `apply`-count between in-band snapshot writes. Clients
     /// override with [`Self::set_snapshot_policy`] from `[snapshot]`
     /// in `outl.toml`. The CLI forces `0` to opt out.
@@ -169,7 +183,12 @@ impl Workspace {
             Some(d) => d.clone(),
             None => return Ok(false),
         };
-        let body = match snapshot::read_from_disk(&snapshots_dir, self.actor) {
+        // Prefer this device's own snapshot; when it has none yet (a fresh
+        // paired device), adopt a peer's snapshot so we skip a full replay
+        // of a 200k-op log. Local input is preserved either way — the
+        // per-actor delta below replays every op above the snapshot's
+        // cutoff, including this device's own. See `read_best_from_disk`.
+        let body = match snapshot::read_best_from_disk(&snapshots_dir, self.actor) {
             Ok(Some(b)) => b,
             Ok(None) => return Ok(false),
             Err(e) => {
@@ -180,11 +199,34 @@ impl Workspace {
             }
         };
 
-        // Hydrate the materialized tree + block text directly from the
-        // snapshot body. No `Edit` ops are replayed for these nodes;
-        // `block_text` already carries their settled string. Convert
-        // BTreeMap → HashMap to match the runtime representation
-        // (ContentStore's hot path is a HashMap lookup).
+        // Compute the delta the snapshot hasn't seen — per actor, so a
+        // low-HLC op from an actor the snapshot never saw isn't dropped
+        // below another actor's high-water mark (#156).
+        let delta = self.ops_since_per_actor_combined(&body.cutoff)?;
+
+        // CONVERGENCE GUARD (invariant #1). The snapshot body is an opaque
+        // MATERIALIZED tree, not a reorderable log, so applying the delta on
+        // top equals a full replay ONLY when the delta is a pure temporal
+        // SUFFIX — every delta op newer than every op folded into the body.
+        // If a delta op sorts at/below a body op, the CRDT would need to
+        // reorder it against ops that live only in the (opaque) tree, so a
+        // cycle-forming `Move` can resolve the opposite way and the tree
+        // diverges from a full replay. The per-actor cutoff makes this
+        // reachable — a peer op below our cutoff, or an adopted peer
+        // snapshot that excludes all our local ops. Bail to a full replay:
+        // correct over fast. (No-silent-loss #5 holds regardless — the op is
+        // always in the log; this only decides the materialization order.)
+        if let Some(max_body_hlc) = body.cutoff.values().max().copied() {
+            if delta.iter().any(|op| op.ts <= max_body_hlc) {
+                return Ok(false);
+            }
+        }
+
+        // Safe to adopt: hydrate the materialized tree + block text from the
+        // snapshot body, then apply the suffix delta on top. No `Edit` ops
+        // are replayed for the body nodes; `block_text` already carries
+        // their settled string. Convert BTreeMap → HashMap to match the
+        // runtime representation (ContentStore's hot path is a HashMap).
         self.tree = Tree::from_parts(
             body.nodes.into_iter().collect(),
             body.properties.into_iter().collect(),
@@ -192,12 +234,8 @@ impl Workspace {
         );
         self.content = ContentStore::from_text_map(body.block_text.into_iter().collect());
 
-        // Replay only the ops the snapshot hasn't seen yet — per actor,
-        // so a low-HLC op from an actor the snapshot never saw isn't
-        // dropped below another actor's high-water mark (#156). `Edit`
-        // ops in this delta will be re-materialized in the loop below;
+        // `Edit` ops in the delta are re-materialized in the loop below;
         // the rest of the snapshot's text is still authoritative.
-        let delta = self.ops_since_per_actor_combined(&body.cutoff)?;
         let mut edited_in_delta: HashSet<NodeId> = HashSet::new();
         for op in delta {
             if let Op::Edit { node, .. } = &op.op {
@@ -254,35 +292,30 @@ impl Workspace {
     /// as the snapshot-miss fallback and by `open_in_memory`.
     fn boot_from_full_replay(&mut self) -> Result<(), WorkspaceError> {
         // Pass 1: structural. Apply every op to the tree (`Edit` is a
-        // no-op there) and the log. Text is materialized in pass 2 so the
-        // open-time memory peak stays at a single live `Doc` instead of
-        // one per block — that peak is what jetsam was killing on iOS.
+        // no-op there) and the log. This keeps the tree FULLY materialized;
+        // only block text goes lazy below.
         let ops = self.all_ops_combined()?;
         for op in ops {
             self.tree.apply_op(&mut self.log, op);
         }
 
-        // Pass 2: text. Group `Edit` ops by node (indices only, no byte
-        // copies), then rebuild one `Doc` at a time, materialize its
-        // string, and drop it before moving on.
-        let mut edits_by_node: HashMap<NodeId, Vec<usize>> = HashMap::new();
-        for (i, logged) in self.log.iter().enumerate() {
-            if let Op::Edit { node, .. } = &logged.op {
-                edits_by_node.entry(*node).or_default().push(i);
-            }
-        }
-        for (node, indices) in edits_by_node {
-            self.content.materialize(
-                node,
-                indices.iter().filter_map(|&i| match self.log.get(i) {
-                    Some(LogOp {
-                        op: Op::Edit { text_op, .. },
-                        ..
-                    }) => Some(text_op.as_slice()),
-                    _ => None,
-                }),
-            );
-        }
+        // Pass 2: defer text. Materializing every block's `Doc` here was
+        // O(all blocks) — a major boot freeze on large snapshotless vaults
+        // (a 66k-block install-clean froze the mobile app, #179). Instead
+        // record which nodes carry `Edit` history (indices-free, one cheap
+        // scan) and let `block_text` rebuild each string lazily on first
+        // read. `self.log` is complete here (`log_complete == true`), so a
+        // lazy rebuild sees the node's full `Edit` set and produces
+        // byte-identical text to the old eager pass.
+        let edited: HashSet<NodeId> = self
+            .log
+            .iter()
+            .filter_map(|logged| match &logged.op {
+                Op::Edit { node, .. } => Some(*node),
+                _ => None,
+            })
+            .collect();
+        self.content.set_pending(edited);
 
         // Seed the snapshot counter so a long-lived workspace opened
         // without a snapshot on disk doesn't have to wait a full
@@ -403,11 +436,27 @@ impl Workspace {
     /// The cutoff is the per-actor high-water mark across **all** storage
     /// (global + per-page shards), so the snapshot records exactly which
     /// of each actor's ops its materialized state already folds in.
+    /// Materialize every still-deferred block's text via the per-node index
+    /// (O(edits) each), so a follow-up `materialized_text` finds it cached
+    /// instead of falling back to its O(log)-per-block log scan. Without this,
+    /// snapshotting a full-replay-booted 200k-op vault is O(blocks × log).
+    fn force_materialize_pending(&self) {
+        for node in self.content.pending_snapshot() {
+            // Index-driven (see `block_text`); caches the string + clears
+            // `pending`. A node that fails to resolve is left pending — the
+            // snapshot then omits it and the next boot rebuilds it lazily.
+            let _ = self.block_text(node);
+        }
+    }
+
     fn build_snapshot_body(&self) -> Result<Option<SnapshotBody>, WorkspaceError> {
         let cutoff = self.last_ts_per_actor_combined()?;
         if cutoff.is_empty() {
             return Ok(None);
         }
+        // Resolve deferred text through the index first (cheap), so the
+        // `materialized_text` call below is a pure cache read.
+        self.force_materialize_pending();
         let (nodes, properties, collapsed) = self.tree.snapshot_parts();
         // Convert to BTreeMap/BTreeSet for canonical (order-stable)
         // serialization — see `snapshot::SnapshotBody` for why.
@@ -420,10 +469,13 @@ impl Workspace {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
             collapsed.iter().copied().collect(),
+            // Force-materialize any block whose text the lazy read path
+            // deferred at boot (#179) so the snapshot carries every
+            // block's string — an incomplete map would silently drop text
+            // on the next snapshot boot.
             self.content
-                .text_map()
-                .iter()
-                .map(|(k, v)| (*k, v.clone()))
+                .materialized_text(&self.log)
+                .into_iter()
                 .collect(),
         )))
     }
@@ -537,8 +589,34 @@ impl Workspace {
     }
 
     /// Block text content, if the block has any.
+    ///
+    /// After a full-replay boot the string may not be materialized yet
+    /// (that O(all blocks) pass is deferred, #179); this rebuilds it from
+    /// the in-memory log on first read and caches it. The log is complete
+    /// on the full-replay path (`log_complete == true`), and snapshot boot
+    /// leaves nothing deferred, so this never needs storage.
     pub fn block_text(&self, node: NodeId) -> Option<String> {
-        self.content.text(node)
+        // Cache hit (snapshot body, or a prior read) — cheap.
+        if let Some(s) = self.content.cached(node) {
+            return Some(s);
+        }
+        // A node with no recorded `Edit` history reads back as `None`.
+        if !self.content.is_pending(node) {
+            return None;
+        }
+        // Resolve the node's `Edit` updates through the log's IN-MEMORY
+        // per-node index — O(edits-of-node), no log scan, no disk. The old
+        // `content.text(node, &self.log)` scanned the whole log per block
+        // (O(log) each — pathological after a full replay of a 200k-op vault:
+        // the "journal takes forever to render" regression); the on-disk
+        // `ops_for_node` path did a cold seek per op (worse). This branch only
+        // runs post-full-replay — a snapshot boot leaves `pending` empty
+        // (delta nodes are re-materialized at boot). Same edits, same HLC
+        // order, same text.
+        Some(
+            self.content
+                .text_from_edits(node, self.log.edit_updates(node)),
+        )
     }
 
     /// Number of live Yrs `Doc`s currently resident in the content cache.
@@ -548,6 +626,13 @@ impl Workspace {
     #[cfg(test)]
     fn live_doc_count(&self) -> usize {
         self.content.live_doc_count()
+    }
+
+    /// Number of block strings currently materialized. Test-only window
+    /// into the lazy full-replay boot path (#179).
+    #[cfg(test)]
+    fn resident_text_count(&self) -> usize {
+        self.content.resident_text_count()
     }
 
     /// Build a Yrs `update_v1` payload that, once wrapped in
@@ -610,7 +695,13 @@ impl Workspace {
     /// Walk `tree.parent(node)` up until we hit a registered page root.
     /// Returns the slug of that page, or `None` if the chain dead-ends
     /// at the workspace root without finding one.
-    fn slug_for_node(&self, node: NodeId) -> Option<String> {
+    ///
+    /// Public so a client can name the page a synced block belongs to (the
+    /// pairing-screen progress feed resolves freshly-received block ids to
+    /// their page/journal slug). Requires the page roots to be registered
+    /// (`register_page_root`) — an unregistered or not-yet-materialized node
+    /// returns `None`, so callers treat it as best-effort.
+    pub fn slug_for_node(&self, node: NodeId) -> Option<String> {
         let mut current = node;
         loop {
             if let Some(slug) = self.page_root_to_slug.get(&current) {
@@ -833,6 +924,90 @@ mod tests {
         }
         // Pass 2 materializes strings and drops every Doc, so nothing is
         // resident right after open — the whole point of issue #108.
+        assert_eq!(ws2.live_doc_count(), 0);
+    }
+
+    /// Full-replay boot must NOT materialize block text up front (#179):
+    /// no string is resident until the first `block_text` read, which then
+    /// rebuilds that one block lazily and correctly — byte-identical to
+    /// what the old eager pass produced.
+    #[test]
+    fn full_replay_boot_defers_block_text_materialization() {
+        let actor = ActorId::new();
+        let g = HlcGenerator::new(actor);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().to_path_buf();
+
+        let storage = Box::new(crate::storage::JsonlStorage::open(dir.clone(), actor).unwrap());
+        let mut ws = Workspace::open_with_storage(actor, storage, None).unwrap();
+
+        // Many edited blocks, plus one create-only block (no text).
+        let mut edited = Vec::new();
+        for i in 0..64 {
+            let n = NodeId::new();
+            edited.push((n, format!("block {i} ☃")));
+            ws.apply(make_op(
+                &g,
+                Op::Create {
+                    node: n,
+                    parent: NodeId::root(),
+                    position: Fractional::first(),
+                },
+            ))
+            .unwrap();
+            let update = ws.build_text_replace_update(n, &format!("block {i} ☃"));
+            ws.apply(make_op(
+                &g,
+                Op::Edit {
+                    node: n,
+                    text_op: update,
+                },
+            ))
+            .unwrap();
+        }
+        let bare = NodeId::new();
+        ws.apply(make_op(
+            &g,
+            Op::Create {
+                node: bare,
+                parent: NodeId::root(),
+                position: Fractional::first(),
+            },
+        ))
+        .unwrap();
+        drop(ws);
+
+        // Reopen: no snapshot (root = None) → full replay, which now
+        // defers text.
+        let storage = Box::new(crate::storage::JsonlStorage::open(dir, actor).unwrap());
+        let ws2 = Workspace::open_with_storage(actor, storage, None).unwrap();
+
+        // Tree structure is fully materialized; block text is not.
+        assert_eq!(ws2.tree().node_count(), 65);
+        assert_eq!(
+            ws2.resident_text_count(),
+            0,
+            "boot must not eagerly materialize any block text"
+        );
+        assert_eq!(ws2.live_doc_count(), 0);
+
+        // Reading a block never touched since boot rebuilds its text
+        // lazily and correctly.
+        let (first, first_text) = &edited[0];
+        assert_eq!(ws2.block_text(*first).as_deref(), Some(first_text.as_str()));
+        assert_eq!(
+            ws2.resident_text_count(),
+            1,
+            "only the read block should now be resident"
+        );
+
+        // Every other block reads back byte-identical on demand; a
+        // create-only block has no text (not a phantom empty string).
+        for (n, want) in &edited {
+            assert_eq!(ws2.block_text(*n).as_deref(), Some(want.as_str()));
+        }
+        assert_eq!(ws2.block_text(bare), None);
+        // Lazy reads only ever populate the string cache, never the Doc LRU.
         assert_eq!(ws2.live_doc_count(), 0);
     }
 

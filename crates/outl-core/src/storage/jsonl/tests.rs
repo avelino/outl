@@ -91,10 +91,10 @@ fn merges_ops_from_multiple_actor_files() {
     assert_eq!(mine.all_ops().unwrap().len(), 1);
 }
 
-/// Bounded LRU should keep RSS constant: ops past the cap are
-/// evicted from RAM, but the offset index still knows about them
-/// (visible via `last_ts_per_actor`) so they can be rebuilt from
-/// disk on demand by future work.
+/// Bounded LRU keeps RSS constant — ops past the cap are evicted from
+/// RAM — while the offset index stays complete, so `all_ops` still
+/// returns every op (rehydrated from disk) and `last_ts_per_actor`
+/// still sees the newest. RAM is bounded; the logical op set is not.
 #[test]
 fn bounded_lru_evicts_old_ops() {
     let tmp = TempDir::new().unwrap();
@@ -107,19 +107,24 @@ fn bounded_lru_evicts_old_ops() {
         storage.append_op(op).unwrap();
     }
 
-    // Only the last 3 of the 5 ops fit in the LRU.
-    let cached = storage.all_ops().unwrap();
-    assert_eq!(cached.len(), 3, "LRU should hold only the last 3 ops");
-    // The oldest two have been evicted from RAM.
-    assert!(!cached.iter().any(|o| o.ts == ops[0].ts));
-    assert!(!cached.iter().any(|o| o.ts == ops[1].ts));
-    // The newest three are still resident.
-    assert!(cached.iter().any(|o| o.ts == ops[2].ts));
-    assert!(cached.iter().any(|o| o.ts == ops[3].ts));
-    assert!(cached.iter().any(|o| o.ts == ops[4].ts));
+    // RAM is bounded: only the last 3 of the 5 ops stay resident in the
+    // LRU (`file_stats` counts cache entries).
+    let resident: usize = storage.file_stats().iter().map(|(_, n)| n).sum();
+    assert_eq!(resident, 3, "LRU should hold only the last 3 ops in RAM");
+
+    // But the logical op set is complete: `all_ops` rehydrates the two
+    // evicted ops from the offset index — no silent loss.
+    let all = storage.all_ops().unwrap();
+    assert_eq!(all.len(), 5, "all_ops returns every op via the index");
+    for op in &ops {
+        assert!(
+            all.iter().any(|o| o.ts == op.ts),
+            "every appended op must come back, evicted or not"
+        );
+    }
 
     // The offset index still knows every op the cache evicted.
-    // `last_ts_per_actor` walks the index, not the cache.
+    // `last_ts_per_actor` reads the index, not the cache.
     let last = storage.last_ts_per_actor().unwrap();
     assert_eq!(last.get(&actor).copied(), Some(ops[4].ts));
 }
@@ -178,12 +183,11 @@ fn ops_for_node_survives_lru_eviction() {
     // only the very last put (a filler), so every target op
     // becomes a cold read.
     storage.resize_cache(1);
-    // Cache no longer holds any target op.
-    let cached = storage.all_ops().unwrap();
-    assert!(
-        !cached.iter().any(|o| op_touches_node(&o.op, target)),
-        "target ops should be evicted by resize_cache(1)"
-    );
+    // The LRU now holds a single resident op (a filler), so every
+    // target op is guaranteed cold. `all_ops` would still return them
+    // (it reads the complete index), so check RAM residency directly.
+    let resident: usize = storage.file_stats().iter().map(|(_, n)| n).sum();
+    assert_eq!(resident, 1, "resize_cache(1) leaves one op resident");
 
     // Cold path must still find every target op via the per-node
     // index + offset index.
@@ -201,10 +205,12 @@ fn ops_for_node_survives_lru_eviction() {
     assert_eq!(post_ts, expected);
 }
 
-/// Reload after a bounded-LRU session rehydrates from disk; the cap
-/// still applies.
+/// Reopening rebuilds the offset index from disk and leaves the LRU
+/// empty (boot no longer reparses the full log into the cache). The
+/// cap bounds only resident RAM, not the logical op set, so `all_ops`
+/// recovers every op via the index regardless of the cap.
 #[test]
-fn reload_with_bounded_lru_keeps_cap() {
+fn reload_with_bounded_lru_rehydrates_full_log() {
     let tmp = TempDir::new().unwrap();
     let actor = ActorId::new();
     let dir = tmp.path().to_path_buf();
@@ -217,8 +223,15 @@ fn reload_with_bounded_lru_keeps_cap() {
             s.append_op(op).unwrap();
         }
     }
+    // Boot leaves the cache empty; the index still holds all 4 offsets.
     let reopened = JsonlStorage::open_with_cap(dir, actor, 2).unwrap();
-    assert_eq!(reopened.all_ops().unwrap().len(), 2);
+    let resident: usize = reopened.file_stats().iter().map(|(_, n)| n).sum();
+    assert_eq!(resident, 0, "boot leaves the LRU empty");
+    assert_eq!(
+        reopened.all_ops().unwrap().len(),
+        4,
+        "all_ops rehydrates the full log from the offset index"
+    );
 }
 
 /// `PageScope::PerPage` writes ops to `ops/<actor>/<slug>.jsonl`,
@@ -283,6 +296,306 @@ fn per_page_scope_with_missing_file_boots_clean() {
     )
     .unwrap();
     assert_eq!(storage.all_ops().unwrap().len(), 0);
+}
+
+/// A second boot loads the persisted `.idx`/`.nodes.idx` and, when they
+/// exactly cover the `.jsonl`, uses them AS-IS — no reparse of the log
+/// body. Sentinel: only the fresh branch skips `save()`, so byte-identical
+/// sidecars across a reboot prove the body was never re-streamed for
+/// indexing (a rebuild would rewrite them).
+#[test]
+fn reload_uses_fresh_idx_without_reparse() {
+    let tmp = TempDir::new().unwrap();
+    let actor = ActorId::new();
+    let dir = tmp.path().to_path_buf();
+    let g = HlcGenerator::new(actor);
+
+    // Boot + append 5 ops. Each append mirrors into both sidecars.
+    {
+        let mut s = JsonlStorage::open(dir.clone(), actor).unwrap();
+        for _ in 0..5 {
+            s.append_op(&mk_create(&g)).unwrap();
+        }
+    }
+    let idx_path = dir.join(format!(".ops-{actor}.idx"));
+    let node_idx_path = dir.join(format!(".ops-{actor}.nodes.idx"));
+    let jsonl_path = dir.join(format!("ops-{actor}.jsonl"));
+    let idx_before = std::fs::read(&idx_path).unwrap();
+    let node_before = std::fs::read(&node_idx_path).unwrap();
+    // The sidecar covers all 5 ops.
+    assert_eq!(
+        String::from_utf8(idx_before.clone())
+            .unwrap()
+            .lines()
+            .count(),
+        5
+    );
+
+    // Corrupt the FIRST line of the `.jsonl` in place, same byte length so
+    // every later offset (and the last record) stays put. A full parse-lite
+    // REBUILD would skip this line and rewrite the sidecar to 4 entries; the
+    // fresh path only reads the LAST record, so it must NOT reparse or rewrite.
+    let body = std::fs::read(&jsonl_path).unwrap();
+    let first_nl = body.iter().position(|&b| b == b'\n').unwrap();
+    let mut corrupted = body.clone();
+    for b in corrupted[..first_nl].iter_mut() {
+        *b = b'x'; // not JSON → parse-lite Skip, same length, offsets intact
+    }
+    std::fs::write(&jsonl_path, &corrupted).unwrap();
+
+    // Reboot: the last record still parses, coverage is byte-exact → fresh.
+    let reopened = JsonlStorage::open(dir.clone(), actor).unwrap();
+
+    // Sentinel: the sidecars are byte-identical (5 entries, unchanged). Only
+    // the fresh branch skips `save()`; a rebuild would have rewritten them to
+    // 4 entries after skipping the corrupt line.
+    assert_eq!(std::fs::read(&idx_path).unwrap(), idx_before);
+    assert_eq!(std::fs::read(&node_idx_path).unwrap(), node_before);
+
+    // Contrast proves the source: the INDEX (from the trusted sidecar) still
+    // knows all 5 ops, while `all_ops` — which re-reads the corrupt body
+    // sequentially — sees only 4. If the fresh path had reparsed the body it
+    // would have dropped the corrupt line from the index too.
+    assert!(reopened.last_ts_per_actor().unwrap().contains_key(&actor));
+    assert_eq!(reopened.all_ops().unwrap().len(), 4);
+}
+
+/// A `.jsonl` that grew since the sidecars were written (append after the
+/// last indexed op, sidecars left stale) is handled by indexing only the
+/// TAIL and merging into the loaded indexes — old + new ops all end up
+/// indexed, identical to a full rebuild, and the node index gets the tail
+/// too (cold `ops_for_node` finds an appended op).
+#[test]
+fn reload_reindexes_appended_tail() {
+    let tmp = TempDir::new().unwrap();
+    let actor = ActorId::new();
+    let dir = tmp.path().to_path_buf();
+    let g = HlcGenerator::new(actor);
+
+    // Boot + append 3 ops via storage (sidecars now cover exactly 3).
+    {
+        let mut s = JsonlStorage::open(dir.clone(), actor).unwrap();
+        for _ in 0..3 {
+            s.append_op(&mk_create(&g)).unwrap();
+        }
+    }
+
+    // Append 2 more op LINES directly to the `.jsonl`, leaving the sidecars
+    // stale at 3 (simulates a crash after the `.jsonl` fsync but before the
+    // sidecar append). One carries a known node so we can probe the node
+    // index afterwards.
+    let jsonl_path = dir.join(format!("ops-{actor}.jsonl"));
+    let tail_node = NodeId::new();
+    let tail_ts = g.next();
+    let tail_op = LogOp {
+        ts: tail_ts,
+        actor,
+        op: Op::Create {
+            node: tail_node,
+            parent: NodeId::root(),
+            position: Fractional::first(),
+        },
+    };
+    let extra = [mk_create(&g), tail_op];
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&jsonl_path)
+            .unwrap();
+        for op in &extra {
+            writeln!(f, "{}", serde_json::to_string(op).unwrap()).unwrap();
+        }
+    }
+
+    // Reboot: covered_end < file_size → grew → tail reindex.
+    let reopened = JsonlStorage::open(dir.clone(), actor).unwrap();
+
+    let mut all: Vec<Hlc> = reopened.all_ops().unwrap().iter().map(|o| o.ts).collect();
+    all.sort();
+    assert_eq!(all.len(), 5, "grew reindex must cover old + appended ops");
+
+    // Node index got the tail: cold read via the per-node index returns the
+    // appended op.
+    let for_node = reopened.ops_for_node(tail_node).unwrap();
+    assert_eq!(for_node.len(), 1);
+    assert_eq!(for_node[0].ts, tail_ts);
+
+    // The grew branch persisted the extended sidecar (now 5 entries).
+    let idx_path = dir.join(format!(".ops-{actor}.idx"));
+    let node_idx_path = dir.join(format!(".ops-{actor}.nodes.idx"));
+    assert_eq!(
+        std::fs::read_to_string(&idx_path).unwrap().lines().count(),
+        5,
+        "grew branch must persist the tail into the sidecar"
+    );
+
+    // Identical to a full rebuild: delete sidecars, reboot, compare.
+    std::fs::remove_file(&idx_path).unwrap();
+    std::fs::remove_file(&node_idx_path).unwrap();
+    let control = JsonlStorage::open(dir.clone(), actor).unwrap();
+    let mut control_ts: Vec<Hlc> = control.all_ops().unwrap().iter().map(|o| o.ts).collect();
+    control_ts.sort();
+    assert_eq!(
+        all, control_ts,
+        "grew tail-reindex must equal a full rebuild"
+    );
+}
+
+/// A missing or corrupt `.idx` falls through to a full parse-lite rebuild —
+/// every op is re-indexed and the sidecar is regenerated. The index is a
+/// cache; losing it can never lose ops, only cost a reparse.
+#[test]
+fn reload_rebuilds_on_missing_or_corrupt_idx() {
+    let tmp = TempDir::new().unwrap();
+    let actor = ActorId::new();
+    let dir = tmp.path().to_path_buf();
+    let g = HlcGenerator::new(actor);
+
+    let ops: Vec<LogOp> = (0..4).map(|_| mk_create(&g)).collect();
+    {
+        let mut s = JsonlStorage::open(dir.clone(), actor).unwrap();
+        for op in &ops {
+            s.append_op(op).unwrap();
+        }
+    }
+    let idx_path = dir.join(format!(".ops-{actor}.idx"));
+
+    let expected: Vec<Hlc> = {
+        let mut v: Vec<Hlc> = ops.iter().map(|o| o.ts).collect();
+        v.sort();
+        v
+    };
+
+    // (a) Missing `.idx` → rebuild.
+    std::fs::remove_file(&idx_path).unwrap();
+    {
+        let r = JsonlStorage::open(dir.clone(), actor).unwrap();
+        let mut got: Vec<Hlc> = r.all_ops().unwrap().iter().map(|o| o.ts).collect();
+        got.sort();
+        assert_eq!(got, expected, "missing .idx must rebuild the full index");
+        assert!(idx_path.exists(), "rebuild regenerates the .idx sidecar");
+    }
+
+    // (b) Corrupt `.idx` (non-JSON garbage) → rebuild.
+    std::fs::write(&idx_path, b"garbage not json at all\n").unwrap();
+    {
+        let r = JsonlStorage::open(dir.clone(), actor).unwrap();
+        let mut got: Vec<Hlc> = r.all_ops().unwrap().iter().map(|o| o.ts).collect();
+        got.sort();
+        assert_eq!(got, expected, "corrupt .idx must rebuild the full index");
+    }
+}
+
+/// An `.idx` pointing past the end of a truncated `.jsonl` (shrank) is
+/// suspect and triggers a full rebuild over whatever survived — no panic,
+/// no trust in the stale index.
+#[test]
+fn reload_rebuilds_on_shrunk_jsonl() {
+    let tmp = TempDir::new().unwrap();
+    let actor = ActorId::new();
+    let dir = tmp.path().to_path_buf();
+    let g = HlcGenerator::new(actor);
+
+    let ops: Vec<LogOp> = (0..4).map(|_| mk_create(&g)).collect();
+    {
+        let mut s = JsonlStorage::open(dir.clone(), actor).unwrap();
+        for op in &ops {
+            s.append_op(op).unwrap();
+        }
+    }
+
+    // Truncate the `.jsonl` at the boundary after the 2nd line — 2 complete
+    // ops survive, but the sidecar still points at offsets for all 4.
+    let jsonl_path = dir.join(format!("ops-{actor}.jsonl"));
+    let body = std::fs::read(&jsonl_path).unwrap();
+    let mut newlines = 0usize;
+    let mut cut = body.len();
+    for (i, &b) in body.iter().enumerate() {
+        if b == b'\n' {
+            newlines += 1;
+            if newlines == 2 {
+                cut = i + 1;
+                break;
+            }
+        }
+    }
+    {
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&jsonl_path)
+            .unwrap();
+        f.set_len(cut as u64).unwrap();
+    }
+
+    // Reboot must not panic and must index exactly the two survivors.
+    let reopened = JsonlStorage::open(dir.clone(), actor).unwrap();
+    let mut got: Vec<Hlc> = reopened.all_ops().unwrap().iter().map(|o| o.ts).collect();
+    got.sort();
+    let mut expected: Vec<Hlc> = ops[..2].iter().map(|o| o.ts).collect();
+    expected.sort();
+    assert_eq!(got, expected, "shrunk .jsonl rebuilds to the surviving ops");
+}
+
+/// A crash landing between the `.idx` append and the `.nodes.idx` append
+/// leaves the two sidecars at different max offsets. The node/offset
+/// symmetry guard must catch the lag and rebuild rather than trust a
+/// half-updated pair — otherwise the un-indexed tail op is silently dropped
+/// from the node-driven `ops_for_node` read (block-text rebuild, #129).
+#[test]
+fn reload_rebuilds_on_node_offset_asymmetry() {
+    let tmp = TempDir::new().unwrap();
+    let actor = ActorId::new();
+    let dir = tmp.path().to_path_buf();
+    let g = HlcGenerator::new(actor);
+
+    // Four edits on the same node → four `.nodes.idx` entries, one per op,
+    // appended in offset order.
+    let target = NodeId::new();
+    let mut target_ts: Vec<Hlc> = Vec::new();
+    {
+        let mut s = JsonlStorage::open(dir.clone(), actor).unwrap();
+        for _ in 0..4 {
+            let ts = g.next();
+            target_ts.push(ts);
+            s.append_op(&LogOp {
+                ts,
+                actor,
+                op: Op::Edit {
+                    node: target,
+                    text_op: vec![1, 2, 3],
+                },
+            })
+            .unwrap();
+        }
+    }
+    target_ts.sort();
+
+    // Simulate the crash: the offset index carries all four entries, but the
+    // node index is missing its last (highest-offset) one — as if the process
+    // died after appending `.idx` and before finishing `.nodes.idx`. Dropping
+    // the tail line makes `NodeIndex::max_offset()` lag `OffsetIndex`'s.
+    let node_idx_path = dir.join(format!(".ops-{actor}.nodes.idx"));
+    let content = std::fs::read_to_string(&node_idx_path).unwrap();
+    let mut lines: Vec<&str> = content.lines().collect();
+    lines.pop();
+    std::fs::write(&node_idx_path, format!("{}\n", lines.join("\n"))).unwrap();
+
+    // Reboot: the asymmetry must trigger a full rebuild, and every op that
+    // touched `target` — including the one whose node entry was dropped — must
+    // come back through the node-driven read.
+    let r = JsonlStorage::open(dir.clone(), actor).unwrap();
+    let mut got: Vec<Hlc> = r
+        .ops_for_node(target)
+        .unwrap()
+        .iter()
+        .map(|o| o.ts)
+        .collect();
+    got.sort();
+    assert_eq!(
+        got, target_ts,
+        "asymmetric sidecars must rebuild so ops_for_node loses nothing"
+    );
 }
 
 /// Global and PerPage storages coexist in the same `ops/` dir
