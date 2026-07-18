@@ -23,7 +23,6 @@ use tracing::{debug, warn};
 use crate::output::{codes, ApiError, Envelope};
 use crate::ws::{self, WsCtx};
 use outl_actions::SyncTransport;
-use outl_core::WorkspaceId;
 use outl_md::index::WorkspaceIndex;
 
 mod prompts;
@@ -164,58 +163,33 @@ impl ServerCtx {
         f(wc)
     }
 
-    /// Bring the iroh transport up once, now that we have the resolved actor
-    /// and root. No-op if already tried, or if the device has no paired peers
-    /// (nothing to sync — stay off the wire). All failures degrade silently.
+    /// Bring up a **passive, file-poll** transport so the MCP notices ops that
+    /// other processes (a co-resident GUI, the `outl` CLI, the mobile app via
+    /// the GUI's sync) wrote to the shared `ops/` dir — keeping its cached reads
+    /// fresh. No-op if already tried.
+    ///
+    /// It deliberately does **NOT** bind an iroh endpoint. The MCP shares the
+    /// device identity (`~/.outl/identity.key`) with the desktop GUI, and iroh's
+    /// relay routes only ONE endpoint per node_id: a second endpoint (the MCP)
+    /// steals the active relay route, and the GUI then loses BOTH inbound and
+    /// outbound sync to any relay-reachable peer (an off-LAN iPhone). That is
+    /// not the "benign hijack" the docs once claimed — it breaks the GUI's sync
+    /// whenever a dual-write tool fires. So the MCP stays a PASSIVE WRITER: it
+    /// writes `ops-<actor>.jsonl` to the shared dir, the sole long-lived
+    /// endpoint (the GUI) announces/serves them to remote peers, and this file
+    /// poller only flips `peer_dirty` when the on-disk ops change so the next
+    /// tool call reopens. A headless MCP (no GUI) still converges via each
+    /// peer's `MAINTENANCE_RESYNC` when a long-lived endpoint next runs, or an
+    /// explicit `outl sync`.
     fn ensure_transport(self: &Arc<Self>, state: &mut ServerState, wc: &WsCtx) {
         if state.transport_tried {
             return;
         }
         state.transport_tried = true;
-        let Some(home) = dirs::home_dir() else {
-            return;
-        };
-        let outl_dir = home.join(".outl");
-        // Peer list is per-GRAPH → `<workspace>/.outl/peers.json`; identity stays
-        // global (`~/.outl/identity.key`).
-        outl_sync_iroh::migrate_global_peers_if_absent(&wc.root);
-        let peers = match outl_sync_iroh::PeersStore::load_or_default(
-            &outl_sync_iroh::workspace_peers_path(&wc.root),
-        ) {
-            Ok(p) => p,
-            Err(e) => {
-                debug!("mcp: peers.json unreadable, P2P off: {e}");
-                return;
-            }
-        };
-        if peers.list().is_empty() {
-            debug!("mcp: no paired peers — P2P transport stays off");
-            return;
-        }
-        let identity =
-            match outl_sync_iroh::IrohIdentity::load_or_generate(&outl_dir.join("identity.key")) {
-                Ok(i) => i,
-                Err(e) => {
-                    warn!("mcp: identity load failed, P2P off: {e}");
-                    return;
-                }
-            };
-        let workspace_id = match WorkspaceId::read_or_create(&wc.root) {
-            Ok(w) => w.as_str().to_string(),
-            Err(e) => {
-                warn!("mcp: workspace id resolve failed, P2P off: {e}");
-                return;
-            }
-        };
-        // `[sync] relay_url` from the global config: `None` (or empty) uses
-        // outl's default relay (`use1-1.relay.avelino.outl.iroh.link`), `Some(url)` points the sync
-        // endpoint at a different relay.
-        let relay_url = outl_config::load().sync.relay_url().map(str::to_string);
-        let transport: Arc<dyn SyncTransport> = Arc::new(outl_sync_iroh::IrohSyncTransport::new(
-            identity, peers, relay_url,
-        ));
-        // The transport signals on this channel each time a peer's ops land;
-        // a tiny drain thread flips `peer_dirty` so the next access reopens.
+        let transport: Arc<dyn SyncTransport> = Arc::new(outl_actions::FileSyncTransport);
+        // The transport signals on this channel each time a peer's ops file
+        // changes on disk; a tiny drain thread flips `peer_dirty` so the next
+        // access reopens and replays the freshly-written ops.
         let (tx, rx) = std::sync::mpsc::channel::<()>();
         let dirty = self.peer_dirty.clone();
         std::thread::Builder::new()
@@ -228,8 +202,7 @@ impl ServerCtx {
             .ok();
         transport.start(wc.root.clone(), wc.actor, tx);
         state.transport = Some(transport);
-        state.workspace_id = Some(workspace_id);
-        debug!("mcp: iroh P2P transport up");
+        debug!("mcp: passive file-poll transport up (no iroh endpoint — see doc)");
     }
 
     /// After a mutating tool commits, wake connected peers so they pull the
