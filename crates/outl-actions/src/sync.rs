@@ -59,6 +59,70 @@ pub struct PeerHealthSnapshot {
     pub last_rtt_ms: Option<u64>,
 }
 
+/// A sync-progress update the transport pushes to the UI while a pass runs.
+///
+/// **Purely informational — distinct from the `start` reload `tx`.** That
+/// unit signal stays the load-bearing "peer ops landed, reload the workspace"
+/// trigger; correctness depends on it. This enum only drives a progress
+/// indicator (the pairing screen's "downloading snapshot 8/15 MB…" feed), so
+/// a dropped update is cosmetic, never a lost op.
+///
+/// Every variant carries `peer` as the peer's **short** node id
+/// (`EndpointId::fmt_short`); the UI resolves it to a friendly alias against
+/// the peer list it already holds. The only honest percentage is
+/// [`Self::Snapshot`] — its `total` comes from the frame's length prefix,
+/// known before the body arrives; op counts are known only once a batch
+/// finishes, so they surface as a live count, not a bar.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "phase", rename_all = "kebab-case")]
+pub enum SyncProgress {
+    /// Dialing / handshaking a peer, before any bytes flow.
+    Connecting {
+        /// Peer's short node id.
+        peer: String,
+    },
+    /// Pulling a peer's materialized snapshot. `received` / `total` in bytes.
+    Snapshot {
+        /// Peer's short node id.
+        peer: String,
+        /// Bytes of the snapshot frame received so far.
+        received: u64,
+        /// Total snapshot frame size, from the length prefix.
+        total: u64,
+    },
+    /// Ingested `count` ops the peer had that this device lacked. `nodes`
+    /// carries the (capped) distinct block ids touched so the UI can name the
+    /// pages that changed — empty on a bulk pass (the initial pair), where
+    /// naming every page is meaningless.
+    ReceivedOps {
+        /// Peer's short node id.
+        peer: String,
+        /// Number of ops applied in this batch.
+        count: u64,
+        /// Distinct block ids touched (capped; empty on a bulk pass).
+        nodes: Vec<String>,
+    },
+    /// Pushed `count` ops the peer lacked.
+    PushedOps {
+        /// Peer's short node id.
+        peer: String,
+        /// Number of ops pushed to the peer.
+        count: u64,
+    },
+    /// A sync pass with this peer finished cleanly.
+    Synced {
+        /// Peer's short node id.
+        peer: String,
+    },
+    /// A sync pass with this peer failed.
+    Failed {
+        /// Peer's short node id.
+        peer: String,
+        /// Human-readable failure reason.
+        error: String,
+    },
+}
+
 /// Transport abstraction — how ops travel between devices.
 ///
 /// iCloud/filesystem: detects file changes via polling.
@@ -87,6 +151,15 @@ pub trait SyncTransport: Send + Sync + 'static {
 
     /// Graceful shutdown. Transport must stop background tasks.
     fn shutdown(&self);
+
+    /// Register a channel the transport pushes [`SyncProgress`] updates to.
+    ///
+    /// Optional and purely informational: a UI progress indicator reads it,
+    /// correctness never does (the reload trigger is the `start` `tx`). Call
+    /// this **before** [`Self::start`] so the transport captures the sink as
+    /// it wires up its tasks. The default no-op means [`FileSyncTransport`]
+    /// and any transport without granular progress simply never report.
+    fn set_progress_sink(&self, _tx: std::sync::mpsc::Sender<SyncProgress>) {}
 
     /// Force an immediate sync pass against every known peer, instead of
     /// waiting for the transport's own periodic catch-up tick.
@@ -260,11 +333,40 @@ impl SyncEngine {
         let ops_dir = self.workspace_root.join("ops");
         let storage = JsonlStorage::open(ops_dir, self.actor)
             .map_err(|e| ActionError::Io(std::io::Error::other(format!("jsonl open: {e}"))))?;
-        let workspace = Workspace::open_with_storage(
+        let mut workspace = Workspace::open_with_storage(
             self.actor,
             Box::new(storage),
             Some(self.workspace_root.clone()),
         )?;
+
+        // Write-through snapshot after a big cold replay.
+        //
+        // Peer-sync ingest writes ops straight to `ops-*.jsonl` (never
+        // through `Workspace::apply`), so the background snapshot writer —
+        // which only fires from `apply` crossing the op threshold — never
+        // runs on a receive-only device. Every reload then full-replays the
+        // ENTIRE log, and the GUI reloads every few seconds (5s poll +
+        // `workspace-ready`), pinning the CPU on a freshly-synced 200k-op
+        // workspace: the journal paints but the UI keeps stuttering.
+        //
+        // Re-persist a fresh snapshot whenever this reload FULL-REPLAYED
+        // (snapshot absent, stale, or rejected by the convergence guard) so
+        // the next boot adopts one instead of replaying. `save_snapshot` is
+        // O(log) — the block-text index makes `force_materialize_pending`
+        // cheap, not the old O(blocks × log) that made this catastrophic —
+        // and it no-ops on an empty log, so there's no size floor worth
+        // gating on. A gate here used to require `log().len() >= 10_000`
+        // before re-persisting, which meant any workspace under that size
+        // whose snapshot got rejected once by the convergence guard (the
+        // routine case for two actively-syncing actors — see
+        // `late_low_hlc_op_from_unseen_actor_survives_snapshot_boot`) never
+        // got a fresh cutoff and full-replayed on *every* subsequent
+        // incremental reload, forever.
+        if !workspace.booted_from_snapshot() {
+            if let Err(e) = workspace.save_snapshot() {
+                tracing::warn!("reload: could not persist boot snapshot: {e}");
+            }
+        }
         Ok(workspace)
     }
 
@@ -484,6 +586,99 @@ mod tests {
         assert_eq!(
             crate::tree::children_of(&ws, outl_core::id::NodeId::root()).len(),
             0
+        );
+    }
+
+    /// Regression: a small (well under the old 10k-op threshold) workspace
+    /// whose on-disk snapshot gets rejected by the convergence guard once
+    /// must NOT be stuck full-replaying on every subsequent incremental
+    /// reload. This is the routine two-actor case — see
+    /// `snapshot_late_op.rs::late_low_hlc_op_from_unseen_actor_survives_snapshot_boot`
+    /// for why a legitimate peer op can sort below another actor's cutoff.
+    #[test]
+    fn reload_workspace_refreshes_snapshot_after_guard_rejection_even_below_threshold() {
+        use outl_core::fractional::Fractional;
+        use outl_core::hlc::Hlc;
+        use outl_core::id::NodeId;
+        use outl_core::op::{LogOp, Op};
+        use outl_core::storage::{JsonlStorage, Storage};
+
+        fn hlc(physical_ms: u64, actor: ActorId) -> Hlc {
+            Hlc {
+                physical_ms,
+                logical: 0,
+                actor,
+            }
+        }
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let ops_dir = root.join("ops");
+        let actor_a = ActorId::new();
+        let actor_b = ActorId::new();
+
+        // Actor A creates one node at a HIGH physical time and snapshots.
+        let mut ws = Workspace::open_with_storage(
+            actor_a,
+            Box::new(JsonlStorage::open(ops_dir.clone(), actor_a).unwrap()),
+            Some(root.to_path_buf()),
+        )
+        .unwrap();
+        ws.set_snapshot_policy(false, 0);
+        let n_a = NodeId::new();
+        ws.apply(LogOp {
+            ts: hlc(10_000, actor_a),
+            actor: actor_a,
+            op: Op::Create {
+                node: n_a,
+                parent: NodeId::root(),
+                position: Fractional::first(),
+            },
+        })
+        .unwrap();
+        ws.save_snapshot().unwrap();
+        drop(ws);
+
+        // Actor B's op arrives via sync with a LOW physical time (B was
+        // offline / its clock lags), sitting below A's cutoff — the
+        // convergence guard must reject the stale snapshot for this boot.
+        let n_b = NodeId::new();
+        {
+            let mut storage_b = JsonlStorage::open(ops_dir.clone(), actor_b).unwrap();
+            storage_b
+                .append_op(&LogOp {
+                    ts: hlc(5, actor_b),
+                    actor: actor_b,
+                    op: Op::Create {
+                        node: n_b,
+                        parent: NodeId::root(),
+                        position: Fractional::first(),
+                    },
+                })
+                .unwrap();
+        }
+
+        let engine = SyncEngine::new(root.to_path_buf(), actor_a);
+
+        // Well under the old 10_000-op "worth the write" gate.
+        let ws1 = engine.reload_workspace().expect("first reload");
+        assert!(ws1.tree().contains(n_a));
+        assert!(ws1.tree().contains(n_b));
+        assert!(
+            !ws1.booted_from_snapshot(),
+            "first boot must full-replay: the stale snapshot's cutoff sits above B's late op"
+        );
+        drop(ws1);
+
+        // No new ops landed since. A fresh snapshot persisted after the
+        // first reload's full replay should let this second reload adopt
+        // it directly instead of full-replaying again.
+        let ws2 = engine.reload_workspace().expect("second reload");
+        assert!(ws2.tree().contains(n_a));
+        assert!(ws2.tree().contains(n_b));
+        assert!(
+            ws2.booted_from_snapshot(),
+            "second reload must adopt the refreshed snapshot instead of full-replaying forever"
         );
     }
 }

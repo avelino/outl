@@ -43,6 +43,21 @@ const CATCH_UP_INTERVAL: Duration = Duration::from_secs(8);
 /// nothing propagates" bug).
 const MAINTENANCE_RESYNC: Duration = Duration::from_secs(10);
 
+/// Warm-up ramp: for the first [`WARMUP_TICKS`] ticks after the loop starts,
+/// re-dial peers every [`WARMUP_PERIOD`] instead of the steady `period`.
+///
+/// iOS accepts inbound connections poorly, so the side that actually opens the
+/// path is the **mobile dialing outbound** (its dial reveals the current LAN IP
+/// / punches the NAT — the "refreshed direct addr for <mobile>" in the logs).
+/// At the steady 8s cadence, a failed first dial makes the mobile wait a full
+/// interval before retrying, so first-sync after boot took minutes. A fast
+/// initial cadence retries within seconds during the critical boot window, then
+/// relaxes so there's no steady-state battery/CPU cost. The in-flight guard
+/// collapses a re-dial of a peer already being reached, so the fast cadence
+/// can't pile up.
+const WARMUP_PERIOD: Duration = Duration::from_secs(2);
+const WARMUP_TICKS: u32 = 12;
+
 /// Periodic catch-up against peers added (or recovered) after boot.
 ///
 /// Each tick reloads `peers.json` from disk — this is the whole point: a device
@@ -71,6 +86,7 @@ pub(crate) async fn catch_up_loop(
     append_lock: AppendLock,
     in_flight: InFlightPeers,
     wid_changed: tokio::sync::broadcast::Receiver<outl_core::WorkspaceId>,
+    progress: crate::progress::ProgressSink,
 ) {
     // Default resolver: reload peers.json each tick and build a full
     // EndpointAddr (id + relay) for every known peer.
@@ -103,6 +119,7 @@ pub(crate) async fn catch_up_loop(
         append_lock,
         Some(in_flight),
         Some(wid_changed),
+        progress,
     )
     .await
 }
@@ -131,6 +148,7 @@ pub(crate) async fn force_sync_all(
     health: PeerHealthMap,
     append_lock: AppendLock,
     in_flight: InFlightPeers,
+    progress: crate::progress::ProgressSink,
 ) {
     let addrs: Vec<iroh::EndpointAddr> = match PeersStore::load_or_default(&peers_path) {
         Ok(store) => {
@@ -171,6 +189,7 @@ pub(crate) async fn force_sync_all(
             actor,
             peer_ready_tx.clone(),
             &append_lock,
+            &progress,
         )
         .await
         {
@@ -214,6 +233,7 @@ pub(crate) async fn drain_sync_now(
     append_lock: AppendLock,
     in_flight: InFlightPeers,
     passes_completed: Arc<AtomicU64>,
+    progress: crate::progress::ProgressSink,
 ) {
     while rx.recv().await.is_some() {
         info!("sync-now: forced sync pass requested");
@@ -227,6 +247,7 @@ pub(crate) async fn drain_sync_now(
             health.clone(),
             append_lock.clone(),
             in_flight.clone(),
+            progress.clone(),
         )
         .await;
         // The dial cycle over every peer finished (each dial succeeded or
@@ -263,49 +284,65 @@ pub(crate) async fn run_catch_up<F>(
     append_lock: AppendLock,
     in_flight: Option<InFlightPeers>,
     mut wid_changed: Option<tokio::sync::broadcast::Receiver<outl_core::WorkspaceId>>,
+    progress: crate::progress::ProgressSink,
 ) where
     F: FnMut() -> Vec<iroh::EndpointAddr>,
 {
-    let mut interval = tokio::time::interval(period);
     // When each peer last completed a delta_sync cleanly this session. A peer is
     // re-dialed once its last success is older than `resync_after` (the
     // maintenance re-sync) — or immediately if it's new / its last attempt
     // failed (absent from the map). This replaces the old "synced once, never
     // again" set that made convergence hostage to the gossip path.
     let mut last_synced: HashMap<iroh::EndpointId, Instant> = HashMap::new();
+    // Drives the warm-up ramp: the first `WARMUP_TICKS` iterations wait
+    // `WARMUP_PERIOD`, the rest wait `period` (see the constants). Iteration 0
+    // fires immediately — the old `tokio::time::interval` fired its first tick
+    // at once, and a freshly paired peer must sync without waiting a tick.
+    let mut tick_count: u32 = 0;
 
     loop {
-        // Wait for the next tick, but if the workspace id is adopted mid-session
-        // (the joiner takes the host's id during pairing), clear `synced` and
+        let elapsed_ticks = tick_count;
+        tick_count = tick_count.saturating_add(1);
+        let wait = if elapsed_ticks < WARMUP_TICKS {
+            period.min(WARMUP_PERIOD)
+        } else {
+            period
+        };
+
+        // Iteration 0 skips the wait (immediate first pass). Otherwise wait the
+        // ramped cadence — but if the workspace id is adopted mid-session (the
+        // joiner takes the host's id during pairing), clear `synced` and
         // continue: every peer must be re-dialed under the new id, otherwise the
         // single immediate post-pair sync leaves them marked synced forever and
         // later edits never pull. Reuses the same dial/append/in-flight path —
         // only the dedup is reset.
-        match wid_changed.as_mut() {
-            Some(rx) => {
-                tokio::select! {
-                    _ = interval.tick() => {}
-                    changed = rx.recv() => {
-                        match changed {
-                            // Adopted (or lagged — same response): re-dial everyone.
-                            Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                                info!("catch-up: workspace id changed; clearing synced dedup to re-dial");
-                                last_synced.clear();
+        if elapsed_ticks > 0 {
+            match wid_changed.as_mut() {
+                Some(rx) => {
+                    tokio::select! {
+                        _ = tokio::time::sleep(wait) => {}
+                        changed = rx.recv() => {
+                            match changed {
+                                // Adopted (or lagged — same response): re-dial everyone.
+                                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                    info!("catch-up: workspace id changed; clearing synced dedup to re-dial");
+                                    last_synced.clear();
+                                }
+                                // Sender dropped (transport shutdown): stop listening,
+                                // keep ticking on the sleep alone.
+                                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                    wid_changed = None;
+                                }
                             }
-                            // Sender dropped (transport shutdown): stop listening,
-                            // keep ticking on the interval alone.
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                wid_changed = None;
-                            }
+                            // Loop straight to a fresh tick selection; the cleared
+                            // dedup takes effect on the next resolve_peers pass.
+                            continue;
                         }
-                        // Loop straight to a fresh tick selection; the cleared
-                        // dedup takes effect on the next resolve_peers pass.
-                        continue;
                     }
                 }
-            }
-            None => {
-                interval.tick().await;
+                None => {
+                    tokio::time::sleep(wait).await;
+                }
             }
         }
 
@@ -340,6 +377,7 @@ pub(crate) async fn run_catch_up<F>(
                 actor,
                 peer_ready_tx.clone(),
                 &append_lock,
+                &progress,
             )
             .await
             {
@@ -405,6 +443,7 @@ mod tests {
             Arc::new(tokio::sync::Mutex::new(())),
             Arc::new(std::sync::Mutex::new(HashSet::new())),
             passes.clone(),
+            crate::progress::ProgressSink::default(),
         ));
 
         tx.send(()).expect("queue first sync-now");

@@ -77,8 +77,7 @@ If the newcomer doesn't accept `SYNC_ALPN`, the dialer gets `quinn` `CONNECTION_
 **Three call sites, three rules:**
 
 1. **Sync endpoint (`engine::run_iroh`)** — the one allowed long-lived endpoint.
-   Router accepts `SYNC_ALPN` + gossip ALPN **+ `PAIRING_ALPN`** (the GUI pairing handler — see rule 3).
-   The endpoint advertises both `SYNC_ALPN` and `PAIRING_ALPN` in its `.alpns()`.
+   Router accepts `SYNC_ALPN` + gossip ALPN **+ `PAIRING_ALPN`** (rule 3) **+ `SNAPSHOT_ALPN`** (see "Snapshot sync"), all advertised in its `.alpns()`.
    All catch-up / boot / gossip / pairing dials go out through *this* endpoint (the one bound in `run_iroh`); no helper spins up a second.
 2. **Status (`status::probe_peers`)** — binds a transient endpoint with the device identity.
    **CLI-only — forbidden from the GUI.**
@@ -102,9 +101,8 @@ The transport's own dials populate it: the **boot connect**, the **catch-up loop
 
 The GUI status commands read it from the transport stored in Tauri state and merge it onto the full `peers.json` list, so a peer the transport hasn't dialed yet (or the file-transport case) shows offline.
 The transport lives in desktop `state.iroh_transport` (`Arc<dyn SyncTransport>`, reached via the trait method) and mobile `state.iroh` (concrete `IrohSyncTransport`).
-Desktop also keeps a **concrete** clone in `state.iroh_pairing` (`IrohSyncTransport`) so the pairing commands can call `pair_host` / `pair_join`.
-Those aren't `SyncTransport` trait methods — the trait can't return `outl_sync_iroh::PeerEntry` without a dep cycle, and pairing isn't a generic-transport concern.
-Both desktop slots are populated together in `wire_iroh_transport` and cleared together on workspace switch; mobile already stores the concrete type, so it reuses `state.iroh` for both status and pairing.
+Desktop also keeps a **concrete** clone in `state.iroh_pairing` for `pair_host` / `pair_join` (not `SyncTransport` methods — the trait can't return `PeerEntry` without a dep cycle).
+Both desktop slots are wired/cleared together in `wire_iroh_transport`; mobile reuses `state.iroh` for both status and pairing.
 **Never** add a GUI status path that binds an endpoint with the device identity.
 
 ## Append-serialization invariant (load-bearing)
@@ -199,6 +197,18 @@ Conservative guards on the merge:
 
 If membership ever needs to *gate* who can join (beyond "is on the topic"), that's a new trust surface — stop and design it; do not loosen these guards silently.
 
+## Snapshot sync (Phase 2, ALPN `outl-snapshot/1`)
+
+A freshly-paired device that would otherwise receive + replay a huge op log (76 MB / 200k+ ops) instead pulls a peer's materialized **snapshot** (`snap-<actor>.bin`) and boots from it via `outl_core::snapshot::read_best_from_disk`.
+This crate owns **only the transport** (in `engine_snapshot.rs`); the boot-adoption half is done in `outl-core` and never touched here.
+
+- **Responder** (`SnapshotProtocolHandler`, under `SNAPSHOT_ALPN`) reads this device's own `snap-<self.actor>.bin` off disk and ships it as one length-prefixed frame (`protocol::encode_blob_frame`; empty when absent → peer skips).
+  No workspace lock — it reads a cache file and holds no `Workspace`.
+- **Puller** (`pull_snapshot_from_peer`, fired from `drain_pair_completions` right after the immediate `delta_sync`, still inside the peer's in-flight guard) dials `SNAPSHOT_ALPN` and reads the frame.
+  It `SnapshotBody::decode`s the blob (validate + learn actor id), writes it to `snap-<peer-actor>.bin` via `snapshot::write_to_disk` (atomic tmp+rename), and fires `peer_ready_tx` so boot adopts it.
+- Not an op-log write → **no `AppendLock` / flock**; it's a local boot cache in the dotfile dir `.outl/snapshots/`, off the file-sync surface (the transfer is the only way it crosses devices).
+- Best-effort: an absent / corrupt / undecodable peer snapshot is skipped, never fatal — the op log stays source of truth and boot falls back to full replay.
+
 ## Regression suite (Pilar 2)
 
 Every bug hand-found during the sync saga has a NAMED, permanent test — the name IS the bug, so a failure is self-explanatory.
@@ -221,33 +231,30 @@ Shared seed/read/wait helpers stay in `tests/common/mod.rs` (read-only); saga-sp
 | 7. (set-convergence half) both sides hold all ops | `bidirectional_delta_sync` (pre-existing) | `tests/integration.rs` |
 | 8. Membership merge is ADD-only (never clobber a local entry, drop self, drop undialable) | `merge_unknown_never_clobbers_a_known_entry` + `merge_skips_self` / `merge_adds_unknown_and_dedups_known` / `merge_skips_unreachable_peer` | `src/peers.rs`, `src/engine_membership.rs` `#[cfg(test)]` |
 | 9. Watermark gap — ops below a receiver's max-HLC stayed permanently invisible after out-of-order ingest; the v2 `ActorClock` count detects the gap, the full-log fallback + ingest dedup converge without duplicating | `backlog_below_watermark_crosses_after_gap_detected` / `ingest_dedups_already_present_ops` / `full_actor_resend_converges_and_dedups` | `tests/regression.rs` |
+| 10. Snapshot sync — peer snapshot transferred on pair (byte-identical, reload fired); absent snapshot harmless, op-sync still works | `snapshot_transfers_from_peer_on_pair` / `snapshot_pull_absent_is_harmless` | `tests/regression.rs` |
 
 Names map 1:1 to the saga checklist; do NOT delete one without deleting the bug it guards.
 
 ### Chaos/concurrency tests (Pilar 3)
 
-The regression suite above pins one named bug per row; the **chaos battery** (`tests/chaos.rs`) instead *hammers* the same wire code with the failure modes a P2P op-log hits in the wild, as STRESS tests (N writers × M ops), not single cases.
-It drives the real `delta_sync` initiator + the `SyncProtocolHandler` responder, both via `test_support`.
-Every test runs over real QUIC on loopback (no faking, no relay — direct `127.0.0.1` addrs) under `#[tokio::test(flavor = "multi_thread")]`, so the concurrency is genuine.
+The regression suite pins one named bug per row; the **chaos battery** (`tests/chaos.rs`) instead *hammers* the same wire code (real `delta_sync` + `SyncProtocolHandler` via `test_support`) with STRESS loads (N writers × M ops).
+Every test runs over real QUIC on loopback under `#[tokio::test(flavor = "multi_thread")]`.
 
-| Failure mode | Chaos test | What it asserts |
-|--------------|-----------|-----------------|
-| Concurrent writers corrupting the op log (the `…}}}{` glue) | `concurrent_writers_never_corrupt_op_log` | 8 initiators push ops of ONE shared actor at ONE responder; every inbound `serve()` writes the same `ops-<actor>.jsonl` under the shared `AppendLock`. After: every physical line is one JSON value AND the op set is the exact union (no loss, no dup blow-up). |
-| Reordered + duplicated delivery | `reordered_and_duplicated_delivery_converges` | 3 nodes (each initiator + responder), 3 rounds of seeded-shuffled directed passes, ~half delivered twice. All three converge to the identical op set. |
-| Partition + heal under load | `partition_then_heal_under_load` | B is "offline" while A and C make many edits and reconcile; B comes back and converges to the full A+B+C state. No lost ops, no glued line on the healed node. |
-| Fan-out + redundant dials | `fan_out_to_many_peers_converges_without_double_dial` | 5 peers dial one hub, each dial launched TWICE concurrently. Hub converges to the exact union, every op lands once, no glued line on any actor file. |
-| Single-endpoint invariant under concurrency | `concurrent_inbound_dials_on_single_endpoint_stay_clean` | 6 inbound dials land on one hub endpoint WHILE it initiates an outbound `delta_sync` — the "pair handshake racing a sync" case (relay-less loopback can't drive the real gossip/pairing swarm). Hub converges across both directions; no corruption. |
+| Failure mode | Chaos test | Asserts |
+|--------------|-----------|---------|
+| Concurrent writers gluing the op log | `concurrent_writers_never_corrupt_op_log` | 8 initiators push one actor's ops at one responder under the shared `AppendLock`; every line is one JSON value + exact union |
+| Reordered + duplicated delivery | `reordered_and_duplicated_delivery_converges` | 3 nodes, seeded-shuffled passes, ~half twice; all converge |
+| Partition + heal under load | `partition_then_heal_under_load` | B offline while A/C edit; B rejoins and converges, no glued line |
+| Fan-out + redundant dials | `fan_out_to_many_peers_converges_without_double_dial` | 5 peers dial one hub, each dial twice; exact union, every op once |
+| Single-endpoint invariant under concurrency | `concurrent_inbound_dials_on_single_endpoint_stay_clean` | 6 inbound dials on one hub endpoint while it dials out; converges both ways, no corruption |
 
-**Determinism (load-bearing — a flaky chaos test is worse than none).**
-All "randomness" is a seeded xorshift (`chaos_helpers::Rng`); network timing is the only true nondeterminism, and every wait goes through `common::STEP_TIMEOUT` (30s) + `wait_until` polling, never a fixed sleep.
-Sizes are bounded (≤ 64 ops, ≤ 8 tasks) so the suite stays ~2.5s.
+**Determinism** (a flaky chaos test is worse than none): randomness is a seeded xorshift (`chaos_helpers::Rng`); the only true nondeterminism is network timing, so every wait uses `common::STEP_TIMEOUT` + `wait_until`, never a fixed sleep.
+Sizes are bounded (≤ 64 ops, ≤ 8 tasks).
 
-**Why raw bytes, not `all_ops`.**
-`JsonlStorage::reload` *recovers* glued `…}}}{…` lines on read, so asserting through `all_ops` would MASK a real append-lock failure.
-`chaos_helpers::assert_every_line_is_one_json_value` reads the `ops-<actor>.jsonl` bytes directly and asserts each physical line decodes to exactly one JSON value — only the raw bytes reveal whether the lock actually held.
+**Why raw bytes, not `all_ops`:** `JsonlStorage::reload` recovers glued `…}}}{…` lines on read, so `all_ops` would MASK an append-lock failure.
+`chaos_helpers::assert_every_line_is_one_json_value` reads the `ops-<actor>.jsonl` bytes directly — the only thing that reveals whether the lock held.
 
-**Helpers.**
-Chaos-only helpers live in `tests/chaos_helpers/mod.rs`, NOT `tests/common/mod.rs` (integration/catchup own it, read-only; clippy `duplicate_mod` allows one `common` loader per test binary, so `common`-dependent helpers stay in `chaos.rs`).
+**Helpers** live in `tests/chaos_helpers/mod.rs`, not `tests/common/mod.rs` (clippy `duplicate_mod` allows one `common` loader per test binary).
 
 ## Sync invariants
 
@@ -294,11 +301,7 @@ So the new peer's op-log history is never pulled (only brand-new ops would trick
   (base64 JSON), captured at pairing time after the endpoint came online —
   see "Reachability: full `EndpointAddr`" below.
 
-`run_catch_up` is parameterized over the tick `period`, the `resync_after`
-window, and a `resolve_peers` closure so `test_support::run_catch_up_loop` can
-drive it over loopback (direct addrs, short tick, short re-sync) — see the
-`catch_up_syncs_peer_paired_after_boot` and `catch_up_resyncs_peer_after_interval`
-regression tests.
+`run_catch_up` is parameterized over `period`, `resync_after`, and a `resolve_peers` closure so `test_support::run_catch_up_loop` drives it over loopback (regressions `catch_up_syncs_peer_paired_after_boot`, `catch_up_resyncs_peer_after_interval`).
 
 ## Passive writers vs the MCP peer
 
@@ -330,25 +333,24 @@ field, not just the bare node id.
 Same-WiFi devices connect instantly via direct addrs — but only if captured; the old `PeerEntry` stored `relay_url: null` and no addrs.
 
 **Capture (`pairing::ready_addr`):** `endpoint.addr()` right after `bind()` is typically empty, so both sides call `ready_addr` before minting the ticket / sending the payload.
-It awaits `endpoint.online()` under a mandatory 5s timeout (pends forever with no relay/WAN), after which the addr carries the relay + LAN direct addrs; on timeout we proceed anyway (the local net report usually already filled them).
+It awaits `endpoint.online()` under a mandatory 5s timeout, after which the addr carries relay + LAN direct addrs; on timeout we proceed anyway (the local net report usually filled them).
 
 **Exchange:** host mints the ticket from its ready addr (joiner stores a reachable host); joiner sends its ready `EndpointAddr` in the payload (host stores a reachable joiner).
 
 **Resolution order** (`PeerEntry::iroh_endpoint_addr`): stored `endpoint_addr` → keep the relay + the **on-LAN IPv4** direct addrs, **drop IPv6** and **drop off-LAN IPv4**; else id + `relay_url`; else bare id.
 A corrupt `endpoint_addr` logs a warning and falls through, never failing the dial.
-Not relay-only (a flaky relay would break same-WiFi sync) and not all-addrs (a dead IPv6/off-LAN direct stalls multipath) — keeping only on-LAN IPv4 direct + relay is the balance.
+Not relay-only (flaky relay breaks same-WiFi sync), not all-addrs (a dead IPv6/off-LAN direct stalls multipath) — on-LAN IPv4 + relay is the balance.
 
 **Off-LAN IPv4 drop (issue #133):** a VPN-paired peer stores tunnel IPs (`10.x`, `100.x`, WAN) beside its LAN addr, stalling iroh's multipath on the dead ones.
 `iroh_endpoint_addr` keeps only IPv4 on a **local** subnet (`is_reachable_lan_ipv4` + `if-addrs`; injectable `iroh_endpoint_addr_with_ifaces`), fail-open on error.
 
-**Back-compat:** `endpoint_addr` is `#[serde(default)]`, so old `peers.json` entries (`node_id` + `relay_url` only) still deserialize and dial via the fallback; `relay_url` is kept for display.
+**Back-compat:** `endpoint_addr` is `#[serde(default)]`, so old `peers.json` entries (id + `relay_url` only) still deserialize + dial via the fallback.
 
-Ticket codec == `endpoint_addr` codec (`peers::encode_endpoint_addr` / `decode_endpoint_addr`); `encode_ticket` / `decode_ticket` delegate to it — a pairing ticket IS a `PeerEntry.endpoint_addr`.
+Ticket codec == `endpoint_addr` codec (`encode_ticket` / `decode_ticket` delegate to `peers::{encode,decode}_endpoint_addr`) — a pairing ticket IS a `PeerEntry.endpoint_addr`.
 
-**Self-heal on inbound connect (`peers::refresh_peer_direct_addr`):** a stored addr goes stale when a peer's DHCP lease moves, and a stale direct addr stalls multipath like an off-LAN one.
-On an **accepted** inbound connection, `serve()` reads the live remote socket off `Connection::paths()` (`TransportAddr::Ip`) and calls `refresh_peer_direct_addr(root, node_id, sock)`.
-That rewrites the stored `endpoint_addr` to *only* that socket + the known relay, so the next catch-up dial uses the fresh route without a re-pair.
-Conservative: it only touches an **already-paired** peer (unknown node id → no-op, never added), and returns `false` with no write when the stored addr is already that socket.
+**Self-heal on inbound connect (`peers::refresh_peer_direct_addr`):** a stored addr goes stale when a peer's DHCP lease moves (stalling multipath like an off-LAN one).
+On an **accepted** inbound connection `serve()` reads the live remote socket off `Connection::paths()` and rewrites the stored `endpoint_addr` to *only* that socket + the known relay, so the next catch-up dial uses the fresh route without a re-pair.
+Conservative: only an **already-paired** peer (unknown id → no-op), no write when unchanged.
 Regression: `refresh_peer_direct_addr_replaces_stale_keeps_relay_and_is_idempotent`.
 
 ## STOPGAP: IPv4-only bind (iroh 1.0.0 multipath workaround)

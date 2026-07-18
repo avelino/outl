@@ -52,6 +52,7 @@ pub(crate) struct GossipCtx {
     pub(crate) append_lock: AppendLock,
     pub(crate) in_flight: InFlightPeers,
     pub(crate) peers_path: PathBuf,
+    pub(crate) progress: crate::progress::ProgressSink,
 }
 
 /// Resolve the current bootstrap peer ids from `peers.json` (so a re-subscribe
@@ -137,6 +138,7 @@ fn handle_message(ctx: &GossipCtx, msg: iroh_gossip::api::Message) {
     let health = ctx.health.clone();
     let lock = ctx.append_lock.clone();
     let in_flight = ctx.in_flight.clone();
+    let prog = ctx.progress.clone();
     tokio::spawn(async move {
         let Some(_in_flight) = try_acquire_in_flight(&in_flight, peer_node_id) else {
             debug!(
@@ -147,7 +149,18 @@ fn handle_message(ctx: &GossipCtx, msg: iroh_gossip::api::Message) {
         };
         let started = Instant::now();
         let wid_snapshot = wid.read().expect("workspace id rwlock poisoned").clone();
-        match delta_sync(&ep, peer_node_id, &wr, &wid_snapshot, actor, tx, &lock).await {
+        match delta_sync(
+            &ep,
+            peer_node_id,
+            &wr,
+            &wid_snapshot,
+            actor,
+            tx,
+            &lock,
+            &prog,
+        )
+        .await
+        {
             Ok(()) => health.record_success(peer_node_id, started),
             Err(e) => {
                 warn!(

@@ -30,10 +30,11 @@ use crate::engine_pairing::{
 // The delta-sync wire protocol lives in `engine_sync`; re-exported here so
 // `crate::engine::{delta_sync, SyncProtocolHandler}` keeps resolving for the
 // catch-up loop, pairing drain, the router below, and `test_support`.
+use crate::engine_snapshot::SnapshotProtocolHandler;
 pub(crate) use crate::engine_sync::{delta_sync, SyncProtocolHandler};
 use crate::identity::IrohIdentity;
 use crate::peers::{PeerEntry, PeersStore};
-use crate::protocol::{PAIRING_ALPN, SYNC_ALPN};
+use crate::protocol::{PAIRING_ALPN, SNAPSHOT_ALPN, SYNC_ALPN};
 
 /// iroh-based P2P transport.
 ///
@@ -88,6 +89,12 @@ pub struct IrohSyncTransport {
     /// sleeping a fixed worst-case window. This is what lets the iOS background
     /// FFI return early and hand the unused window back to the OS.
     sync_passes: Arc<AtomicU64>,
+    /// Sink for [`outl_actions::SyncProgress`] updates, registered by the GUI
+    /// bridge via `set_progress_sink` **before** `start()`. Read once in
+    /// `start()` to build the [`crate::progress::ProgressSink`] threaded through
+    /// the initiator-side sync paths. `None` (no GUI, or the CLI/tests) makes
+    /// every progress emit a no-op — it is purely cosmetic, never load-bearing.
+    progress_tx: Arc<Mutex<Option<std::sync::mpsc::Sender<outl_actions::SyncProgress>>>>,
 }
 
 /// Process-wide guard serializing every op-log append performed by the iroh
@@ -185,6 +192,7 @@ impl IrohSyncTransport {
             health: PeerHealthMap::default(),
             pairing_hub: Arc::new(Mutex::new(None)),
             sync_passes: Arc::new(AtomicU64::new(0)),
+            progress_tx: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -274,6 +282,18 @@ impl SyncTransport for IrohSyncTransport {
         let relay_url = self.relay_url.clone();
         let sync_passes = self.sync_passes.clone();
 
+        // Snapshot the progress sink registered by the GUI bridge (if any).
+        // Purely cosmetic: a missing sink makes every progress emit a no-op.
+        let progress = match self
+            .progress_tx
+            .lock()
+            .expect("progress mutex poisoned")
+            .clone()
+        {
+            Some(tx) => crate::progress::ProgressSink::new(tx),
+            None => crate::progress::ProgressSink::default(),
+        };
+
         // Resolve the STABLE, SHARED workspace identity once, before binding.
         // Generated + persisted at `<root>/.outl/workspace-id` on first open
         // (migration path for existing workspaces); the same bytes on every
@@ -323,6 +343,7 @@ impl SyncTransport for IrohSyncTransport {
                         workspace_id,
                         actor,
                         peer_ready_tx,
+                        progress,
                         announce_rx,
                         sync_now_rx,
                         &mut shutdown_rx,
@@ -334,6 +355,13 @@ impl SyncTransport for IrohSyncTransport {
                 });
             })
             .expect("spawn outl-iroh-sync thread");
+    }
+
+    fn set_progress_sink(&self, tx: std::sync::mpsc::Sender<outl_actions::SyncProgress>) {
+        // Stash it; `start()` reads it once to build the threaded `ProgressSink`.
+        // Registering after `start()` has no effect (the sink was already
+        // snapshotted) — the GUI bridge always calls this first, by contract.
+        *self.progress_tx.lock().expect("progress mutex poisoned") = Some(tx);
     }
 
     fn announce_local_ops(&self, workspace_id: &str, hlc: outl_core::hlc::Hlc) {
@@ -418,6 +446,7 @@ async fn run_iroh(
     workspace_id: WorkspaceId,
     actor: ActorId,
     peer_ready_tx: std::sync::mpsc::Sender<()>,
+    progress: crate::progress::ProgressSink,
     announce_rx: tokio::sync::mpsc::UnboundedReceiver<Announce>,
     sync_now_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
     shutdown_rx: &mut tokio::sync::oneshot::Receiver<()>,
@@ -428,9 +457,11 @@ async fn run_iroh(
     let workspace_id: SharedWorkspaceId = Arc::new(std::sync::RwLock::new(workspace_id));
     // Build the iroh endpoint with our identity and the n0 discovery preset.
     //
-    // Advertise BOTH ALPNs: `SYNC_ALPN` for op-sync and `PAIRING_ALPN` so GUI
-    // pairing rides this same endpoint (one endpoint per identity — a separate
-    // pairing endpoint would hijack the relay route and kill sync).
+    // Advertise ALL THREE ALPNs on the ONE endpoint (one endpoint per identity —
+    // a separate endpoint would hijack the relay route and kill sync):
+    // `SYNC_ALPN` for op-sync, `PAIRING_ALPN` so GUI pairing rides this same
+    // endpoint, and `SNAPSHOT_ALPN` so a freshly-paired peer can pull this
+    // device's materialized snapshot (Phase 2 snapshot sync).
     //
     // STOPGAP: IPv4-only bind. iroh 1.0.0 multipath stalls on unreachable IPv6
     // direct paths; binding IPv4-only stops this endpoint from advertising a
@@ -444,7 +475,11 @@ async fn run_iroh(
     // pass `None` and resolve the same default.
     let endpoint = crate::bind::n0_builder_ipv4_only(relay_url.as_deref())
         .secret_key(identity.secret_key().clone())
-        .alpns(vec![SYNC_ALPN.to_vec(), PAIRING_ALPN.to_vec()])
+        .alpns(vec![
+            SYNC_ALPN.to_vec(),
+            PAIRING_ALPN.to_vec(),
+            SNAPSHOT_ALPN.to_vec(),
+        ])
         .bind()
         .await
         .context("bind iroh endpoint")?;
@@ -505,6 +540,13 @@ async fn run_iroh(
                 hub: pairing_hub.clone(),
             },
         )
+        .accept(
+            SNAPSHOT_ALPN,
+            SnapshotProtocolHandler {
+                workspace_root: workspace_root.clone(),
+                actor,
+            },
+        )
         .spawn();
 
     // Drain pair-completions: dial each freshly paired peer once for an
@@ -520,6 +562,7 @@ async fn run_iroh(
         health.clone(),
         append_lock.clone(),
         in_flight.clone(),
+        progress.clone(),
     ));
 
     // Connect to known peers and trigger an initial delta sync. Prefer the full
@@ -536,6 +579,7 @@ async fn run_iroh(
         let health = health.clone();
         let lock = append_lock.clone();
         let in_flight = in_flight.clone();
+        let prog = progress.clone();
         let nid = addr.id;
         let has_direct = !addr.is_empty();
         tokio::spawn(async move {
@@ -553,7 +597,7 @@ async fn run_iroh(
             );
             let started = Instant::now();
             let wid_snapshot = wid.read().expect("workspace id rwlock poisoned").clone();
-            match delta_sync(&ep, addr, &wr, &wid_snapshot, actor, tx, &lock).await {
+            match delta_sync(&ep, addr, &wr, &wid_snapshot, actor, tx, &lock, &prog).await {
                 Ok(()) => {
                     info!("boot: initial sync to {} ok", nid.fmt_short());
                     health.record_success(nid, started);
@@ -590,6 +634,7 @@ async fn run_iroh(
         append_lock: append_lock.clone(),
         in_flight: in_flight.clone(),
         peers_path: peers_path.clone(),
+        progress: progress.clone(),
     };
     let gossip_task = tokio::spawn(crate::engine_gossip::run_gossip(
         gossip_ctx,
@@ -610,6 +655,7 @@ async fn run_iroh(
     let catchup_lock = append_lock.clone();
     let catchup_in_flight = in_flight.clone();
     let catchup_peers_path = peers_path.clone();
+    let catchup_progress = progress.clone();
     // A second receiver on the same broadcast channel the gossip supervisor uses:
     // when the joiner adopts the host's id, the catch-up loop clears its
     // per-session `synced` dedup so it re-dials every peer under the new id (item
@@ -628,6 +674,7 @@ async fn run_iroh(
             catchup_lock,
             catchup_in_flight,
             catchup_wid_changed,
+            catchup_progress,
         )
         .await;
     });
@@ -651,6 +698,7 @@ async fn run_iroh(
         append_lock.clone(),
         in_flight.clone(),
         sync_passes,
+        progress.clone(),
     ));
 
     // Incoming sync connections are handled by the Router above.

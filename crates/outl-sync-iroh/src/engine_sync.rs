@@ -24,6 +24,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use iroh::endpoint::{Connection, ConnectionError};
 use iroh::protocol::{AcceptError, ProtocolHandler};
+use outl_actions::SyncProgress;
 use outl_core::hlc::Hlc;
 use outl_core::id::ActorId;
 use outl_core::storage::{JsonlStorage, Storage};
@@ -268,13 +269,20 @@ fn write_deduped_batch(
 /// the same guarantee across processes (GUI + MCP + CLI transports on one
 /// device). The blocking flock + file I/O run on `spawn_blocking` so a wait
 /// on another process never stalls the tokio workers.
+/// Cap on the number of distinct touched block ids [`ingest_received_ops`]
+/// reports back for the progress feed. A live incremental sync touches a
+/// handful of blocks (name the pages); a bulk pair touches tens of thousands
+/// (naming them is meaningless), so we stop collecting past this and let the UI
+/// show the count instead of an endless page list.
+const NODE_REPORT_CAP: usize = 64;
+
 async fn ingest_received_ops(
     ops_dir: &std::path::Path,
     local_actor: ActorId,
     received: &[LogOp],
     peer_ready_tx: &std::sync::mpsc::Sender<()>,
     append_lock: &AppendLock,
-) -> Result<usize> {
+) -> Result<(usize, Vec<outl_core::id::NodeId>)> {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -299,7 +307,24 @@ async fn ingest_received_ops(
     }
 
     if candidates.is_empty() {
-        return Ok(0);
+        return Ok((0, Vec::new()));
+    }
+
+    // Collect the distinct block ids this batch touches, capped, BEFORE moving
+    // `candidates` into the blocking write. This is best-effort for the UI feed
+    // ("page X synced") — it names the candidate ops, not just the ones that
+    // survived dedup, which for a live incremental sync is the same handful.
+    let mut seen = std::collections::HashSet::new();
+    let mut nodes = Vec::new();
+    for op in &candidates {
+        if nodes.len() >= NODE_REPORT_CAP {
+            break;
+        }
+        if let Some(node) = outl_core::op::op_node(&op.op) {
+            if seen.insert(node) {
+                nodes.push(node);
+            }
+        }
     }
 
     // Serialize the whole batch against every other transport append. The
@@ -317,7 +342,7 @@ async fn ingest_received_ops(
         peer_ready_tx.send(()).ok();
     }
 
-    Ok(applied)
+    Ok((applied, nodes))
 }
 
 /// Hard ceiling on a single sync frame's body, enforced before allocating.
@@ -350,7 +375,7 @@ fn checked_frame_body_len(prefix: [u8; 4]) -> Result<usize> {
 /// `decode_*` helpers (which expect the prefix) consume it directly. Letting
 /// several independent frames share a single bi stream without EOF ambiguity
 /// is the whole point — `read_to_end` would swallow the next frame too.
-async fn read_frame(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<u8>> {
+pub(crate) async fn read_frame(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<u8>> {
     let mut prefix = [0u8; 4];
     recv.read_exact(&mut prefix)
         .await
@@ -372,6 +397,37 @@ async fn read_frame(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<u8>> {
             .await
             .context("read frame body")?;
         remaining -= want;
+    }
+    Ok(frame)
+}
+
+/// Like [`read_frame`] but calls `on_progress(received, total)` as body bytes
+/// arrive, for the snapshot pull's percentage feed. `total` is the declared
+/// body length — known from the 4-byte prefix before any body byte — so the UI
+/// gets a real bar, not a spinner. Kept separate from [`read_frame`] so the hot
+/// path stays callback-free; the small body-read loop is duplicated on purpose.
+pub(crate) async fn read_frame_reporting(
+    recv: &mut iroh::endpoint::RecvStream,
+    mut on_progress: impl FnMut(u64, u64),
+) -> Result<Vec<u8>> {
+    let mut prefix = [0u8; 4];
+    recv.read_exact(&mut prefix)
+        .await
+        .context("read frame length prefix")?;
+    let body_len = checked_frame_body_len(prefix)?;
+    on_progress(0, body_len as u64);
+    let mut frame = Vec::with_capacity(4 + body_len.min(64 * 1024));
+    frame.extend_from_slice(&prefix);
+    let mut remaining = body_len;
+    while remaining > 0 {
+        let want = remaining.min(64 * 1024);
+        let start = frame.len();
+        frame.resize(start + want, 0);
+        recv.read_exact(&mut frame[start..])
+            .await
+            .context("read frame body")?;
+        remaining -= want;
+        on_progress((body_len - remaining) as u64, body_len as u64);
     }
     Ok(frame)
 }
@@ -402,7 +458,16 @@ async fn read_ops_blob(recv: &mut iroh::endpoint::RecvStream) -> Result<Vec<LogO
 /// the relay path can carry the connection. Bounding each attempt caps
 /// that stall so a stale direct address can't wedge every catch-up tick,
 /// and lets the bare-id (relay/discovery) fallback take over.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+///
+/// The **direct** attempt is short: a live on-LAN peer connects sub-second, so
+/// a longer wait only ever pays off for a DEAD direct addr — where waiting is
+/// exactly wrong (it wedges the peer's `InFlightGuard`, so the pull-to-refresh /
+/// boot-kick `sync_now` calls all skip as "already in flight" while a stale LAN
+/// IP times out). 5s fails the dead path fast and hands off to the relay — the
+/// path that actually carries the iOS peer's inbound. The **relay** fallback
+/// keeps the full 10s (discovery + relay handshake legitimately takes longer).
+const DIRECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const RELAY_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Connect to `peer` for a sync, resilient to a stale direct address.
 ///
@@ -420,7 +485,12 @@ async fn connect_with_fallback(
     let node_id = peer_addr.id;
     let had_direct = peer_addr.ip_addrs().next().is_some();
 
-    match tokio::time::timeout(CONNECT_TIMEOUT, endpoint.connect(peer_addr, SYNC_ALPN)).await {
+    match tokio::time::timeout(
+        DIRECT_CONNECT_TIMEOUT,
+        endpoint.connect(peer_addr, SYNC_ALPN),
+    )
+    .await
+    {
         Ok(Ok(conn)) => return Ok(conn),
         Ok(Err(e)) if !had_direct => return Err(e).context("connect for delta sync"),
         Err(_) if !had_direct => return Err(anyhow::anyhow!("connect for delta sync timed out")),
@@ -435,7 +505,7 @@ async fn connect_with_fallback(
     }
 
     // Fallback: bare node id → relay + discovery resolves the current addr.
-    tokio::time::timeout(CONNECT_TIMEOUT, endpoint.connect(node_id, SYNC_ALPN))
+    tokio::time::timeout(RELAY_CONNECT_TIMEOUT, endpoint.connect(node_id, SYNC_ALPN))
         .await
         .context("relay/discovery connect timed out")?
         .context("connect for delta sync (relay/discovery)")
@@ -448,6 +518,7 @@ async fn connect_with_fallback(
 /// 2. read the peer's [`SyncResponse`] (vector clock B).
 /// 3. read the peer's ops blob (ops we lack) and write them to disk.
 /// 4. send our ops blob (ops the peer lacks under B) and `finish()`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn delta_sync(
     endpoint: &iroh::Endpoint,
     peer: impl Into<iroh::EndpointAddr>,
@@ -456,6 +527,7 @@ pub(crate) async fn delta_sync(
     actor: ActorId,
     peer_ready_tx: std::sync::mpsc::Sender<()>,
     append_lock: &AppendLock,
+    progress: &crate::progress::ProgressSink,
 ) -> Result<()> {
     let ops_dir = workspace_root.join("ops");
     let vector_clock = local_vector_clock(&ops_dir, actor)?;
@@ -472,6 +544,10 @@ pub(crate) async fn delta_sync(
 
     let peer_addr: iroh::EndpointAddr = peer.into();
     let peer_node_id = peer_addr.id;
+    let peer_short = peer_node_id.fmt_short().to_string();
+    progress.emit(SyncProgress::Connecting {
+        peer: peer_short.clone(),
+    });
     let conn = connect_with_fallback(endpoint, peer_addr).await?;
 
     let (mut send, mut recv) = conn.open_bi().await.context("open bi stream")?;
@@ -489,7 +565,7 @@ pub(crate) async fn delta_sync(
 
     // 3. read the peer's ops blob (ops we lack) and persist.
     let received = read_ops_blob(&mut recv).await.context("read peer ops")?;
-    let received_count =
+    let (received_count, touched_nodes) =
         ingest_received_ops(&ops_dir, actor, &received, &peer_ready_tx, append_lock).await?;
     if received_count > 0 {
         info!(
@@ -497,6 +573,11 @@ pub(crate) async fn delta_sync(
             received_count,
             peer_node_id.fmt_short()
         );
+        progress.emit(SyncProgress::ReceivedOps {
+            peer: peer_short.clone(),
+            count: received_count as u64,
+            nodes: touched_nodes.iter().map(|n| n.to_string()).collect(),
+        });
     }
 
     // 4. push the ops the peer is missing under its own vector clock.
@@ -510,6 +591,10 @@ pub(crate) async fn delta_sync(
             to_push.len(),
             peer_node_id.fmt_short()
         );
+        progress.emit(SyncProgress::PushedOps {
+            peer: peer_short.clone(),
+            count: to_push.len() as u64,
+        });
     }
 
     // Do NOT force-close here: the responder still has to read this final ops
@@ -528,10 +613,19 @@ pub(crate) async fn delta_sync(
     // successful ingest only costs a redundant re-push next tick, which the
     // receiver's ingest dedup absorbs — far cheaper than silently losing ops.
     match conn.closed().await {
-        ConnectionError::ApplicationClosed(ac) if ac.error_code == 0u32.into() => Ok(()),
-        other => Err(anyhow::anyhow!(
-            "peer did not confirm durable ingest (closed: {other})"
-        )),
+        ConnectionError::ApplicationClosed(ac) if ac.error_code == 0u32.into() => {
+            progress.emit(SyncProgress::Synced { peer: peer_short });
+            Ok(())
+        }
+        other => {
+            progress.emit(SyncProgress::Failed {
+                peer: peer_short,
+                error: format!("peer did not confirm durable ingest (closed: {other})"),
+            });
+            Err(anyhow::anyhow!(
+                "peer did not confirm durable ingest (closed: {other})"
+            ))
+        }
     }
 }
 
@@ -675,7 +769,7 @@ impl SyncProtocolHandler {
         let received = read_ops_blob(&mut recv)
             .await
             .context("read initiator ops")?;
-        let received_count = ingest_received_ops(
+        let (received_count, _touched) = ingest_received_ops(
             &ops_dir,
             self.actor,
             &received,
