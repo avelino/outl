@@ -58,15 +58,15 @@ use crate::commands::{
     list_all_pages, list_shortcut_bindings, list_templates_cmd, list_themes, move_block_after,
     move_block_down, move_block_up, next_day, open_journal_for, open_page_by_slug, open_ref,
     open_today_journal, outdent_block, outl_emoji_search, outl_peer_list, outl_peer_pair_host,
-    outl_peer_pair_join, outl_peer_remove, outl_peer_status, outl_sync_now, paste_block_after,
-    paste_markdown_at, paste_plain_at, plugin_config_set, plugin_install_official,
-    plugin_keybindings, plugin_list, plugin_registry_list, plugin_run, plugin_secret_remove,
-    plugin_secret_set, plugin_set_enabled, plugin_settings_describe, plugin_sync_hooks,
-    plugin_toolbar, plugin_transform, plugin_transformers, plugin_uninstall, previous_day,
-    redo_page, reload_workspace, resolve_embeds, resolve_ref, run_auto_run_blocks, run_code_block,
-    search_blocks, search_pages, search_persons, set_backlinks_order, set_block_collapsed,
-    set_workspace, today_slug_cmd, toggle_quote, toggle_todo, undo_page, update_settings,
-    workspace_stats,
+    outl_peer_pair_join, outl_peer_remove, outl_peer_status, outl_sync_now, page_backlinks,
+    paste_block_after, paste_markdown_at, paste_plain_at, plugin_config_set,
+    plugin_install_official, plugin_keybindings, plugin_list, plugin_registry_list, plugin_run,
+    plugin_secret_remove, plugin_secret_set, plugin_set_enabled, plugin_settings_describe,
+    plugin_sync_hooks, plugin_toolbar, plugin_transform, plugin_transformers, plugin_uninstall,
+    previous_day, redo_page, reload_workspace, resolve_embeds, resolve_page_labels, resolve_ref,
+    run_auto_run_blocks, run_code_block, search_blocks, search_pages, search_persons,
+    set_backlinks_order, set_block_collapsed, set_workspace, today_slug_cmd, toggle_quote,
+    toggle_todo, undo_page, update_settings, workspace_stats,
 };
 use crate::plugin_service::spawn_plugin_service;
 use crate::state::AppState;
@@ -132,18 +132,28 @@ fn dispatch_deep_link(app: &tauri::AppHandle, raw: &str) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Install a log subscriber FIRST so the iroh P2P transport's
+    // Install a `tracing` subscriber FIRST so the iroh P2P transport's
     // `info!`/`warn!`/`debug!` lines are visible in the terminal running the
     // app (stderr). Without this the transport runs blind. `RUST_LOG` overrides
-    // the default; `try_init` makes a double-init a no-op instead of a panic.
-    let _ = tracing_subscriber::fmt()
+    // the default.
+    //
+    // We use `set_global_default` (NOT `.try_init()`) on purpose: `try_init`
+    // also installs a `log`→`tracing` bridge (`LogTracer`) that claims the
+    // global `log` logger slot, which would collide with `tauri-plugin-log`
+    // below (it installs ITS logger in the same slot). Splitting them keeps
+    // `tracing` as the backend for our own `tracing::` events (sync/iroh) and
+    // leaves the `log` crate's slot free for the plugin, which owns the
+    // frontend + file/webview targets. A double-init just returns `Err`, so
+    // `.ok()` keeps it a no-op.
+    let subscriber = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
                 tracing_subscriber::EnvFilter::new("info,outl_sync_iroh=debug,iroh=info")
             }),
         )
         .with_writer(std::io::stderr)
-        .try_init();
+        .finish();
+    let _ = tracing::subscriber::set_global_default(subscriber);
 
     // rustls 0.23 needs a process-wide CryptoProvider before any rustls
     // consumer builds a client. iroh pulls rustls with `default-features =
@@ -163,6 +173,27 @@ pub fn run() {
                 let _ = win.set_focus();
             }
         }))
+        // Unified logging (React-Native-style): the frontend logs via
+        // `@tauri-apps/plugin-log` + `attachConsole()`, and everything lands on
+        // three targets — Stdout (the terminal running `cargo tauri dev`), the
+        // Webview console, and a rotating file in the OS log dir
+        // (`~/Library/Logs/<bundle>/` on macOS, `%APPDATA%/<bundle>/` on
+        // Windows, `~/.config/<bundle>/` on Linux). This owns the `log` crate
+        // slot (see the tracing note above); our own `tracing::` events still go
+        // to stderr via the subscriber. Registered after single-instance, which
+        // must stay first.
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: None,
+                    }),
+                ])
+                .level(log::LevelFilter::Info)
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
@@ -307,7 +338,9 @@ pub fn run() {
             date_title,
             resolve_ref,
             delete_page,
+            page_backlinks,
             set_backlinks_order,
+            resolve_page_labels,
             // Structural templates
             list_templates_cmd,
             instantiate_template_at,
