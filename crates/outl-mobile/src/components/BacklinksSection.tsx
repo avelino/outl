@@ -5,6 +5,7 @@ import type {
   TodoState,
 } from "@outl/shared/api/types";
 import { MarkdownInline } from "@outl/shared/markdown";
+import { sameCrumbTrail } from "@outl/shared/outline";
 
 interface BacklinksSectionProps {
   backlinks: Backlink[];
@@ -16,9 +17,13 @@ interface BacklinksSectionProps {
 }
 
 /**
- * Backlinks panel rendered below the outline. Each entry shows the
- * source block's text plus the page it lives on; tapping it jumps to
- * the source page.
+ * Backlinks panel rendered below the outline. References are grouped
+ * by their source page (parity with desktop + TUI): one card per
+ * source page, its title as the card header, then one row per
+ * referencing block. A row buried in a nested outline shows its
+ * ancestor breadcrumb as dimmed context; consecutive rows in the same
+ * branch collapse the trail (shown once, then implied). Tapping a row
+ * — or the card header — jumps to the source page.
  *
  * Renders even when the list is empty so newcomers discover the
  * bidirectional-linking feature exists. Without the empty state,
@@ -27,6 +32,33 @@ interface BacklinksSectionProps {
  * other until they happen to land on one that already has refs.
  */
 export function BacklinksSection(props: BacklinksSectionProps): JSX.Element {
+  /**
+   * Group backlinks by their source page. `null` source (orphan
+   * blocks with no enclosing page) collapse under a synthetic key.
+   * Mirrors the desktop's `groupedBySource`.
+   */
+  function groupedBySource(): Array<{
+    key: string;
+    title: string;
+    icon: string;
+    entries: Backlink[];
+  }> {
+    const groups = new Map<
+      string,
+      { key: string; title: string; icon: string; entries: Backlink[] }
+    >();
+    for (const b of props.backlinks) {
+      const key = b.source_page?.slug ?? "__orphan__";
+      const title = b.source_page?.title ?? "untitled";
+      const fallback = b.source_page?.kind === "journal" ? "📅" : "📄";
+      const icon = b.source_page?.icon || fallback;
+      const existing = groups.get(key);
+      if (existing) existing.entries.push(b);
+      else groups.set(key, { key, title, icon, entries: [b] });
+    }
+    return [...groups.values()];
+  }
+
   return (
     <section class="mx-3 mt-6">
       <header class="mb-2 flex items-center gap-2 px-2 text-(--color-ios-text-secondary) dark:text-(--color-iosd-text-secondary)">
@@ -78,38 +110,77 @@ export function BacklinksSection(props: BacklinksSectionProps): JSX.Element {
           </div>
         }
       >
-        <div class="overflow-hidden rounded-2xl bg-(--color-ios-card) dark:bg-(--color-iosd-card)">
-          <For each={props.backlinks}>
-            {(link, idx) => (
-              <button
-                type="button"
-                onClick={() => props.onJump(link)}
-                class="block w-full text-left active:opacity-60"
-                classList={{
-                  "border-t border-(--color-ios-divider)/40 dark:border-(--color-iosd-divider)/40":
-                    idx() > 0,
-                }}
-              >
-                <div class="px-4 py-3">
-                  <p class="text-[13px] font-medium text-(--color-ios-accent) dark:text-(--color-iosd-accent)">
-                    {link.source_page?.title ?? "untitled"}
-                  </p>
-                  <div class="mt-1 flex items-start gap-2">
-                    <Show when={link.todo !== null}>
-                      <BacklinkCheckbox todo={link.todo} />
-                    </Show>
-                    <p
-                      class="flex-1 text-[15px] leading-snug"
-                      classList={{
-                        "text-(--color-ios-text-tertiary) line-through dark:text-(--color-iosd-text-tertiary)":
-                          link.todo === "DONE",
-                      }}
-                    >
-                      <MarkdownInline tokens={link.source_block.tokens} />
-                    </p>
-                  </div>
-                </div>
-              </button>
+        <div class="space-y-3">
+          <For each={groupedBySource()}>
+            {(group) => (
+              <div class="overflow-hidden rounded-2xl bg-(--color-ios-card) dark:bg-(--color-iosd-card)">
+                {/* Card header: source page. Tapping it jumps to the
+                    page (via the group's first referencing block). */}
+                <button
+                  type="button"
+                  onClick={() => props.onJump(group.entries[0])}
+                  class="flex w-full items-center gap-2 px-4 pt-3 pb-1 text-left active:opacity-60"
+                >
+                  <span aria-hidden="true">{group.icon}</span>
+                  <span class="flex-1 text-[13px] font-medium text-(--color-ios-accent) dark:text-(--color-iosd-accent)">
+                    {group.title}
+                  </span>
+                  <span class="text-[12px] text-(--color-ios-text-tertiary) dark:text-(--color-iosd-text-tertiary)">
+                    {group.entries.length}
+                  </span>
+                </button>
+                <For each={group.entries}>
+                  {(link, idx) => {
+                    // Breadcrumb of ancestor blocks as dimmed context,
+                    // collapsed against the previous row in the same
+                    // branch (shown once, then implied).
+                    const prev =
+                      idx() > 0 ? group.entries[idx() - 1] : null;
+                    const showCrumbs =
+                      link.ancestors.length > 0 &&
+                      (!prev ||
+                        !sameCrumbTrail(prev.ancestors, link.ancestors));
+                    const crumbTrail = link.ancestors
+                      .map((c) => c.text)
+                      .join(" › ");
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => props.onJump(link)}
+                        class="block w-full text-left active:opacity-60"
+                        classList={{
+                          "border-t border-(--color-ios-divider)/40 dark:border-(--color-iosd-divider)/40":
+                            idx() > 0,
+                        }}
+                      >
+                        <div class="px-4 py-3">
+                          <Show when={showCrumbs}>
+                            <p class="mb-1 truncate text-[12px] text-(--color-ios-text-tertiary) dark:text-(--color-iosd-text-tertiary)">
+                              {crumbTrail}
+                            </p>
+                          </Show>
+                          <div class="flex items-start gap-2">
+                            <Show when={link.todo !== null}>
+                              <BacklinkCheckbox todo={link.todo} />
+                            </Show>
+                            <p
+                              class="flex-1 text-[15px] leading-snug"
+                              classList={{
+                                "text-(--color-ios-text-tertiary) line-through dark:text-(--color-iosd-text-tertiary)":
+                                  link.todo === "DONE",
+                              }}
+                            >
+                              <MarkdownInline
+                                tokens={link.source_block.tokens}
+                              />
+                            </p>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  }}
+                </For>
+              </div>
             )}
           </For>
         </div>

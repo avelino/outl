@@ -148,6 +148,7 @@ describe("OpenRefUnderCursor (Normal-mode Enter)", () => {
       },
       source_block: block("blk-source", "points at [[today]]"),
       source_block_path: [0],
+      ancestors: [],
     };
     setAppState({
       backlinks: [backlink],

@@ -86,6 +86,29 @@ export function focusSubtree(
 }
 
 /**
+ * Do two crumb trails name the same chain of blocks (by id, in order)?
+ *
+ * Drives breadcrumb collapse in the backlinks panel: consecutive
+ * references inside the same branch share an identical ancestor trail,
+ * so a client renders the branch header once and lets the following
+ * references sit under it silently instead of repeating it per line.
+ * Collapse is all-or-nothing on equality (not a shared-prefix count):
+ * showing only the differing tail of a trail — `Riscos` without the
+ * `Planejamento Q3 ›` it hangs off — reads as ambiguous in the inline
+ * breadcrumb, so any change re-shows the whole trail.
+ *
+ * Generic over `{ id }`, so it works for both `BacklinkCrumb` and
+ * `FocusCrumb`.
+ */
+export function sameCrumbTrail(
+  a: readonly { id: string }[],
+  b: readonly { id: string }[],
+): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((crumb, i) => crumb.id === b[i].id);
+}
+
+/**
  * Flatten an outline into a DFS-preorder list of **`BlockNode`s**
  * (fold state ignored — every block is included).
  *

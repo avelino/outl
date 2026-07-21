@@ -14,6 +14,7 @@ import {
   nextVisibleId,
   previousVisibleId,
   rawTextWithTodo,
+  sameCrumbTrail,
   visualRangeIds,
   visualRangeSet,
 } from "./index";
@@ -363,5 +364,31 @@ describe("focusSubtree", () => {
 
   it("returns null for an empty outline", () => {
     expect(focusSubtree([], "a")).toBeNull();
+  });
+});
+
+describe("sameCrumbTrail", () => {
+  const crumb = (id: string) => ({ id, text: id });
+
+  it("two empty trails are the same (both root-level)", () => {
+    expect(sameCrumbTrail([], [])).toBe(true);
+  });
+
+  it("matches identical trails by id", () => {
+    expect(sameCrumbTrail([crumb("a"), crumb("b")], [crumb("a"), crumb("b")])).toBe(true);
+  });
+
+  it("ignores text, compares by id", () => {
+    const a = [{ id: "a", text: "Old" }];
+    const b = [{ id: "a", text: "New" }];
+    expect(sameCrumbTrail(a, b)).toBe(true);
+  });
+
+  it("different length is never the same", () => {
+    expect(sameCrumbTrail([crumb("a")], [crumb("a"), crumb("b")])).toBe(false);
+  });
+
+  it("a shared prefix is not enough — the whole trail must match", () => {
+    expect(sameCrumbTrail([crumb("a"), crumb("b")], [crumb("a"), crumb("c")])).toBe(false);
   });
 });

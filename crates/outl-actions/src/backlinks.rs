@@ -71,11 +71,39 @@ pub struct Backlink {
     /// Used by the TUI to track which block inside a backlink's
     /// subtree the cursor is on (`Focus::Backlink { sub_path }`).
     pub source_block_path: Vec<usize>,
+    /// Ancestor blocks between the page root and the source block,
+    /// **root-first**: `ancestors[0]` is the direct child of the page
+    /// root, the last entry is the source block's immediate parent.
+    /// Empty when the source block sits at page-root level.
+    ///
+    /// This is the breadcrumb every client renders as dimmed context
+    /// above the citing block, so a reference buried inside a nested
+    /// outline still reads with the branch it belongs to. The page
+    /// root itself is **not** included — clients already show it as the
+    /// group header (the page title).
+    pub ancestors: Vec<BacklinkCrumb>,
     /// On-disk path of the source page's `.md`. Derived from the
     /// workspace root passed to [`backlinks_for_page`] / [`backlinks_for_target`].
     /// `None` when the block has no enclosing page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_path: Option<PathBuf>,
+}
+
+/// One ancestor step in a backlink's breadcrumb.
+///
+/// Plain text only (no inline tokens): the breadcrumb is dimmed
+/// context, not an interactive surface, so clients render it as a
+/// muted trail rather than re-rendering links/bold the way they do for
+/// the citing block itself. `text` already has the `TODO `/`DONE `
+/// prefix stripped, mirroring [`Backlink::block_text`]. `id` lets a
+/// client make a crumb tappable (jump to that ancestor) later without
+/// a shape change.
+#[derive(Debug, Clone, Serialize)]
+pub struct BacklinkCrumb {
+    /// Node id of the ancestor block.
+    pub id: String,
+    /// Ancestor block's text, TODO/DONE prefix stripped, single line.
+    pub text: String,
 }
 
 fn serialize_todo_state<S>(state: &Option<TodoState>, ser: S) -> Result<S::Ok, S::Error>
@@ -151,12 +179,14 @@ fn collect_backlinks(
         };
         let source_path = page_md_path(root, &meta);
         let mut path: Vec<usize> = Vec::new();
+        let mut ancestors: Vec<BacklinkCrumb> = Vec::new();
         walk_inside_page(
             workspace,
             page_id,
             &meta,
             &source_path,
             &mut path,
+            &mut ancestors,
             matcher,
             &mut out,
             index,
@@ -307,6 +337,7 @@ fn walk_inside_page(
     meta: &PageMeta,
     source_path: &Path,
     path: &mut Vec<usize>,
+    ancestors: &mut Vec<BacklinkCrumb>,
     matcher: &TargetMatcher,
     out: &mut Vec<Backlink>,
     index: &ChildrenIndex,
@@ -317,8 +348,8 @@ fn walk_inside_page(
     for (idx, child_id) in children.iter().copied().enumerate() {
         path.push(idx);
         let text = workspace.block_text(child_id).unwrap_or_default();
+        let (todo, body) = split_todo(&text);
         if matcher.matches(workspace, child_id, &text) {
-            let (todo, body) = split_todo(&text);
             let source_block = project_outline_node_indexed(workspace, child_id, index);
             out.push(Backlink {
                 block_id: child_id.to_string(),
@@ -327,19 +358,30 @@ fn walk_inside_page(
                 source_page: Some(meta.clone()),
                 source_block,
                 source_block_path: path.clone(),
+                // `ancestors` holds the chain down to `parent` — i.e.
+                // exactly this block's ancestors, excluding the block
+                // itself (pushed only before recursing below).
+                ancestors: ancestors.clone(),
                 source_path: Some(source_path.to_path_buf()),
             });
         }
+        // Descend: this block becomes an ancestor of its descendants.
+        ancestors.push(BacklinkCrumb {
+            id: child_id.to_string(),
+            text: body.to_string(),
+        });
         walk_inside_page(
             workspace,
             child_id,
             meta,
             source_path,
             path,
+            ancestors,
             matcher,
             out,
             index,
         );
+        ancestors.pop();
         path.pop();
     }
 }

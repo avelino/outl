@@ -269,6 +269,17 @@ The direction — `newest` (default, most recently referenced page on top) or `o
 
 See [config.md → `[display]`](config.md#display) for the schema and [shortcuts.md](shortcuts.md) for the TUI chord.
 
+## Backlink breadcrumbs
+
+When a citing block sits nested inside an outline (not at the page's root level), the "Linked from" panel shows the chain of parent blocks as a dimmed breadcrumb directly above the citing block, root-first — e.g. `Planejamento Q3 › Objetivos`.
+A block at root level has no breadcrumb.
+Consecutive references from the same branch collapse: the trail renders once, and the following reference(s) sit under it silently until the branch changes.
+
+`outl_actions::backlinks_for_page` / `backlinks_for_target` populate `Backlink::ancestors` (a `Vec<BacklinkCrumb>`) while walking the page tree, so every client reads the same data — nothing is recomputed client-side.
+`@outl/shared/outline::sameCrumbTrail` (mirrored locally by the TUI as `same_trail`) is the one comparison every client uses to decide whether to collapse consecutive breadcrumbs, comparing trails by block id.
+
+Mobile's `BacklinksSection` groups references by source page and renders the breadcrumb the same way desktop and TUI do — it no longer shows a flat list of blocks.
+
 ## iCloud sync (mobile + TUI, today)
 
 The iOS app is on a public TestFlight beta — <https://testflight.apple.com/join/P2GdWAMd>.
