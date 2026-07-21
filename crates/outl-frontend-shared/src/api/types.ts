@@ -102,10 +102,32 @@ export interface PageMeta {
   page_type?: string | null;
 }
 
+/**
+ * One ancestor step in a backlink's breadcrumb. Plain text only — the
+ * breadcrumb is dimmed context, so clients render a muted trail rather
+ * than re-rendering inline markdown the way they do for the citing
+ * block. `text` already has the `TODO `/`DONE ` prefix stripped. Mirrors
+ * `outl_actions::BacklinkCrumb`. (Same shape as `FocusCrumb` from
+ * `@outl/shared/outline`, but a distinct concept — zoom vs. backlink.)
+ */
+export interface BacklinkCrumb {
+  id: string;
+  text: string;
+}
+
 export interface Backlink {
   block_id: string;
   todo: TodoState | null;
   source_page: PageMeta | null;
+  /**
+   * Ancestor blocks between the source page root and the citing block,
+   * **root-first**: `ancestors[0]` is the direct child of the page
+   * root, the last entry is the block's immediate parent. Empty when
+   * the block sits at page-root level. The page root itself is not
+   * included — clients show it as the group header. Mirrors
+   * `outl_actions::Backlink::ancestors`.
+   */
+  ancestors: BacklinkCrumb[];
   /**
    * Source block as a self-contained outline subtree (text, tokens,
    * children, properties). Mirrors what `read_page_view_with_workspace`

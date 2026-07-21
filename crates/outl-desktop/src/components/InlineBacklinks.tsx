@@ -2,6 +2,7 @@ import { For, Show } from "solid-js";
 
 import { openRef, setBacklinksOrder } from "@outl/shared/api/commands";
 import { MarkdownInline } from "@outl/shared/markdown";
+import { sameCrumbTrail } from "@outl/shared/outline";
 import type { Backlink } from "@outl/shared/api/types";
 
 import { appState, setAppState } from "../lib/store";
@@ -165,9 +166,22 @@ export function InlineBacklinks() {
 
                 <ul class="mt-1 space-y-1 pl-6">
                   <For each={group.entries}>
-                    {(link) => {
+                    {(link, index) => {
                       const selected = () =>
                         appState.selectedBacklinkBlockId === link.block_id;
+                      // Breadcrumb of ancestor blocks as dimmed context.
+                      // Collapsed against the previous entry in the same
+                      // group: consecutive references in the same branch
+                      // show the trail once, then sit under it silently.
+                      const prev =
+                        index() > 0 ? group.entries[index() - 1] : null;
+                      const showCrumbs =
+                        link.ancestors.length > 0 &&
+                        (!prev ||
+                          !sameCrumbTrail(prev.ancestors, link.ancestors));
+                      const crumbTrail = link.ancestors
+                        .map((c) => c.text)
+                        .join(" › ");
                       return (
                         <li
                           // The selected state mirrors the outline's
@@ -181,6 +195,14 @@ export function InlineBacklinks() {
                               : ""
                           }
                         >
+                          <Show when={showCrumbs}>
+                            <div
+                              class="truncate px-1 pt-0.5 text-xs opacity-40"
+                              title={crumbTrail}
+                            >
+                              {crumbTrail}
+                            </div>
+                          </Show>
                           <button
                             type="button"
                             onClick={() => void openBacklink(link)}

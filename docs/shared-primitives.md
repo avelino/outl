@@ -209,7 +209,8 @@ UI-agnostic; both TUI and mobile consume them.
 | Intent | Use this | File |
 |---|---|---|
 | Extract `[[ref]]` tokens out of a block's text (tolerates unbalanced openers) | `outl_actions::backlinks::extract_refs` | `crates/outl-actions/src/backlinks.rs` |
-| Backlink DTO returned by the queries below | `outl_actions::backlinks::Backlink` | `crates/outl-actions/src/backlinks.rs` |
+| Backlink DTO returned by the queries below (carries `ancestors: Vec<BacklinkCrumb>` — root-first ancestor chain of the citing block, excluding the page root, empty when the block sits at root level) | `outl_actions::backlinks::Backlink` | `crates/outl-actions/src/backlinks.rs` |
+| One breadcrumb entry in `Backlink::ancestors` (plain text, TODO/DONE prefix stripped) | `outl_actions::BacklinkCrumb` | `crates/outl-actions/src/backlinks.rs` |
 | Walk every backlink for a target / a `PageMeta` (matches `[[ref]]` literally **and** `#tag` via slugify — same resolution a tag click uses) | `outl_actions::backlinks::backlinks_for_target` / `backlinks_for_page` | `crates/outl-actions/src/backlinks.rs` |
 | Order a backlinks list chronologically (group-stable by source page, newest- or oldest-first; drives the issue-#142 direction toggle on every client) | `outl_actions::sort_backlinks` | `crates/outl-actions/src/backlinks_sort.rs` |
 

@@ -100,6 +100,7 @@ mod tests {
                 children: Vec::new(),
             },
             source_block_path: Vec::new(),
+            ancestors: Vec::new(),
             source_path: None,
         }
     }

@@ -242,6 +242,7 @@ Recently added — check these before writing a parallel template helper (catalo
 | Order a backlinks list chronologically (group-stable by source page, newest-/oldest-first; drives the issue-#142 direction toggle on every client — never re-sort backlinks by hand per client) | `outl_actions::sort_backlinks` | `crates/outl-actions/src/backlinks_sort.rs` |
 | Resolve the page/journal slug a node sits under (walks up to a registered page root; `None` if unregistered or not yet materialized) | `outl_core::Workspace::slug_for_node` | `crates/outl-core/src/workspace.rs` |
 | Live sync-progress update pushed while a sync pass runs (connecting / snapshot bytes / ops received-pushed / synced / failed) — cosmetic only, distinct from the load-bearing reload trigger | `outl_actions::SyncProgress` + `SyncTransport::set_progress_sink` (default no-op) | `crates/outl-actions/src/sync.rs` |
+| Backlink DTO's ancestor breadcrumb — `Backlink::ancestors: Vec<BacklinkCrumb>` (root-first, excludes the page root, empty when the citing block is at root level) | `outl_actions::Backlink` / `outl_actions::BacklinkCrumb` | `crates/outl-actions/src/backlinks.rs` |
 
 ### 5.2 Reuse-first violations — no parallel implementations
 

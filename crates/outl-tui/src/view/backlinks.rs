@@ -13,8 +13,16 @@
 
 use crate::state::{App, EditTarget, Focus, Mode};
 use crate::view::outline::{emit_block_lines, RenderMode};
-use outl_actions::{Backlink, OutlineNode};
+use outl_actions::{Backlink, BacklinkCrumb, OutlineNode};
 use ratatui::text::{Line, Span};
+
+/// Do two ancestor trails name the same chain of blocks (by id)?
+/// Drives breadcrumb collapse: consecutive references in the same
+/// branch show the trail once. All-or-nothing on equality — mirrors
+/// `sameCrumbTrail` in `@outl/shared/outline`.
+fn same_trail(a: &[BacklinkCrumb], b: &[BacklinkCrumb]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.id == y.id)
+}
 
 /// Render the inline backlinks section.
 ///
@@ -89,6 +97,27 @@ pub(crate) fn render_backlinks_inline(
             };
             out.push(Line::from(Span::styled(header, app.theme.heading)));
             prev_source = Some(source_slug.to_string());
+        }
+
+        // Breadcrumb of ancestor blocks as dimmed context, so a
+        // reference buried in a nested outline reads with its branch.
+        // Collapsed against the previous entry: consecutive references
+        // in the same branch show the trail once (ancestor ids are
+        // globally unique, so a trail never matches across pages).
+        let prev = idx.checked_sub(1).and_then(|i| backlinks.get(i));
+        let show_crumbs = !bl.ancestors.is_empty()
+            && prev.is_none_or(|p| !same_trail(&p.ancestors, &bl.ancestors));
+        if show_crumbs {
+            let trail = bl
+                .ancestors
+                .iter()
+                .map(|c| c.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" › ");
+            out.push(Line::from(Span::styled(
+                format!("  {trail}"),
+                app.theme.dim,
+            )));
         }
 
         // Sub-path inside the source_block that's currently focused,
