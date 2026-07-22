@@ -37,7 +37,7 @@ import {
 } from "./api";
 
 import { playPluginViews } from "./plugin-views";
-import { appState, setAppState } from "./store";
+import { appState, setAppState, setOutline } from "./store";
 
 // ---------------------------------------------------------------------------
 // KeyboardEvent → Chord
@@ -217,10 +217,8 @@ async function runPluginChord(kb: PluginKeybinding) {
     // `<AppShell>`'s `applyView` writes. Backlinks are fetched lazily by
     // OutlineView's per-slug effect, not carried on the view.
     if (reply.view) {
-      setAppState({
-        page: reply.view.page,
-        outline: reply.view.outline,
-      });
+      setAppState({ page: reply.view.page });
+      setOutline(reply.view.outline);
     }
     playPluginViews(reply.views);
   } catch (e) {

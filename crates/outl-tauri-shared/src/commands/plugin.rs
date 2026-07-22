@@ -64,6 +64,12 @@ pub fn run<S: AppHost>(
 ) -> Result<PluginRunReply, String> {
     let run = plugins.run_command(plugin_id, command_id)?;
 
+    if run.applied > 0 {
+        // The plugin mutated the workspace (any page), so the backlinks
+        // index is stale — drop it; the next `page_backlinks` rebuilds.
+        crate::helpers::invalidate_backlink_index(state);
+    }
+
     // Re-render the on-screen page from the now-mutated + re-projected
     // workspace. Failure to resolve the page is non-fatal: the mutation
     // already landed, the frontend can fall back to its own reload.
@@ -153,6 +159,9 @@ pub fn sync_hooks<S: AppHost>(
 ) -> Result<PluginSyncHooksReply, String> {
     let outcome = plugins.sync_hooks();
     let view = if outcome.applied > 0 {
+        // A plugin mutated the workspace (any page), so the backlinks
+        // index is stale — drop it; the next `page_backlinks` rebuilds.
+        crate::helpers::invalidate_backlink_index(state);
         match page_id {
             Some(id) => {
                 let page = parse_node_id(&id)?;

@@ -280,6 +280,36 @@ Consecutive references from the same branch collapse: the trail renders once, an
 
 Mobile's `BacklinksSection` groups references by source page and renders the breadcrumb the same way desktop and TUI do — it no longer shows a flat list of blocks.
 
+## Backlinks index (performance)
+
+`outl_actions::backlinks_for_page` walks the whole workspace (`O(blocks)`) on every call.
+Recomputing that on each page open made opening a page — or today's journal — noticeably slower as a workspace grew.
+
+Every client now keeps a **pre-computed inverted index** (`outl_actions::BacklinkIndex`) instead of scanning per open.
+Once built, a page's backlinks are an `O(refs-of-the-page)` lookup.
+
+The index is built from the **`.md` files on disk** (`outl_actions::build_backlink_index_from_disk`), not from the in-memory `Workspace`.
+An earlier version built it from the workspace (`Workspace::block_text` on every block).
+That forced a lazy-boot vault (#179) to materialize entirely and held the workspace lock across the whole `O(blocks)` walk — the "opening the journal / pressing Esc freezes" regression.
+The `.md` projection already carries every block's text, properties, and sidecar id, so the from-disk build needs no lock and no Yrs materialization.
+
+| Client | Where the index lives | Rebuild |
+|---|---|---|
+| TUI | `App::backlink_index` (`RefCell<Option<BacklinkIndex>>`) | Inline, on the next dirty read (`ensure_backlink_index`), from disk. The TUI owns its `Workspace` single-threaded, so it can't hand the build to a worker the way the GUIs do — the from-disk walk stays fast enough (disk I/O + parse, no lock, no materialization) to run inline. |
+| Desktop / Mobile | `AppState::backlink_index` (`Arc<Mutex<Option<BacklinkIndex>>>`), exposed through `AppHost::backlink_index()` | Off the IPC thread, inside the `page_backlinks` command (`spawn_blocking`, `compute_backlinks_offloaded`): a brief workspace lock reads the page list + this page's meta, the index rebuild itself runs from disk with **no lock held**, then a brief lock does the `O(refs)` lookup. |
+
+A regression test (`outl-actions/tests/backlinks_index_disk.rs`) asserts the from-disk build never materializes the workspace, via `Workspace::resident_text_count()` (the same counter #179's fix introduced, now `pub` for this exact check).
+
+The index is a **dirty-flag cache, never a sync surface** — it is dropped (set to `None`) on every event that can change what a page's backlinks are, and rebuilt lazily on the next read:
+
+- a local mutation (`App::invalidate_backlinks_cache` on the TUI, `finish_in_page*` on desktop/mobile),
+- a peer or workspace reload,
+- a plugin run that applied ops.
+
+The index stores each referencing block as a **shallow leaf** — body, tokens, `ancestors`, no subtree.
+Every client renders a backlink row from `source_block.tokens`, and materializing the subtree of every referencing block across the workspace (under the workspace lock) is exactly what froze input, so the build stops at the leaf.
+One visible consequence: a backlink shows only the citing block, not its child blocks, on every client (the TUI no longer expands a backlink into a mini-outline).
+
 ## iCloud sync (mobile + TUI, today)
 
 The iOS app is on a public TestFlight beta — <https://testflight.apple.com/join/P2GdWAMd>.

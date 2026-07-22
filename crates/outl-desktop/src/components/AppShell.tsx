@@ -4,12 +4,13 @@ import {
   openJournalFor,
   openPageBySlug,
   openTodayJournal,
+  pageBacklinks,
   reloadWorkspace,
 } from "@outl/shared/api/commands";
 import type { PageView } from "@outl/shared/api/types";
 import { flattenAll } from "@outl/shared/outline";
 
-import { appState, setAppState } from "../lib/store";
+import { appState, setAppState, setOutline } from "../lib/store";
 import { takePendingDeepLink, workspaceStats } from "../lib/api";
 import {
   onDeepLinkNavigate,
@@ -51,10 +52,8 @@ export function AppShell() {
   const [handlers, setHandlers] = createSignal<ActionHandlers | null>(null);
 
   function applyView(view: PageView) {
-    setAppState({
-      page: view.page,
-      outline: view.outline,
-    });
+    setAppState({ page: view.page });
+    setOutline(view.outline);
     // Drop editing / selection cursors that the new outline no longer
     // contains. This path fires on peer-driven reloads (onPeerChange →
     // reloadWorkspace), which replace the outline without going through
@@ -116,6 +115,17 @@ export function AppShell() {
           ? await openJournalFor(page.slug)
           : await openPageBySlug(page.slug);
       applyView(view);
+      // A peer reload keeps the same slug, so OutlineView's `on(slug)`
+      // backlinks effect won't refire — but a peer's edit CAN change this
+      // page's backlinks. Refetch them here explicitly.
+      pageBacklinks(page.slug)
+        .then((r) =>
+          setAppState({
+            backlinks: r.backlinks,
+            backlinksOrder: r.backlinks_order,
+          }),
+        )
+        .catch(() => {});
     } catch {
       await loadToday();
     }

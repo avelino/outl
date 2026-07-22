@@ -105,6 +105,10 @@ impl App {
         if matches!(self.mode, Mode::Insert { .. }) {
             self.commit_insert();
         }
+        // Execution reads the code block from the workspace / `.md`, so
+        // persist any coalesced edit first — otherwise `gx` would run the
+        // stale source.
+        self.flush_pending_save();
 
         // Skip auto-run runtimes on manual `gx` — they execute
         // automatically on page load and after every save. Running

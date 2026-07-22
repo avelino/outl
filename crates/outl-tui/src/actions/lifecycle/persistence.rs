@@ -12,10 +12,11 @@
 //!   that always rebuilds the index. Kept for callers that don't
 //!   want to think about the optimistic-patch flag.
 //!
-//! After each save we invalidate `backlinks_cache` (the page just
-//! changed, the cached `Vec<Backlink>` for the current slug is
-//! stale) and resync `last_mtime` so the polling loop doesn't
-//! mistake our own write for an external edit.
+//! After each save we patch the current page's entries in the
+//! backlink index (the page just changed; `reindex_backlinks_for_slug`
+//! re-reads its one `.md`) and resync `last_mtime` so the polling loop
+//! doesn't mistake our own write for an external edit. A cross-page
+//! save re-spawns the whole background build instead.
 
 use crate::outline_ops::flat_count;
 use crate::state::{App, ToastKind};
@@ -76,8 +77,10 @@ impl App {
             self.index.patch_page(path, page);
         }
         // Reconciling the source page may have touched blocks that
-        // mention the current view's slug.
-        self.invalidate_backlinks_cache();
+        // mention the current view's slug — rebuild the backlink index
+        // off-thread (a cross-page save is rare, so the full rebuild is
+        // fine; the incremental patch only covers the current page).
+        self.spawn_backlink_index_rebuild();
         if path == self.current_path() {
             self.last_mtime = file_mtime(path);
         }
@@ -97,26 +100,85 @@ impl App {
         }
     }
 
+    /// Mark the in-memory `page` as changed and repaint — **without**
+    /// touching disk. The heavy `render → write → reconcile_md → fsync`
+    /// runs later in [`Self::flush_pending_save`], drained by the event
+    /// loop the instant it goes idle.
+    ///
+    /// This is the edit hot path: every commit boundary (`Esc`, `Enter`,
+    /// `dd`, indent, paste, …) calls `save()`, and on a large workspace
+    /// the reconcile+fsync is tens of milliseconds. Doing it inline made
+    /// a burst of edits stutter — each `Esc` blocked the next keystroke.
+    /// Coalescing it means the user always sees the result on the next
+    /// frame and keeps typing; the persist happens in the gap when they
+    /// pause (or is forced by [`crate::runtime::MAX_SAVE_DEFER`] / any
+    /// read of persisted state).
+    ///
+    /// Callers that need the op log / workspace to reflect the edit
+    /// *right now* (a `call:` re-run, cross-page navigation, quit) must
+    /// call [`Self::flush_pending_save`] first — those paths already do.
+    pub(crate) fn save(&mut self) {
+        self.dirty_since.get_or_insert_with(std::time::Instant::now);
+    }
+
+    /// `true` when an edit is committed to the in-memory AST but not yet
+    /// persisted to disk / the op log. The event loop polls this to
+    /// drain the save on idle and to keep its `event::poll` timeout
+    /// short while a save is outstanding.
+    pub(crate) fn has_pending_save(&self) -> bool {
+        self.dirty_since.is_some()
+    }
+
+    /// How long the pending edit has waited unpersisted, or `None` when
+    /// nothing is pending. The event loop uses this to force a flush
+    /// once the wait exceeds `MAX_SAVE_DEFER`, even mid-burst.
+    pub(crate) fn pending_save_age(&self) -> Option<std::time::Duration> {
+        self.dirty_since.map(|t| t.elapsed())
+    }
+
+    /// Persist the pending edit if there is one, then clear the dirty
+    /// mark. A no-op when nothing changed since the last persist. This
+    /// is the barrier every path that reads persisted state runs first
+    /// (navigation, peer reload, quit, `call:` re-run) so no reader ever
+    /// sees a stale `.md` / op log.
+    pub(crate) fn flush_pending_save(&mut self) {
+        if self.dirty_since.take().is_some() {
+            self.persist();
+        }
+    }
+
     /// Render the in-memory `page` back to disk and reconcile.
     ///
     /// All writes go through [`outl_md::write_atomic`] so a crash
     /// between render and rename cannot leave a half-written `.md`.
-    pub(crate) fn save(&mut self) {
+    /// Not called directly by edit paths — they go through [`Self::save`]
+    /// (mark dirty) and this is drained by [`Self::flush_pending_save`].
+    pub(crate) fn persist(&mut self) {
+        // Timing instrumentation: run with `RUST_LOG=outl_tui=debug` and
+        // read `<workspace>/.outl/tui.log` to see where a slow commit
+        // spends its time (reconcile vs backlinks vs auto-run).
+        let t0 = std::time::Instant::now();
         let path = self.current_path();
         let md = render(&self.page);
         if let Err(e) = outl_md::write_atomic(&path, md.as_bytes()) {
             self.toast(ToastKind::Error, format!("save failed: {e}"));
             return;
         }
+        let t_reconcile = std::time::Instant::now();
+        let mut ops_applied = 0usize;
         match reconcile_md(
             &mut self.workspace,
             &self.hlc,
             &path,
             Some(&self.orphans_log),
         ) {
-            Ok(_) => self.status.clear(),
+            Ok(report) => {
+                ops_applied = report.ops_applied;
+                self.status.clear();
+            }
             Err(e) => self.toast(ToastKind::Error, format!("reconcile failed: {e}")),
         }
+        let reconcile_ms = t_reconcile.elapsed().as_secs_f64() * 1000.0;
         self.flat_len = flat_count(&self.page.blocks);
         if self.flat_len == 0 {
             // Always keep at least one empty bullet so the cursor has a home.
@@ -129,16 +191,32 @@ impl App {
         // refresh its entries (backlinks, title, icon). Cheap and
         // synchronous — no waiting for a worker to rescan the whole
         // workspace.
+        let t_index = std::time::Instant::now();
         self.index.patch_page(&path, &self.page);
-        // The page just changed; any cached backlink list is stale.
-        self.invalidate_backlinks_cache();
+        // Only THIS page changed, so patch just its backlink entries from
+        // the freshly-projected `.md` — O(one page). Rebuilding the index
+        // from EVERY `.md` in the workspace per commit, inline on the
+        // event loop, was the "Esc is slow in the TUI" bug.
+        self.reindex_backlinks_for_slug(&self.current_slug());
+        let index_ms = t_index.elapsed().as_secs_f64() * 1000.0;
         // Update mtime AFTER the write so the polling loop doesn't
         // mistake our own save for an external edit.
         self.last_mtime = file_mtime(&path);
         self.last_saved_at = Some(std::time::Instant::now());
         // Re-run query / auto-run blocks — workspace state changed,
         // so results may be different now.
+        let t_autorun = std::time::Instant::now();
         self.run_auto_run_blocks();
+        let autorun_ms = t_autorun.elapsed().as_secs_f64() * 1000.0;
+        tracing::debug!(
+            blocks = self.flat_len,
+            ops_applied,
+            total_ms = t0.elapsed().as_secs_f64() * 1000.0,
+            reconcile_ms,
+            index_ms,
+            autorun_ms,
+            "tui commit (save)"
+        );
         // Post-commit hook: tell the transport new local ops landed.
         // No-op for FileSyncTransport (the file is already on disk and
         // a peer's poller will notice it); IrohSyncTransport gossips
@@ -152,5 +230,104 @@ impl App {
             let hlc = self.hlc.next();
             transport.announce_local_ops(&workspace_id, hlc);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::state::App;
+    use outl_core::{ActorId, Workspace};
+    use tempfile::TempDir;
+
+    fn fresh_app() -> (App, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let actor = ActorId::new();
+        let ws = Workspace::open_in_memory(actor).unwrap();
+        let app = App::new(
+            dir.path().to_path_buf(),
+            ws,
+            actor,
+            crate::theme::default_theme(),
+            false,
+            outl_config::SyncConfig::default(),
+        )
+        .unwrap();
+        (app, dir)
+    }
+
+    fn seed_single_block(app: &mut App, text: &str) {
+        app.page.blocks.clear();
+        app.page.blocks.push(outl_md::parse::OutlineNode {
+            text: text.to_string(),
+            children: vec![],
+            properties: vec![],
+        });
+        app.flat_len = 1;
+        app.selected = 0;
+    }
+
+    // `save()` is the edit hot path — it must NOT touch disk, only mark
+    // the page dirty. The heavy persist is deferred to `flush`.
+    #[test]
+    fn save_marks_dirty_without_touching_disk() {
+        let (mut app, _dir) = fresh_app();
+        seed_single_block(&mut app, "coalesced body");
+        let path = app.current_path();
+
+        app.save();
+        assert!(app.has_pending_save(), "save() must set the dirty mark");
+        let on_disk = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            !on_disk.contains("coalesced body"),
+            "save() must not write the .md — persist is deferred"
+        );
+    }
+
+    // `flush_pending_save` drains the coalesced edit to disk and clears
+    // the dirty mark; a second flush is a no-op.
+    #[test]
+    fn flush_persists_then_is_idempotent() {
+        let (mut app, _dir) = fresh_app();
+        seed_single_block(&mut app, "flush me to disk");
+        let path = app.current_path();
+
+        app.save();
+        app.flush_pending_save();
+        assert!(!app.has_pending_save(), "flush clears the dirty mark");
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk.contains("flush me to disk"),
+            "flush must persist the .md, got: {on_disk:?}"
+        );
+
+        // Nothing pending → a second flush changes nothing.
+        app.flush_pending_save();
+        assert!(!app.has_pending_save());
+    }
+
+    // The load-bearing guarantee: navigation reparses the page from
+    // disk, so it must flush a pending edit first. Without the flush in
+    // `load_current_no_autorun`, the reparse would silently drop the
+    // in-memory edit — data loss.
+    #[test]
+    fn navigation_flushes_before_reparsing_from_disk() {
+        let (mut app, _dir) = fresh_app();
+        seed_single_block(&mut app, "must survive nav");
+        app.save();
+        assert!(app.has_pending_save());
+
+        // Reparses `current_path()` from disk; must persist first.
+        app.load_current();
+
+        assert!(!app.has_pending_save(), "nav drained the pending save");
+        let on_disk = std::fs::read_to_string(app.current_path()).unwrap();
+        assert!(
+            on_disk.contains("must survive nav"),
+            "the edit must reach disk before the reparse, got: {on_disk:?}"
+        );
+        assert!(
+            app.page.blocks.iter().any(|b| b.text == "must survive nav"),
+            "the reparsed AST still carries the edit"
+        );
     }
 }

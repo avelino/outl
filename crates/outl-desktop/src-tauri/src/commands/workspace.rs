@@ -37,6 +37,9 @@ pub(crate) fn set_workspace(
     *state.storage_root.lock() = Some(path.clone());
     // Undo snapshots belong to the previous workspace.
     state.history.lock().clear();
+    // As does the backlinks index — drop it so the next `page_backlinks`
+    // rebuilds against the new workspace.
+    outl_tauri_shared::helpers::invalidate_backlink_index(state.inner());
 
     // (Re)start the FS watcher for the new root. Dropping the
     // previous handle inside `swap_watcher` stops watching the
@@ -204,6 +207,9 @@ pub(crate) async fn reload_workspace(
         crate::helpers::invalidate_changed_history(old_guard.as_ref(), &fresh, &mut history);
     }
     *state.workspace.lock() = Some(fresh);
+    // Peer ops replaced the workspace, so the cached backlinks index is
+    // stale — drop it; the next `page_backlinks` rebuilds it off-thread.
+    outl_tauri_shared::helpers::invalidate_backlink_index(state.inner());
     // Same split as `set_workspace` and the boot opener — reconcile
     // legacy / peer-pushed `.md` files in the background so the
     // frontend doesn't wait.

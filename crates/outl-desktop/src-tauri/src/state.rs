@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use outl_actions::{HistoryStacks, SyncTransport};
+use outl_actions::{BacklinkIndex, HistoryStacks, SyncTransport};
 use outl_core::hlc::HlcGenerator;
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
@@ -78,6 +78,12 @@ pub(crate) struct AppState {
     /// pages whose projection changed lose their stacks (see
     /// `commands::workspace::reload_workspace`).
     pub history: Mutex<HashMap<NodeId, HistoryStacks<String>>>,
+    /// Pre-computed backlinks index over the whole workspace. `None`
+    /// while stale — `finish_in_page` clears it after a mutation and the
+    /// peer reload clears it too, so the next `page_backlinks` rebuilds
+    /// it (off the IPC thread) and every later navigation is an
+    /// `O(refs)` lookup instead of a full `O(blocks)` re-scan.
+    pub backlink_index: Arc<Mutex<Option<BacklinkIndex>>>,
 }
 
 /// The desktop's projection onto the shared command surface. The one
@@ -115,5 +121,9 @@ impl AppHost for AppState {
 
     fn history(&self) -> Option<&Mutex<HashMap<NodeId, HistoryStacks<String>>>> {
         Some(&self.history)
+    }
+
+    fn backlink_index(&self) -> Option<Arc<Mutex<Option<BacklinkIndex>>>> {
+        Some(self.backlink_index.clone())
     }
 }

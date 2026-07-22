@@ -68,11 +68,11 @@ This section captures only the **architectural / TUI-specific behaviour** a cont
   When yank (`y`), delete (`d`), or `Esc` exits Visual, `remember_visual_range` walks the selected ids and drops any id whose ancestor is also in the selection (it already comes inside the ancestor's subtree via `copy_markdown`).
   This prevents the same block appearing twice in the copied markdown when a parent and child are both in the Visual range.
 - **`Ctrl+O` toggles the backlinks sort direction.**
-  Flips `App::backlinks_newest_first`, invalidates the backlinks cache, and persists the choice to `[display] backlinks_order` in `~/.config/outl/config.toml`.
+  Flips `App::backlinks_newest_first` and persists the choice to `[display] backlinks_order` in `~/.config/outl/config.toml`; no index rebuild, since `sort_backlinks` runs on every read.
   Same pure-display-preference policy as `theme.preset` — it never converges between devices.
   The panel header shows the current direction (`↓ newest (^O)` / `↑ oldest (^O)`).
   Read once at boot in `runtime.rs` and set post-construction on `App` (mirrors `mouse_capture`'s wiring).
-  Ordering itself runs through `outl_actions::sort_backlinks` in `App::compute_backlinks_for_slug`, the same function the desktop and mobile clients call.
+  Ordering itself runs through `outl_actions::sort_backlinks` in `App::backlinks_for_slug`, the same function the desktop and mobile clients call.
 - **Mouse capture (opt-in).**
   Set `[tui] mouse_capture = true` in `~/.config/outl/config.toml` to enable `Event::Mouse` handling (`actions/mouse.rs`).
   When active: the scroll wheel moves the outline selection, a click selects the block under the pointer, and a drag selects a range — on button release the range is yanked as markdown to the OS clipboard (same arboard + OSC 52 dual path as `y`).
@@ -183,11 +183,24 @@ Both directions live in `outl_md::view::{char_to_line_col, line_col_to_char}` an
 ## Persistence model
 
 Editing is **AST-first**: edits mutate an in-memory `ParsedPage`.
-On commit boundaries (Esc, Enter, dd, Tab/Shift-Tab, structural ops), the TUI:
+On commit boundaries (Esc, Enter, dd, Tab/Shift-Tab, structural ops), the TUI persists in two decoupled steps:
 
-1. Renders the AST back to `.md` via `outl_md::render`.
-2. Writes the `.md` file.
-3. Calls `outl_md::reconcile_md` which runs matching → diff → applies ops to the workspace → updates the sidecar.
+1. **Mark dirty + repaint (`App::save`).**
+   The commit boundary only records that the AST diverged from disk (`App::dirty_since`) and lets the next frame paint the result — no disk I/O.
+   This is what makes a burst of edits (`Esc o … Esc o …`) feel instant: the user never waits on a per-commit fsync.
+2. **Drain (`App::flush_pending_save` → `App::persist`).**
+   The heavy work runs when it won't stall input:
+   - renders the AST back to `.md` via `outl_md::render`,
+   - writes the `.md` file,
+   - calls `outl_md::reconcile_md` (matching → diff → applies ops to the workspace → updates the sidecar).
+
+The event loop drains the moment it goes idle (no keystroke waiting in the terminal buffer).
+`runtime::MAX_SAVE_DEFER` (600 ms) forces a flush even mid-burst so an unsaved edit can't linger longer than that, bounding crash loss.
+
+**Every path that reads persisted state flushes first**, so a reader never sees a stale `.md` / op log.
+Those paths are navigation (`load_current_no_autorun`), peer reload (`reload_workspace_from_disk`), quit (`Ctrl+C`, `q q`, overlay-driven exit), explicit `Ctrl+S`, `call:` re-run (`commit_insert`), and code-block exec (`run_current_block`).
+**If you add an action that reads the workspace or `.md` after an edit, call `flush_pending_save()` first** — otherwise it acts on pre-edit state.
+Regression tests for the invariant live at the bottom of `actions/lifecycle/persistence.rs`.
 
 This means concurrent `outl serve` is OK — both go through the same reconcile path; the sidecar `last_synced_hash` short-circuits no-ops.
 

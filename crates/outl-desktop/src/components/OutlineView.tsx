@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo } from "solid-js";
+import { For, Show, createEffect, createMemo, on } from "solid-js";
 
 import {
   createBlock,
@@ -29,7 +29,7 @@ import { journalSlugToDate } from "@outl/shared/journal";
 import { focusSubtree, visualRangeSet } from "@outl/shared/outline";
 import { NATIVE_TEMPLATE_PLUGIN_ID } from "../lib/slash-commands";
 import { playPluginViews } from "../lib/plugin-views";
-import { appState, setAppState } from "../lib/store";
+import { appState, setAppState, setOutline } from "../lib/store";
 import { BlockRow, type BlockCallbacks } from "./BlockRow";
 import { InlineBacklinks } from "./InlineBacklinks";
 
@@ -142,31 +142,45 @@ export function OutlineView() {
   });
 
   /**
-   * Lazily fetch backlinks once per page navigation. The open commands
-   * (`open_today` / `open_page` / `open_ref` / peer reload) now return an
-   * empty `backlinks` array — `backlinks_for_page` is an O(blocks) scan
-   * that used to block the first journal paint on a large workspace, so
-   * it moved off the page-open path. Keyed on `slug` (not `id`) because
-   * that's the argument the command takes, and it's the single place
-   * backlinks get populated on navigation: today/journal/page/openRef and
-   * peer-driven reloads all change the slug.
+   * Lazily fetch backlinks — but ONLY when the page slug changes
+   * (navigation), via `on(slug)`. It must NOT refetch on every mutation.
+   *
+   * `applyView` after a commit replaces `appState.page` with a fresh
+   * object carrying the *same* slug, which a bare `createEffect` reading
+   * `appState.page?.slug` re-runs anyway (the store tracks `page`). Each
+   * re-run hit `pageBacklinks`, and since a mutation invalidated the
+   * backend index, that rebuilt the whole index (reading every `.md`)
+   * on every keystroke-commit — the "Esc is slow" bug. Editing the
+   * current page almost never changes *its own* backlinks (backlinks are
+   * other pages pointing here), so refetching per edit is pure waste.
+   * `on(slug)` fires once per navigation; the peer-reload path refetches
+   * explicitly (`AppShell::refreshActivePage`) since it keeps the slug.
    */
-  createEffect(() => {
-    const slug = appState.page?.slug;
-    if (!slug) return;
-    pageBacklinks(slug)
-      .then((r) =>
-        setAppState({ backlinks: r.backlinks, backlinksOrder: r.backlinks_order }),
-      )
-      .catch(() => {});
-  });
+  createEffect(
+    on(
+      () => appState.page?.slug,
+      (slug) => {
+        if (!slug) return;
+        pageBacklinks(slug)
+          .then((r) =>
+            setAppState({
+              backlinks: r.backlinks,
+              backlinksOrder: r.backlinks_order,
+            }),
+          )
+          .catch(() => {});
+      },
+    ),
+  );
 
   function applyView(view: PageView) {
     setAppState({
       page: view.page,
-      outline: view.outline,
       parseWarnings: view.warnings ?? [],
     });
+    // Reconcile the outline (see `setOutline`): only the block that
+    // actually changed re-renders, not all N rows.
+    setOutline(view.outline);
     // Auto-run query blocks after page load / commit, then re-resolve
     // embeds with the updated outline.
     void runAutoRunBlocks(view.page.id)
@@ -175,9 +189,9 @@ export function OutlineView() {
           const updated = reply.view;
           setAppState({
             page: updated.page,
-            outline: updated.outline,
             parseWarnings: updated.warnings ?? [],
           });
+          setOutline(updated.outline);
           void resolvePageEmbeds(updated.outline);
         }
       })

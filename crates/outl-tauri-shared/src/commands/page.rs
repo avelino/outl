@@ -1,10 +1,11 @@
 //! Page / journal navigation command bodies.
 
 use outl_actions::{
-    find_by_slug, journal_slug, journal_title, list_pages, next_journal_date, open_journal,
-    open_or_create_by_name, open_or_create_by_ref, open_today, page_meta as page_meta_action,
-    previous_journal_date, remove_page_projection, search_persons as action_search_persons, today,
-    PageKind, PageMeta,
+    build_backlink_index_from_disk, find_by_slug, journal_slug, journal_title, list_pages,
+    next_journal_date, open_journal, open_or_create_by_name, open_or_create_by_ref, open_today,
+    page_meta as page_meta_action, previous_journal_date, remove_page_projection,
+    search_persons as action_search_persons, sort_backlinks, today, BacklinkIndex, PageKind,
+    PageMeta,
 };
 
 use outl_md::index::WorkspaceIndex;
@@ -16,35 +17,97 @@ use std::sync::Arc;
 use outl_core::workspace::Workspace;
 use parking_lot::Mutex;
 
-use crate::helpers::{
-    build_page_view, compute_backlinks, parse_date, parse_node_id, with_ws, with_ws_mut,
-};
+use crate::helpers::{build_page_view, parse_date, parse_node_id, with_ws, with_ws_mut};
 use crate::host::AppHost;
 use crate::state::{BacklinksReply, BlockHit, PageView, ERR_LOADING};
 
-/// Run the O(blocks) backlinks walk off the Tauri IPC/main thread.
+/// Resolve a page's backlinks off the Tauri IPC/main thread, from the
+/// pre-computed index (built lazily from the `.md` projection on disk).
 ///
-/// `compute_backlinks` materializes every block's text while scanning for
-/// references — on a large workspace (tens of thousands of blocks) that is
-/// seconds of CPU. Run synchronously in a `#[tauri::command]` it holds the
-/// IPC thread and iOS fires the scene-update watchdog (>10s → SIGKILL): the
-/// "journal paints but nothing is clickable, then the app dies" bug, whose
-/// crash backtrace is `page_backlinks → backlinks_for_page → block_text →
-/// materialize_text_from_log` on `com.apple.main-thread`. Offloading keeps
-/// the WebView responsive; the backlinks panel fills in a beat later.
+/// Three phases, none of which materialize the workspace: (1) a brief
+/// workspace lock to read the page list + this page's meta (`list_pages`
+/// reads page roots only, never block text); (2) an `O(blocks)` index
+/// rebuild **from disk** when the slot is stale, holding no lock and
+/// touching no `Workspace` — reading block text through
+/// `Workspace::block_text` here would force a lazy-boot vault (#179) to
+/// materialize the whole thing, the "opening the journal / pressing Esc
+/// freezes for seconds" bug (crash backtrace `page_backlinks →
+/// backlinks_for_page → block_text → materialize_text_from_log` on
+/// `com.apple.main-thread`); (3) an `O(refs)` lookup under a brief lock.
+/// Run off the IPC thread so the WebView stays responsive; the panel
+/// fills in a beat later.
 async fn compute_backlinks_offloaded(
     workspace: Arc<Mutex<Option<Workspace>>>,
+    index: Option<Arc<Mutex<Option<BacklinkIndex>>>>,
     root: PathBuf,
     slug: String,
 ) -> Result<BacklinksReply, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let guard = workspace.lock();
-        let ws = guard.as_ref().ok_or_else(|| ERR_LOADING.to_string())?;
-        let id = find_by_slug(ws, &slug).ok_or_else(|| format!("page not found: {slug}"))?;
-        compute_backlinks(ws, &root, id).map_err(|e| e.to_string())
+        // Phase 1: page list + this page's meta, under a BRIEF workspace
+        // lock. `list_pages` reads page roots only — it never materializes
+        // block text, so this doesn't trip the #179 freeze.
+        let (metas, meta) = {
+            let guard = workspace.lock();
+            let ws = guard.as_ref().ok_or_else(|| ERR_LOADING.to_string())?;
+            let id = find_by_slug(ws, &slug).ok_or_else(|| format!("page not found: {slug}"))?;
+            let meta = page_meta_action(ws, id).ok_or_else(|| format!("page not found: {slug}"))?;
+            (list_pages(ws), meta)
+        };
+        let backlinks_order = outl_config::load().display.backlinks_order;
+
+        // Phase 2: build the index FROM DISK when stale — reads the `.md`
+        // projection, touches no `Workspace`, holds NO lock. This is what
+        // keeps opening the journal / pressing Esc from freezing: the
+        // O(blocks) work never materializes the vault and never blocks an
+        // edit waiting on the workspace lock.
+        let index = match index {
+            Some(i) => i,
+            None => {
+                // Host without a cached slot: one-shot from-disk build.
+                let idx = build_backlink_index_from_disk(&metas, &root);
+                return finish_lookup(&workspace, &idx, &meta, backlinks_order);
+            }
+        };
+        if index.lock().is_none() {
+            let fresh = build_backlink_index_from_disk(&metas, &root);
+            let mut g = index.lock();
+            if g.is_none() {
+                *g = Some(fresh);
+            }
+        }
+
+        // Phase 3: O(refs) lookup under a brief lock (`for_page` reads the
+        // page's own `template::` property; no block-text scan).
+        let g = index.lock();
+        let idx = g.as_ref().expect("index just built");
+        finish_lookup(&workspace, idx, &meta, backlinks_order)
     })
     .await
     .map_err(|e| format!("backlinks task join: {e}"))?
+}
+
+/// Look a page up in `index` and shape the reply. GUI rows render only
+/// `source_block.tokens`, so each hit ships through `into_shallow` to
+/// keep the subtree off the IPC wire. Takes a brief workspace lock for
+/// `for_page` (which reads the page's `template::` property).
+fn finish_lookup(
+    workspace: &Arc<Mutex<Option<Workspace>>>,
+    index: &BacklinkIndex,
+    meta: &PageMeta,
+    backlinks_order: outl_config::BacklinksOrder,
+) -> Result<BacklinksReply, String> {
+    let guard = workspace.lock();
+    let ws = guard.as_ref().ok_or_else(|| ERR_LOADING.to_string())?;
+    let mut backlinks: Vec<_> = index
+        .for_page(ws, meta)
+        .into_iter()
+        .map(|b| b.into_shallow())
+        .collect();
+    sort_backlinks(&mut backlinks, backlinks_order.newest_first());
+    Ok(BacklinksReply {
+        backlinks,
+        backlinks_order,
+    })
 }
 
 pub fn list_all_pages<S: AppHost>(state: &S) -> Result<Vec<PageMeta>, String> {
@@ -260,7 +323,8 @@ pub fn open_page_by_slug<S: AppHost>(state: &S, slug: String) -> Result<PageView
 pub async fn page_backlinks<S: AppHost>(state: &S, slug: String) -> Result<BacklinksReply, String> {
     let root = state.storage_root()?;
     let workspace = state.workspace_arc();
-    compute_backlinks_offloaded(workspace, root, slug).await
+    let index = state.backlink_index();
+    compute_backlinks_offloaded(workspace, index, root, slug).await
 }
 
 /// Persist the backlinks-list direction (`[display] backlinks_order`,
@@ -287,7 +351,8 @@ pub async fn set_backlinks_order<S: AppHost>(
 
     let root = state.storage_root()?;
     let workspace = state.workspace_arc();
-    compute_backlinks_offloaded(workspace, root, slug).await
+    let index = state.backlink_index();
+    compute_backlinks_offloaded(workspace, index, root, slug).await
 }
 
 /// Resolve a batch of block ids to the distinct page/journal slugs they

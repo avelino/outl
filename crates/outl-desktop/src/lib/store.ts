@@ -8,7 +8,7 @@
  * because the chrome diverges; only pure helpers and DTOs go through
  * `@outl/shared`.
  */
-import { createStore } from "solid-js/store";
+import { createStore, reconcile } from "solid-js/store";
 
 import type {
   Backlink,
@@ -237,3 +237,19 @@ const [state, setState] = createStore<AppStateShape>({
 });
 
 export { state as appState, setState as setAppState };
+
+/**
+ * Update the outline by **reconciling** (keyed on block id), not
+ * replacing the array. Replacing it with a fresh array of new objects
+ * makes the `<For>` re-create every `<BlockRow>` (it keys by reference),
+ * so editing one block on a large page re-renders the whole page — the
+ * "commit is slow on a big page" cause. `reconcile` keeps unchanged
+ * blocks' identity so only what actually changed re-renders.
+ *
+ * Every path that swaps in a backend outline (commit, batch op, peer
+ * reload, navigation) MUST go through here, never `setAppState("outline", …)`
+ * with a raw array.
+ */
+export function setOutline(outline: BlockNode[]): void {
+  setState("outline", reconcile(outline, { key: "id" }));
+}

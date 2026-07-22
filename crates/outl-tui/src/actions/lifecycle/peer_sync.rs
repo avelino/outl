@@ -201,9 +201,10 @@ impl App {
         if reconciled > 0 {
             // New blocks in the workspace mean the workspace index
             // (page list, block refs, icons) is stale, as is the
-            // cached backlinks list for the current view (a newly
-            // reconciled file may mention the current slug).
-            self.invalidate_backlinks_cache();
+            // backlink index (a newly reconciled file may mention the
+            // current slug). Rebuild both off-thread so the reload
+            // doesn't stall on a full-workspace `.md` walk.
+            self.spawn_backlink_index_rebuild();
             self.spawn_index_rebuild();
         }
         true
@@ -274,6 +275,10 @@ impl App {
     /// in-flight AST would be lost. See [`Self::poll_jsonl_updates`]
     /// for the deferral logic and `commit_insert` for the drain.
     pub(crate) fn reload_workspace_from_disk(&mut self) {
+        // Persist any coalesced local edit before swapping the workspace
+        // out from under it — otherwise the reproject below would render
+        // the pre-edit `.md` and the local change would be lost.
+        self.flush_pending_save();
         let engine = outl_actions::SyncEngine::new(self.workspace_root.clone(), self.hlc.actor());
         // Resolve the focused page id *before* swapping the
         // workspace; the slug→id lookup needs a stable workspace.
@@ -287,8 +292,9 @@ impl App {
             (Err(_), _) => return,
         };
         self.workspace = fresh;
-        // Peer ops landed; any cached backlink list is stale.
-        self.invalidate_backlinks_cache();
+        // Peer ops landed; the backlink index is stale. Rebuild it
+        // off-thread so the reload stays snappy.
+        self.spawn_backlink_index_rebuild();
         self.load_current_no_autorun();
     }
 

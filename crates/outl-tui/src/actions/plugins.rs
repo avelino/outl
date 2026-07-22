@@ -373,7 +373,9 @@ impl App {
             tracing::warn!("re-projecting .md after plugin mutation failed: {e}");
         }
         self.refresh_page_list();
-        self.invalidate_backlinks_cache();
+        // A plugin can touch any page, so rebuild the backlink index
+        // off-thread rather than incrementally patching one slug.
+        self.spawn_backlink_index_rebuild();
         self.load_current();
     }
 }

@@ -3,7 +3,7 @@ import { For, createSignal, onMount, type JSX } from "solid-js";
 import { pluginRun, pluginToolbar } from "@outl/shared/api/commands";
 import type { PluginToolbarButton as ToolbarButtonEntry } from "@outl/shared/api/types";
 import { playPluginViews } from "../lib/plugin-views";
-import { appState, setAppState } from "../lib/store";
+import { appState, setAppState, setOutline } from "../lib/store";
 import { SyncIndicator } from "./SyncIndicator";
 
 /**
@@ -86,10 +86,8 @@ function PluginToolbarButton(props: { entry: ToolbarButtonEntry }) {
       for (const err of reply.errors)
         setAppState("lastError", `plugin: ${err}`);
       if (reply.view) {
-        setAppState({
-          page: reply.view.page,
-          outline: reply.view.outline,
-        });
+        setAppState({ page: reply.view.page });
+        setOutline(reply.view.outline);
       }
       playPluginViews(reply.views);
     } catch (e) {
