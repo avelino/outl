@@ -58,6 +58,7 @@ pub fn diff_to_ops(
         new_md_hash,
         old_blocks,
         &[],
+        &|_| None,
     )
 }
 
@@ -79,6 +80,10 @@ pub fn diff_to_ops(
 /// HLC clock, so we can safely re-emit on every reconcile pass
 /// (external `.md` edit, `outl-cli serve` watcher, peer ops change)
 /// without flooding the log.
+// Each argument is a distinct reconcile input (new AST, matches,
+// orphans, page id, hash, old sidecar, page props, current-position
+// lookup); bundling them into a struct would just move the noise.
+#[allow(clippy::too_many_arguments)]
 pub fn diff_to_ops_with_page_props(
     new_blocks: &[OutlineNode],
     matches: &[Match],
@@ -87,6 +92,13 @@ pub fn diff_to_ops_with_page_props(
     new_md_hash: &str,
     old_blocks: &[SidecarBlock],
     page_properties: &[(String, String)],
+    // Current fractional position of a node in the workspace tree, or
+    // `None` if it isn't there yet. Reusing the existing position for an
+    // unchanged block keeps the `Move` a no-op (same target), so a
+    // one-block edit doesn't churn every sibling's position and emit a
+    // pile of redundant, fsynced `Move` ops. Pass `|_| None` to always
+    // allocate fresh positions (the old behaviour; used by unit tests).
+    current_pos: &dyn Fn(NodeId) -> Option<Fractional>,
 ) -> DiffPlan {
     let flat = flatten(new_blocks);
     assert_eq!(
@@ -180,6 +192,7 @@ pub fn diff_to_ops_with_page_props(
         &mut parent_stack,
         &mut last_position_per_indent,
         &mut line_counter,
+        current_pos,
     );
 
     // Orphan moves: each goes to TRASH_ROOT at a fresh position.
@@ -227,6 +240,7 @@ fn walk(
     parent_stack: &mut Vec<NodeId>,
     last_position_per_indent: &mut Vec<Option<Fractional>>,
     line_counter: &mut usize,
+    current_pos: &dyn Fn(NodeId) -> Option<Fractional>,
 ) {
     // Ensure the stack has a slot for the current indent's position
     // bookkeeping.
@@ -245,10 +259,18 @@ fn walk(
         let line = *line_counter;
         *line_counter += 1;
 
-        // Allocate a fractional position strictly greater than the last
-        // sibling's. None on the left means "first child".
+        // Position, strictly greater than the previous sibling's. Prefer
+        // REUSING the node's current position: when the order hasn't
+        // changed the reused value still sorts after `left`, so the
+        // emitted `Move` is a no-op (same target) that the reconcile
+        // filters out — no churn. Only when the block is new, or its old
+        // position would break sort order (a real reorder), do we mint a
+        // fresh one between `left` and the next sibling.
         let left = last_position_per_indent[indent as usize + 1].clone();
-        let position = Fractional::between(left.as_ref(), None);
+        let position = match current_pos(id) {
+            Some(cur) if left.as_ref().is_none_or(|l| cur > *l) => cur,
+            _ => Fractional::between(left.as_ref(), None),
+        };
 
         // Always emit a Create. Idempotent if the block already exists.
         ops.push(Op::Create {
@@ -302,6 +324,7 @@ fn walk(
             parent_stack,
             last_position_per_indent,
             line_counter,
+            current_pos,
         );
         parent_stack.pop();
     }
@@ -506,6 +529,7 @@ mod tests {
             &file_hash(md),
             &[],
             &ast.properties,
+            &|_| None,
         );
 
         let prop_ops: Vec<(&str, &str)> = plan
@@ -559,6 +583,7 @@ mod tests {
             &file_hash(md),
             &[],
             &ast.properties,
+            &|_| None,
         );
 
         let prop_keys: Vec<&str> = plan

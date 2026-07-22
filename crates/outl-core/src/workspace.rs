@@ -367,6 +367,49 @@ impl Workspace {
         self.content.cache_doc(node, updates.into_iter());
     }
 
+    /// Whether applying `op` would leave the materialized tree exactly
+    /// as it is — a redundant `Create` / `Move` / `SetProp` for a node
+    /// that already has that parent+position / property value.
+    ///
+    /// The `.md`-reconcile diff defensively re-emits `Create` + `Move`
+    /// (+ a `SetProp` per property) for **every** block on **every**
+    /// commit. Each is idempotent on the tree but still costs one
+    /// fsynced append, so a one-block edit on an 11-block page turned
+    /// into 23 persisted ops (≈2 per block) — the slow commit, and an op
+    /// log that grew by the whole page on every keystroke (the slow
+    /// boot). Callers filter these out so only ops that actually change
+    /// something get logged. `Edit` is never a no-op here (its Yrs delta
+    /// is already empty when text is unchanged); a `Move` whose target
+    /// differs is never a no-op, so cycle-forming moves are still logged
+    /// (invariant #5).
+    pub fn op_is_noop(&self, op: &Op) -> bool {
+        match op {
+            Op::Create {
+                node,
+                parent,
+                position,
+            } => {
+                self.tree.contains(*node)
+                    && self.tree.parent(*node) == Some(*parent)
+                    && self.tree.position(*node) == Some(position)
+            }
+            Op::Move {
+                node,
+                new_parent,
+                position,
+                ..
+            } => {
+                self.tree.contains(*node)
+                    && self.tree.parent(*node) == Some(*new_parent)
+                    && self.tree.position(*node) == Some(position)
+            }
+            Op::SetProp {
+                node, key, value, ..
+            } => self.tree.property(*node, key) == value.as_ref(),
+            _ => false,
+        }
+    }
+
     /// Apply an op locally and persist it.
     ///
     /// The op is appended to the in-memory log, dispatched to the Yrs
@@ -628,10 +671,16 @@ impl Workspace {
         self.content.live_doc_count()
     }
 
-    /// Number of block strings currently materialized. Test-only window
-    /// into the lazy full-replay boot path (#179).
-    #[cfg(test)]
-    fn resident_text_count(&self) -> usize {
+    /// Number of block strings currently materialized in the content
+    /// cache.
+    ///
+    /// A window into the lazy full-replay boot path (#179): after a
+    /// full-replay boot this is ~0 and grows only as blocks are read via
+    /// [`Self::block_text`]. Downstream crates assert on it to prove a
+    /// read path (e.g. the backlinks index build) does **not** force the
+    /// whole workspace to materialize — the regression that froze the
+    /// app on open. Cheap (a map length); safe to call in production.
+    pub fn resident_text_count(&self) -> usize {
         self.content.resident_text_count()
     }
 

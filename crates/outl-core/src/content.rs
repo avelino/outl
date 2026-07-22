@@ -313,10 +313,11 @@ impl ContentStore {
         self.cache.docs.len()
     }
 
-    /// Number of block strings currently materialized. Test-only window
-    /// into the lazy read path (#179): after a full-replay boot this is
-    /// `0` until the first `block_text` read.
-    #[cfg(test)]
+    /// Number of block strings currently materialized. Window into the
+    /// lazy read path (#179): after a full-replay boot this is `0` until
+    /// the first `block_text` read. Surfaced through
+    /// `Workspace::resident_text_count` so downstream crates can assert a
+    /// read path doesn't force the whole workspace to materialize.
     pub(crate) fn resident_text_count(&self) -> usize {
         self.text.borrow().len()
     }
