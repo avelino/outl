@@ -105,23 +105,6 @@ pub fn flat_index_for_block(outline: &[OutlineNode], target: NodeId) -> Option<u
 pub fn project_outline_node(workspace: &Workspace, node: NodeId) -> OutlineNode {
     project_node(workspace, node, None)
 }
-
-/// Same shape as [`project_outline_node`], but resolves children through
-/// a pre-built `parent -> children` index instead of [`children_of`].
-///
-/// [`children_of`] rescans **every** node in the workspace on each call,
-/// so projecting a subtree with it is `O(subtree × total-nodes)`. The
-/// backlinks builder materialises hundreds of source blocks per pass and
-/// builds the index once (see [`crate::backlinks`]), turning that into
-/// `O(subtree)`. A parent missing from `index` means "no children" — the
-/// same result [`children_of`] would give for a leaf.
-pub(crate) fn project_outline_node_indexed(
-    workspace: &Workspace,
-    node: NodeId,
-    index: &ChildrenIndex,
-) -> OutlineNode {
-    project_node(workspace, node, Some(index))
-}
 use outl_md::parse::OutlineNode as ParsedOutlineNode;
 use outl_md::sidecar::SidecarBlock;
 use serde::Serialize;
@@ -244,6 +227,37 @@ fn project_children(
 /// tokens, and its subtree. Shared core behind [`project_outline`],
 /// [`project_outline_node`], and [`project_outline_node_indexed`]; the
 /// only difference between them is how children are resolved (`index`).
+/// Project a single block as a **leaf** — body, todo, properties,
+/// tokens — with an **empty** `children`.
+///
+/// The backlinks index uses this instead of [`project_outline_node`] so
+/// building the index never descends (and tokenizes, and reads
+/// properties of) every descendant of every referencing block in the
+/// workspace. That full-subtree materialization, run while holding the
+/// workspace lock, is what froze input on a large workspace. Clients
+/// render a backlink row from the leaf's `tokens`; nothing on the
+/// backlinks path needs the subtree.
+pub(crate) fn project_outline_node_shallow(workspace: &Workspace, node: NodeId) -> OutlineNode {
+    let raw = workspace.block_text(node).unwrap_or_default();
+    let (todo, body) = split_todo(&raw);
+    let mut properties: Vec<(String, String)> = workspace
+        .tree()
+        .properties_of(node)
+        .map(|(k, v)| (k.to_string(), prop_value_to_string(v)))
+        .collect();
+    properties.sort_by(|a, b| a.0.cmp(&b.0));
+    let tokens = outl_md::tokenize_owned(body);
+    OutlineNode {
+        id: node.to_string(),
+        text: body.to_string(),
+        todo,
+        collapsed: workspace.tree().is_collapsed(node),
+        properties,
+        tokens,
+        children: Vec::new(),
+    }
+}
+
 fn project_node(workspace: &Workspace, node: NodeId, index: Option<&ChildrenIndex>) -> OutlineNode {
     let raw = workspace.block_text(node).unwrap_or_default();
     let (todo, body) = split_todo(&raw);

@@ -15,18 +15,15 @@
 //! backlinks cache — that earlier duplication was the bug that made
 //! self-references invisible on one surface but not the other.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use outl_core::fractional::Fractional;
-use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
 use serde::{Serialize, Serializer};
 
-use crate::journal::page_md_path;
-use crate::outline::{project_outline_node_indexed, ChildrenIndex, OutlineNode};
-use crate::page::{page_meta, PageMeta};
-use crate::todo::{split_todo, TodoState};
+use crate::backlinks_index::build_backlink_index;
+use crate::outline::OutlineNode;
+use crate::page::PageMeta;
+use crate::todo::TodoState;
 
 /// One backlink reference from a source block to a target page.
 ///
@@ -89,6 +86,22 @@ pub struct Backlink {
     pub source_path: Option<PathBuf>,
 }
 
+impl Backlink {
+    /// Drop the source block's subtree (children), keeping the leaf
+    /// itself (text, tokens, todo, properties) plus `ancestors`.
+    ///
+    /// The GUI clients render only `source_block.tokens` for a backlink
+    /// row, so shipping the whole descendant subtree over the IPC wire
+    /// is pure waste. The TUI, which renders the subtree as a
+    /// mini-outline, keeps the full form (it reads the index in-process,
+    /// no serialization). Apply this on the GUI `page_backlinks` path
+    /// only.
+    pub fn into_shallow(mut self) -> Self {
+        self.source_block.children.clear();
+        self
+    }
+}
+
 /// One ancestor step in a backlink's breadcrumb.
 ///
 /// Plain text only (no inline tokens): the breadcrumb is dimmed
@@ -128,262 +141,30 @@ where
 /// workspace root directory; it's needed so each backlink can carry
 /// its `source_path` (the `.md` of the page the source block lives
 /// in).
+///
+/// This builds a one-shot [`BacklinkIndex`][crate::backlinks_index::BacklinkIndex]
+/// and looks the target up in it — fine for a one-off caller (CLI,
+/// tests). A long-lived client that reads backlinks repeatedly should
+/// keep an index around ([`build_backlink_index`]) and call
+/// [`BacklinkIndex::for_target`][crate::backlinks_index::BacklinkIndex::for_target]
+/// so it pays the `O(blocks)` build once, off the input path, instead
+/// of per lookup.
 pub fn backlinks_for_target(workspace: &Workspace, root: &Path, target: &str) -> Vec<Backlink> {
-    let index = build_children_index(workspace);
-    collect_backlinks(workspace, root, &TargetMatcher::refs(target), &index)
+    build_backlink_index(workspace, root).for_target(target)
 }
 
-/// Build a `parent -> children (in fractional order)` map once per
-/// backlinks pass (one scan + per-parent sort; `O(n log n)` worst case).
+/// Convenience: backlinks against either the page's slug or its title
+/// (plus the `@`-alias forms for a person page and the template
+/// channels for a template page).
 ///
-/// The walk visits every block in the workspace and, for each match,
-/// materialises its subtree. Both steps used to go through
-/// [`children_of`], which **rescans every node** on each call (`Tree`
-/// stores only `node -> (parent, position)`, with no child index) —
-/// making the whole pass `O(n²)`. Building this map once and threading
-/// it through the walk + [`project_outline_node_indexed`] eliminates the
-/// `O(n²)` rescans (the remaining cost is one full walk + sorting).
-/// Rebuilt per `backlinks_for_page` call, so it never goes stale: it is a
-/// scratch accelerator, not cached state.
-fn build_children_index(workspace: &Workspace) -> ChildrenIndex {
-    let mut grouped: HashMap<NodeId, Vec<(NodeId, Fractional)>> = HashMap::new();
-    for (id, parent, pos) in workspace.tree().iter_nodes() {
-        grouped.entry(parent).or_default().push((id, pos.clone()));
-    }
-    grouped
-        .into_iter()
-        .map(|(parent, mut kids)| {
-            kids.sort_by(|a, b| a.1.cmp(&b.1));
-            (parent, kids.into_iter().map(|(id, _)| id).collect())
-        })
-        .collect()
-}
-
-/// Walk every page's blocks and collect the ones `matcher` accepts.
-/// `index` is the shared `parent -> children` map (see
-/// [`build_children_index`]); pages are the children of
-/// [`NodeId::root`].
-fn collect_backlinks(
-    workspace: &Workspace,
-    root: &Path,
-    matcher: &TargetMatcher,
-    index: &ChildrenIndex,
-) -> Vec<Backlink> {
-    let mut out: Vec<Backlink> = Vec::new();
-    let Some(pages) = index.get(&NodeId::root()) else {
-        return out;
-    };
-    for &page_id in pages {
-        let Some(meta) = page_meta(workspace, page_id) else {
-            continue;
-        };
-        let source_path = page_md_path(root, &meta);
-        let mut path: Vec<usize> = Vec::new();
-        let mut ancestors: Vec<BacklinkCrumb> = Vec::new();
-        walk_inside_page(
-            workspace,
-            page_id,
-            &meta,
-            &source_path,
-            &mut path,
-            &mut ancestors,
-            matcher,
-            &mut out,
-            index,
-        );
-    }
-    out
-}
-
-/// Pre-computed match state for one backlink target.
-///
-/// A block counts as a backlink when it matches any enabled channel:
-/// the literal `[[target]]` needle, a `#tag` whose slug form equals
-/// the target's, a ` ```call:<name> ` fence (callable-template render
-/// site), or a `from-template:: <slug>` property (structural-template
-/// instance). The last two are how a template page surfaces where it
-/// was used without the user hand-writing a `[[link]]`.
-struct TargetMatcher {
-    /// `[[target]]` literal; empty disables the ref channel.
-    needle: String,
-    /// Slug form for `#tag` comparison; `None` disables the tag channel.
-    tag_slug: Option<String>,
-    /// Template invocation name for `call:<name>` fences; `None`
-    /// disables the callable channel.
-    call_name: Option<String>,
-    /// Page slug matched against `from-template::`; `None` disables the
-    /// structural-instance channel.
-    provenance_slug: Option<String>,
-}
-
-impl TargetMatcher {
-    /// The ordinary text-reference matcher: `[[target]]` + `#tag`.
-    fn refs(target: &str) -> Self {
-        Self {
-            needle: format!("[[{target}]]"),
-            tag_slug: Some(outl_md::slug::slugify(target)),
-            call_name: None,
-            provenance_slug: None,
-        }
-    }
-
-    /// The template-provenance matcher for a template page: a
-    /// `call:<name>` fence or a `from-template:: <slug>` instance.
-    fn template(slug: &str, name: &str) -> Self {
-        Self {
-            needle: String::new(),
-            tag_slug: None,
-            call_name: Some(name.to_string()),
-            provenance_slug: Some(slug.to_string()),
-        }
-    }
-
-    /// Does this block mention the target on any enabled channel?
-    /// `[[ref]]` is a substring probe (cheap, exact thanks to the `]]`
-    /// terminator); `#tag` goes through the real inline tokenizer so
-    /// tags inside code spans don't count and `#avelino-foo` doesn't
-    /// false-match `avelino`.
-    fn matches(&self, workspace: &Workspace, block_id: NodeId, text: &str) -> bool {
-        if !self.needle.is_empty() && text.contains(&self.needle) {
-            return true;
-        }
-        if let Some(name) = &self.call_name {
-            if crate::template::call_target_name(text).as_deref() == Some(name.as_str()) {
-                return true;
-            }
-        }
-        if let Some(slug) = &self.provenance_slug {
-            let from = crate::page::read_text_prop(
-                workspace,
-                block_id,
-                crate::template::FROM_TEMPLATE_KEY,
-            );
-            if from.as_deref() == Some(slug.as_str()) {
-                return true;
-            }
-        }
-        if let Some(want) = &self.tag_slug {
-            if text.contains('#') {
-                return outl_md::inline::tokenize(text).iter().any(|tok| match tok {
-                    outl_md::inline::InlineTok::Tag { name } => {
-                        outl_md::slug::slugify(name) == *want
-                    }
-                    _ => false,
-                });
-            }
-        }
-        false
-    }
-}
-
-/// The template invocation name of `meta`'s page, when it is a template
-/// (has a non-empty `template::` property).
-fn template_name_of(workspace: &Workspace, meta: &PageMeta) -> Option<String> {
-    let id = crate::page::find_by_slug(workspace, &meta.slug)?;
-    let name = crate::page::read_text_prop(workspace, id, crate::template::TEMPLATE_KEY)?;
-    (!name.trim().is_empty()).then_some(name)
-}
-
-/// Convenience: backlinks against either the page's slug or its title.
-///
-/// When the page is a person (`page_type == Some("person")`), we also
-/// scan for the **`@`-prefixed** alias forms (`@<slug>` and
-/// `@<title>`). Person pages don't carry the `@` in their slug or
-/// title — the `@` is purely the mention affordance produced by the
-/// `@` autocomplete (`[[@avelino]]` resolves to the page `avelino`).
-/// Without scanning the alias, every mention of `@avelino` would fall
-/// off the person's backlinks panel.
+/// Like [`backlinks_for_target`], this builds a one-shot index and
+/// looks the page up. The single source of truth for *what counts as a
+/// mention* lives in [`crate::backlinks_index`]; this is just the
+/// build-once-then-lookup convenience. A repeated reader should hold a
+/// [`BacklinkIndex`][crate::backlinks_index::BacklinkIndex] and call
+/// [`for_page`][crate::backlinks_index::BacklinkIndex::for_page].
 pub fn backlinks_for_page(workspace: &Workspace, root: &Path, meta: &PageMeta) -> Vec<Backlink> {
-    // Build the `parent -> children` index once and reuse it across every
-    // channel below, so a template page (up to four scans) still walks the
-    // tree a single logical time instead of rebuilding the accelerator per
-    // target.
-    let index = build_children_index(workspace);
-    let mut acc: Vec<Backlink> = Vec::new();
-    let mut add = |matcher: TargetMatcher| {
-        for link in collect_backlinks(workspace, root, &matcher, &index) {
-            if !acc.iter().any(|l| l.block_id == link.block_id) {
-                acc.push(link);
-            }
-        }
-    };
-
-    add(TargetMatcher::refs(&meta.slug));
-    if meta.title != meta.slug {
-        add(TargetMatcher::refs(&meta.title));
-    }
-    if meta.page_type.as_deref() == Some(crate::person::PERSON_TYPE) {
-        add(TargetMatcher::refs(&format!("@{}", meta.slug)));
-        if meta.title != meta.slug {
-            add(TargetMatcher::refs(&format!("@{}", meta.title)));
-        }
-    }
-    // A template page also surfaces where it was rendered (`call:<name>`
-    // fences) or instantiated (`from-template:: <slug>`) — neither is a
-    // `[[ref]]`, so the scans above miss them.
-    if let Some(name) = template_name_of(workspace, meta) {
-        add(TargetMatcher::template(&meta.slug, &name));
-    }
-    acc
-}
-
-/// Recursive helper: descend into `parent`'s children, tracking the
-/// DFS path. Every block whose text matches `matcher` becomes a
-/// [`Backlink`] in `out`.
-#[allow(clippy::too_many_arguments)]
-fn walk_inside_page(
-    workspace: &Workspace,
-    parent: NodeId,
-    meta: &PageMeta,
-    source_path: &Path,
-    path: &mut Vec<usize>,
-    ancestors: &mut Vec<BacklinkCrumb>,
-    matcher: &TargetMatcher,
-    out: &mut Vec<Backlink>,
-    index: &ChildrenIndex,
-) {
-    let Some(children) = index.get(&parent) else {
-        return;
-    };
-    for (idx, child_id) in children.iter().copied().enumerate() {
-        path.push(idx);
-        let text = workspace.block_text(child_id).unwrap_or_default();
-        let (todo, body) = split_todo(&text);
-        if matcher.matches(workspace, child_id, &text) {
-            let source_block = project_outline_node_indexed(workspace, child_id, index);
-            out.push(Backlink {
-                block_id: child_id.to_string(),
-                block_text: body.to_string(),
-                todo,
-                source_page: Some(meta.clone()),
-                source_block,
-                source_block_path: path.clone(),
-                // `ancestors` holds the chain down to `parent` — i.e.
-                // exactly this block's ancestors, excluding the block
-                // itself (pushed only before recursing below).
-                ancestors: ancestors.clone(),
-                source_path: Some(source_path.to_path_buf()),
-            });
-        }
-        // Descend: this block becomes an ancestor of its descendants.
-        ancestors.push(BacklinkCrumb {
-            id: child_id.to_string(),
-            text: body.to_string(),
-        });
-        walk_inside_page(
-            workspace,
-            child_id,
-            meta,
-            source_path,
-            path,
-            ancestors,
-            matcher,
-            out,
-            index,
-        );
-        ancestors.pop();
-        path.pop();
-    }
+    build_backlink_index(workspace, root).for_page(workspace, meta)
 }
 
 /// Extract every `[[ref]]` target out of a block's text. An
@@ -432,6 +213,7 @@ pub fn extract_refs(text: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::block::{append_block, edit_text};
+    use crate::page::page_meta;
     use crate::page::{find_by_slug, open_journal, open_or_create, PageKind};
     use chrono::NaiveDate;
     use outl_core::hlc::HlcGenerator;
@@ -801,11 +583,12 @@ mod tests {
     }
 
     #[test]
-    fn backlink_carries_source_block_subtree_and_path() {
-        // The TUI renders backlinks as a mini-outline: the source
-        // block plus its children, with the DFS path so the cursor
-        // can land on a specific descendant. The struct must carry
-        // both, ready-to-render.
+    fn backlink_carries_shallow_source_block_and_path() {
+        // A backlink carries the referencing block as a SHALLOW leaf
+        // (text + tokens + path), NOT its subtree. Materializing every
+        // referencing block's children across the workspace — under the
+        // workspace lock — is what froze input, so the index stops at
+        // the leaf. Clients render the row from `source_block.tokens`.
         let (mut w, hlc) = ws();
         let avelino = open_or_create(&mut w, &hlc, "avelino", "Avelino", PageKind::Page).unwrap();
         let _ = avelino;
@@ -826,12 +609,13 @@ mod tests {
         // child of `day` (index 1, after `warmup block` at index 0).
         assert_eq!(bl.source_block_path, vec![1]);
 
-        // Source block subtree mirrors what the outline panel would
-        // show on that page.
+        // The leaf itself, without its subtree.
         assert_eq!(bl.source_block.text, "[[avelino]] led the project");
-        assert_eq!(bl.source_block.children.len(), 2);
-        assert_eq!(bl.source_block.children[0].text, "milestone A");
-        assert_eq!(bl.source_block.children[1].text, "milestone B");
+        assert!(
+            bl.source_block.children.is_empty(),
+            "backlink leaf must be shallow (no subtree), got {:?}",
+            bl.source_block.children
+        );
     }
 
     #[test]
