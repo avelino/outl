@@ -10,7 +10,7 @@ use std::str::FromStr;
 
 use chrono::NaiveDate;
 use outl_actions::{
-    apply_page_md_with_sidecar, backlinks_for_page, date_from_slug, page_meta as page_meta_action,
+    apply_page_md_with_sidecar, date_from_slug, page_meta as page_meta_action,
     read_page_outline_with_workspace, render_page_md, ActionError, PageOutline,
 };
 use outl_core::id::NodeId;
@@ -100,28 +100,6 @@ pub fn build_page_view(
     })
 }
 
-/// Compute a page's backlinks, sorted per `[display] backlinks_order`.
-///
-/// The lazy counterpart to [`build_page_view`]: the `page_backlinks`
-/// command calls this off the first-paint path so the O(blocks) scan
-/// never blocks the journal appearing. `set_backlinks_order` reuses it to
-/// return the re-sorted list after flipping the preference.
-pub fn compute_backlinks(
-    workspace: &Workspace,
-    storage_root: &Path,
-    page_id: NodeId,
-) -> Result<crate::state::BacklinksReply, ActionError> {
-    let meta = page_meta_action(workspace, page_id)
-        .ok_or_else(|| ActionError::NotInTree(page_id.to_string()))?;
-    let mut backlinks = backlinks_for_page(workspace, storage_root, &meta);
-    let backlinks_order = outl_config::load().display.backlinks_order;
-    outl_actions::sort_backlinks(&mut backlinks, backlinks_order.newest_first());
-    Ok(crate::state::BacklinksReply {
-        backlinks,
-        backlinks_order,
-    })
-}
-
 /// Apply a workspace mutation `f` and project the result back to
 /// `.md` + sidecar.
 ///
@@ -168,10 +146,25 @@ where
         if let Err(e) = apply_page_md_with_sidecar(ws, &root, page_id) {
             warn!("page md+sidecar sync failed: {e}");
         }
+        // The mutation changed the tree, so the cached backlinks index is
+        // stale. Drop it here (still under the workspace lock, so it
+        // serializes with the rebuild `page_backlinks` does); the next
+        // backlinks read rebuilds it off the IPC thread.
+        invalidate_backlink_index(state);
         announce_after_commit(state, ws, page_id);
         let view = build_page_view(ws, &root, page_id).map_err(|e| e.to_string())?;
         Ok((value, view))
     })
+}
+
+/// Drop the host's cached backlinks index so the next `page_backlinks`
+/// rebuilds it. Call after any change that can alter backlinks — a local
+/// mutation (via [`finish_in_page_with`]) or a peer reload. No-op when
+/// the host doesn't cache one ([`AppHost::backlink_index`] is `None`).
+pub fn invalidate_backlink_index<S: AppHost>(state: &S) {
+    if let Some(index) = state.backlink_index() {
+        *index.lock() = None;
+    }
 }
 
 /// Post-commit hook: tell connected peers this device just produced new

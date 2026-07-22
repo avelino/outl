@@ -16,6 +16,19 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Performance
 
+- **The TUI opens instantly and `Esc`/commit is snappy again on a large workspace.**
+  On a ~2800-page vault, opening the journal and leaving edit mode stalled for over a second each.
+  Two separate costs were behind it.
+  First, **every commit rewrote the whole page's op log**: the diff defensively re-emitted `Create` + `Move` for every block and allocated fresh fractional positions each time, so every `Move` looked like a real reorder — an 11-block page fsynced 23 ops per keystroke-commit (slow `Esc`) and the log grew by the whole page every edit (slow boot).
+  The diff now reuses each block's current position when its order is unchanged and filters ops that are already no-ops against the tree, so a one-block edit emits **one** op instead of 23 (measured 114 ms → 8.6 ms).
+  Second, the **backlink index was built inline on the event loop** — reading all 2800 `.md` files (~1.75 s) on the first render and again on every whole-workspace change, which is what froze the open.
+  It now builds on a worker thread (mirroring the existing workspace-index rebuild): the journal paints immediately and the "Linked from" panel fills in a beat later; a local edit patches just the current page's entries, and only whole-workspace changes (peer sync, plugins, page delete, cross-page edits) re-spawn the background build.
+
+- **The TUI commit is now coalesced, so a burst of edits never blocks input.**
+  Leaving edit mode used to persist synchronously — render `.md` + reconcile + fsync, tens of milliseconds — before the next keystroke could land, so typing `Esc o … Esc o …` stuttered.
+  Now a commit boundary only marks the page dirty and repaints; the actual `render → write → reconcile_md → fsync` drains the instant the event loop goes idle (no keystroke waiting), so edits in a burst coalesce into one persist when the user pauses.
+  A hard cap (600 ms) forces a flush even mid-burst so an unsaved edit can't linger, and every path that reads persisted state (navigation, peer reload, quit, `Ctrl+S`, `call:` re-run, code-block exec) flushes first — so nothing ever reads a stale `.md` or op log, and a quit never drops the last edit.
+
 - **Opening today's journal is instant again on the desktop and mobile apps, even on a large workspace.**
   A ~66k-block / 211k-op workspace took seconds to paint the journal on first open (desktop noticeably, mobile much worse); the TUI stayed fast.
   The TUI was the clue: all three clients share the same op-log boot + snapshot, so the boot itself was fine — the GUI clients were paying for something the TUI does lazily.

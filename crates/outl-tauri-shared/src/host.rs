@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use outl_actions::{HistoryStacks, SyncTransport};
+use outl_actions::{BacklinkIndex, HistoryStacks, SyncTransport};
 use outl_core::hlc::HlcGenerator;
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
@@ -26,11 +26,10 @@ pub trait AppHost: Send + Sync {
 
     /// A cloneable handle to the same workspace slot, so a heavy read can
     /// be moved onto a blocking pool thread instead of running on the
-    /// Tauri IPC/main thread. The O(blocks) backlinks walk
-    /// (`compute_backlinks`, which materializes every block's text) blocks
-    /// the main thread long enough to trip the iOS scene-update watchdog on
-    /// a large workspace; offloading it needs an owned `Arc`, not the
-    /// borrow `workspace()` returns.
+    /// Tauri IPC/main thread. The backlinks path (`page_backlinks`) needs
+    /// an owned `Arc` to take a brief lock off the IPC thread for the page
+    /// list + lookup; the `O(blocks)` index rebuild itself runs from disk
+    /// with no lock at all (see `commands::page::compute_backlinks_offloaded`).
     fn workspace_arc(&self) -> Arc<Mutex<Option<Workspace>>>;
 
     /// Per-device HLC generator (actors identify devices, not workspaces).
@@ -55,6 +54,19 @@ pub trait AppHost: Send + Sync {
     /// [`crate::helpers::finish_in_page_with`] entirely — no per-mutation
     /// render is paid on clients without undo.
     fn history(&self) -> Option<&Mutex<HashMap<NodeId, HistoryStacks<String>>>> {
+        None
+    }
+
+    /// Pre-computed backlinks index slot, when the client caches one.
+    ///
+    /// `Some` lets `page_backlinks` serve a page's backlinks as an
+    /// `O(refs)` lookup and rebuild the `O(blocks)` index only when it's
+    /// stale (`None` inside the slot), instead of re-scanning the whole
+    /// workspace on every navigation. `finish_in_page` invalidates it
+    /// after a mutation. The default `None` keeps the pre-index
+    /// behaviour (scan per `page_backlinks` call) for any host that
+    /// hasn't wired the slot.
+    fn backlink_index(&self) -> Option<Arc<Mutex<Option<BacklinkIndex>>>> {
         None
     }
 }

@@ -5,7 +5,7 @@ import { MarkdownInline } from "@outl/shared/markdown";
 import { sameCrumbTrail } from "@outl/shared/outline";
 import type { Backlink } from "@outl/shared/api/types";
 
-import { appState, setAppState } from "../lib/store";
+import { appState, setAppState, setOutline } from "../lib/store";
 
 /**
  * Inline backlinks section — rendered **below** the outline, not
@@ -42,10 +42,8 @@ export function InlineBacklinks() {
       const view = await openRef(target);
       // Backlinks refetch via OutlineView's per-slug effect once the
       // new page's outline lands; the view no longer carries them.
-      setAppState({
-        page: view.page,
-        outline: view.outline,
-      });
+      setAppState({ page: view.page });
+      setOutline(view.outline);
       // Position cursor on the source block (the one we just came
       // from). Reset backlink cursor so j/k keep working in the
       // freshly-opened outline.
@@ -77,10 +75,8 @@ export function InlineBacklinks() {
     try {
       const view = await openRef(sourceSlug);
       // Backlinks refetch via OutlineView's per-slug effect.
-      setAppState({
-        page: view.page,
-        outline: view.outline,
-      });
+      setAppState({ page: view.page });
+      setOutline(view.outline);
       setAppState("selectedBacklinkBlockId", null);
     } catch (e) {
       setAppState("lastError", e instanceof Error ? e.message : String(e));

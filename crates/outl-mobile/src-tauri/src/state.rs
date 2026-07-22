@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use outl_actions::SyncTransport;
+use outl_actions::{BacklinkIndex, SyncTransport};
 use outl_core::hlc::HlcGenerator;
 use outl_core::workspace::Workspace;
 use outl_exec::RuntimeRegistry;
@@ -55,6 +55,12 @@ pub(crate) struct AppState {
     /// force-sync / announce paths, cloned by the pairing commands, and
     /// shut down gracefully in `Drop`.
     pub(crate) iroh: Option<IrohSyncTransport>,
+    /// Pre-computed backlinks index over the whole workspace. `None`
+    /// while stale — `finish_in_page` clears it after a mutation and the
+    /// peer reload clears it too, so the next `page_backlinks` rebuilds
+    /// it (off the IPC thread) and every later navigation is an
+    /// `O(refs)` lookup instead of a full `O(blocks)` re-scan.
+    pub(crate) backlink_index: Arc<Mutex<Option<BacklinkIndex>>>,
 }
 
 impl Drop for AppState {
@@ -100,5 +106,9 @@ impl AppHost for AppState {
 
     fn exec_registry(&self) -> Arc<RuntimeRegistry> {
         self.registry.clone()
+    }
+
+    fn backlink_index(&self) -> Option<Arc<Mutex<Option<BacklinkIndex>>>> {
+        Some(self.backlink_index.clone())
     }
 }

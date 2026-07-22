@@ -270,7 +270,9 @@ impl App {
         // the deleted row on the next render. Spawning (not sync)
         // keeps the event loop responsive on big workspaces.
         self.spawn_index_rebuild();
-        self.invalidate_backlinks_cache();
+        // Deleting a page drops it from every other page's backlinks —
+        // rebuild the index off-thread, same as the workspace index.
+        self.spawn_backlink_index_rebuild();
 
         if is_current {
             // Never leave the user staring at a deleted page — jump

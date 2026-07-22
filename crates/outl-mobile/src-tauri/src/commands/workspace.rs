@@ -41,6 +41,7 @@ pub(crate) async fn reload_workspace(state: State<'_, AppState>) -> Result<(), S
     let storage_root = state.storage_root.clone();
     let hlc = state.hlc.clone();
     let workspace = state.workspace.clone();
+    let backlink_index = state.backlink_index.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let engine = outl_actions::SyncEngine::new(storage_root, hlc.actor());
         let mut fresh = engine
@@ -63,6 +64,9 @@ pub(crate) async fn reload_workspace(state: State<'_, AppState>) -> Result<(), S
         let today_id = open_today(&mut fresh, &hlc).map_err(|e| e.to_string())?;
         let _ = engine.reproject_page(&fresh, today_id);
         *workspace.lock() = Some(fresh);
+        // Peer ops replaced the workspace, so the cached backlinks index
+        // is stale — drop it; the next `page_backlinks` rebuilds it.
+        *backlink_index.lock() = None;
         Ok::<(), String>(())
     })
     .await

@@ -2,10 +2,10 @@
 //! state from disk: parse the `.md`, rehydrate the sidecar's stable
 //! ids, refresh the page list, push the path through the recent-LRU.
 //!
-//! Loading also clears the caches that depend on the open view —
-//! `backlinks_cache` (different slug owns a different list) and the
-//! focused `Focus` (a stale `Focus::Backlink` would point at the
-//! previous page's backlinks list).
+//! Loading also resets the focused `Focus` (a stale `Focus::Backlink`
+//! would point at the previous page's backlinks list). The backlink
+//! index itself is whole-workspace, not per-view, so a plain view
+//! switch does **not** touch it — it's keyed by slug on read.
 
 use crate::outline_ops::flat_count;
 use crate::state::{App, Focus};
@@ -80,9 +80,18 @@ impl App {
     /// when something stamps a fresh hash but the hash doesn't stick
     /// for some reason).
     pub(crate) fn load_current_no_autorun(&mut self) {
-        // Switching views invalidates the cached backlinks: the new
-        // slug owns a different list.
-        self.invalidate_backlinks_cache();
+        // Reparsing from disk would clobber a coalesced edit that only
+        // lives in the in-memory AST, so persist it first. Reentrant-
+        // safe: `flush_pending_save` clears the dirty mark before it
+        // runs `persist` → `run_auto_run_blocks` → back here, so the
+        // nested call is a no-op.
+        self.flush_pending_save();
+        // Navigation does NOT invalidate the backlink index: it's a
+        // whole-workspace index, so the new page is just a different
+        // lookup in the same index — no rebuild. (A peer reload, which
+        // does change the workspace, invalidates separately in
+        // `peer_sync`.) Invalidating here rebuilt the index from every
+        // `.md` on every page switch, inline.
         let path = self.current_path();
         let text = fs::read_to_string(&path).unwrap_or_default();
         self.page = parse(&text);

@@ -147,8 +147,11 @@ impl App {
                         self.save();
                         // Finishing an edit on a `call:<name>` block
                         // re-runs it so the `> **result:**` reflects the
-                        // freshly-typed params.
+                        // freshly-typed params. The re-run reads the op
+                        // log, so persist the coalesced edit first —
+                        // otherwise it would run against a stale tree.
                         if is_call {
+                            self.flush_pending_save();
                             self.rerun_call_block_at(&block_path);
                         }
                     } else if let Some(node) = node_at_path_mut(&mut self.page.blocks, &block_path)

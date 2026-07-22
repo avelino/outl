@@ -77,7 +77,8 @@ impl App {
             last_yanked_ref: None,
             index: WorkspaceIndex::default(),
             index_rx: None,
-            backlinks_cache: std::cell::RefCell::new(None),
+            backlink_index: std::cell::RefCell::new(None),
+            backlink_index_rx: None,
             shared_workspace,
             jsonl_rx: None,
             sync_transport: None,
@@ -103,6 +104,7 @@ impl App {
             mouse_anchor: None,
             last_mtime: None,
             last_saved_at: None,
+            dirty_since: None,
             undo: Vec::new(),
             redo: Vec::new(),
             theme,
@@ -145,6 +147,12 @@ impl App {
         // workspaces, longer for big ones — but the user is already
         // typing).
         s.spawn_index_rebuild();
+        // Backlinks are read off a from-disk index that walks every
+        // page's `.md` — seconds on a large vault. Build it on a worker
+        // thread too, so the journal paints immediately and the
+        // "Linked from" panel fills in a beat later instead of freezing
+        // the open.
+        s.spawn_backlink_index_rebuild();
         s.spawn_jsonl_poller();
         s.spawn_orphan_md_scanner();
         Ok(s)

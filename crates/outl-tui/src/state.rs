@@ -548,21 +548,26 @@ pub(crate) struct App {
     /// date.
     pub(crate) index_rx: Option<std::sync::mpsc::Receiver<WorkspaceIndex>>,
 
-    /// Cached backlinks for the currently-opened page, keyed by slug.
+    /// Pre-computed backlinks index over the whole workspace.
     ///
-    /// `outl_actions::backlinks_for_page` is `O(blocks in workspace)`
-    /// per call. Render frames and backlink-panel keystrokes both
-    /// query the same slug repeatedly, so we cache the last result
-    /// here. `None` means "stale, recompute on next read" — the
-    /// invalidation points are `save`, `save_page_with`,
-    /// `reload_workspace_from_disk`, and any path that swaps the
-    /// open view (`load_current`, `go_today`, `shift_journal`, …).
+    /// Built **on a worker thread** from the `.md` files on disk
+    /// (`build_backlink_index_from_disk`), never from the workspace tree:
+    /// reading every block via `Workspace::block_text` would materialize a
+    /// lazy-boot vault (#179), and reading 2800+ `.md` inline on the event
+    /// loop froze the open. `None` until the first build lands (the panel
+    /// / footer count just show nothing until then). A local edit patches
+    /// the current page in place ([`App::reindex_backlinks_for_slug`],
+    /// `O(one page)`); a whole-workspace change (reload, plugin, delete)
+    /// re-spawns the background build.
     ///
-    /// Wrapped in `RefCell` so the read-only render path
-    /// ([`App::backlinks_for_current`]) can populate it on a cache
-    /// miss without needing `&mut App`. See
-    /// [`App::invalidate_backlinks_cache`].
-    pub(crate) backlinks_cache: std::cell::RefCell<Option<(String, Vec<outl_actions::Backlink>)>>,
+    /// Still a `RefCell` so the read-only render path reads it via
+    /// `&self`; the worker's result is swapped in from
+    /// [`App::poll_backlink_index_updates`].
+    pub(crate) backlink_index: std::cell::RefCell<Option<outl_actions::BacklinkIndex>>,
+    /// Receiver for an in-flight background backlink-index build (see
+    /// [`App::spawn_backlink_index_rebuild`]). `Some` while a worker is
+    /// running; drained by [`App::poll_backlink_index_updates`].
+    pub(crate) backlink_index_rx: Option<std::sync::mpsc::Receiver<outl_actions::BacklinkIndex>>,
 
     /// `true` when this workspace is using the JSONL backend (shared
     /// across devices via iCloud / Syncthing / etc.). Set at boot
@@ -759,6 +764,22 @@ pub(crate) struct App {
     /// has a glanceable freshness indicator. `None` means "never saved
     /// in this session" — the header chip is hidden in that case.
     pub(crate) last_saved_at: Option<Instant>,
+
+    /// When the in-memory `page` AST first diverged from disk without a
+    /// `persist()` yet — i.e. the "dirty since" mark for the coalesced
+    /// commit.
+    ///
+    /// The edit hot path ([`App::save`]) only sets this and repaints;
+    /// the heavy `render → write → reconcile_md → fsync` work
+    /// ([`App::persist`]) is drained by [`App::flush_pending_save`] the
+    /// moment the event loop goes idle (no keystroke waiting) — so a
+    /// burst of edits (`Esc o … Esc o …`) never blocks input on a
+    /// per-commit fsync; they coalesce into one persist when the user
+    /// pauses. A hard cap ([`crate::runtime::MAX_SAVE_DEFER`]) forces a
+    /// flush even mid-burst so an unsaved edit can't linger, and every
+    /// path that reads persisted state (navigation, peer reload, quit,
+    /// a `call:` re-run) flushes first. `None` == in sync with disk.
+    pub(crate) dirty_since: Option<Instant>,
 
     /// Snapshots of the page AST taken before each structural mutation.
     /// `u` pops back one step; `Ctrl+R` re-pushes. Bounded — see

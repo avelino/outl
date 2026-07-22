@@ -256,6 +256,7 @@ pub fn run() {
                 storage_root,
                 registry,
                 iroh,
+                backlink_index: Arc::new(Mutex::new(None)),
             });
             app.manage(plugins);
             app.manage(PendingDeepLink(Mutex::new(None)));

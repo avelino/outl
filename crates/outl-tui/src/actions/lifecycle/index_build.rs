@@ -2,9 +2,10 @@
 //!
 //! The index ([`outl_md::index::WorkspaceIndex`]) powers page-title
 //! autocomplete, the quick-switcher icon column, and block-ref
-//! resolution (`((blk-XXXXXX))`). Backlinks no longer live here —
-//! they come from `outl_actions::backlinks_for_page` and are cached
-//! on [`crate::state::App::backlinks_cache`].
+//! resolution (`((blk-XXXXXX))`). Backlinks no longer live here — they
+//! come from a separate `outl_actions::BacklinkIndex` built on its own
+//! worker thread (`App::spawn_backlink_index_rebuild`), mirroring the
+//! pattern in this module.
 //!
 //! Building the index walks every `.md` under `pages/` + `journals/`,
 //! which is cheap for small workspaces but blocks the UI thread on

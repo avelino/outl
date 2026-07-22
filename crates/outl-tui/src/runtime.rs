@@ -48,6 +48,13 @@ const POLL_INTERVAL: Duration = Duration::from_millis(750);
 /// moment the index lands.
 const POLL_INTERVAL_PENDING_INDEX: Duration = Duration::from_millis(16);
 
+/// Longest a coalesced edit may sit unpersisted while the user keeps
+/// typing. The save normally drains the instant the loop goes idle (no
+/// keystroke waiting), so a burst of edits persists as soon as the user
+/// pauses; this cap forces a flush mid-burst so an unsaved change can't
+/// linger longer than this — bounding what a crash could lose.
+const MAX_SAVE_DEFER: Duration = Duration::from_millis(600);
+
 /// Run the TUI against the workspace at `path`.
 ///
 /// Picks the active theme from `.outl/config.toml`'s `[theme] preset`
@@ -403,6 +410,10 @@ fn event_loop(
         // Pick up the background index build if it finished since the
         // last frame. Non-blocking; costs ~one channel try_recv.
         app.poll_index_updates();
+        // Same for the background backlink-index build: swap it in when
+        // the worker finishes so the "Linked from" panel + footer count
+        // fill in without blocking the open.
+        app.poll_backlink_index_updates();
         // Pick up any peer ops the jsonl poller saw arrive via iCloud
         // (or another sync transport). Reopens the workspace from
         // disk so the merged op log shows up in the next render.
@@ -417,6 +428,22 @@ fn event_loop(
         app.prune_toasts();
 
         terminal.draw(|f| render_app(f, &mut app)).context("draw")?;
+        // Render-first coalesced save: the edit is already on screen.
+        // Now drain the persist (`render → write → reconcile_md →
+        // fsync`) — but only when it won't stall the user's next
+        // keystroke. If a key is already waiting in the terminal buffer
+        // (the user is mid-burst), skip it and let the burst flow;
+        // MAX_SAVE_DEFER forces the flush once the edit has waited too
+        // long so it can't linger unpersisted.
+        if app.has_pending_save() {
+            let input_waiting = event::poll(Duration::ZERO).unwrap_or(false);
+            let overdue = app
+                .pending_save_age()
+                .is_some_and(|age| age >= MAX_SAVE_DEFER);
+            if overdue || !input_waiting {
+                app.flush_pending_save();
+            }
+        }
         // Wait for a keystroke for up to POLL_INTERVAL. If nothing
         // arrives, take that opportunity to check whether the `.md`
         // changed under us (external editor saved). This is the
@@ -427,7 +454,7 @@ fn event_loop(
         // timeout so the freshly-built `WorkspaceIndex` shows up in
         // the UI within ~16 ms of arriving (instead of waiting up to
         // 750 ms for the next external-edit poll).
-        let poll_timeout = if app.has_pending_index() {
+        let poll_timeout = if app.has_pending_index() || app.has_pending_backlink_index() {
             POLL_INTERVAL_PENDING_INDEX
         } else {
             POLL_INTERVAL
@@ -461,10 +488,12 @@ fn event_loop(
         // to act on the *new* page state, not the stale one.
         app.check_external_changes();
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            // Commit any pending insert before exiting.
+            // Commit any pending insert before exiting, then persist the
+            // coalesced save so a quit never drops the last edit.
             if matches!(app.mode, Mode::Insert { .. }) {
                 app.commit_insert();
             }
+            app.flush_pending_save();
             return Ok(());
         }
 
@@ -491,6 +520,9 @@ fn event_loop(
             } else {
                 app.save();
             }
+            // Explicit `Ctrl+S` means "persist now" — drain the coalesced
+            // save instead of leaving it for the idle drain.
+            app.flush_pending_save();
             app.toast(crate::state::ToastKind::Success, "saved");
             continue;
         }
@@ -509,6 +541,7 @@ fn event_loop(
         // Overlays steal the keystream while open.
         if app.overlay.is_some() {
             if handle_overlay_key(&mut app, key)? {
+                app.flush_pending_save();
                 return Ok(());
             }
             continue;
@@ -517,6 +550,8 @@ fn event_loop(
         match app.mode {
             Mode::Normal => {
                 if handle_normal_key(&mut app, key)? {
+                    // Quitting — persist the coalesced save first.
+                    app.flush_pending_save();
                     return Ok(());
                 }
             }

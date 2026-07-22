@@ -272,6 +272,7 @@ pub fn run() {
                 iroh_transport,
                 iroh_pairing,
                 history: Mutex::new(std::collections::HashMap::new()),
+                backlink_index: Arc::new(Mutex::new(None)),
             });
             app.manage(plugins);
             app.manage(PendingDeepLink(parking_lot::Mutex::new(None)));
