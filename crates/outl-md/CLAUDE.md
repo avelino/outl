@@ -76,7 +76,9 @@ Treat matching with the same paranoia as the CRDT.
 - **Block index** (`block_index.rs`) — `NodeId → BlockEntry`, `ref_handle → NodeId`, `NodeId → [BlockReference]` (reverse refs), `(slug, dfs_path) → NodeId` for location lookup.
   Population is two-pass (`collect_page_blocks` then `collect_page_refs`) so reverse edges survive arbitrary page-load order during the initial build.
   Lookups are O(1).
-- **Workspace index** (`index.rs`) — page-level (`slug → PageEntry`, backlinks) plus block-level (re-exports the `BlockIndex` API).
+- **Workspace index** (`index.rs`) — page-level (`slug → PageEntry`) plus block-level (re-exports the `BlockIndex` API).
+  **Does not carry backlinks.**
+  Backlinks live in `outl_actions::backlinks` / `outl_actions::backlinks_index` so every client computes them straight from the `Workspace` — an earlier parallel cache on this index hid self-references on one surface while the other showed them.
   Public surface includes `resolve_block_ref(handle)`, `block_by_id`, `block_at_location(slug, &[usize])`, `block_refs_to(id)`, `iter_blocks`, `block_count`, `search_block_text(query, limit)`.
   `block_index()` borrows the inner `BlockIndex` so a consumer that already holds a `WorkspaceIndex` can reuse its primitives through one value.
   `block_at_location` is the O(1) replacement for scanning `iter_blocks()` to find the entry for a known `(page, dfs_path)`, e.g. when the TUI translates a keyboard chord onto a specific block.

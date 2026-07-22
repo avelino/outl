@@ -170,17 +170,32 @@ pub fn reconcile_md(
     // this is a no-op for them.
     ops_applied += ensure_page_root_in_tree(ws, hlc, page_id, md_path)?;
 
-    let plan = crate::diff::diff_to_ops_with_page_props(
-        &new_ast.blocks,
-        &matches,
-        &orphans,
-        page_id,
-        &md_hash,
-        &old_blocks,
-        &new_ast.properties,
-    );
+    // Feed the diff the nodes' CURRENT positions so an unchanged block
+    // keeps its position and its `Move` stays a filtered-out no-op — see
+    // `Workspace::op_is_noop` and the walk in `diff.rs`.
+    let plan = {
+        let current_pos = |id: NodeId| ws.tree().position(id).cloned();
+        crate::diff::diff_to_ops_with_page_props(
+            &new_ast.blocks,
+            &matches,
+            &orphans,
+            page_id,
+            &md_hash,
+            &old_blocks,
+            &new_ast.properties,
+            &current_pos,
+        )
+    };
 
     for op in plan.ops {
+        // The diff defensively re-emits `Create` + `Move` (+ `SetProp`)
+        // for every block; skip the ones that wouldn't change the tree so
+        // a one-block edit persists (and fsyncs) one op, not two per block
+        // in the page — and the op log stops growing by the whole page on
+        // every commit. See `Workspace::op_is_noop`.
+        if ws.op_is_noop(&op) {
+            continue;
+        }
         let ts = hlc.next();
         let log_op = LogOp {
             ts,

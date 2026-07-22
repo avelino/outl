@@ -89,6 +89,10 @@ A block never touched since boot reads back byte-identical to the old eager pass
 The snapshot boot path is unchanged — it hydrates the full text map up front (already materialized strings, not a replay) and leaves `pending` empty.
 The snapshot **writer** (`build_snapshot_body`) force-materializes any still-deferred block first, so a snapshot always carries every block's string.
 
+`Workspace::resident_text_count()` (thin wrapper over `ContentStore::resident_text_count`) is `pub` — the observability window into this lazy path.
+It reports how many block strings are currently materialized, so a downstream crate's regression test can assert a read path (e.g. `outl-actions`' backlinks index build) does **not** force the whole workspace to materialize.
+Cheap (a map length); safe to call in production, not gated behind `#[cfg(test)]`.
+
 This is a materialization change only: the op log stays the source of truth, the `Doc`/string are projections, and the public surface (`block_text`, `build_text_replace_update`, `apply`) is unchanged.
 `Workspace` is only ever reached through `Arc<Mutex<..>>`, so it needs `Send` (which `RefCell<T: Send>` keeps) but never `Sync`.
 The resident `OpLog` still holds every `Op::Edit`'s `text_op` bytes (the cheaper second copy of history); shrinking that is the separate per-page op-log shards work, not this change.
