@@ -391,7 +391,9 @@ When you open a `.md` that the outl parser had to recover from (a leading `# hea
 
 ## Behavior worth knowing
 
-- **Autosave**: every commit (Esc from Insert, structural ops, history navigation) writes the `.md` to disk and reconciles into the op log.
+- **Autosave, coalesced**: every commit (Esc from Insert, structural ops, history navigation) marks the page dirty and repaints on the same frame — no disk I/O yet.
+  The actual `.md` write + op-log reconcile drains the moment you pause typing, or is forced after 600ms if you keep a burst going.
+  It always flushes before quitting, `Ctrl+S`, cross-page navigation, or a `call:` re-run, so an edit is never lost — it just isn't on disk the instant you press `Esc`.
   Concurrent `outl serve` is safe — both routes go through `outl_md::reconcile_md`.
 - **No IDs on disk**: every block has a stable ULID, but it lives in the `.outl` sidecar file, not in your markdown.
   `outl serve` / `outl-tui` rebuild that sidecar after every change.
