@@ -39,9 +39,11 @@ pub mod iroh_sync;
 pub mod plugin_dto;
 pub mod plugin_service;
 mod plugin_thread;
+pub mod projection;
 pub mod state;
 pub mod workspace_open;
 
 pub use host::{AppHost, StorageRootProvider};
 pub use plugin_service::PluginService;
+pub use projection::ProjectionWriter;
 pub use state::{CreateBlockReply, PageView, TemplateDto, WorkspaceSummary, ERR_LOADING};

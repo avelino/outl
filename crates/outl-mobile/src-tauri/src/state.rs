@@ -12,7 +12,7 @@ use outl_core::hlc::HlcGenerator;
 use outl_core::workspace::Workspace;
 use outl_exec::RuntimeRegistry;
 use outl_sync_iroh::IrohSyncTransport;
-use outl_tauri_shared::AppHost;
+use outl_tauri_shared::{AppHost, ProjectionWriter};
 use parking_lot::Mutex;
 
 pub(crate) use outl_tauri_shared::{CreateBlockReply, PageView, WorkspaceSummary};
@@ -61,6 +61,11 @@ pub(crate) struct AppState {
     /// it (off the IPC thread) and every later navigation is an
     /// `O(refs)` lookup instead of a full `O(blocks)` re-scan.
     pub(crate) backlink_index: Arc<Mutex<Option<BacklinkIndex>>>,
+    /// Background `.md` + sidecar projection writer. Mutations queue
+    /// their page here instead of rendering + hashing + writing inline,
+    /// so a commit never blocks the next tap on disk I/O (the outl
+    /// async-writes default). See [`outl_tauri_shared::projection`].
+    pub(crate) projection_writer: ProjectionWriter,
 }
 
 impl Drop for AppState {
@@ -110,5 +115,9 @@ impl AppHost for AppState {
 
     fn backlink_index(&self) -> Option<Arc<Mutex<Option<BacklinkIndex>>>> {
         Some(self.backlink_index.clone())
+    }
+
+    fn projection_writer(&self) -> Option<&ProjectionWriter> {
+        Some(&self.projection_writer)
     }
 }

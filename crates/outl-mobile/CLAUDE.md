@@ -13,7 +13,7 @@ outl-actions                 (workspace operations + SyncEngine, shared with TUI
 outl-mobile (this crate)
    ├── src-tauri/src/
    │   ├── lib.rs                  (mod decls + run() + invoke_handler)
-   │   ├── state.rs                (AppState + AppHost impl; wire DTOs re-exported from outl-tauri-shared)
+   │   ├── state.rs                (AppState + AppHost impl (incl. ProjectionWriter); wire DTOs re-exported)
    │   ├── workspace_open.rs       (boot orchestration over outl_tauri_shared::workspace_open primitives)
    │   ├── workspace_picker.rs     (set_workspace — folder choice + persistence; native picker deferred)
    │   ├── iroh_sync.rs            (wire_iroh_transport — boot the P2P transport, register the bg-sync handle)
@@ -197,14 +197,14 @@ A `"> "`-prefixed block gets a left border + ~5% tint, right-rounded, body full-
 The outline bullet and `<CollapseTriangle />` stay outside the quote chrome; a non-quoted block degrades to a plain flex container (byte-identical).
 Detection is `splitQuote` + `stripQuoteFromTokens` (`@outl/shared/markdown`, mirror of `outl_actions::quote::split_quote`) so the `> ` isn't rendered twice; it composes with the TODO/DONE checkbox.
 Toggling: `toggleQuote(id)` → `toggle_quote` → `outl_actions::block::toggle_quote` (no TS string surgery).
-Full convention (three-surface parity): [`docs/clients.md` → Blockquote convention](../../docs/clients.md#blockquote-convention).
+Convention (three-surface parity): [`docs/clients.md` → Blockquote convention](../../docs/clients.md#blockquote-convention).
 
 ## Zoom / focus on a block
 
 Tap a block's plain bullet dot to zoom in — it becomes the outline root (Roam/Workflowy focus); `← Back` + breadcrumb zoom out.
 Local view state (`focusBlockId` in `Journal.tsx`), never a Tauri round-trip; the shared `focusSubtree` (`@outl/shared/outline`) does the subtree + breadcrumb.
 Mobile owns only the touch chrome: the bullet tap moves mark-as-TODO to the long-press menu; checkbox + `<CollapseTriangle>` untouched.
-Full convention: [`docs/clients.md` → Zoom / focus on a block](../../docs/clients.md#zoom--focus-on-a-block-roamworkflowy).
+Convention: [`docs/clients.md` → Zoom / focus on a block](../../docs/clients.md#zoom--focus-on-a-block-roamworkflowy).
 
 ## Paste from external apps
 
@@ -221,7 +221,7 @@ The keyboard toolbar + suggester strip have two renderings.
 iOS is native (`OutlToolbarView` swizzled onto `WKContentView`), untouched.
 Android is web: `KeyboardAccessory.tsx` → `<SuggesterStrip />` + `<KeyboardToolbar />`, gated in `Journal.tsx` on `isAndroid && editingId()`.
 Catalog + MFU are shared in `@outl/shared/toolbar` (port of `swift/OutlKit/Toolbar/*`); the action ids are the `window.__outlToolbar(action)` wire contract, so the Swift and TS catalogs stay byte-identical until the native bar retires.
-Full convention (shared `dispatchToolbarAction`, the two invariants): [`docs/clients.md` → Keyboard accessory bar](../../docs/clients.md#keyboard-accessory-bar-mobile).
+Convention (shared `dispatchToolbarAction`, the two invariants): [`docs/clients.md` → Keyboard accessory bar](../../docs/clients.md#keyboard-accessory-bar-mobile).
 
 ## Code execution (`run_code_block`)
 

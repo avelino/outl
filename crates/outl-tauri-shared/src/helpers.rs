@@ -10,8 +10,8 @@ use std::str::FromStr;
 
 use chrono::NaiveDate;
 use outl_actions::{
-    apply_page_md_with_sidecar, date_from_slug, page_meta as page_meta_action,
-    read_page_outline_with_workspace, render_page_md, ActionError, PageOutline,
+    apply_page_md_with_sidecar_rendered, date_from_slug, page_meta as page_meta_action,
+    project_outline, read_page_outline_with_workspace, render_page_md, ActionError, PageOutline,
 };
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
@@ -100,6 +100,35 @@ pub fn build_page_view(
     })
 }
 
+/// Build a page view **straight from the workspace tree**, without
+/// reading the `.md` off disk.
+///
+/// This is the async-projection twin of [`build_page_view`]: when the
+/// `.md` write is deferred to the background [`crate::ProjectionWriter`],
+/// the on-disk `.md` is momentarily behind the tree, so the reply must
+/// come from the tree (the source of truth) instead. `project_outline`
+/// carries the same shape `read_page_outline` produces — tokens,
+/// `collapsed` (from the op log), alpha-sorted block props — so the
+/// client renders identically either way. `warnings` is always empty
+/// here: parse warnings come from re-reading external `.md`, and the
+/// tree the user just mutated has none.
+pub fn build_page_view_from_tree(
+    workspace: &Workspace,
+    page_id: NodeId,
+) -> Result<PageView, ActionError> {
+    let meta = page_meta_action(workspace, page_id)
+        .ok_or_else(|| ActionError::NotInTree(page_id.to_string()))?;
+    let outline = project_outline(workspace, page_id);
+    let backlinks_order = outl_config::load().display.backlinks_order;
+    Ok(PageView {
+        page: meta,
+        outline,
+        backlinks: Vec::new(),
+        backlinks_order,
+        warnings: Vec::new(),
+    })
+}
+
 /// Apply a workspace mutation `f` and project the result back to
 /// `.md` + sidecar.
 ///
@@ -136,6 +165,9 @@ where
 {
     let root = state.storage_root()?;
     with_ws_mut(state, |ws| {
+        // Undo snapshot: record the pre-mutation `.md` only when the page
+        // actually changed. The renders here also cover the async path's
+        // diff; the sync fallback reuses `after` for its projection.
         let before = state.history().map(|_| render_page_md(ws, page_id));
         let value = f(ws).map_err(|e| e.to_string())?;
         if let (Some(history), Some(before)) = (state.history(), before) {
@@ -143,17 +175,30 @@ where
                 history.lock().entry(page_id).or_default().record(before);
             }
         }
-        if let Err(e) = apply_page_md_with_sidecar(ws, &root, page_id) {
-            warn!("page md+sidecar sync failed: {e}");
-        }
         // The mutation changed the tree, so the cached backlinks index is
-        // stale. Drop it here (still under the workspace lock, so it
-        // serializes with the rebuild `page_backlinks` does); the next
-        // backlinks read rebuilds it off the IPC thread.
+        // stale. Drop it (under the workspace lock, so it serializes with
+        // the rebuild `page_backlinks` does); the next read rebuilds it.
         invalidate_backlink_index(state);
         announce_after_commit(state, ws, page_id);
-        let view = build_page_view(ws, &root, page_id).map_err(|e| e.to_string())?;
-        Ok((value, view))
+
+        if let Some(writer) = state.projection_writer() {
+            // Async-writes default: the op log already has the truth, so
+            // queue the `.md` + sidecar write off-thread and build the
+            // reply straight from the tree. The commit never blocks the
+            // next keystroke on a render + SHA-256 + disk write.
+            writer.queue(page_id);
+            let view = build_page_view_from_tree(ws, page_id).map_err(|e| e.to_string())?;
+            Ok((value, view))
+        } else {
+            // Synchronous fallback (host without a projection worker):
+            // project inline and read the view back off the `.md`.
+            let after = render_page_md(ws, page_id);
+            if let Err(e) = apply_page_md_with_sidecar_rendered(ws, &root, page_id, &after) {
+                warn!("page md+sidecar sync failed: {e}");
+            }
+            let view = build_page_view(ws, &root, page_id).map_err(|e| e.to_string())?;
+            Ok((value, view))
+        }
     })
 }
 

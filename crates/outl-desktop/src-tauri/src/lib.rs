@@ -261,6 +261,13 @@ pub fn run() {
             let plugins =
                 spawn_plugin_service(workspace.clone(), storage_root.clone(), hlc.clone());
 
+            // Background projection writer: mutations queue their page
+            // here so the `.md` + sidecar write happens off the IPC
+            // thread (async-writes default). Shares the same workspace
+            // slot + swap-capable storage root the commands lock.
+            let projection_writer =
+                outl_tauri_shared::ProjectionWriter::spawn(workspace.clone(), storage_root.clone());
+
             app.manage(AppState {
                 workspace,
                 storage_root,
@@ -273,6 +280,7 @@ pub fn run() {
                 iroh_pairing,
                 history: Mutex::new(std::collections::HashMap::new()),
                 backlink_index: Arc::new(Mutex::new(None)),
+                projection_writer,
             });
             app.manage(plugins);
             app.manage(PendingDeepLink(parking_lot::Mutex::new(None)));

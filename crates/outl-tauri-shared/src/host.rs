@@ -69,6 +69,17 @@ pub trait AppHost: Send + Sync {
     fn backlink_index(&self) -> Option<Arc<Mutex<Option<BacklinkIndex>>>> {
         None
     }
+
+    /// Background `.md` + sidecar projection writer, when the client
+    /// wires one. `Some` makes [`crate::helpers::finish_in_page_with`]
+    /// build the reply view from the tree and **queue** the projection
+    /// off-thread instead of rendering + hashing + writing it inline —
+    /// the async-writes default (see [`crate::projection`]). The default
+    /// `None` keeps the synchronous projection for any host that hasn't
+    /// wired the worker.
+    fn projection_writer(&self) -> Option<&crate::projection::ProjectionWriter> {
+        None
+    }
 }
 
 /// Owned handle to "the current storage root" the plugin thread can move
