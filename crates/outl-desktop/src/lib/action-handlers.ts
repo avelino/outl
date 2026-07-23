@@ -650,13 +650,14 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
       }
       const view = await safeCall(toggleTodoCmd(pageId, id));
       if (view) deps.applyView(view);
-      // Confetti path: a TODO toggle is an op, so fire the plugin `onOp`
-      // sweep. A `ui-render` plugin (op-hook + ui-render) emits HTML here
-      // (e.g. confetti on DONE); play it as a sandboxed iframe overlay.
-      // Best-effort — a host with no op-hook plugins is a cheap no-op.
-      const hooked = await safeCall(pluginSyncHooks(pageId));
-      if (hooked?.view) deps.applyView(hooked.view);
-      if (hooked) playPluginViews(hooked.views);
+      // Plugin `onOp` sweep runs OFF the input path — fire-and-forget, no
+      // `await` (see the outl async-writes principle). A TODO toggle is an
+      // op; a `ui-render` plugin emits HTML here (e.g. confetti on DONE).
+      // Blocking the toggle on the plugin JS just delayed the checkbox.
+      void safeCall(pluginSyncHooks(pageId)).then((hooked) => {
+        if (hooked?.view) deps.applyView(hooked.view);
+        if (hooked) playPluginViews(hooked.views);
+      });
     },
 
     // ── overlays + insert escape ─────────────────────────────────

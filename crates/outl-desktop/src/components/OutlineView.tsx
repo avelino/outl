@@ -372,18 +372,18 @@ export function OutlineView() {
       const view = await handleError(editBlock(pageId, id, text));
       if (view) applyView(view);
       setEditingId(null);
-      // Single post-mutation point for plugin `onOp` hooks. `sync_hooks`
-      // dispatches EVERY op since the host's last sweep (not just this
-      // edit), so one call after a commit catches up structural ops
-      // (indent / move / delete) committed since the previous commit too
-      // — mirrors the TUI's once-per-tick sweep. Best-effort; the lock is
-      // already released here so the plugin thread can take it.
-      const hooked = await handleError(pluginSyncHooks(pageId));
-      if (hooked?.view) applyView(hooked.view);
-      // Confetti path: a `ui-render` plugin (op-hook + ui-render) emits
-      // HTML from its `onOp` hook on e.g. a DONE toggle. Play it as a
-      // sandboxed iframe overlay even when nothing was re-rendered.
-      if (hooked) playPluginViews(hooked.views);
+      // Plugin `onOp` hooks run OFF the input path — fire-and-forget, no
+      // `await`. `sync_hooks` runs the 2 plugins' JS through Boa (tens of
+      // ms even in release) and blocking the commit on it stole that time
+      // from the next keystroke. It dispatches EVERY op since the host's
+      // last sweep, so catching it a beat later still picks up structural
+      // ops (indent / move / delete). The re-render / confetti overlay
+      // land whenever the hook resolves. Async-by-default (see the outl
+      // async-writes principle): nothing the user waits on runs a plugin.
+      void handleError(pluginSyncHooks(pageId)).then((hooked) => {
+        if (hooked?.view) applyView(hooked.view);
+        if (hooked) playPluginViews(hooked.views);
+      });
     },
     onEnter: async (id, text) => {
       const pageId = appState.page?.id;

@@ -36,10 +36,11 @@ What this crate **does** own:
 - Path discovery (file picker via `tauri-plugin-dialog`; persisted in settings JSON; cross-platform default).
 - Cross-platform FS watcher (`notify` crate) that signals the frontend when peer `ops-*.jsonl` files grow — replaces the `NSMetadataQuery`/`NSFileCoordinator` dance the mobile crate has to do for iOS.
 - Desktop-only Tauri command surface (workspace picker, settings IO).
-  The code-execution command (`run_code_block`) is a **thin adapter** — the orchestration (flat-DFS walk, `.md` path resolution, `outl-exec` invocation, DTO build) lives in `outl_actions::exec` so the mobile client shares the exact same flow.
+  The code-execution command (`run_code_block`) is a **thin adapter** — the orchestration (flat-DFS walk, `.md` path resolution, `outl-exec` invocation, DTO build) lives in `outl_actions::exec`, shared with mobile.
   The desktop adapter only parses NodeIds, locks the workspace, calls the action, and wraps the outcome with a refreshed `PageView`.
   Adding behaviour to `commands/exec.rs` is almost always a smell — promote it to `outl-actions` instead.
 - Solid frontend with **3-pane layout** (Sidebar / OutlineView / BacklinksPanel) and **OS-standard keyboard shortcuts** (`Cmd+P`, `Cmd+J`, `Cmd+T`, `Cmd+Enter`, `Cmd+,`) plus optional vim mode.
+- `AppState` holds a `ProjectionWriter` (async `.md`+sidecar writes) — see [`outl-tauri-shared/CLAUDE.md`](../outl-tauri-shared/CLAUDE.md).
 
 ## Layout
 
@@ -95,8 +96,7 @@ Do not add a second reachability path; `peersOnline` is the one owner.
 `Sidebar.tsx`'s `<Row>` takes an optional `onDelete` callback; when provided, a `×` button appears on hover.
 `handleDelete(p)` calls `window.confirm(...)`, then `deletePage(slug)` (from `@outl/shared/api/commands`), applies the returned today's-journal view, and refetches the page list.
 Journals are excluded — only regular pages show the affordance.
-The `g d` chord (Normal mode, "go delete") routes through the `DeletePage` case in `action-handlers.ts`.
-It runs the same `window.confirm` + `deletePage(slug)` flow as the `×` button.
+The `g d` chord (Normal mode, "go delete") routes through the `DeletePage` case in `action-handlers.ts`, running the same flow as the `×` button.
 The backend `delete_page` Tauri command is the shared `outl_tauri_shared::commands::page::delete_page` body — no desktop-specific logic.
 
 `InlineBacklinks.tsx`'s header direction button (`setBacklinksOrder`) flips newest/oldest; `appState.backlinksOrder` hydrates at boot.
@@ -106,7 +106,7 @@ The backend `delete_page` Tauri command is the shared `outl_tauri_shared::comman
 
 A `"> "`-prefixed block renders with a left border + ~6% tint, right-rounded, body full-colour; the outline bullet stays outside the quote chrome.
 Detection is `splitQuote` + `stripQuoteFromTokens`; toggling routes `toggleQuote` → `toggle_quote` → `outl_actions::block::toggle_quote`.
-Full convention: [`docs/clients.md` → Blockquote convention](../../docs/clients.md#blockquote-convention).
+Convention: [`docs/clients.md` → Blockquote convention](../../docs/clients.md#blockquote-convention).
 
 ## Theme tokens
 
@@ -152,7 +152,7 @@ Same file smoke-tests the block clipboard (cut arms `blockClipboard`; paste rout
 
 ## Shortcuts
 
-The full catalog lives in **`crates/outl-shortcuts`** (single source of truth, also consumed by the TUI).
+Catalog: **`crates/outl-shortcuts`** (single source of truth, also consumed by the TUI).
 The desktop fetches it via the `list_shortcut_bindings` Tauri command on boot and wires every `Action` through `lib/action-handlers.ts`.
 
 Two of these chords also have **visible icon affordances** in a fixed bottom-left cluster (`components/ChromeToggleBar.tsx`, mounted by `AppShell`):
@@ -162,7 +162,7 @@ The cluster floats over the main pane on an elevated, bordered surface (active t
 
 ### OS-standard chrome and undo / redo
 
-The full per-chord table is in [`docs/shortcuts.md`](../../docs/shortcuts.md) — the single source of truth, shared with the TUI.
+Chord table: [`docs/shortcuts.md`](../../docs/shortcuts.md).
 Desktop-specific: `Cmd/Ctrl+Shift+X` runs the focused / selected code block (plain `Cmd/Ctrl+X` is OS cut / view-mode block cut).
 
 ### Undo / redo (Normal mode — fire when no textarea is focused)
@@ -180,12 +180,12 @@ Pages the peer didn't touch keep their full undo depth.
 ### Inline markdown (Insert mode — fire when a textarea is focused)
 
 `Cmd/Ctrl+B`/`I`/`E`/`Shift+X`/`K` wrap the selection (or insert the delimiter pair around the caret) — bold / italic / inline code / strikethrough / link.
-The full chord + output table lives in [`docs/shortcuts.md`](../../docs/shortcuts.md).
+Full chord + output table: [`docs/shortcuts.md`](../../docs/shortcuts.md).
 Implementation lives in `lib/markdown-wrap.ts`: each handler reads `document.activeElement`, splices the value, dispatches an `input` event so `<BlockRow />`'s Solid signal stays in sync, then repositions the caret / selection.
 
 ### Paste (with and without formatting)
 
-User-facing behaviour + routing lives in [`docs/paste.md`](../../docs/paste.md).
+Behaviour + routing: [`docs/paste.md`](../../docs/paste.md).
 Three guards (mobile mirrors them):
 
 - Code-fence host bails `Cmd/Ctrl+V` to the native splice (`detectFence` early-return), keeping it literal.
@@ -196,7 +196,7 @@ Three guards (mobile mirrors them):
 
 ### Block-editor chords (inside a block's textarea)
 
-The user-facing chord table lives in [`docs/shortcuts.md`](../../docs/shortcuts.md).
+Chord table: [`docs/shortcuts.md`](../../docs/shortcuts.md).
 Load-bearing notes a contributor needs:
 
 - **Plain `Enter` → commit + new sibling below** (`onEnter`, TUI parity).
@@ -209,7 +209,7 @@ Load-bearing notes a contributor needs:
 
 ### Vim parity (Normal + Visual)
 
-User-facing chord list lives in [`docs/shortcuts.md`](../../docs/shortcuts.md) — don't duplicate it here.
+Chord list: [`docs/shortcuts.md`](../../docs/shortcuts.md) — don't duplicate it here.
 This section captures only the **architectural decisions** a contributor needs to know before touching `lib/action-handlers.ts`.
 
 - **Three categories of vim ops**, by what they need from the cursor model:
@@ -311,13 +311,13 @@ which scheme-guards to `http(s)`/`mailto` and opens in the system browser via **
 the capability grants a scoped `opener:allow-open-url` for `http`/`https`/`mailto` in `capabilities/default.json`).
 Failures (malformed URL, disallowed scheme) land on the status line via `appState.lastError`.
 The `[[ref]]` / `#tag` click handlers are unchanged (they navigate the workspace, not the browser).
-The opener call lives in the shared wrapper (not a custom Tauri command), so mobile can opt in later.
+The opener call lives in the shared wrapper (not a custom command), so mobile can opt in later.
 Backlink rows stay inert (the whole row is already a navigate-to-source button; nesting a second click target would conflict).
 
 ### `/template` slash entry
 
 The block-initial `/` menu lists native `template: <name>` rows (`templateSlashCommands`, `lib/slash-commands.ts`) that `OutlineView` runs via `instantiateTemplateAt`.
-Contract + backend: [`docs/clients.md` → Structural templates](../../docs/clients.md#structural-templates).
+Contract: [`docs/clients.md` → Structural templates](../../docs/clients.md#structural-templates).
 
 In a `call:<name>` fence, `CodeFenceView`'s `CALL:<NAME>` chip links to the template page — `onOpenPage`→`openPageBySlug` (exact, not `openRef`), slug via `listTemplates()`; unknown name = inert chip.
 
@@ -367,6 +367,7 @@ Both paths run a command like the palette does: status-line output, re-render fr
 Op-hooks fire `pluginSyncHooks` at **two post-mutation points**: `OutlineView`'s `onCommit` (after an edit) and the `ToggleTodo` handler (`Cmd+T`).
 `sync_hooks` dispatches **every** op since the host's last sweep, so one call also catches up structural ops (indent / move / delete) — mirrors the TUI's once-per-tick sweep.
 Best-effort: a host with no op-hook plugins is a cheap no-op.
+Both fire **fire-and-forget** (no `await`) — a slow plugin can't block the commit or next keystroke.
 
 ### `ui-render` overlays (sandboxed iframe)
 

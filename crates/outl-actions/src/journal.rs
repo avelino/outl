@@ -216,6 +216,24 @@ pub fn apply_page_md_with_sidecar(
     write_page_projection(workspace, root, page_root, &meta, &md)
 }
 
+/// Like [`apply_page_md_with_sidecar`] but reuses an already-rendered
+/// `md` instead of rendering the page again.
+///
+/// The GUI commit path renders the page once to diff it for undo; passing
+/// that string here saves a second whole-page render (which materializes
+/// every block's text). On a large journal that render is tens of ms in
+/// release, hundreds in debug, and it ran on every keystroke-commit.
+pub fn apply_page_md_with_sidecar_rendered(
+    workspace: &Workspace,
+    root: &Path,
+    page_root: NodeId,
+    md: &str,
+) -> Result<PathBuf, ActionError> {
+    let meta = page_meta(workspace, page_root)
+        .ok_or_else(|| ActionError::NotInTree(page_root.to_string()))?;
+    write_page_projection(workspace, root, page_root, &meta, md)
+}
+
 /// Write an already-rendered page `md` to its `.md` and rebuild the matching
 /// sidecar from the same tree. Split out of [`apply_page_md_with_sidecar`] so a
 /// caller that already rendered the page (to detect a stale projection) reuses

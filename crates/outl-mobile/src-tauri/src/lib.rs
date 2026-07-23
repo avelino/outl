@@ -250,6 +250,14 @@ pub fn run() {
             let plugins =
                 spawn_plugin_service(workspace.clone(), storage_root.clone(), hlc.clone());
 
+            // Background projection writer: mutations queue their page
+            // here so the `.md` + sidecar write happens off the command
+            // thread (async-writes default). `storage_root` is a fixed
+            // `PathBuf` here (folder swap is a relaunch), which is itself
+            // a `StorageRootProvider`.
+            let projection_writer =
+                outl_tauri_shared::ProjectionWriter::spawn(workspace.clone(), storage_root.clone());
+
             app.manage(AppState {
                 workspace,
                 hlc,
@@ -257,6 +265,7 @@ pub fn run() {
                 registry,
                 iroh,
                 backlink_index: Arc::new(Mutex::new(None)),
+                projection_writer,
             });
             app.manage(plugins);
             app.manage(PendingDeepLink(Mutex::new(None)));

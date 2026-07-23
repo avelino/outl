@@ -24,6 +24,12 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
   Second, the **backlink index was built inline on the event loop** — reading all 2800 `.md` files (~1.75 s) on the first render and again on every whole-workspace change, which is what froze the open.
   It now builds on a worker thread (mirroring the existing workspace-index rebuild): the journal paints immediately and the "Linked from" panel fills in a beat later; a local edit patches just the current page's entries, and only whole-workspace changes (peer sync, plugins, page delete, cross-page edits) re-spawn the background build.
 
+- **Desktop and mobile writes are now async — a commit never blocks the next keystroke.**
+  Leaving edit mode used to render the page, SHA-256 the sidecar, and write both to disk synchronously on the IPC thread before the reply came back (tens of ms in release, hundreds in debug), and it fired the plugins' `onOp` sweep with an `await` on top.
+  Now the commit only mutates the op log (the source of truth) and builds the reply view straight from the tree; the `.md` + sidecar projection is queued to a single background writer (`ProjectionWriter`), and the plugin sweep is fire-and-forget.
+  The writer serializes and coalesces projections under the workspace lock, so the `.md`↔sidecar pair can never tear (no sync corruption), and a lagging projection is never data loss (the op log is truth; the next boot re-projects, and peers sync ops over iroh, not the `.md`).
+  This brings the two GUI clients to the same async-on-write default the TUI has.
+
 - **The TUI commit is now coalesced, so a burst of edits never blocks input.**
   Leaving edit mode used to persist synchronously — render `.md` + reconcile + fsync, tens of milliseconds — before the next keystroke could land, so typing `Esc o … Esc o …` stuttered.
   Now a commit boundary only marks the page dirty and repaints; the actual `render → write → reconcile_md → fsync` drains the instant the event loop goes idle (no keystroke waiting), so edits in a burst coalesce into one persist when the user pauses.
