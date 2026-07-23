@@ -206,6 +206,11 @@ In those paths, reviewers will flag:
 - `Vec::new()` + repeated `push` in a loop where capacity is knowable (`Vec::with_capacity`).
 - Re-parsing the same markdown or re-walking the same subtree on every keystroke — propose caching with a clear invalidation story.
 - Big-O regressions on tree ops or backlink computation.
+- **A synchronous write reintroduced on the input path.** The op log write (`Storage::append_op`) is the one step allowed to be synchronous.
+  Every client defers the `.md` + sidecar projection, the backlink index rebuild, and plugin `onOp` hooks off the keystroke / command path.
+  TUI: coalesced idle-drain.
+  Desktop/mobile: background `ProjectionWriter` / `spawn_blocking` / fire-and-forget hooks.
+  A new mutation path that renders or rebuilds inline before replying is a regression — see [`docs/architecture.md` → Every client is async-on-write](architecture.md#every-client-is-async-on-write).
 
 If you're unsure whether code is on a hot path, ask in the PR — we'd rather a question than a guess.
 

@@ -211,6 +211,16 @@ flowchart TB
     save --> notify --> parse --> match --> diff --> apply --> write --> p2p
 ```
 
+### Every client is async-on-write
+
+The TUI write-path diagram above is exact for the `apply_op` / `Storage::append_op` / tree-update steps — those are synchronous, on the same call that handles the keystroke or the Tauri command.
+The **render → `.md` + sidecar write** step is not: on every client it runs after that call returns, off the input path.
+The TUI coalesces a commit and drains it the moment the event loop goes idle (bounded by `MAX_SAVE_DEFER`, forced on quit / `Ctrl+S` / navigation).
+Desktop and mobile hand the page to a background `ProjectionWriter` thread and build the command's reply straight from the in-memory tree instead of waiting on the write.
+See [`docs/clients.md` → Async projection writes](clients.md#async-projection-writes-performance) for the full picture across clients.
+
+This is a project rule, not just today's implementation: the op log write is the one synchronous step, and nothing on the input path — a `.md` render, a backlink index rebuild, a plugin hook — gets to block the next keystroke again.
+
 ---
 
 ## Concurrency model

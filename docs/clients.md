@@ -310,6 +310,21 @@ The index stores each referencing block as a **shallow leaf** — body, tokens, 
 Every client renders a backlink row from `source_block.tokens`, and materializing the subtree of every referencing block across the workspace (under the workspace lock) is exactly what froze input, so the build stops at the leaf.
 One visible consequence: a backlink shows only the citing block, not its child blocks, on every client (the TUI no longer expands a backlink into a mini-outline).
 
+## Async projection writes (performance)
+
+Every client is **async-on-write**: the op log is written synchronously (`Workspace::apply` → `Storage::append_op`), but the `.md` + sidecar projection — the file the user actually sees on disk — happens after, off the input path.
+No client blocks a keystroke or a Tauri command reply on a `.md` render, an fsync, or a backlink rebuild.
+
+| Client | Op log write | Projection write |
+|---|---|---|
+| TUI | Synchronous, on commit (`Esc`, `Enter`, structural ops) | Deferred. The commit marks the page dirty and repaints immediately; the render → `.md` write → `reconcile_md` drains the moment the event loop goes idle, or after 600ms mid-burst (`runtime::MAX_SAVE_DEFER`). Always flushed before quit, `Ctrl+S`, navigation, peer reload, or a `call:` re-run — see [`docs/tui.md` → Behavior worth knowing](tui.md#behavior-worth-knowing). |
+| Desktop / Mobile | Synchronous, inside the Tauri command | Queued to a background `ProjectionWriter` thread (`outl_tauri_shared::ProjectionWriter::queue`), which coalesces bursts and writes `.md` + sidecar under the workspace lock. The command's reply is built straight from the in-memory tree (`build_page_view_from_tree`), not from a re-read of the file it just queued. |
+
+A crash between the op-log write and a queued projection leaves the `.md` briefly behind the op log — that's not data loss.
+The op log is authoritative: the next boot re-projects any stale page, and peers sync ops, never `.md` files.
+
+Plugin `onOp` hooks on desktop/mobile are fire-and-forget (no `await` on the reply path) for the same reason — a slow plugin can't stall the next keystroke or command.
+
 ## iCloud sync (mobile + TUI, today)
 
 The iOS app is on a public TestFlight beta — <https://testflight.apple.com/join/P2GdWAMd>.
@@ -335,7 +350,8 @@ The TUI reaches the same workspace by pointing `--workspace` at the container's 
 > The same rule is why the sidecar moved from `.foo.outl` to `foo.outl` in v0.
 
 Each device only writes to its own `ops-<actor>.jsonl`, so iCloud never has to merge file contents — the CRDT does that work after reading every actor's ops.
-The `.md` projection is rewritten after every mutation; do **not** parse it back to reconstruct workspace state, the op log is authoritative.
+The `.md` projection is rewritten after every mutation — the TUI coalesces the write to its next idle/flush point, desktop/mobile queue it to a background writer (see "Async projection writes" above) — so it can briefly lag the op log by a beat.
+Do **not** parse it back to reconstruct workspace state; the op log is authoritative.
 
 ### Shared sync engine
 
