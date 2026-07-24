@@ -110,7 +110,29 @@ describe("BlockRow Enter key — #119", () => {
     ta.dispatchEvent(ev);
     await Promise.resolve();
 
-    expect(cb.onEnter).toHaveBeenCalledWith("blk-1", "hello");
+    // The caret (3rd arg) rides along so the backend can split the block
+    // at that offset (issue #184). It defaults to the end of the text
+    // ("hello" → 5) when the textarea mounts with the caret at the end.
+    expect(cb.onEnter).toHaveBeenCalledWith("blk-1", "hello", 5);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it("plain Enter mid-text passes the caret offset so the backend splits there", async () => {
+    const cb = makeCb();
+    const block = makeBlock("blk-split", "hello world");
+    const ta = mountEditing(block, cb);
+    // Caret between "hello" and " world".
+    ta.setSelectionRange(5, 5);
+
+    const ev = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    ta.dispatchEvent(ev);
+    await Promise.resolve();
+
+    expect(cb.onEnter).toHaveBeenCalledWith("blk-split", "hello world", 5);
     expect(ev.defaultPrevented).toBe(true);
   });
 

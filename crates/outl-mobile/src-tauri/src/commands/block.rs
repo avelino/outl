@@ -35,6 +35,16 @@ pub(crate) fn edit_block(
 }
 
 #[tauri::command]
+pub(crate) fn split_block(
+    page_id: String,
+    id: String,
+    char_offset: u32,
+    state: State<'_, AppState>,
+) -> Result<CreateBlockReply, String> {
+    shared::split_block(state.inner(), page_id, id, char_offset)
+}
+
+#[tauri::command]
 pub(crate) fn toggle_todo(
     page_id: String,
     id: String,

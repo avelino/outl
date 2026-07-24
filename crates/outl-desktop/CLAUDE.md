@@ -199,7 +199,7 @@ Three guards (mobile mirrors them):
 Chord table: [`docs/shortcuts.md`](../../docs/shortcuts.md).
 Load-bearing notes a contributor needs:
 
-- **Plain `Enter` → commit + new sibling below** (`onEnter`, TUI parity).
+- **Plain `Enter` → splits the block at the caret** (`onEnter`, issue #184).
   `Shift+Enter` → literal `\n` soft break (issue #119), handled in `BlockRow`'s `handleKeydown` (not the catalog; see the code comment).
 - `Cmd/Ctrl+X` (cut) and `Cmd/Ctrl+Z` (undo) deliberately fall through to the webview — no catalog binding matches inside a textarea.
   Native per-keystroke undo is still broken: the controlled `value={draft()}` binding resets the textarea's undo stack on every keystroke (issue #80).

@@ -65,8 +65,8 @@ use crate::commands::{
     plugin_sync_hooks, plugin_toolbar, plugin_transform, plugin_transformers, plugin_uninstall,
     previous_day, redo_page, reload_workspace, resolve_embeds, resolve_page_labels, resolve_ref,
     run_auto_run_blocks, run_code_block, search_blocks, search_pages, search_persons,
-    set_backlinks_order, set_block_collapsed, set_workspace, today_slug_cmd, toggle_quote,
-    toggle_todo, undo_page, update_settings, workspace_stats,
+    set_backlinks_order, set_block_collapsed, set_workspace, split_block, today_slug_cmd,
+    toggle_quote, toggle_todo, undo_page, update_settings, workspace_stats,
 };
 use crate::plugin_service::spawn_plugin_service;
 use crate::state::AppState;
@@ -356,6 +356,7 @@ pub fn run() {
             // Block mutations
             create_block,
             edit_block,
+            split_block,
             toggle_todo,
             toggle_quote,
             delete_block,

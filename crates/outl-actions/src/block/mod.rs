@@ -39,6 +39,7 @@ use crate::error::ActionError;
 mod create;
 mod edit;
 mod moves;
+mod split;
 
 pub(crate) use create::create_with_explicit_id;
 pub use create::{
@@ -47,6 +48,7 @@ pub use create::{
 };
 pub use edit::{edit_text, toggle_quote, toggle_todo};
 pub use moves::{delete, indent, move_after, move_down, move_under, move_up, outdent};
+pub use split::split_block;
 
 /// Build a [`LogOp`] wrapping `op` with a fresh HLC.
 fn wrap(hlc: &HlcGenerator, op: Op) -> LogOp {

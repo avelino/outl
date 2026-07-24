@@ -10,8 +10,9 @@ use outl_actions::{
     create_after_or_append, create_before_or_append, delete, edit_text, enclosing_page_id, indent,
     move_after, move_down, move_up, outdent, paste_markdown as action_paste_markdown,
     paste_plain as action_paste_plain, render_block_md,
-    set_block_collapsed as action_set_block_collapsed, toggle_quote as action_toggle_quote,
-    toggle_todo as action_toggle_todo, ActionError, PasteAnchor,
+    set_block_collapsed as action_set_block_collapsed, split_block as action_split_block,
+    toggle_quote as action_toggle_quote, toggle_todo as action_toggle_todo, ActionError,
+    PasteAnchor,
 };
 use tracing::warn;
 
@@ -53,6 +54,43 @@ pub fn create_block<S: AppHost>(
                 None => page,
             };
             append_block(ws, state.hlc(), Some(parent), text_owned.as_deref())
+        }
+    })?;
+    Ok(CreateBlockReply {
+        view,
+        new_id: new_id.to_string(),
+    })
+}
+
+/// Split a block at the caret: the text up to `char_offset` stays in the
+/// block, the rest moves into a new sibling created right below. Returns
+/// the new sibling's id so the client parks the caret at its start.
+///
+/// `char_offset` is a **codepoint** offset (the client converts the
+/// textarea's UTF-16 `selectionStart` first, same as `paste_plain_at`).
+/// `char_offset == 0` empties the block and pushes its text down (open a
+/// block above); `char_offset` at/after the end leaves the text and
+/// creates an empty sibling (plain "Enter at end of line").
+///
+/// Tolerates a stale anchor exactly like [`create_block`]: if a sync
+/// reload re-minted or trashed the node between the caret read and this
+/// commit, it degrades to the old "empty sibling below" so Enter still
+/// yields a block instead of surfacing a dead-id Retry toast.
+pub fn split_block<S: AppHost>(
+    state: &S,
+    page_id: String,
+    id: String,
+    char_offset: u32,
+) -> Result<CreateBlockReply, String> {
+    let page = parse_node_id(&page_id)?;
+    let node = parse_node_id(&id)?;
+    let (new_id, view) = finish_in_page_with(state, page, |ws| {
+        match action_split_block(ws, state.hlc(), node, char_offset as usize) {
+            Err(ActionError::NotInTree(_)) => {
+                warn!("split_block: node {node} not in tree (re-minted by a sync reload?); creating an empty sibling instead");
+                create_after_or_append(ws, state.hlc(), page, node, None)
+            }
+            other => other,
         }
     })?;
     Ok(CreateBlockReply {

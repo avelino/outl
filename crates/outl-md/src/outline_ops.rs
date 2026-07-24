@@ -155,6 +155,29 @@ pub fn insert_sibling_after(blocks: &mut Vec<OutlineNode>, path: &[usize]) {
     siblings.insert(pos, OutlineNode::default());
 }
 
+/// Insert a new block carrying `text` as a sibling immediately *after*
+/// `path`. Same clamp behaviour as [`insert_sibling_after`] (a path past
+/// the live sibling list appends at the end).
+///
+/// Used by the TUI's block-split (Enter mid-text): the tail of the
+/// current block becomes the new sibling's initial text while the head
+/// stays behind. The empty-text call is exactly [`insert_sibling_after`],
+/// which stays as the common case.
+pub fn insert_sibling_after_with_text(blocks: &mut Vec<OutlineNode>, path: &[usize], text: String) {
+    let node = OutlineNode {
+        text,
+        ..OutlineNode::default()
+    };
+    if path.is_empty() {
+        blocks.push(node);
+        return;
+    }
+    let (last, parent_path) = path.split_last().unwrap();
+    let siblings = siblings_mut(blocks, parent_path);
+    let pos = (last + 1).min(siblings.len());
+    siblings.insert(pos, node);
+}
+
 /// Insert a fresh empty block as a sibling immediately *before* `path`.
 ///
 /// Clamp behavior mirrors [`insert_sibling_after`]: a path that
@@ -369,6 +392,26 @@ mod tests {
         insert_sibling_before(&mut blocks, &[0]);
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].text, "");
+    }
+
+    #[test]
+    fn insert_sibling_after_with_text_seeds_the_new_block() {
+        // The TUI block-split path: "hello world" split at the cursor
+        // leaves the head behind and drops the tail into a new sibling.
+        let mut blocks = vec![block("hello"), block("b")];
+        insert_sibling_after_with_text(&mut blocks, &[0], " world".to_string());
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0].text, "hello");
+        assert_eq!(blocks[1].text, " world");
+        assert_eq!(blocks[2].text, "b");
+    }
+
+    #[test]
+    fn insert_sibling_after_with_text_clamps_when_blocks_empty() {
+        let mut blocks: Vec<OutlineNode> = Vec::new();
+        insert_sibling_after_with_text(&mut blocks, &[0], "tail".to_string());
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].text, "tail");
     }
 
     #[test]

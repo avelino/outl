@@ -74,6 +74,7 @@ pub mod resolve;
 pub mod storage_scope;
 pub mod sync;
 pub mod template;
+mod text;
 pub mod todo;
 pub mod tree;
 
@@ -85,7 +86,8 @@ pub use backlinks_sort::sort_backlinks;
 pub use block::{
     append_block, append_forest, append_tree, create_after, create_after_or_append, create_before,
     create_before_or_append, create_under, delete, edit_text, indent, move_after, move_down,
-    move_under, move_up, outdent, toggle_quote, toggle_todo, BlockTreeOutcome, BlockTreeSpec,
+    move_under, move_up, outdent, split_block, toggle_quote, toggle_todo, BlockTreeOutcome,
+    BlockTreeSpec,
 };
 pub use clipboard::{copy_markdown, copy_markdown_nodes};
 pub use collapsed::{set_block_collapsed, toggle_block_collapsed};
