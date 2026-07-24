@@ -73,7 +73,7 @@ export interface BlockCallbacks {
   /** Commit the current edit. Called on Esc / blur / structural ops. */
   onCommit: (id: string, text: string) => Promise<void>;
   /** Enter pressed → commit + create a sibling below + focus it. */
-  onEnter: (id: string, text: string) => Promise<void>;
+  onEnter: (id: string, text: string, caretChars: number) => Promise<void>;
   /**
    * `Cmd/Ctrl+Shift+Enter` with the caret at column 0 → commit + create
    * a sibling *before* this one + focus it. The textarea mirror of vim `O`.
@@ -641,7 +641,14 @@ export function BlockRow(props: {
       !e.altKey
     ) {
       e.preventDefault();
-      await props.cb.onEnter(props.block.id, draft());
+      // Pass the caret so the backend splits the block there instead of
+      // always appending an empty sibling (issue #184). `selectionStart`
+      // is a UTF-16 offset; the backend expects codepoints.
+      const caretChars = utf16OffsetToCharOffset(
+        textareaRef?.value ?? draft(),
+        textareaRef?.selectionStart ?? draft().length,
+      );
+      await props.cb.onEnter(props.block.id, draft(), caretChars);
       return;
     }
     // `Cmd/Ctrl+Shift+Enter` is caret-position aware, handled here (not
@@ -663,7 +670,10 @@ export function BlockRow(props: {
         (textareaRef?.selectionStart ?? -1) === 0 &&
         (textareaRef?.selectionEnd ?? -1) === 0;
       if (atStart) await props.cb.onCreateBefore(props.block.id, draft());
-      else await props.cb.onEnter(props.block.id, draft());
+      // Past column 0: this chord means "sibling below", not "split
+      // here" — pass the end offset so `split_block` yields an empty
+      // sibling below (the pre-#184 behaviour) regardless of the caret.
+      else await props.cb.onEnter(props.block.id, draft(), draft().length);
       return;
     }
     if (e.key === "Tab") {

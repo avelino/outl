@@ -246,6 +246,8 @@ Recently added — check these before writing a parallel template helper (catalo
 | Pre-computed inverted backlinks index — build once (`O(blocks)`, off the input path) then look a page's backlinks up in `O(refs)` instead of re-scanning the workspace on every navigation (`for_page` / `for_target` / `count_for_page` / `len` / `is_empty`); `backlinks_for_page` / `backlinks_for_target` are now one-shot wrappers over this | `outl_actions::BacklinkIndex` | `crates/outl-actions/src/backlinks_index.rs` |
 | Build the backlinks index from the `.md` files on disk (client-facing builder — no `Workspace` touched, no lock held, `Send`); `build_backlink_index` (from an in-memory `Workspace`) is for the one-shot wrappers only — building a client's index from the workspace forces a lazy-boot vault (#179) to materialize and holds the workspace lock across the walk | `outl_actions::build_backlink_index_from_disk` | `crates/outl-actions/src/backlinks_index.rs` |
 | Apply an already-rendered `.md` string back into the workspace + sidecar, skipping a redundant re-render (the GUI commit path renders once for the undo diff and reuses it) | `outl_actions::journal::apply_page_md_with_sidecar_rendered` | `crates/outl-actions/src/journal.rs` |
+| Split a block at a character offset (Enter mid-text): head stays in the block, tail becomes a new sibling right after it, children stay with the head | `outl_actions::block::split_block` | `crates/outl-actions/src/block/split.rs` |
+| Insert a sibling after a path, seeded with text (the TUI's in-flight block-split: tail of the split goes into the new sibling) | `outline_ops::insert_sibling_after_with_text` | `crates/outl-md/src/outline_ops.rs` |
 
 ### 5.2 Reuse-first violations — no parallel implementations
 

@@ -266,12 +266,7 @@ fn apply_properties_node(
     Ok(())
 }
 
-fn split_at_char(s: &str, caret: usize) -> (String, String) {
-    let mut chars = s.chars();
-    let left: String = chars.by_ref().take(caret).collect();
-    let right: String = chars.collect();
-    (left, right)
-}
+use crate::text::split_at_char;
 
 fn join_caret_left_with(left: &str, addition: &str) -> String {
     if left.is_empty() {

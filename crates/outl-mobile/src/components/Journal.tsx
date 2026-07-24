@@ -44,11 +44,13 @@ import {
   searchPersons,
   setBacklinksOrder,
   setBlockCollapsed,
+  splitBlock,
   syncNow,
   todaySlug,
   toggleTodo,
   workspaceStats,
 } from "@outl/shared/api/commands";
+import { utf16OffsetToCharOffset } from "@outl/shared/paste";
 import { peersOnline } from "@outl/shared/peers";
 import { detectFence } from "@outl/shared/highlight";
 import {
@@ -1028,13 +1030,21 @@ export function Journal() {
     // sync that meant lost text + leftover empty blocks. Correctness wins; the
     // keyboard bounce needs a truly optimistic create (mount+focus the new
     // block synchronously), which is a separate, carefully-validated change.
+    // Capture the caret BEFORE committing (commit drops focus). A caret
+    // in the middle splits the block there (issue #184); the tail moves
+    // into the new sibling and we drop the caret at its start. No active
+    // textarea (newLine fired from a selected-but-not-editing block) →
+    // split at the end, i.e. an empty sibling below (the old behaviour).
+    const ta = activeTextareaSignal();
+    const caretChars = ta
+      ? utf16OffsetToCharOffset(ta.value, ta.selectionStart ?? ta.value.length)
+      : Number.MAX_SAFE_INTEGER;
+    const tail = ta ? ta.value.slice(ta.selectionStart ?? ta.value.length) : "";
     if (editingId()) await commitEdit();
-    const reply = await withError(() =>
-      createBlock(pid, { afterId: id, text: null }),
-    );
+    const reply = await withError(() => splitBlock(pid, id, caretChars));
     if (reply) {
       applyView(reply.view);
-      startEdit(reply.new_id, "");
+      startEdit(reply.new_id, tail);
     }
   }
 

@@ -19,6 +19,7 @@ import {
   runAutoRunBlocks,
   runCodeBlock,
   setBlockCollapsed,
+  splitBlock,
   toggleTodo,
 } from "@outl/shared/api/commands";
 
@@ -385,22 +386,23 @@ export function OutlineView() {
         if (hooked) playPluginViews(hooked.views);
       });
     },
-    onEnter: async (id, text) => {
+    onEnter: async (id, text, caretChars) => {
       const pageId = appState.page?.id;
       if (!pageId) return;
-      // Commit the in-flight edit first, then create the sibling.
-      // The backend returns the freshly-inserted id so we put it
-      // straight into edit mode — `<BlockRow />`'s `createEffect`
-      // focuses its textarea on the next tick. We used to find the
-      // new block by diffing against a snapshot of the old outline,
-      // which mis-fired when the host block had children (the diff
-      // could pick up an existing descendant).
+      // Commit the in-flight draft first so the workspace holds the text
+      // we're about to split, then split at the caret (issue #184). The
+      // head stays in this block, the tail moves into a new sibling
+      // below; the backend returns the sibling's id so we drop straight
+      // into edit mode on it. A caret at the end yields an empty sibling
+      // (the old "Enter appends a block below" behaviour), so this one
+      // path covers both. We used to find the new block by diffing the
+      // outline, which mis-fired when the host block had children.
       await handleError(editBlock(pageId, id, text));
-      const reply = await handleError(
-        createBlock(pageId, { afterId: id, parentId: null, text: "" }),
-      );
+      const reply = await handleError(splitBlock(pageId, id, caretChars));
       if (!reply) return;
       applyView(reply.view);
+      // The sibling carries the tail — land the caret at its start.
+      setAppState("caretIntent", "start");
       setEditingId(reply.new_id);
     },
     onCreateBefore: async (id, text) => {

@@ -62,6 +62,7 @@ Every entry here routes through `Workspace::apply` — never build a `LogOp` fro
 | Create sibling after a block, appending at page end when the anchor is stale | `outl_actions::block::create_after_or_append` (the desktop/mobile `create_block` stale-anchor fallback — one owner, no per-client duplication) | `crates/outl-actions/src/block/create.rs` |
 | Create sibling **before** a block, appending at page end when the anchor is stale | `outl_actions::block::create_before_or_append` (the `O` / new-block-above counterpart of `create_after_or_append` — same stale-anchor tolerance so a concurrent sync reload that re-mints the id never surfaces `block <id> is not in the tree`) | `crates/outl-actions/src/block/create.rs` |
 | Edit a block's text | `outl_actions::block::edit_text` | `crates/outl-actions/src/block/edit.rs` |
+| Split a block at a character offset (Enter mid-text): head stays in the block, tail becomes a new sibling right after it, children stay with the head | `outl_actions::block::split_block` | `crates/outl-actions/src/block/split.rs` |
 | Move a block to sit **after an arbitrary target** (cut-and-paste-block; crosses pages; one `Op::Move`, preserving id + refs; rejects self-subtree cycles) | `outl_actions::block::move_after` | `crates/outl-actions/src/block/moves.rs` |
 | Indent / outdent / move up / move down a block | `outl_actions::block::indent` / `outdent` / `move_up` / `move_down` | `crates/outl-actions/src/block/moves.rs` |
 | Re-parent a block under an arbitrary page/block (cross-page move) | `outl_actions::block::move_under` | `crates/outl-actions/src/block/moves.rs` |
@@ -173,6 +174,7 @@ UI-agnostic; both TUI and mobile consume them.
 | Convert flat index ↔ path / look up a node at a path | `outline_ops::path_for_index` / `index_for_path` / `node_at_path` / `node_at_path_mut` | `crates/outl-md/src/outline_ops.rs` |
 | Count descendants under a path / grab a mutable siblings slice | `outline_ops::descendants_count_at_path` / `siblings_mut` | `crates/outl-md/src/outline_ops.rs` |
 | Insert a sibling before / after a path | `outline_ops::insert_sibling_before` / `outline_ops::insert_sibling_after` | `crates/outl-md/src/outline_ops.rs` |
+| Insert a sibling after a path, seeded with text (the TUI's in-flight block-split: tail of the split goes into the new sibling) | `outline_ops::insert_sibling_after_with_text` | `crates/outl-md/src/outline_ops.rs` |
 | Indent / outdent / delete / move up / move down at a path | `outline_ops::indent_at_path` / `outdent_at_path` / `delete_at_path` / `move_up_at_path` / `move_down_at_path` | `crates/outl-md/src/outline_ops.rs` |
 
 ## 10. Indices and search (outl-md::index + block_index)

@@ -298,6 +298,25 @@ export function editBlock(pageId: string, id: string, text: string): Promise<Pag
   return invoke<PageView>("edit_block", { pageId, id, text });
 }
 
+/**
+ * Split a block at the caret: the text up to `charOffset` stays in the
+ * block, the rest moves into a new sibling below (returned as `new_id`
+ * so the client can drop the caret at its start). Mirrors
+ * `outl_actions::split_block`.
+ *
+ * `charOffset` is a **codepoint** offset — convert the textarea's
+ * UTF-16 `selectionStart` with `utf16OffsetToCharOffset` first, same as
+ * {@link pastePlain}. `charOffset === 0` opens an empty block above;
+ * a caret at/after the end creates an empty sibling below (plain Enter).
+ */
+export function splitBlock(
+  pageId: string,
+  id: string,
+  charOffset: number,
+): Promise<CreateBlockReply> {
+  return invoke<CreateBlockReply>("split_block", { pageId, id, charOffset });
+}
+
 export function toggleTodo(pageId: string, id: string): Promise<PageView> {
   return invoke<PageView>("toggle_todo", { pageId, id });
 }

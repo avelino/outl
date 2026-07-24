@@ -103,8 +103,10 @@ TUI-specific contracts worth remembering:
 
 - **`Esc` commits** through `commit_insert` (writes buffer → AST → disk via `outl_md::reconcile_md`).
   Aborting without commit is `abort_insert` — wired to nothing today; we never lose user keystrokes silently.
-- **`Enter` always commits and continues.**
-  It's commit + new block below + park in Insert on the new block.
+- **`Enter` splits the block at the cursor (issue #184).**
+  The text before the cursor stays in the current block (the head), the text from the cursor onward moves into a new sibling created right below (the tail), and Insert re-enters on the new block with the cursor parked at its start.
+  Cursor at the end of the text is the degenerate case: an empty tail, i.e. the old "commit + new block below" behaviour.
+  Cursor at the start empties the head and pushes the whole line down into the sibling — "open an empty block above".
   The Insert-mode commit path also drains `pending_reload` (peer-ops poller held it back during the edit).
 - **`Backspace` on an empty block deletes the block** and moves selection to the previous one — the only structural mutation that can happen from Insert.
 - **Autocomplete triggers** are pure trigger-detection inside the buffer (`[[`, `#`, `((`, `/`); they own the keystream while their popup is open.

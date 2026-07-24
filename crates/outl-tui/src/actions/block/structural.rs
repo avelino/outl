@@ -11,8 +11,8 @@ use crate::actions::block::insert::InsertCursor;
 use crate::edit_buffer::EditBuffer;
 use crate::outline_ops::{
     delete_at_path, descendants_count_at_path, flat_count, indent_at_path, index_for_path,
-    insert_sibling_after, insert_sibling_before, node_at_path, outdent_at_path, path_for_index,
-    siblings_mut,
+    insert_sibling_after, insert_sibling_after_with_text, insert_sibling_before, node_at_path,
+    outdent_at_path, path_for_index, siblings_mut,
 };
 use crate::state::{App, EditTarget, Focus, Mode};
 
@@ -78,16 +78,40 @@ impl App {
             path_for_index(&self.page.blocks, self.selected).unwrap_or_else(|| vec![0])
         };
         self.snapshot_for_undo();
-        insert_sibling_after(&mut self.page.blocks, &path);
+
+        // Split the in-flight buffer at the cursor when we're editing: the
+        // head stays in the current block, the tail seeds the new sibling
+        // (issue #184). Cursor at end → empty tail (the plain "new block
+        // below"); cursor at start → empty head, the text rides down onto
+        // the sibling (open an empty block above). When invoked from Normal
+        // (`o`, no live buffer) there's nothing to split — the sibling is
+        // empty, exactly as before.
+        let in_insert = matches!(self.mode, Mode::Insert { .. });
+        let tail = if let Mode::Insert { buffer, .. } = &mut self.mode {
+            // `take`/`skip` saturate, so a cursor at end yields an empty tail.
+            let full = buffer.as_string();
+            let head: String = full.chars().take(buffer.cursor).collect();
+            let tail: String = full.chars().skip(buffer.cursor).collect();
+            // Truncate the buffer to the head so `commit_insert` writes only
+            // the head back to the current block.
+            *buffer = EditBuffer::from_text(&head);
+            tail
+        } else {
+            String::new()
+        };
+
+        insert_sibling_after_with_text(&mut self.page.blocks, &path, tail);
         // New selection = the newly inserted block (right after the previous one in DFS).
         self.flat_len = flat_count(&self.page.blocks);
         let new_idx = self.selected + 1 + descendants_count_at_path(&self.page.blocks, &path);
         self.selected = new_idx.min(self.flat_len.saturating_sub(1));
-        // If we were in Insert, commit the old buffer first, then re-enter on new block.
-        if matches!(self.mode, Mode::Insert { .. }) {
+        // If we were in Insert, commit the old buffer (now the head) first,
+        // then re-enter on the new block with the caret at its start — the
+        // tail begins there.
+        if in_insert {
             self.commit_insert();
         }
-        self.enter_insert(InsertCursor::AtCursor);
+        self.enter_insert(InsertCursor::Start);
     }
 
     /// Create a new block above the current selection, then enter Insert.

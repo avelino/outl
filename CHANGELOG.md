@@ -5,6 +5,15 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pressing Enter in the middle of a block now splits it instead of leaving the text untouched and opening an empty block below (issue #184).**
+  Every client — TUI, desktop, mobile — used to treat Enter as "commit this block, then create an empty sibling below and start typing there," no matter where the cursor sat, so splitting a sentence into two blocks meant a manual cut-and-paste.
+  Enter now behaves the way every other outliner does: the text before the cursor stays in the current block, the text from the cursor onward moves into a brand-new sibling created right below, and the cursor lands at the start of that new block.
+  The two edge cases keep their old, familiar shape — Enter at the end of the text still just opens an empty block below, and Enter at the very start pushes the whole line down and leaves an empty block above it.
+  Children of the split block stay with the head, so indenting is never disturbed.
+  The desktop and mobile apps share one backend operation for this (`outl_actions::split_block`, wired through a new `split_block` Tauri command); the TUI has its own equivalent that slices the in-flight edit buffer before it's ever written back to disk, since the TUI edits an AST that hasn't round-tripped through the workspace yet.
+
 ### Added
 
 - **The pairing screen now shows live sync progress instead of a frozen "Loading…".**
