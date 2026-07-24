@@ -101,7 +101,7 @@ The query runtime returns `OutputFormat::Embeds`, which tells the orchestrator t
 
 The rendered structure under the ` ```query ` block looks like:
 
-```markdown
+````markdown
 - ```query
   status: todo
   ```
@@ -109,7 +109,7 @@ The rendered structure under the ` ```query ` block looks like:
     - !((blk-abcdef))
     - !((blk-ghijkl))
     - !((blk-mnopqr))
-```
+````
 
 When the page is opened in the TUI or desktop, each `!((blk-…))` expands to show the original block's text and subtree.
 Because these are embeds — not copies — toggling a TODO on the original block updates the query result on the next page load.
