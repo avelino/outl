@@ -93,18 +93,34 @@ impl App {
         }
     }
 
-    /// Run the code block under the current selection through
-    /// [`outl_exec`]. The result lands as a `> **result:**` subblock
-    /// (or replaces an existing one), the `.md` is rewritten, and the
-    /// op log is reconciled — all in one shot.
+    /// Dispatch the `gx` chord: run the fenced code block under the
+    /// cursor, or — when the block isn't code — open the markdown link
+    /// `[text](url)` under the cursor in the system browser (issue #183).
+    ///
+    /// Code execution wins: a fenced block always runs, and only a
+    /// non-fence block consults the link under the caret. Neither present
+    /// is a friendly status message, not the old `run failed` modal.
     pub(crate) fn run_current_block(&mut self) {
+        if matches!(self.mode, Mode::Insert { .. }) {
+            self.commit_insert();
+        }
+
+        match decide_gx(&self.current_block_text(), self.cursor_col) {
+            GxAction::OpenLink(url) => {
+                self.open_external_url(&url);
+                return;
+            }
+            GxAction::Nothing => {
+                self.status = "no code block or link under cursor".into();
+                return;
+            }
+            GxAction::Run => {}
+        }
+
         let path = self.current_path();
         let idx = self.selected;
         let orphans = self.orphans_log.clone();
 
-        if matches!(self.mode, Mode::Insert { .. }) {
-            self.commit_insert();
-        }
         // Execution reads the code block from the workspace / `.md`, so
         // persist any coalesced edit first — otherwise `gx` would run the
         // stale source.
@@ -150,6 +166,23 @@ impl App {
             Err(e) => {
                 self.show_error("run failed", format!("{e}"));
             }
+        }
+    }
+
+    /// Open an external URL in the system's default handler (browser,
+    /// mail client). Scheme-guarded to mirror the desktop frontend's
+    /// `openExternalUrl` (`outl-frontend-shared/src/api/commands.ts`):
+    /// only `http` / `https` / `mailto` are allowed; `file:`,
+    /// `javascript:`, and anything else are refused so a crafted link in
+    /// a synced note can't launch an arbitrary handler.
+    pub(crate) fn open_external_url(&mut self, url: &str) {
+        if !is_safe_external_url(url) {
+            self.status = format!("refused to open non-web link: {url}");
+            return;
+        }
+        match open::that(url) {
+            Ok(()) => self.status = format!("opened {url}"),
+            Err(e) => self.show_error("open failed", format!("{e}")),
         }
     }
 
@@ -293,4 +326,89 @@ fn find_block_at_flat<'a>(
         }
     }
     None
+}
+
+/// What the `gx` chord should do for the block under the cursor.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum GxAction {
+    /// The block is a fenced code block — run it (code exec has priority).
+    Run,
+    /// The block isn't code but a markdown link sits under the cursor.
+    OpenLink(String),
+    /// Neither a code block nor a link under the cursor.
+    Nothing,
+}
+
+/// Decide what `gx` does given the block `text` and the cursor column.
+///
+/// Pure so the priority rule (code beats link) is unit-testable without
+/// touching the terminal or the browser.
+pub(crate) fn decide_gx(text: &str, cursor_col: usize) -> GxAction {
+    if outl_exec::extract_fence(text).is_some() {
+        GxAction::Run
+    } else if let Some(url) = outl_md::link_at_cursor(text, cursor_col) {
+        GxAction::OpenLink(url.to_string())
+    } else {
+        GxAction::Nothing
+    }
+}
+
+/// Only web-ish schemes may be opened externally: `http`, `https`,
+/// `mailto`. Mirrors the desktop frontend's `openExternalUrl` guard.
+fn is_safe_external_url(url: &str) -> bool {
+    url.split_once(':').is_some_and(|(scheme, _)| {
+        matches!(
+            scheme.to_ascii_lowercase().as_str(),
+            "http" | "https" | "mailto"
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn code_block_runs_even_with_a_link_in_it() {
+        // A fence wins over any link text inside it.
+        let text = "```sh\ncurl https://example.com\n```";
+        assert_eq!(decide_gx(text, 10), GxAction::Run);
+    }
+
+    #[test]
+    fn non_code_block_opens_link_under_cursor() {
+        let text = "see [docs](https://outl.app) for more";
+        // Cursor on the anchor text.
+        assert_eq!(
+            decide_gx(text, 6),
+            GxAction::OpenLink("https://outl.app".into())
+        );
+        // Cursor on the URL portion.
+        assert_eq!(
+            decide_gx(text, 15),
+            GxAction::OpenLink("https://outl.app".into())
+        );
+    }
+
+    #[test]
+    fn plain_block_with_no_link_does_nothing() {
+        assert_eq!(decide_gx("just some prose", 3), GxAction::Nothing);
+    }
+
+    #[test]
+    fn cursor_off_the_link_does_nothing() {
+        let text = "tail [x](https://y.z)";
+        assert_eq!(decide_gx(text, 1), GxAction::Nothing);
+    }
+
+    #[test]
+    fn scheme_guard_allows_web_and_mail_only() {
+        assert!(is_safe_external_url("https://outl.app"));
+        assert!(is_safe_external_url("http://outl.app"));
+        assert!(is_safe_external_url("HTTPS://OUTL.APP"));
+        assert!(is_safe_external_url("mailto:a@b.c"));
+        assert!(!is_safe_external_url("file:///etc/passwd"));
+        assert!(!is_safe_external_url("javascript:alert(1)"));
+        assert!(!is_safe_external_url("outl.app"));
+    }
 }

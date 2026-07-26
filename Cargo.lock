@@ -6443,6 +6443,7 @@ dependencies = [
  "chrono",
  "clap",
  "crossterm",
+ "open",
  "outl-actions",
  "outl-config",
  "outl-core",

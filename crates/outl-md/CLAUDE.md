@@ -48,7 +48,11 @@ Treat matching with the same paranoia as the CRDT.
   `is_valid_shortcode_char(c)` is the char-level alphabet check — exported so consumers walking buffers char-by-char (`try_emoji`, TUI's `detect_trigger`) avoid allocating a 1-char `String` per keystroke.
   The parser only tokenizes `:foo:` when `shortcode_to_unicode` finds `foo`, so unknown input (`:notarealemoji:`, `meeting at 14:00`) stays plain.
   **Never retro-translate `glyph → shortcode`** — multiple shortcodes can alias the same codepoint (`:+1:` and `:thumbsup:` both → 👍) so the disk form would become lossy.
-- **Inline tokenization** (`inline.rs`) — `**bold**`, `[[refs]]`, `#tags`, `((blk-XXXXXX))`, `!((blk-XXXXXX))`, `:shortcode:` — and `ref_at_cursor` (resolves to `RefTarget::Page`, `Journal`, `Tag`, or `Block`).
+- **Inline tokenization** (`inline.rs`) — `**bold**`, `[[refs]]`, `#tags`, `((blk-XXXXXX))`, `!((blk-XXXXXX))`, `:shortcode:`.
+- **Cursor introspection** (`cursor.rs`) — "what token sits under the caret?", re-exported through `inline` so `outl_md::inline::{…}` paths still resolve.
+  `ref_at_cursor` resolves to a navigable `RefTarget::{Page, Journal, Tag, Block}`;
+  `link_at_cursor` resolves a markdown link `[text](url)` under the caret (anchor OR url) and returns its URL — the building block for a client that opens links externally (the TUI's `g x`, issue #183);
+  `byte_index_for_char` converts a char index (cursor column) to a byte offset.
   **UI-agnostic.**
   TUI, future Tauri GUI, and mobile clients all consume the same `InlineTok` / `RefTarget` types and map them to their own primitives (`Span`, HTML, `AttributedString`, `AnnotatedString`).
   Two forms:
@@ -61,7 +65,7 @@ Treat matching with the same paranoia as the CRDT.
   `chamados_chat`, `inc_lag1`, `prod.ml_atendimento` stay literal.
   `*` is not subject to this restriction — it works mid-word.
   Enforced in `try_italic_under` / `try_bold_under` via the `closing_underscore` helper.
-  **`inline.rs` is over 900 lines** — known refactor debt; invoke `refactor-architect` before adding further features to this file.
+  The cursor-introspection concern was split out to `cursor.rs` to keep `inline.rs` under the file-size guard; keep new inline-token variants in `inline.rs` and new caret-resolution helpers in `cursor.rs`.
 - **External frontmatter** (`frontmatter.rs`) — metadata extraction for markdown authored by other tools.
   `split_frontmatter` splits the leading `---` fence off a `.md` body (CRLF-safe, honours the `...` end marker; no closing fence → whole file stays body).
   `parse_frontmatter(yaml, drop_keys) → Frontmatter { title, props, dropped }` flattens the YAML into `key:: value` properties: `title` lifted, `tags` normalized to `#name`, caller-supplied drop-list, values verbatim.
@@ -196,7 +200,8 @@ src/
 ├── sidecar.rs      # read/write .outl JSON, derive_ref_handle, content_hash
 ├── matching.rs     # 3-level matching algorithm
 ├── diff.rs         # AST diff → Op sequence (takes old_blocks to preserve ref_handle)
-├── inline.rs       # InlineTok (Plain/Bold/.../BlockRef/Embed/Emoji), RefTarget, ref_at_cursor
+├── inline.rs       # InlineTok (Plain/Bold/.../BlockRef/Embed/Emoji), RefTarget
+├── cursor.rs       # ref_at_cursor, link_at_cursor, byte_index_for_char (re-exported via inline)
 ├── emoji.rs        # shortcode_to_unicode, search, is_valid_shortcode, EmojiHit
 ├── frontmatter.rs  # split_frontmatter, parse_frontmatter, extract_leading_h1 (external md metadata)
 ├── wikilink.rs     # rewrite_wikilinks, clean_wikilink_target, convert_image_links, is_image_target

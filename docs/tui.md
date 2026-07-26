@@ -412,8 +412,13 @@ The result lands as a `> **result:**` subblock right below the source, and re-ru
 
 | Key | Action |
 |-----|--------|
-| `g x` | Run the code block under the cursor |
+| `g x` | Run the code block under the cursor — or, when the block isn't code, open the markdown link `[text](url)` under the cursor in the system browser (issue #183) |
 | `:run` (also `:x`) | Same, via the command palette |
+
+`g x` prioritizes code: a fenced block always runs.
+Only when the current block is **not** a code block does `g x` look for a markdown link under the cursor and open it — the cursor may sit on the link's text or its URL.
+Only `http` / `https` / `mailto` links are opened; anything else is refused.
+Following a `[[page]]` / `#tag` / `((block ref))` is still `Enter`, unchanged.
 
 ```
 - ```lisp
