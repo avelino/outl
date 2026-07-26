@@ -16,6 +16,13 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Added
 
+- **The TUI's `g x` now opens the markdown link under the cursor when the block isn't code (issue #183).**
+  Links `[text](url)` already rendered in the TUI (blue, underlined) but there was no way to follow one — the desktop and mobile apps let you click, the terminal had nothing.
+  `g x` keeps running fenced code blocks exactly as before (code always wins), and only when the current block isn't code does it look for a markdown link under the cursor and open it in your system browser.
+  The cursor can sit on the link's text or its URL — both open the same link, matching vim's `gx` on `.md` files.
+  Only `http` / `https` / `mailto` links are opened; anything else is refused, the same guard the desktop uses.
+  Following a `[[page]]` / `#tag` / `((block ref))` is still `Enter`, unchanged.
+
 - **The pairing screen now shows live sync progress instead of a frozen "Loading…".**
   Pairing a device to a large workspace transfers a ~15 MB snapshot plus a couple hundred thousand ops, which takes the better part of a minute — and until now the screen gave no sign anything was happening.
   The Sync section (desktop) and the Devices sheet (mobile) now show, as a pass runs: a **real progress bar** for the snapshot download (the only phase with an honest percentage — the total is known from the frame's length prefix before the body arrives), a **live count** of ops received / sent (op totals are only known once a batch finishes, so they surface as a number, not a bar), and an **activity feed** of "device → what synced".

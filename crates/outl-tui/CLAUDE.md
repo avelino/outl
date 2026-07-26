@@ -81,6 +81,13 @@ This section captures only the **architectural / TUI-specific behaviour** a cont
 - **`Enter` is overloaded.**
   Open `[[ref]]` / `#tag` / journal / block ref (`((blk-X))` / `!((blk-X))`) under cursor, else enter Insert.
   On a block ref it jumps to the source page and positions the cursor on the referenced block; orphan handles surface a status message and stay put.
+  It deliberately does **not** follow markdown links `[text](url)` — that's `g x` (below).
+- **`g x` is overloaded (code exec first, then link).**
+  The decision is the pure `decide_gx(text, cursor_col)` in `actions/exec.rs`.
+  A fenced code block always runs — `extract_fence` wins, so `call:` / `query` / any ` ```lang ` still executes.
+  Only when the block is **not** code does it consult `link_at_cursor` and open the markdown link under the cursor (anchor or URL) in the system browser via `App::open_external_url` (the `open` crate).
+  Scheme-guarded to `http` / `https` / `mailto`, mirroring the desktop frontend's `openExternalUrl`.
+  Neither present → a status-line message, not the old `run failed` modal (issue #183).
 - **Quit is chord-only.**
   `q q` arms + confirms (single `q` is too easy to hit by accident).
   `Z Z` is the vim "save and quit" alias — outl auto-commits on every Normal boundary, so it reduces to `q q`.

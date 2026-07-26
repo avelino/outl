@@ -248,6 +248,7 @@ Recently added — check these before writing a parallel template helper (catalo
 | Apply an already-rendered `.md` string back into the workspace + sidecar, skipping a redundant re-render (the GUI commit path renders once for the undo diff and reuses it) | `outl_actions::journal::apply_page_md_with_sidecar_rendered` | `crates/outl-actions/src/journal.rs` |
 | Split a block at a character offset (Enter mid-text): head stays in the block, tail becomes a new sibling right after it, children stay with the head | `outl_actions::block::split_block` | `crates/outl-actions/src/block/split.rs` |
 | Insert a sibling after a path, seeded with text (the TUI's in-flight block-split: tail of the split goes into the new sibling) | `outline_ops::insert_sibling_after_with_text` | `crates/outl-md/src/outline_ops.rs` |
+| Resolve the markdown link `[text](url)` under a caret position (anchor OR url) — the URL a client opens externally (TUI `gx` opens it in the browser when the block isn't code) | `outl_md::inline::link_at_cursor` → `Option<&str>` | `crates/outl-md/src/cursor.rs` |
 
 ### 5.2 Reuse-first violations — no parallel implementations
 

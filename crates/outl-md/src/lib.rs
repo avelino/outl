@@ -12,6 +12,7 @@
 
 pub mod atomic;
 pub mod block_index;
+pub mod cursor;
 pub mod diff;
 pub mod emoji;
 pub mod frontmatter;
@@ -35,7 +36,8 @@ pub use diff::{diff_to_ops, DiffPlan};
 pub use emoji::{is_valid_shortcode, search as search_emoji, shortcode_to_unicode, EmojiHit};
 pub use index::{PageEntry, WorkspaceIndex};
 pub use inline::{
-    byte_index_for_char, ref_at_cursor, tokenize, tokenize_owned, InlineTok, InlineToken, RefTarget,
+    byte_index_for_char, link_at_cursor, ref_at_cursor, tokenize, tokenize_owned, InlineTok,
+    InlineToken, RefTarget,
 };
 pub use matching::{match_blocks, Match, MatchLevel};
 pub use parse::{parse, OutlineNode, ParseWarning, ParseWarningKind, ParsedPage};

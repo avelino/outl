@@ -192,7 +192,9 @@ pub fn default_bindings() -> Vec<Binding> {
             pair('g', 'x'),
             Normal,
             Action::RunCodeBlock,
-            "Run code block (TUI chord)",
+            // TUI falls back to opening the markdown link under the
+            // cursor when the block isn't code (issue #183).
+            "Run code block / open link (TUI chord)",
         ),
         // ── Inline markdown wrappers (Insert mode — textarea focused) ──
         //

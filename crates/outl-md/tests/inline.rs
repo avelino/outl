@@ -2,7 +2,9 @@
 //! Moved out of `src/inline.rs` to keep that module under the
 //! file-size-guard. Every test here exercises only the public API.
 
-use outl_md::inline::{byte_index_for_char, ref_at_cursor, tokenize, InlineTok, RefTarget};
+use outl_md::inline::{
+    byte_index_for_char, link_at_cursor, ref_at_cursor, tokenize, InlineTok, RefTarget,
+};
 
 #[test]
 fn plain_text_is_one_token() {
@@ -561,4 +563,46 @@ fn mixed_star_italic_and_underscore_identifier_same_line() {
             .any(|t| matches!(t, InlineTok::Italic { marker: '_', .. })),
         "chamados_chat must not produce an underscore italic, got {toks:?}"
     );
+}
+
+// --- link_at_cursor -----------------------------------------------------
+
+#[test]
+fn link_at_cursor_hits_anchor_text() {
+    let text = "see [docs](https://outl.app) now";
+    // Cursor on the "docs" anchor.
+    assert_eq!(link_at_cursor(text, 6), Some("https://outl.app"));
+}
+
+#[test]
+fn link_at_cursor_hits_url_part() {
+    let text = "see [docs](https://outl.app) now";
+    // Cursor inside the URL.
+    assert_eq!(link_at_cursor(text, 15), Some("https://outl.app"));
+}
+
+#[test]
+fn link_at_cursor_misses_outside_the_link() {
+    let text = "see [docs](https://outl.app) now";
+    assert_eq!(link_at_cursor(text, 1), None); // "see"
+    assert_eq!(link_at_cursor(text, 30), None); // "now"
+}
+
+#[test]
+fn link_at_cursor_ignores_page_refs() {
+    // `[[page]]` is a ref, not a markdown link.
+    assert_eq!(link_at_cursor("go to [[home]] page", 9), None);
+}
+
+#[test]
+fn link_at_cursor_picks_the_right_one_of_many() {
+    let text = "[a](http://a.x) and [b](http://b.y)";
+    assert_eq!(link_at_cursor(text, 1), Some("http://a.x"));
+    assert_eq!(link_at_cursor(text, 21), Some("http://b.y"));
+    assert_eq!(link_at_cursor(text, 16), None); // " and "
+}
+
+#[test]
+fn link_at_cursor_empty_when_no_link() {
+    assert_eq!(link_at_cursor("just prose here", 4), None);
 }
