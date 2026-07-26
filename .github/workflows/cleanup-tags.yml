@@ -54,7 +54,7 @@ jobs:
     # workflow_run fires on every conclusion (success/failure/cancelled).
     # Only act when the upstream Release actually succeeded.
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
         with:
