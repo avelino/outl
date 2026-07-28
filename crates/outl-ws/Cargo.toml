@@ -1,0 +1,29 @@
+[package]
+name = "outl-ws"
+description = "Workspace bootstrap for embedders: open a workspace directory with locks, actor resolution, and per-page shard registration"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+name = "outl_ws"
+path = "src/lib.rs"
+
+[dependencies]
+outl-core.workspace = true
+outl-actions.workspace = true
+
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tracing.workspace = true
+ulid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -54,7 +54,9 @@ outl import logseq ~/path/to/logseq-graph ~/notes
 outl import roam ~/Downloads/backup.json ~/notes
 ```
 
-The importer strips `id::` lines, resolves `((uid))` block refs to page links, slugifies filenames, seeds the sidecars. Anything it can't resolve stays as `((unresolved:UID))` for manual triage.
+The importers (Roam, Logseq, Obsidian — or `auto` to detect) resolve `((uid))` block refs and `{{embed}}`s into real outl block references, keep folded state, and translate each dialect.
+Everything touched is counted in the import report — run with `--dry-run` first to measure fidelity against your backup.
+Anything unresolvable stays as `((unresolved:UID))` for manual triage.
 
 ## Contributing
 

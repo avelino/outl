@@ -268,6 +268,7 @@ Past incidents:
 - The Logseq importer's `crates/outl-cli/src/cmd/import/normalize.rs` was opened reimplementing `\r\n` handling, `id::` stripping, and long-form date rewriting — every one of which `outl_actions::paste::normalize_external_syntax` already owned.
   Caught in PR #47 review.
   Lesson: a "normalize markdown from outside" need always starts at `paste::normalize_external_syntax`; outline-level restructuring (headings → bullets, multi-paragraph merge, fence dedent) is the only thing the importer adds on top.
+  (The `cmd/import/` directory has since been replaced by the adapter-based `crates/outl-import` — the lesson still applies there: adapters own dialect translation, shared coercions stay upstream.)
 
 The rule:
 

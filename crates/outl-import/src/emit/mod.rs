@@ -1,0 +1,89 @@
+//! Emission — shared by every adapter.
+//!
+//! `render` (pass A) turns the IR into markdown with placeholders;
+//! `resolve` (pass B) maps source UIDs to real handles through the
+//! stamped sidecars and applies the rewrite through the op log.
+
+pub mod render;
+mod resolve;
+
+use crate::adapter::ImportError;
+use crate::ir::ImportGraph;
+use crate::progress::{ImportProgress, ProgressSink};
+use crate::report::ImportReport;
+use crate::{ImportDest, ImportOptions};
+use std::path::Path;
+
+/// Full pipeline: render → write → reconcile → resolve.
+pub fn run(
+    graph: &ImportGraph,
+    mut dest: ImportDest<'_>,
+    opts: &ImportOptions,
+    report: &mut ImportReport,
+    sink: ProgressSink<'_>,
+) -> Result<(), ImportError> {
+    let (pages, uid_map) =
+        render::render_graph(graph, &dest.pages_dir, &dest.journals_dir, opts, report);
+    sink(ImportProgress::Rendered { pages: pages.len() });
+
+    // Pass A: write every file, then reconcile so sidecars are
+    // stamped with NodeIds + ref handles.
+    for (i, p) in pages.iter().enumerate() {
+        if let Some(dir) = p.path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| ImportError::io(dir, e))?;
+        }
+        outl_md::write_atomic(&p.path, p.text.as_bytes())
+            .map_err(|e| ImportError::io(&p.path, e))?;
+        sink(ImportProgress::Writing {
+            done: i + 1,
+            total: pages.len(),
+        });
+    }
+    for (i, p) in pages.iter().enumerate() {
+        sink(ImportProgress::Reconciling {
+            done: i,
+            total: pages.len(),
+            page: &p.stem,
+        });
+        if let Err(e) =
+            outl_md::reconcile_md(dest.workspace, dest.hlc, &p.path, Some(&dest.orphans))
+        {
+            report.warn(&p.title, format!("reconcile failed: {e}"));
+        }
+    }
+
+    // Pass B: placeholders → real handles, collapsed flags → ops.
+    resolve::apply(&mut dest, &pages, &uid_map, report, sink)
+}
+
+/// Dry-run: render in memory and simulate the resolve pass so the
+/// report carries the same ref/embed numbers a real import would.
+pub fn dry_run(graph: &ImportGraph, opts: &ImportOptions, report: &mut ImportReport) {
+    let (pages, uid_map) = render::render_graph(
+        graph,
+        Path::new("pages"),
+        Path::new("journals"),
+        opts,
+        report,
+    );
+    for page in &pages {
+        // Scan the whole page text (not just placeholder blocks) so
+        // markers the parser lifts into property values count too —
+        // matching what the real run's file-fallback sweep reaches.
+        if page.has_markers {
+            let _ = resolve::rewrite_placeholders(&page.text, &mut |uid, is_embed| {
+                if uid_map.contains_key(uid) {
+                    if is_embed {
+                        report.embeds_resolved += 1;
+                    } else {
+                        report.refs_resolved += 1;
+                    }
+                } else {
+                    report.refs_unresolved += 1;
+                }
+                String::new()
+            });
+        }
+        report.collapsed_applied += page.collapsed.len();
+    }
+}
