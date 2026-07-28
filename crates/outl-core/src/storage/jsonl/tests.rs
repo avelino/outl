@@ -598,6 +598,177 @@ fn reload_rebuilds_on_node_offset_asymmetry() {
     );
 }
 
+/// A batch append must land byte-for-byte identical on disk — same
+/// `.jsonl` body AND same `.idx` / `.nodes.idx` sidecars — as feeding
+/// the same ops through N sequential `append_op` calls. The only
+/// difference is durability cost (one fsync vs N), never content.
+#[test]
+fn append_ops_batch_equals_sequential_appends() {
+    let actor = ActorId::new();
+    let g = HlcGenerator::new(actor);
+    // Build the ops ONCE and feed the identical set to both storages.
+    let ops: Vec<LogOp> = (0..5).map(|_| mk_create(&g)).collect();
+
+    let seq_dir = TempDir::new().unwrap();
+    {
+        let mut s = JsonlStorage::open(seq_dir.path().to_path_buf(), actor).unwrap();
+        for op in &ops {
+            s.append_op(op).unwrap();
+        }
+    }
+
+    let batch_dir = TempDir::new().unwrap();
+    {
+        let mut s = JsonlStorage::open(batch_dir.path().to_path_buf(), actor).unwrap();
+        s.append_ops(&ops).unwrap();
+    }
+
+    // The op log and both index sidecars are byte-identical.
+    for name in [
+        format!("ops-{actor}.jsonl"),
+        format!(".ops-{actor}.idx"),
+        format!(".ops-{actor}.nodes.idx"),
+    ] {
+        let seq = std::fs::read(seq_dir.path().join(&name)).unwrap();
+        let batch = std::fs::read(batch_dir.path().join(&name)).unwrap();
+        assert_eq!(seq, batch, "{name} must match between sequential and batch");
+    }
+
+    // Reload both from disk and confirm the same op set comes back.
+    let seq_reload = JsonlStorage::open(seq_dir.path().to_path_buf(), actor).unwrap();
+    let batch_reload = JsonlStorage::open(batch_dir.path().to_path_buf(), actor).unwrap();
+    let seq_ts: Vec<Hlc> = seq_reload.all_ops().unwrap().iter().map(|o| o.ts).collect();
+    let batch_ts: Vec<Hlc> = batch_reload
+        .all_ops()
+        .unwrap()
+        .iter()
+        .map(|o| o.ts)
+        .collect();
+    assert_eq!(batch_ts.len(), 5);
+    assert_eq!(seq_ts, batch_ts);
+}
+
+/// A batch carrying one foreign-actor op (even in the middle) is
+/// rejected whole — the guard runs over EVERY op before a single byte
+/// is written, so the file does not grow and no op from the batch lands.
+#[test]
+fn append_ops_rejects_foreign_actor_without_writing() {
+    let tmp = TempDir::new().unwrap();
+    let us = ActorId::new();
+    let g_us = HlcGenerator::new(us);
+    let them = ActorId::new();
+    let g_them = HlcGenerator::new(them);
+
+    let mut storage = JsonlStorage::open(tmp.path().to_path_buf(), us).unwrap();
+    // Seed one legit op so the file exists with a known size.
+    storage.append_op(&mk_create(&g_us)).unwrap();
+    let path = tmp.path().join(format!("ops-{us}.jsonl"));
+    let size_before = std::fs::metadata(&path).unwrap().len();
+
+    // Foreign op in the MIDDLE of the batch → whole batch rejected.
+    let batch = vec![mk_create(&g_us), mk_create(&g_them), mk_create(&g_us)];
+    assert!(storage.append_ops(&batch).is_err());
+
+    // Not one byte was written and the logical set is still the seed op.
+    let size_after = std::fs::metadata(&path).unwrap().len();
+    assert_eq!(
+        size_before, size_after,
+        "a rejected batch must not grow the file"
+    );
+    assert_eq!(storage.all_ops().unwrap().len(), 1);
+}
+
+/// An empty batch touches nothing: no file is created, no fsync happens.
+#[test]
+fn append_ops_empty_batch_is_noop() {
+    let tmp = TempDir::new().unwrap();
+    let actor = ActorId::new();
+    let mut storage = JsonlStorage::open(tmp.path().to_path_buf(), actor).unwrap();
+
+    storage.append_ops(&[]).unwrap();
+
+    let path = tmp.path().join(format!("ops-{actor}.jsonl"));
+    assert!(!path.exists(), "empty batch must not create the ops file");
+    assert_eq!(storage.all_ops().unwrap().len(), 0);
+}
+
+/// A torn tail (partial last line, no newline — a crash mid-write) is
+/// healed ONCE at the front of the batch, so the first batched op lands
+/// as its own record instead of being glued onto the fragment. All
+/// batched ops survive reload; only the fragment is skipped.
+#[test]
+fn append_ops_heals_torn_tail_once() {
+    let tmp = TempDir::new().unwrap();
+    let actor = ActorId::new();
+    let g = HlcGenerator::new(actor);
+    let path = tmp.path().join(format!("ops-{actor}.jsonl"));
+
+    // Simulate a crash mid-write: a partial record with NO trailing newline.
+    std::fs::write(&path, b"{\"ts\":{\"physical").unwrap();
+
+    {
+        let mut s = JsonlStorage::open(tmp.path().to_path_buf(), actor).unwrap();
+        let batch: Vec<LogOp> = (0..3).map(|_| mk_create(&g)).collect();
+        s.append_ops(&batch).unwrap();
+    }
+
+    // The torn fragment must not be glued onto the first batched op.
+    let raw = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !raw.contains("physical{"),
+        "torn fragment was glued onto a batched op: {raw:?}"
+    );
+
+    // All 3 batched ops survive reload; only the fragment is skipped.
+    let s = JsonlStorage::open(tmp.path().to_path_buf(), actor).unwrap();
+    assert_eq!(
+        s.all_ops().unwrap().len(),
+        3,
+        "the 3 ops appended after a torn tail must survive reload"
+    );
+}
+
+/// Every op in the batch is mirrored into the per-node index, so a cold
+/// `ops_for_node` (LRU shrunk to a single resident op) still finds each
+/// one — no silent loss of batched history from the node-driven read.
+#[test]
+fn append_ops_indexes_every_op() {
+    let tmp = TempDir::new().unwrap();
+    let actor = ActorId::new();
+    let g = HlcGenerator::new(actor);
+
+    let mut storage = JsonlStorage::open(tmp.path().to_path_buf(), actor).unwrap();
+    // Distinct nodes so each has its own per-node index entry.
+    let mut batch = Vec::new();
+    let mut nodes = Vec::new();
+    for _ in 0..5 {
+        let ts = g.next();
+        let node = NodeId::new();
+        nodes.push((node, ts));
+        batch.push(LogOp {
+            ts,
+            actor,
+            op: Op::Edit {
+                node,
+                text_op: vec![1, 2, 3],
+            },
+        });
+    }
+    storage.append_ops(&batch).unwrap();
+
+    // Shrink the LRU so every op is a cold read through the index.
+    storage.resize_cache(1);
+    let resident: usize = storage.file_stats().iter().map(|(_, n)| n).sum();
+    assert_eq!(resident, 1, "resize_cache(1) leaves one op resident");
+
+    // Each batched op is found by node via the per-node + offset index.
+    for (node, ts) in &nodes {
+        let ops = storage.ops_for_node(*node).unwrap();
+        assert_eq!(ops.len(), 1, "every batched op must be indexed by its node");
+        assert_eq!(ops[0].ts, *ts);
+    }
+}
+
 /// Global and PerPage storages coexist in the same `ops/` dir
 /// without clobbering each other.
 #[test]

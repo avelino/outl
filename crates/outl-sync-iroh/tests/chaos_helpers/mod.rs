@@ -116,11 +116,12 @@ pub fn seed_ops_from(
     let mut storage = JsonlStorage::open(ops_dir, actor).expect("open storage");
     let base_ms = now_ms();
     let mut nodes = Vec::with_capacity(count as usize);
+    let mut ops = Vec::with_capacity(count as usize);
     for i in 0..count {
         let node = NodeId::new();
         nodes.push(node);
         let c = start_counter + i;
-        let op = LogOp {
+        ops.push(LogOp {
             ts: Hlc::new(base_ms + c as u64, c, actor),
             actor,
             op: Op::Create {
@@ -128,8 +129,9 @@ pub fn seed_ops_from(
                 parent: NodeId::root(),
                 position: Fractional::first(),
             },
-        };
-        storage.append_op(&op).expect("append op");
+        });
     }
+    // One batched fsync for the whole seed (`Storage::append_ops`, issue #192).
+    storage.append_ops(&ops).expect("append ops batch");
     nodes
 }

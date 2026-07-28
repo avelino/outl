@@ -20,6 +20,7 @@ For the reuse-first rule (why this matters, past drift incidents, what to do whe
 |---|---|---|
 | Open a workspace (in-memory for tests, on-disk JSONL for prod) | `outl_core::Workspace::open_in_memory` / `open_with_storage` | `crates/outl-core/src/workspace.rs` |
 | Route an op through the log → tree (the **only** mutation path) | `outl_core::Workspace::apply(LogOp)` | `crates/outl-core/src/workspace.rs` |
+| Batch a composite action so its ops persist in one `append_ops` per destination instead of one fsync per `apply` (RAII guard, derefs to `Workspace`; commit or drop flushes) | `outl_core::Workspace::begin_batch` → `outl_core::WorkspaceBatch` | `crates/outl-core/src/workspace/batch.rs` |
 | Read the materialized tree / op log from a workspace | `outl_core::Workspace::tree` / `log` / `block_text` | `crates/outl-core/src/workspace.rs` |
 | Build a Yrs text-replace update payload for an op | `outl_core::Workspace::build_text_replace_update` | `crates/outl-core/src/workspace.rs` |
 | Save / boot from a materialized-state snapshot (local boot cache, workspace-owned) | `outl_core::Workspace::save_snapshot` / `set_snapshot_policy` / `wait_for_snapshots` | `crates/outl-core/src/workspace.rs` |

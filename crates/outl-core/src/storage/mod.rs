@@ -111,6 +111,21 @@ pub trait Storage: Send + Sync {
     /// Append a new op. Must be durable before returning `Ok`.
     fn append_op(&mut self, op: &LogOp) -> Result<(), StorageError>;
 
+    /// Append a batch of ops. Durable before returning `Ok`.
+    ///
+    /// The whole batch is durable on `Ok`; the tail is "atomic-ish" — a
+    /// crash mid-batch can leave a prefix of the ops persisted with the
+    /// last line possibly torn, which the read path's torn-tail self-heal
+    /// recovers on the next append (see [`JsonlStorage`]). No op past the
+    /// last durable line survives.
+    ///
+    /// Default impl loops [`Self::append_op`] (one fsync each). Backends
+    /// should override to amortize the durability cost to one fsync per
+    /// batch — that is the whole point of the API.
+    fn append_ops(&mut self, ops: &[LogOp]) -> Result<(), StorageError> {
+        ops.iter().try_for_each(|op| self.append_op(op))
+    }
+
     /// Return all ops with HLC strictly greater than `ts`, in HLC order.
     fn ops_since(&self, ts: Hlc) -> Result<Vec<LogOp>, StorageError>;
 

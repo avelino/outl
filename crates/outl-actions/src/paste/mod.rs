@@ -153,6 +153,21 @@ pub fn paste_markdown(
     anchor: PasteAnchor,
     raw: &str,
 ) -> Result<PasteOutcome, ActionError> {
+    // A paste is one user-visible action but materialises many blocks
+    // (append_forest + sibling inserts + property ops). Batch the whole
+    // entry so it flushes once per destination instead of per op.
+    let mut batch = workspace.begin_batch();
+    let outcome = paste_markdown_inner(&mut batch, hlc, anchor, raw)?;
+    batch.commit()?;
+    Ok(outcome)
+}
+
+fn paste_markdown_inner(
+    workspace: &mut Workspace,
+    hlc: &HlcGenerator,
+    anchor: PasteAnchor,
+    raw: &str,
+) -> Result<PasteOutcome, ActionError> {
     // Detect outline shape on the **raw** payload. Running
     // `normalize_external_syntax` first would strip unknown tokens
     // (`{{video: …}}`, `^^…^^`) and collapse whitespace runs before

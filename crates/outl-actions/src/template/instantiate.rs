@@ -80,8 +80,13 @@ pub(crate) fn instantiate_template_traced(
 
     let ctx = VarContext::new(page_slug, page_date);
 
-    clone_children_recursive(
-        workspace,
+    // Instantiating a template is one user-visible action that deep-copies
+    // a whole subtree (append_block + property ops per node). Batch it so
+    // the clone flushes once per destination instead of per op. The
+    // recursion runs off `begin_batch` so the depth counter is pushed once.
+    let mut batch = workspace.begin_batch();
+    let new_ids = clone_children_recursive(
+        &mut batch,
         hlc,
         template_page,
         target_block,
@@ -90,7 +95,9 @@ pub(crate) fn instantiate_template_traced(
         true,
         trace,
         0,
-    )
+    )?;
+    batch.commit()?;
+    Ok(new_ids)
 }
 
 /// Recursively clone the children of `template_parent` under

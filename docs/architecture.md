@@ -53,6 +53,7 @@ We give up SQL queries (we don't need them — replay + in-memory index is fast 
 ```rust
 trait Storage: Send + Sync {
     fn append_op(&mut self, op: &LogOp) -> Result<()>;
+    fn append_ops(&mut self, ops: &[LogOp]) -> Result<()>;
     fn ops_since(&self, ts: HLC) -> Result<Vec<LogOp>>;
     // ...
 }
@@ -65,6 +66,12 @@ trait Storage: Send + Sync {
 Test doubles are trivial.
 The sync code can mock storage.
 Future ChronDB integration is a PR adding `storage/chrondb.rs`.
+
+`append_ops` amortizes durability over a batch instead of paying one fsync per op (default impl loops `append_op`; `JsonlStorage` overrides it with a single `sync_all`).
+`Workspace::begin_batch()` is the apply-side half.
+A composite action (append a forest, create a page, split a block) opens a `WorkspaceBatch` guard and runs its ops through the normal `apply` path one at a time.
+The guard defers the persist until it commits: one `append_ops` call per storage destination for the whole action.
+See [`docs/storage.md`](storage.md) for the durability contract and `outl-core/CLAUDE.md` for the guard's mechanics.
 
 ### 4. Sidecar JSON instead of inline IDs
 

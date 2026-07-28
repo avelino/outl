@@ -59,17 +59,23 @@ pub fn split_block(
     let text = workspace.block_text(node).unwrap_or_default();
     let (head, tail) = split_at_char(&text, char_offset);
 
+    // One keystroke (Enter mid-text) emits up to three ops: truncate the
+    // head, create the sibling, write the tail. Batch them so the split
+    // flushes once per destination instead of fsyncing three times.
+    let mut batch = workspace.begin_batch();
+
     // Truncate the current block to the head. `edit_text` is a no-op
     // when the text is unchanged (offset at end), so this is cheap in
     // the common "Enter at end of line" case.
-    edit_text(workspace, hlc, node, &head)?;
+    edit_text(&mut batch, hlc, node, &head)?;
 
     // The tail becomes a fresh sibling right after `node`, created empty
     // so `create_after`'s trim can't eat a leading space; `edit_text`
     // then writes the tail verbatim. `create_after` gives the sibling no
     // children, so `node`'s subtree stays with the head.
-    let sibling = create_after(workspace, hlc, node, None)?;
-    edit_text(workspace, hlc, sibling, &tail)?;
+    let sibling = create_after(&mut batch, hlc, node, None)?;
+    edit_text(&mut batch, hlc, sibling, &tail)?;
+    batch.commit()?;
     Ok(sibling)
 }
 

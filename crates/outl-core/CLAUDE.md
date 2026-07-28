@@ -25,6 +25,21 @@ Treat every change as production-bound.
 - The CRDT itself: `do_op`, `undo_op`, `apply_op`, `creates_cycle`
 - Append-only `OpLog`
 - `Storage` trait + `JsonlStorage` (one file per actor, syncable via iCloud / Syncthing / shared FS) + `MemoryStorage` (test double)
+  - **Batch append (`Storage::append_ops`).**
+    Durable on `Ok` with ONE `.jsonl` fsync for the whole batch (`F_FULLFSYNC` on macOS is ~4ms; per-op fsync was the write bottleneck).
+    Default trait impl loops `append_op`.
+    `JsonlStorage` overrides it: it validates the foreign-actor guard over every op and serializes all lines before writing a byte (a rejected batch leaves the disk untouched, an empty batch is a no-op).
+    Then it opens once, heals a torn tail once, writes every line, fsyncs once, and mirrors each op into both sidecar indexes + the LRU.
+    `append_op` is `append_ops` of one, so the torn-tail heal and index-mirroring live in a single place.
+  - **`Workspace::begin_batch()` / `WorkspaceBatch`** (`src/workspace/batch.rs`) is the apply-side half of the same optimization.
+    A composite action (multiple `apply` calls for one user-visible mutation) opens the RAII guard and drives every op through the normal `apply` path (dedup, Yrs merge, CRDT unchanged).
+    The guard buffers only the *persist* until it commits — one `append_ops` per touched storage destination.
+    `WorkspaceBatch` derefs to `&mut Workspace`, so composite actions in `outl-actions` pass it straight to functions written for `&mut Workspace`.
+    Batches nest via a depth counter; only the outermost guard flushes.
+    A drop without `commit()` still flushes best-effort (the ops already live in the CRDT + in-memory log, so dropping them would violate invariant #1).
+    The non-RAII `enter_batch`/`end_batch` pair exists for callers that can't hold a `&mut Workspace` borrow across the batched region.
+    `outl-cli`'s `outl batch` is that caller — it re-borrows `&mut WsCtx` per op — and every `enter_batch` must be paired with exactly one `end_batch`.
+    The buffer only ever carries local-actor ops; a foreign op (sync replay) never flows through a batch.
   - **Read-side glued-op recovery.**
     `JsonlStorage::reload` parses each line with a streaming `serde_json::Deserializer`.
     A line carrying concatenated JSON objects with no separating newline (`…}}}{"ts":…` — the signature of an interleaved, non-atomic concurrent append) is recovered into all its ops instead of dropped.
@@ -211,6 +226,8 @@ src/
 │   ├── jsonl.rs        # JsonlStorage (only persistent backend)
 │   └── memory.rs       # MemoryStorage (test double, no disk)
 ├── workspace.rs        # Workspace entry point
+├── workspace/
+│   └── batch.rs         # Workspace::begin_batch / WorkspaceBatch (deferred-persist batching)
 ├── page.rs             # Page model (projection over op log)
 ├── journal.rs          # Journal (page with date-key)
 ├── block.rs            # Block (tree node, with Yrs TextRef for content)

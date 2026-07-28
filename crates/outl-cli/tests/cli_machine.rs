@@ -229,6 +229,92 @@ fn delete_is_idempotent_when_md_is_missing() {
 }
 
 #[test]
+fn batch_applies_every_op_in_one_session() {
+    let ws = init_workspace();
+    let _ = ok(outl()
+        .args(["--workspace"])
+        .arg(ws.path())
+        .args(["page", "create", "ideas", "--json"])
+        .output()
+        .unwrap());
+
+    let payload = r#"{"ops":[
+        {"op":"block_append","args":{"page":"ideas","text":"first"}},
+        {"op":"block_append","args":{"page":"ideas","text":"second"}}
+    ]}"#;
+    let env = ok(outl()
+        .args(["--workspace"])
+        .arg(ws.path())
+        .args(["batch", "--ops", payload, "--json"])
+        .output()
+        .unwrap());
+    assert_eq!(env["ok"], true);
+    assert_eq!(env["data"]["applied"], 2);
+    assert!(env["data"]["failed_at"].is_null());
+    assert_eq!(env["data"]["results"].as_array().unwrap().len(), 2);
+
+    // Both blocks must be searchable from a fresh process (the batch
+    // flushed the ops to the op log).
+    for needle in ["first", "second"] {
+        let search = ok(outl()
+            .args(["--workspace"])
+            .arg(ws.path())
+            .args(["search", needle, "--in", "blocks", "--json"])
+            .output()
+            .unwrap());
+        assert!(
+            !search["data"]["blocks"].as_array().unwrap().is_empty(),
+            "block `{needle}` must be persisted, got {search}"
+        );
+    }
+}
+
+#[test]
+fn batch_stops_on_first_error_and_persists_prefix() {
+    let ws = init_workspace();
+    let _ = ok(outl()
+        .args(["--workspace"])
+        .arg(ws.path())
+        .args(["page", "create", "ideas", "--json"])
+        .output()
+        .unwrap());
+
+    // First op is valid; the second targets an invalid block id and
+    // fails, so the run stops at index 1 with index 0 applied.
+    let payload = r#"{"ops":[
+        {"op":"block_append","args":{"page":"ideas","text":"kept"}},
+        {"op":"block_update","args":{"id":"not-a-valid-ulid","text":"never"}}
+    ]}"#;
+    let out = outl()
+        .args(["--workspace"])
+        .arg(ws.path())
+        .args(["batch", "--ops", payload, "--json"])
+        .output()
+        .unwrap();
+    // A partial batch exits 1 (user error) but still emits an `ok:true`
+    // envelope carrying the `failed_at` / `applied` outcome.
+    assert!(!out.status.success(), "partial batch must exit non-zero");
+    let env: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(env["ok"], true, "partial batch still returns an envelope");
+    assert_eq!(env["data"]["applied"], 1);
+    assert_eq!(env["data"]["failed_at"], 1);
+    assert_eq!(env["data"]["failed_op"], "block_update");
+
+    // The applied prefix (op 0) must survive the failure: the guard
+    // flushes it before the error response is built.
+    let search = ok(outl()
+        .args(["--workspace"])
+        .arg(ws.path())
+        .args(["search", "kept", "--in", "blocks", "--json"])
+        .output()
+        .unwrap());
+    assert!(
+        !search["data"]["blocks"].as_array().unwrap().is_empty(),
+        "prefix op must be persisted after a partial batch, got {search}"
+    );
+}
+
+#[test]
 fn workspace_info_returns_summary() {
     let ws = init_workspace();
     let info = ok(outl()

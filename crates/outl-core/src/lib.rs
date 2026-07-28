@@ -44,5 +44,5 @@ pub use snapshot::{SnapshotBody, SnapshotError, SCHEMA_VERSION};
 pub use storage::{Storage, StorageError};
 pub use tag::Tag;
 pub use tree::Tree;
-pub use workspace::Workspace;
+pub use workspace::{Workspace, WorkspaceBatch};
 pub use workspace_id::{WorkspaceId, WorkspaceIdError};
