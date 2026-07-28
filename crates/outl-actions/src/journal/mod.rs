@@ -5,10 +5,13 @@
 //! every workspace mutation so the user can read it from Finder /
 //! Files app / `cat`.
 //!
-//! Layout inside the workspace root:
+//! Layout inside the workspace root — `root` is the directory whose
+//! immediate children are `journals/`, `pages/`, `ops/` (the caller
+//! resolves it; see `paths::journals_dir` for the contract — re-joining
+//! `Documents/outl` here once double-nested the layout):
 //!
 //! ```text
-//! <root>/Documents/outl/
+//! <workspace root>/
 //! ├── journals/
 //! │   └── YYYY-MM-DD.md            ← journal pages (page-kind = "journal")
 //! └── pages/

@@ -15,7 +15,7 @@ source on disk (JSON backup / graph dir / vault)
    ▼
 [2] emit::render                   ← single owner of outl output syntax
    │    IR → .md; refs/embeds become inert placeholders
-   │    ((outl-import:<uid>)) / !((outl-import:<uid>))
+   │    ((outl-import:<uid>)) / !((outl-import-embed:<uid>))
    ▼
 [3] emit::resolve                  ← 2-pass handle resolution
         reconcile_md stamps sidecars → uid → NodeId → ref_handle

@@ -1,9 +1,11 @@
 //! IR → outl markdown. The single owner of output syntax.
 //!
-//! Block refs and embeds are emitted as inert placeholders
-//! (`((outl-import:<uid>))`) — deliberately not `blk-`-prefixed, so
-//! outl's tokenizer treats them as plain text until the resolve pass
-//! rewrites them into real handles.
+//! Block refs and embeds are emitted as inert placeholders — refs as
+//! `((outl-import:<uid>))`, embeds as `!((outl-import-embed:<uid>))` —
+//! deliberately not `blk-`-prefixed, so outl's tokenizer treats them
+//! as plain text until the resolve pass rewrites them into real
+//! handles. The two prefixes are distinct so resolve knows ref-vs-embed
+//! from the marker itself.
 
 use crate::ir::{
     BlockContent, EmbedTarget, ImportBlock, ImportGraph, ImportPage, Inline, PageBody, PageName,

@@ -67,10 +67,11 @@ pub fn render_page_md(workspace: &Workspace, page_root: NodeId) -> String {
             *k != crate::page::SLUG_KEY && *k != crate::page::KIND_KEY
         })
         .filter_map(|(k, v)| match v {
-            // Only textual properties round-trip through the `.md`
-            // dialect. PageRef / Tag / List shapes would need
-            // dedicated render syntax — skip them silently for now,
-            // and revisit if a real consumer asks for them.
+            // Text, PageRef, and Tag all render as their string form —
+            // the `.md` dialect reads `key:: [[x]]` / `key:: #x` back
+            // into the same shapes, so the round trip closes. Only
+            // `List` is skipped: it has no render syntax yet; revisit
+            // if a real consumer asks for it.
             outl_core::property::PropValue::Text(s) => Some((k.to_string(), s.clone())),
             outl_core::property::PropValue::PageRef(s) | outl_core::property::PropValue::Tag(s) => {
                 Some((k.to_string(), s.clone()))
