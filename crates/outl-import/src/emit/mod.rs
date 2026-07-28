@@ -40,8 +40,11 @@ pub fn run(
         });
     }
     for (i, p) in pages.iter().enumerate() {
+        // `i + 1` = "processing page i+1 of N" (same convention as
+        // `Writing`), so the bar moves from the first page instead of
+        // sitting at 0% while a large page reconciles.
         sink(ImportProgress::Reconciling {
-            done: i,
+            done: i + 1,
             total: pages.len(),
             page: &p.stem,
         });

@@ -87,9 +87,33 @@ pub struct WsCtx {
     actor_lock: ActorWriteLock,
 }
 
-/// Open the workspace at `path`. Returns a typed [`WsError`] on any
+/// Tuning knobs for [`open_with`]. The derived `Default` is the
+/// short-lived contract: snapshots are read, never written.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OpenOptions {
+    /// Whether this process may **write** boot snapshots.
+    ///
+    /// Defaults to `false`: short-lived openers (CLI commands,
+    /// embedders) read snapshots but must not write them — a write
+    /// here would race with the long-lived TUI/desktop/mobile that
+    /// own the workspace (#109). A long-lived surface adopting this
+    /// crate opts in, otherwise its boot/reload cost on a large
+    /// workspace silently regresses to full log replay.
+    pub write_snapshots: bool,
+}
+
+/// Open the workspace at `path` with the short-lived defaults
+/// ([`OpenOptions::default`]). Returns a typed [`WsError`] on any
 /// boot failure (missing workspace, bad config, filesystem error).
 pub fn open(path: &Path) -> Result<WsCtx, WsError> {
+    open_with(path, OpenOptions::default())
+}
+
+/// Like [`open`], but the caller picks the [`OpenOptions`] — a
+/// long-lived surface (TUI, desktop, an embedder that stays resident)
+/// sets `write_snapshots: true` to keep boot O(delta) on large
+/// workspaces.
+pub fn open_with(path: &Path, opts: OpenOptions) -> Result<WsCtx, WsError> {
     let paths = Paths::at(path.to_path_buf());
     if !paths.dot_outl.exists() {
         return Err(WsError::NoWorkspace(paths.root.clone()));
@@ -116,13 +140,14 @@ pub fn open(path: &Path) -> Result<WsCtx, WsError> {
     let mut workspace =
         Workspace::open_with_storage(actor, Box::new(storage), Some(paths.root.clone()))
             .map_err(WsError::internal)?;
-    // Short-lived openers (CLI commands, embedders) read snapshots but
-    // must not write them: a snapshot write here would race with the
-    // long-lived TUI/desktop/mobile that own the workspace, and
-    // snapshots already pay back at boot (`Workspace::open_with_storage`
-    // reads one via `snapshot::read_from_disk` regardless of this
-    // policy). So opt out — read, don't write (#109).
-    workspace.set_snapshot_policy(false, 0);
+    // Snapshot writes are opt-in (see `OpenOptions::write_snapshots`):
+    // short-lived openers read snapshots but must not write them — a
+    // write here would race with the long-lived owner of the
+    // workspace, and reads happen regardless of this policy
+    // (`Workspace::open_with_storage` → `snapshot::read_from_disk`).
+    if !opts.write_snapshots {
+        workspace.set_snapshot_policy(false, 0);
+    }
     // Register per-page shards if the workspace has been migrated
     // (RFC #137 Phase B). No-op for legacy Global workspaces.
     outl_actions::storage_scope::register_per_page_storages(
@@ -138,7 +163,9 @@ pub fn open(path: &Path) -> Result<WsCtx, WsError> {
         workspace
             .reboot_with_all_storages()
             .map_err(WsError::internal)?;
-        workspace.set_snapshot_policy(false, 0);
+        if !opts.write_snapshots {
+            workspace.set_snapshot_policy(false, 0);
+        }
     }
     let hlc = HlcGenerator::new(actor);
 

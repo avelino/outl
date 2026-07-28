@@ -7,9 +7,11 @@
 //!    (what `__x__` means, how `{{embed}}` is spelled) lives in the
 //!    adapter — nothing downstream ever sees source syntax.
 //! 2. [`emit`]'s render stage turns the IR into outl markdown. Block
-//!    refs and embeds are emitted as inert placeholders
-//!    (`((outl-import:<uid>))`) because `((blk-XXXXXX))` handles don't
-//!    exist until the sidecars are stamped.
+//!    refs and embeds are emitted as inert placeholders — refs as
+//!    `((outl-import:<uid>))`, embeds as `!((outl-import-embed:<uid>))`
+//!    (distinct marker so resolve classifies without sniffing the
+//!    surrounding text) — because `((blk-XXXXXX))` handles don't exist
+//!    until the sidecars are stamped.
 //! 3. [`emit`]'s resolve stage reconciles every written file (minting
 //!    `NodeId`s + sidecars), maps each source UID to its freshly
 //!    derived handle through the sidecar's depth-first block list, and
