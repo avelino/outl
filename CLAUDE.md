@@ -73,6 +73,7 @@ outl/
     ├── outl-actions/          # UI-agnostic workspace ops (shared by every client)
     ├── outl-shortcuts/        # canonical (chord, action) catalog — every client consumes it
     ├── outl-exec/             # code-block runtime (desktop + mobile)
+    ├── outl-import/           # adapter-based graph importers (Roam, Logseq, Obsidian + auto-detect)
     ├── outl-config/           # `outl.toml` parsing + schema
     ├── outl-theme/            # palette + presets (TUI + desktop)
     ├── outl-cli/              # `outl` binary

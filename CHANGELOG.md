@@ -7,6 +7,10 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Fixed
 
+- **Re-rendering a page from the op log no longer deletes its block-level `key:: value` property lines from the `.md`.**
+  `reconcile` correctly turned block properties into `Op::SetProp` on the block node, but the reverse projection (`render_page_md` / `render_block_md` via `build_outline`) never wrote them back — so any mutation that re-rendered the page (a GUI edit, the importer's ref-resolution pass) silently dropped every `priority:: high`-style line from disk, and the next external-edit reconcile would emit property-removal ops: convergent data loss.
+  Block properties now project back alpha-sorted, matching the page-property behavior, and the importer's end-to-end suite pins the round trip.
+
 - **Pressing Enter in the middle of a block now splits it instead of leaving the text untouched and opening an empty block below (issue #184).**
   Every client — TUI, desktop, mobile — used to treat Enter as "commit this block, then create an empty sibling below and start typing there," no matter where the cursor sat, so splitting a sentence into two blocks meant a manual cut-and-paste.
   Enter now behaves the way every other outliner does: the text before the cursor stays in the current block, the text from the cursor onward moves into a brand-new sibling created right below, and the cursor lands at the start of that new block.
@@ -15,6 +19,19 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
   The desktop and mobile apps share one backend operation for this (`outl_actions::split_block`, wired through a new `split_block` Tauri command); the TUI has its own equivalent that slices the in-flight edit buffer before it's ever written back to disk, since the TUI edits an AST that hasn't round-tripped through the workspace yet.
 
 ### Added
+
+- **`outl import roam` now preserves block refs, embeds, and folded state — powered by a new adapter-based import pipeline (`outl-import` crate).**
+  The old importer flattened every `((uid))` block ref into a whole-page link and mangled `{{embed}}`s into leftover syntax; for a graph that leans on refs and embeds, that was silent data degradation at migration time.
+  The new pipeline parses the source into a typed IR, writes markdown with inert placeholders, reconciles to mint sidecar handles, and then resolves every source UID into a real `((blk-XXXXXX))` reference / `!((blk-XXXXXX))` embed — through the op log, so block identities never shift under the rewrite.
+  Roam dialect now translates properly on the way in: `__italic__` → `*italic*`, `^^highlight^^` → `==highlight==`, `#[[Multi Word]]` → `[[Multi Word]]`, `{{[[TODO]]}}`/`{{[[DONE]]}}` → outl task prefixes, org-style `DEADLINE:/SCHEDULED: <date>` stamps → `[[YYYY-MM-DD]]` links (the issue #63 model), and flat `{{[[query]]: {and: …}}}` queries become live ` ```query ` fences.
+  Roam's folded blocks (`open: false`) survive as `Op::SetCollapsed`, components with no outl equivalent (`{{table}}`, `$$latex$$`, …) are preserved verbatim and counted, and slug collisions are disambiguated instead of silently overwriting.
+  Three new flags: `--dry-run` (parse + report, write nothing — measure fidelity against a real backup before migrating), `--json` (full machine-readable report), and `--preserve-timestamps` (keep Roam create/edit times as `created::`/`edited::` properties).
+  A large import (a 4.5k-page graph reconciles for several minutes) now paints a live progress line on stderr — phase, page counter, percentage bar, current page, elapsed — instead of sitting silent; it only renders on a TTY, so piped and CI runs stay clean.
+  Anything unresolvable stays greppable (`((unresolved:uid))`) and every degradation is counted in the import report — silent loss is treated as a bug.
+  **Logseq and Obsidian moved to the same adapter pipeline** (the legacy string pipeline is deleted), so every source accepts the same flags and produces the same rich report.
+  The Logseq adapter now truly parses the outline: `id::` UIDs become real block-ref handles instead of page-link fallbacks, `collapsed:: true` survives as folded state, `DOING`/`NOW`/`LATER`/`WAITING`/`CANCELED` map to `TODO`/`DONE` with a `state::` property preserving the nuance, `[#A]` priorities become `priority::` properties, `SCHEDULED:`/`DEADLINE:` timestamps become `[[date]]` links, `:LOGBOOK:` drawers are dropped and counted, and `#+` directives plus leading `key:: value` lines become page properties.
+  The Obsidian adapter keeps its full behavior (frontmatter policy, wiki-link collapsing, image-embed conversion, H1/title resolution, path-derived slug-collision suffixes, `path::` folder hints) on the new engine.
+  `outl import auto <src> <dst>` detects the source from its shape (JSON file = Roam, graph dir = Logseq, `.obsidian/` vault = Obsidian).
 
 - **The TUI's `g x` now opens the markdown link under the cursor when the block isn't code (issue #183).**
   Links `[text](url)` already rendered in the TUI (blue, underlined) but there was no way to follow one — the desktop and mobile apps let you click, the terminal had nothing.

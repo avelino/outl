@@ -132,14 +132,25 @@ enum Command {
     },
     /// Import a graph from another outliner.
     Import {
-        /// Source format: `logseq` (directory), `roam` (JSON file), or
-        /// `obsidian` (vault directory).
+        /// Source format: `roam` (JSON file), `logseq` (graph
+        /// directory), `obsidian` (vault directory), or `auto`
+        /// (detect from the source's shape).
         format: String,
         /// Path to the Logseq graph directory, the Roam backup file,
         /// or the Obsidian vault directory.
         src: PathBuf,
         /// Destination workspace. Created if it doesn't exist yet.
         dst: PathBuf,
+        /// Parse and report only — write nothing to the destination.
+        #[arg(long)]
+        dry_run: bool,
+        /// Print the import report as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Keep source create/edit timestamps as `created::` /
+        /// `edited::` block properties.
+        #[arg(long)]
+        preserve_timestamps: bool,
     },
     /// Page-level operations.
     Page {
@@ -297,7 +308,23 @@ fn main() -> Result<()> {
             cmd::reconcile::run(&p)
         }
         Some(Command::Theme { sub }) => cmd::theme::run(sub.as_ref()),
-        Some(Command::Import { format, src, dst }) => cmd::import::run(&format, &src, &dst),
+        Some(Command::Import {
+            format,
+            src,
+            dst,
+            dry_run,
+            json,
+            preserve_timestamps,
+        }) => cmd::import::run(
+            &format,
+            &src,
+            &dst,
+            cmd::import::ImportFlags {
+                dry_run,
+                json,
+                preserve_timestamps,
+            },
+        ),
         Some(Command::Page { sub }) => {
             let p = resolve_path(cli.workspace.as_ref(), None)?;
             std::process::exit(cmd::page::run(&sub, &p));

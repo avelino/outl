@@ -259,6 +259,7 @@ Duplication here is a real hazard: two implementations of the same logic drift a
 - `outl_md::index::Backlink` and `outl_actions::Backlink` were two parallel "backlinks" pipelines that started identical and ended up disagreeing on self-references — caught by the user, not the reviewer.
   Collapsed into `outl_actions::backlinks_for_page` in 0.5.3.
 - PR #47 (Logseq import) opened with `crates/outl-cli/src/cmd/import/normalize.rs` reimplementing `\r\n` handling, `id::` stripping, and long-form date rewriting — every one of which `outl_actions::paste::normalize_external_syntax` already owned.
+  (That directory has since been replaced by the adapter-based `crates/outl-import`; the lesson carries over.)
   Caught in review *after* a Claude-assisted PR shipped without the catalog being visible.
   That's why §5.1 exists.
 

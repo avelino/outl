@@ -6173,10 +6173,12 @@ dependencies = [
  "outl-config",
  "outl-core",
  "outl-exec",
+ "outl-import",
  "outl-md",
  "outl-plugins",
  "outl-sync-iroh",
  "outl-tui",
+ "outl-ws",
  "parking_lot",
  "rpassword",
  "semver 1.0.28",
@@ -6285,6 +6287,22 @@ dependencies = [
  "tracing",
  "wasmtime",
  "wasmtime-wasi",
+]
+
+[[package]]
+name = "outl-import"
+version = "0.8.0"
+dependencies = [
+ "chrono",
+ "outl-actions",
+ "outl-core",
+ "outl-md",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "walkdir",
 ]
 
 [[package]]
@@ -6463,6 +6481,22 @@ dependencies = [
  "ulid",
  "unicode-width 0.2.2",
  "walkdir",
+]
+
+[[package]]
+name = "outl-ws"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "outl-actions",
+ "outl-core",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 1.1.2+spec-1.1.0",
+ "tracing",
+ "ulid",
 ]
 
 [[package]]

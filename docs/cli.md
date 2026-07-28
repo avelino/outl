@@ -253,11 +253,21 @@ CLI exit code is `1` in that case; MCP returns the payload via the normal envelo
 | `outl plugin init\|search\|list\|install\|run\|config\|secret\|enable\|disable\|remove` | — |
 | `outl sync`                                  | —                       |
 | `outl workspace info [--json]`               | `outl_workspace_info`   |
-| `outl import logseq <src> <dst>`             | —                       |
-| `outl import obsidian <vault> <dst>`         | —                       |
-| `outl import roam <backup.json> <dst>`       | —                       |
+| `outl import roam\|logseq\|obsidian\|auto <src> <dst> [--dry-run] [--json] [--preserve-timestamps]` | — |
 
 `init`, `serve`, `reconcile`, `import`, `mcp serve`, `peer`, `plugin`, and `sync` are CLI-only on purpose — they're either interactive, long-running, or bootstrap commands that don't fit a tool-call shape.
+
+`outl import` runs the adapter-based pipeline in the `outl-import` crate for every source (`roam` = JSON backup file, `logseq` = graph directory, `obsidian` = vault directory; `auto` detects from the source's shape).
+`((uid))` block refs and `{{embed}}`s resolve to real `((blk-XXXXXX))` handles, not page-link fallbacks.
+Folded blocks (Roam `open: false`, Logseq `collapsed:: true`) land as `Op::SetCollapsed`.
+Each dialect is translated on the way in.
+Roam: `__italic__` → `*italic*`, flat `{{[[query]]}}` → ` ```query ` fences.
+Logseq: `DOING`/`NOW`/`LATER`/`WAITING` states → `TODO` + `state::` property, `CANCELED` → `DONE` + `state::`, `[#A]` → `priority::`, `SCHEDULED:`/`DEADLINE:` → `[[date]]` links, `:LOGBOOK:` drawers dropped and counted.
+Obsidian: frontmatter → `key:: value` properties, wiki-link variants collapse to `[[Note]]`.
+A real (non-dry) import paints a live progress line on stderr — phase, page counter, percentage, current page, elapsed — TTY-only, so piped output stays clean.
+`--dry-run` parses and reports without writing a byte — run it against a real backup to measure fidelity before migrating.
+`--json` prints the full report (per-feature counts, warnings with location) as JSON.
+`--preserve-timestamps` keeps source create/edit times as `created::`/`edited::` block properties (dropped and counted by default).
 
 `outl plugin` manages the workspace's JS plugins (under `<workspace>/.outl/plugins/`), wrapping `outl-plugins`.
 `init <NAME> [--id <ID>] [--dir <PATH>]` scaffolds a buildable starter project (manifest + `package.json` + `tsconfig` + `src/index.ts` + README); run `bun install && bun run build` inside it for an installable bundle.

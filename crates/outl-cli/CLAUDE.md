@@ -54,7 +54,10 @@ The CLI/TUI/MCP read the device actor from `config.toml`, so pointing them at a 
   Parser warnings are appended to `.outl/orphans.log` tagged `parse-warning <iso> <path>:<line> <kind> <raw>` so the trail persists across runs.
 - `outl reconcile [<path>]` — list orphans pending manual resolution.
 - `outl migrate-to-shared [<path>]` — copy local sqlite log into shared `ops/` JSONL for cross-device sync.
-- `outl import logseq|roam <src> <dst>` — graph import.
+- `outl import roam|logseq|obsidian|auto <src> <dst>` — graph import.
+  Every source routes through the adapter-based `outl-import` crate (`--dry-run`, `--json`, `--preserve-timestamps`; real `((blk-XXXXXX))` ref/embed resolution, `Op::SetCollapsed`).
+  `auto` picks the adapter from the source's shape.
+  See `crates/outl-import/CLAUDE.md`; `cmd/import.rs` here is pure glue (args, workspace bootstrap, report printing).
 - `outl theme list|show <preset>` — TUI theme inspection.
 - `outl plugin init|list|install|run|enable|disable|remove` — manage the workspace's JS plugins (under `<workspace>/.outl/plugins/`), wrapping `outl-plugins`.
   `init <NAME> [--id <ID>] [--dir <PATH>]` scaffolds a buildable plugin project (manifest + `package.json` + `tsconfig` + `src/index.ts` + README); it touches no workspace.
@@ -167,8 +170,7 @@ src/
 │   ├── doctor.rs          # outl doctor
 │   ├── reconcile.rs       # outl reconcile
 │   ├── theme.rs           # outl theme
-│   ├── import.rs          # outl import (dispatcher; ImportReport re-export)
-│   ├── import/            # common.rs (shared helpers) + logseq.rs + roam.rs + obsidian.rs (+ obsidian/{stems,tests}.rs) — see import/CLAUDE.md
+│   ├── import.rs          # outl import — glue over the outl-import crate (adapters, --dry-run, auto-detect)
 │   ├── migrate_to_shared.rs
 │   ├── export.rs          # legacy `outl export --to fmt` placeholder
 │   ├── export_v2.rs       # outl export {hugo,md,json}
