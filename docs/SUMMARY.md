@@ -23,6 +23,7 @@
 ## Integrations
 
 * [CLI](cli.md)
+* [Embedding outl as a Rust library](embedding.md)
 * [MCP](mcp.md)
 * [MCP recipes (skills & commands)](mcp-recipes.md)
 * [Plugins](plugins.md)
