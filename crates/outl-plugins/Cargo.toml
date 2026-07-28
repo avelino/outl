@@ -9,6 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
 description = "Plugin system for outl: manifest, capability/permission model, JS runtime, and host API shared by every client."
+publish = false
 
 [dependencies]
 outl-core.workspace = true

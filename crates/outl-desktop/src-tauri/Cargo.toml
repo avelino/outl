@@ -8,6 +8,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+publish = false
 
 [lib]
 name = "outl_desktop_lib"
@@ -24,7 +25,7 @@ outl-core = { workspace = true }
 outl-md = { workspace = true }
 outl-actions = { workspace = true }
 outl-config = { workspace = true }
-outl-exec = { workspace = true }
+outl-exec = { workspace = true, default-features = true }
 outl-plugins = { workspace = true, features = ["registry"] }
 outl-shortcuts = { workspace = true }
 outl-tauri-shared = { workspace = true }

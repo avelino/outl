@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 description = "iroh-based P2P sync transport for outl"
 license.workspace = true
+publish = false
 
 [dependencies]
 outl-actions = { workspace = true }

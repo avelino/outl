@@ -20,6 +20,11 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Added
 
+- **The embedder lib crates now publish to crates.io on every release.**
+  `outl-core`, `outl-md`, `outl-exec`, `outl-actions`, and `outl-ws` — the closure an external tool needs to open and mutate an outl workspace through the op log — are published by CI at the same version the binaries report, beta and GA alike.
+  Embedding outl no longer requires a git checkout side by side: a plain `outl-core = "0.8"` requirement resolves GA versions, and a `"0.8.0-beta"`-style requirement rides the betas cut from `main`.
+  Every other crate in the workspace is explicitly `publish = false`.
+
 - **`outl import roam` now preserves block refs, embeds, and folded state — powered by a new adapter-based import pipeline (`outl-import` crate).**
   The old importer flattened every `((uid))` block ref into a whole-page link and mangled `{{embed}}`s into leftover syntax; for a graph that leans on refs and embeds, that was silent data degradation at migration time.
   The new pipeline parses the source into a typed IR, writes markdown with inert placeholders, reconciles to mint sidecar handles, and then resolves every source UID into a real `((blk-XXXXXX))` reference / `!((blk-XXXXXX))` embed — through the op log, so block identities never shift under the rewrite.

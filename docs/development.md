@@ -520,7 +520,7 @@ cargo test -p outl-actions --release --test composite_write_bench -- --ignored -
 | [`mobile.yml`](../.github/workflows/mobile.yml) | Push / PR touching mobile paths | Frontend tests, Swift tests, Rust mobile crate, iOS archive + sign on `push` | Mobile changes only |
 | [`desktop.yml`](../.github/workflows/desktop.yml) | Push / PR touching desktop paths | Tauri build matrix (macOS/Linux/Windows) | Desktop changes only |
 | [`bench.yml`](../.github/workflows/bench.yml) | Push / PR touching `outl-md`, plus weekly cron | Criterion (small/medium/large) on every PR; xlarge + CLI hyperfine on cron / manual dispatch. Artifacts retained 14–30 days. | No (informational) |
-| [`release.yml`](../.github/workflows/release.yml) | Push to `main` (beta), `v*` tag (GA), manual | Computes version from `Cargo.toml`, builds CLI + TUI matrix, builds universal desktop dmg, drafts release, uploads assets, publishes, bumps Homebrew tap (`Formula/outl-beta.rb` + `Casks/outl-desktop-beta.rb`). | n/a |
+| [`release.yml`](../.github/workflows/release.yml) | Push to `main` (beta), `v*` tag (GA), manual | Computes version from `Cargo.toml`, builds CLI + TUI matrix, builds universal desktop dmg, drafts release, uploads assets, publishes, bumps Homebrew tap (`Formula/outl-beta.rb` + `Casks/outl-desktop-beta.rb`), publishes `@outl/plugin-sdk` to npm and the embedder lib crates to crates.io. | n/a |
 | [`testflight.yml`](../.github/workflows/testflight.yml) | `Mobile` workflow completing successfully | Downloads the signed `.ipa`, uploads to App Store Connect via `xcrun altool`, sets "What to Test" notes via App Store Connect API. | n/a |
 | [`cleanup-tags.yml`](../.github/workflows/cleanup-tags.yml) | Cron | Garbage-collects stale beta tags. | n/a |
 
@@ -586,6 +586,16 @@ The `update_tap` job in `release.yml` patches version + sha256 anchors for both 
 
 The desktop dmg is **unsigned** today (Apple Developer account pending).
 The cask carries a `caveats` block with the `xattr -dr com.apple.quarantine` workaround.
+
+### crates.io (lib crates for embedders)
+
+The `publish_crates` job in `release.yml` publishes the embedder closure — `outl-core`, `outl-md`, `outl-exec`, `outl-actions`, `outl-ws` — to crates.io on every release, beta and GA, at the same version the binaries report.
+Every other crate in the workspace carries `publish = false`; flipping one later is a one-line change (plus adding it to the job's publish loop).
+
+SemVer keeps consumers safe: a plain `outl-core = "0.8"` requirement never resolves a `-beta.N` prerelease, so crates.io consumers only see GA versions unless they opt in with a `"0.8.0-beta"`-style requirement.
+
+The job is idempotent (it checks crates.io before each publish, so re-runs resume instead of failing) and self-gating (`cargo publish` verifies each crate by building it).
+It authenticates with the `CARGO_REGISTRY_TOKEN` secret in the `release` environment.
 
 ---
 

@@ -8,6 +8,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+publish = false
 
 [dependencies]
 outl-core = { workspace = true }
@@ -17,7 +18,7 @@ outl-config = { workspace = true }
 # Feature-less on purpose (same rule as outl-actions): the client binary
 # selects the language runtimes it ships; a default-features dep here would
 # smuggle wasmtime into the mobile IPA via Cargo feature unification.
-outl-exec = { path = "../outl-exec", default-features = false }
+outl-exec = { workspace = true }
 outl-plugins = { workspace = true, features = ["registry"] }
 outl-shortcuts = { workspace = true }
 outl-sync-iroh = { workspace = true }
