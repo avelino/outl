@@ -389,6 +389,10 @@ impl Storage for JsonlStorage {
         self.append_op_inner(op)
     }
 
+    fn append_ops(&mut self, ops: &[LogOp]) -> Result<(), StorageError> {
+        self.append_ops_inner(ops)
+    }
+
     fn ops_since(&self, ts: Hlc) -> Result<Vec<LogOp>, StorageError> {
         // The offset index is the complete op set; the LRU is only a warm
         // accelerator (empty right after boot). Drive the result off the

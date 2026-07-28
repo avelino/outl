@@ -145,6 +145,26 @@ mod tests {
     }
 
     #[test]
+    fn append_ops_default_preserves_order() {
+        // MemoryStorage inherits the trait's default `append_ops`, which
+        // loops `append_op`. The batch must land in the same order as N
+        // sequential appends.
+        let mut s = MemoryStorage::new();
+        let g = HlcGenerator::new(ActorId::new());
+        let a = make_op(&g);
+        let b = make_op(&g);
+        let c = make_op(&g);
+
+        s.append_ops(&[a.clone(), b.clone(), c.clone()]).unwrap();
+
+        let all = s.all_ops().unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].ts, a.ts);
+        assert_eq!(all[1].ts, b.ts);
+        assert_eq!(all[2].ts, c.ts);
+    }
+
+    #[test]
     fn ops_since_filters_strictly() {
         let mut s = MemoryStorage::new();
         let g = HlcGenerator::new(ActorId::new());

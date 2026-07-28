@@ -67,6 +67,11 @@ Functions **never**:
 - Round-trip through `.md` to reconstruct workspace state.
   The op log is the source of truth; `.md` is a projection.
 
+A composite action calls `apply` more than once for a single user-visible mutation (`append_forest`/`append_tree`, `page::open_or_create`, `paste::paste_markdown`, `template::instantiate_template`, `block::split_block`).
+It wraps its whole body in one `Workspace::begin_batch()` so the N ops flush as one `Storage::append_ops` per destination instead of fsyncing per op.
+Each op still goes through `apply` individually (dedup, Yrs merge, and the CRDT stay untouched); only the persist is deferred to the guard's `commit()`.
+See `outl-core/CLAUDE.md` → "Batch append" and [`docs/storage.md`](../../docs/storage.md) for the mechanics and durability contract — this crate only needs to know: open a batch around a multi-`apply` action, commit it before returning.
+
 ## Page model
 
 Pages are **regular nodes** directly under [`NodeId::root`] tagged with a `page-slug` property.

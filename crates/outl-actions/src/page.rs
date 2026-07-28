@@ -328,16 +328,20 @@ pub fn open_or_create(
     // (`"2026-06-252026-06-25"`). The title now lives in the `title::`
     // property below (`Op::SetProp`, last-write-wins by HLC), which
     // converges to a single value under the same concurrency.
-    let node = create_with_explicit_id(workspace, hlc, node_id, NodeId::root(), position, None)?;
+    // Creating a page is one user-visible action (root + slug/kind/title
+    // props). Batch it so those consecutive `apply`s flush once per
+    // destination instead of fsyncing per op.
+    let mut batch = workspace.begin_batch();
+    let node = create_with_explicit_id(&mut batch, hlc, node_id, NodeId::root(), position, None)?;
     set_prop(
-        workspace,
+        &mut batch,
         hlc,
         node,
         SLUG_KEY,
         PropValue::Text(slug.to_string()),
     )?;
     set_prop(
-        workspace,
+        &mut batch,
         hlc,
         node,
         KIND_KEY,
@@ -349,13 +353,14 @@ pub fn open_or_create(
     // line.
     if title != slug {
         set_prop(
-            workspace,
+            &mut batch,
             hlc,
             node,
             TITLE_KEY,
             PropValue::Text(title.to_string()),
         )?;
     }
+    batch.commit()?;
     Ok(node)
 }
 

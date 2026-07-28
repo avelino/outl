@@ -49,6 +49,14 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Performance
 
+- **A composite write — creating a page with content, pasting a subtree, running `outl batch`, importing a page — is now a single-digit-millisecond operation instead of tens to ~90ms (issue #192).**
+  Every `Workspace::apply` used to end in its own `Storage::append_op`, and on macOS that call ends in `F_FULLFSYNC`, which costs roughly 4ms regardless of how little data moved.
+  A "create a page" action that appended a root, a 7-block forest, and three properties fired eleven of those fsyncs back to back — the fsync, not the CRDT or the disk write, was the bottleneck.
+  `Storage` grows `append_ops(&[LogOp])`: the default still loops `append_op`, but `JsonlStorage` overrides it to validate the whole batch, serialize every line, then open once, heal a torn tail once, write every line, and fsync **once** for the batch.
+  `Workspace::begin_batch()` is the apply-side half — a new RAII guard (`WorkspaceBatch`) that every composite `outl-actions` function (`append_forest`/`append_tree`, page create, paste, template instantiate, block split) now opens around its multi-op body: each op still runs the full CRDT path one at a time, only the persist is deferred to one `append_ops` call per storage destination on commit.
+  `outl batch` and `outl-md`'s external-edit reconcile (the largest single burst of ops in the system — a fresh import or boot re-diffs every block of every page) batch the same way.
+  A dropped or errored batch still flushes whatever was applied before the failure, so `applied`/`failed_at` in `outl batch`'s response describe the exact same on-disk state the pre-batch per-op path did.
+
 - **The TUI opens instantly and `Esc`/commit is snappy again on a large workspace.**
   On a ~2800-page vault, opening the journal and leaving edit mode stalled for over a second each.
   Two separate costs were behind it.

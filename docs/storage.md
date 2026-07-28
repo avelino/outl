@@ -10,6 +10,11 @@ pub trait Storage: Send + Sync {
     /// Append an op. Must be durable before returning Ok.
     fn append_op(&mut self, op: &LogOp) -> Result<(), StorageError>;
 
+    /// Append a batch of ops. Durable before returning Ok — one fsync
+    /// for the whole batch. Default impl loops `append_op`; backends
+    /// override to amortize the durability cost.
+    fn append_ops(&mut self, ops: &[LogOp]) -> Result<(), StorageError>;
+
     /// Return all ops with HLC > ts, in HLC order.
     fn ops_since(&self, ts: Hlc) -> Result<Vec<LogOp>, StorageError>;
 
@@ -177,6 +182,11 @@ Tracked: <https://github.com/avelino/outl/issues/1>.
   `JsonlStorage` uses `RwLock` around its in-memory cache; reads are concurrent, writes serialize.
 - `append_op` writes one line, then flushes.
   Crash-safe at line granularity: a partial write produces an unparseable tail line, which the loader skips on next open.
+- `append_ops` writes every line, then flushes **once** for the whole batch.
+  Same crash-safety at line granularity, but durability is amortized: `sync_all` (`F_FULLFSYNC` on macOS, ~4ms) fires once per batch instead of once per op.
+  The batch is validated (foreign-actor guard) and serialized before a single byte is written, so a rejected batch leaves the file untouched; an empty batch is a no-op.
+  On `Ok` the whole batch is durable; a crash mid-batch leaves a durable prefix with a possibly-torn last line, which the next append's torn-tail self-heal recovers.
+  `append_op` is just `append_ops` of one — both share the torn-tail heal and index-mirroring path.
 - **Glued-op recovery on read.**
   `JsonlStorage::reload` parses each line with a streaming `serde_json::Deserializer`.
   A line carrying two (or more) concatenated JSON objects with no separating newline (`…}}}{"ts":…`) is recovered into all its ops instead of being dropped.

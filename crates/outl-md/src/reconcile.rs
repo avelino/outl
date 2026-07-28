@@ -187,23 +187,37 @@ pub fn reconcile_md(
         )
     };
 
-    for op in plan.ops {
-        // The diff defensively re-emits `Create` + `Move` (+ `SetProp`)
-        // for every block; skip the ones that wouldn't change the tree so
-        // a one-block edit persists (and fsyncs) one op, not two per block
-        // in the page — and the op log stops growing by the whole page on
-        // every commit. See `Workspace::op_is_noop`.
-        if ws.op_is_noop(&op) {
-            continue;
+    // Coalesce the whole structural-diff pass into one storage flush.
+    // This is the largest single burst of ops in the system (a fresh
+    // boot or import emits Create/Move/SetProp for every block of every
+    // page); paying one fsync per op here was the write bottleneck. The
+    // batch keeps every op flowing through the CRDT one at a time (the
+    // materialized tree stays correct for `op_is_noop`) but defers the
+    // persist to a single `append_ops` on commit. On an error mid-loop
+    // the guard drops and flushes the prefix best-effort, so the on-disk
+    // state matches the pre-batch behaviour (the prefix was already
+    // persisted op-by-op there too).
+    {
+        let mut batch = ws.begin_batch();
+        for op in plan.ops {
+            // The diff defensively re-emits `Create` + `Move` (+ `SetProp`)
+            // for every block; skip the ones that wouldn't change the tree so
+            // a one-block edit persists one op, not two per block in the page
+            // — and the op log stops growing by the whole page on every
+            // commit. See `Workspace::op_is_noop`.
+            if batch.op_is_noop(&op) {
+                continue;
+            }
+            let ts = hlc.next();
+            let log_op = LogOp {
+                ts,
+                actor: ts.actor,
+                op,
+            };
+            batch.apply(log_op)?;
+            ops_applied += 1;
         }
-        let ts = hlc.next();
-        let log_op = LogOp {
-            ts,
-            actor: ts.actor,
-            op,
-        };
-        ws.apply(log_op)?;
-        ops_applied += 1;
+        batch.commit()?;
     }
 
     // Synchronise block text with the workspace.

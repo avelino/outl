@@ -500,6 +500,16 @@ Open it in a browser to compare a baseline against your change.
 `xtask/src/bin/gen-10k.rs` builds a 10k-page payload; `hyperfine` measures CLI wall-clock.
 The exact recipe lives in `.github/workflows/bench.yml` `bench-cli-xlarge` if you want to reproduce locally.
 
+### Composite-write diagnostic bench
+
+`crates/outl-actions/tests/composite_write_bench.rs` is an `#[ignore]`d, non-criterion test.
+It times the two write shapes the MCP / batch surface uses most (page create + forest + properties, full page replace) with and without an outer `Workspace::begin_batch()`.
+It's a diagnostic baseline, not a CI gate — run it manually when touching the batch persistence path:
+
+```bash
+cargo test -p outl-actions --release --test composite_write_bench -- --ignored --nocapture
+```
+
 ---
 
 ## 9. CI walkthrough

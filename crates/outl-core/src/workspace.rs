@@ -26,6 +26,11 @@ use std::path::PathBuf;
 use std::thread::JoinHandle;
 use tracing::{debug, warn};
 
+mod batch;
+
+use batch::BatchRoute;
+pub use batch::WorkspaceBatch;
+
 /// Errors a workspace may surface to its caller.
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceError {
@@ -89,6 +94,19 @@ pub struct Workspace {
     /// [`Self::ensure_doc_for_edit`] — the in-memory log alone would
     /// miss pre-snapshot edits and produce a wrong Doc state (#129).
     log_complete: bool,
+    /// Deferred-persistence depth. `0` means every [`Self::apply`]
+    /// persists immediately (the default). `> 0` means a
+    /// [`WorkspaceBatch`] guard is active: `apply` still runs the full
+    /// dedup + Yrs + CRDT path but buffers the persist into `pending`,
+    /// and the outermost guard flushes it with one `append_ops` per
+    /// destination on commit/drop. See [`Self::begin_batch`].
+    batch_depth: u32,
+    /// Buffered persists awaiting the outermost batch flush. Each entry
+    /// pairs an op with the storage route resolved **at apply time**
+    /// (page routing walks the tree the op may itself have mutated). The
+    /// ops already live in the CRDT + in-memory log; this buffer is only
+    /// the not-yet-durable persistence queue.
+    pending: Vec<(BatchRoute, LogOp)>,
 }
 
 impl Workspace {
@@ -129,6 +147,8 @@ impl Workspace {
             ops_since_snapshot: 0,
             snapshot_threshold: Workspace::DEFAULT_SNAPSHOT_THRESHOLD,
             log_complete: true,
+            batch_depth: 0,
+            pending: Vec::new(),
         };
 
         let booted_from_snapshot = match ws.boot_from_snapshot() {
@@ -435,6 +455,25 @@ impl Workspace {
             return Ok(());
         }
 
+        // Deferred-persistence mode: a `WorkspaceBatch` guard is live, so
+        // buffer the op instead of fsyncing it now. The route is resolved
+        // here (not at flush time) because page routing walks the tree the
+        // op may have just mutated. The snapshot trigger is skipped too —
+        // the outermost guard fires it once for the whole batch. See
+        // `workspace::batch`.
+        if self.batch_depth > 0 {
+            // The buffer must stay single-actor: `JsonlStorage::append_ops`
+            // rejects the whole batch if any op is foreign, so a stray
+            // foreign op would drop the entire flush. See `begin_batch`.
+            debug_assert_eq!(
+                op.actor, self.actor,
+                "batch buffer only carries ops from the local actor"
+            );
+            let route = self.route_for_op(&op);
+            self.pending.push((route, op));
+            return Ok(());
+        }
+
         // Route to the right storage. If the op's node belongs to a
         // registered page, write to that page's shard; otherwise write
         // to the global storage (legacy behaviour).
@@ -457,16 +496,7 @@ impl Workspace {
         // it off to a worker thread so the user never blocks on fsync.
         // Failure inside the worker is logged and discarded — snapshot
         // is a cache, not source of truth.
-        if self.snapshot_threshold > 0 && self.snapshots_dir.is_some() {
-            self.ops_since_snapshot = self.ops_since_snapshot.saturating_add(1);
-            if self.ops_since_snapshot >= self.snapshot_threshold {
-                // Drain finished workers (non-blocking) so the handle
-                // list doesn't grow unbounded over a long session.
-                self.snapshot_workers.retain(|h| !h.is_finished());
-                self.spawn_background_snapshot();
-                self.ops_since_snapshot = 0;
-            }
-        }
+        self.trigger_snapshot(1);
         Ok(())
     }
 

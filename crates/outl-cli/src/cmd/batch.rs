@@ -19,17 +19,83 @@
 //!   suffix) instead of guessing what landed.
 
 use std::io::Read;
+use std::ops::{Deref, DerefMut};
 use std::path::Path;
 
 use clap::Args;
 use serde_json::{json, Value};
 
 use outl_actions::BlockTreeSpec;
+use outl_core::workspace::WorkspaceError;
 
 use crate::output::{codes, emit, ApiError, EXIT_OK, EXIT_USER};
 use crate::ws::{self, WsCtx};
 
 use super::{block as block_cmd, daily as daily_cmd, page as page_cmd, prop as prop_cmd};
+
+/// RAII batch scope over a [`WsCtx`], coalescing every op the wrapped
+/// commands apply into a single storage flush.
+///
+/// `Workspace::begin_batch` borrows the `workspace` field, which
+/// collides with the `&mut WsCtx` each per-op command handler takes.
+/// This guard sidesteps that: it borrows the whole `WsCtx`, derefs back
+/// to it (so the handlers keep their `&mut WsCtx` unchanged), and drives
+/// the workspace's manual `enter_batch` / `end_batch` pair. Dropping
+/// without `commit` still flushes the ops applied so far — best-effort,
+/// matching the op-log invariant that an applied op is never silently
+/// lost, only possibly not-yet-durable.
+struct CtxBatch<'a> {
+    ctx: &'a mut WsCtx,
+    committed: bool,
+}
+
+impl<'a> CtxBatch<'a> {
+    fn new(ctx: &'a mut WsCtx) -> Self {
+        ctx.workspace.enter_batch();
+        Self {
+            ctx,
+            committed: false,
+        }
+    }
+
+    /// Close the batch and flush the buffered ops, propagating any
+    /// storage error.
+    fn commit(mut self) -> Result<(), WorkspaceError> {
+        self.committed = true;
+        self.ctx.workspace.end_batch()
+    }
+}
+
+impl Deref for CtxBatch<'_> {
+    type Target = WsCtx;
+
+    fn deref(&self) -> &WsCtx {
+        self.ctx
+    }
+}
+
+impl DerefMut for CtxBatch<'_> {
+    fn deref_mut(&mut self) -> &mut WsCtx {
+        self.ctx
+    }
+}
+
+impl Drop for CtxBatch<'_> {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        // Best-effort flush of the applied prefix: the ops already live
+        // in the CRDT + in-memory log, so a storage error here means
+        // "not yet durable", never "lost". It can't propagate out of
+        // `Drop`, so it is logged.
+        if let Err(e) = self.ctx.workspace.end_batch() {
+            tracing::warn!(
+                "batch flush on drop failed (ops applied in memory, not persisted): {e}"
+            );
+        }
+    }
+}
 
 /// `outl batch` arguments.
 #[derive(Args, Debug)]
@@ -85,6 +151,16 @@ pub fn apply_batch(ctx: &mut WsCtx, payload: &Value) -> Result<Value, ApiError> 
         .and_then(Value::as_array)
         .ok_or_else(|| ApiError::new(codes::INVALID_ARG, "missing `ops` array".to_string()))?;
 
+    // Run every op under one batch so the N ops share a single storage
+    // flush instead of paying a per-op fsync. Each op still flows through
+    // the CRDT one at a time (the materialized tree the next op reads
+    // stays correct); only the persist is deferred to `commit`. On a
+    // stop-on-first-error the guard is dropped *before* the error
+    // response is built, flushing the already-applied prefix — so
+    // `applied` / `failed_at` describe the exact same on-disk state as
+    // the pre-batch per-op path.
+    let mut batch = CtxBatch::new(ctx);
+
     let mut results: Vec<Value> = Vec::with_capacity(ops.len());
     for (idx, entry) in ops.iter().enumerate() {
         let op_name = entry
@@ -100,9 +176,12 @@ pub fn apply_batch(ctx: &mut WsCtx, payload: &Value) -> Result<Value, ApiError> 
         let default_args = json!({});
         let args = entry.get("args").unwrap_or(&default_args);
 
-        match apply_op(ctx, &op_name, args) {
+        match apply_op(&mut batch, &op_name, args) {
             Ok(data) => results.push(json!({ "op": op_name, "data": data })),
             Err(err) => {
+                // Flush the applied prefix before reporting the failure,
+                // so the on-disk state matches `applied` / `failed_at`.
+                drop(batch);
                 return Ok(json!({
                     "results": results,
                     "applied": idx,
@@ -113,6 +192,8 @@ pub fn apply_batch(ctx: &mut WsCtx, payload: &Value) -> Result<Value, ApiError> 
             }
         }
     }
+
+    batch.commit().map_err(ApiError::internal)?;
 
     let applied = results.len();
     Ok(json!({

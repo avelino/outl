@@ -592,9 +592,10 @@ fn build_ops(actor: ActorId, count: u32) -> Vec<LogOp> {
 /// duplicated line, exactly like a pre-lock concurrent pull did.
 fn append_ops(root: &Path, actor: ActorId, ops: &[LogOp]) {
     let mut storage = JsonlStorage::open(root.join("ops"), actor).expect("open storage");
-    for op in ops {
-        storage.append_op(op).expect("append op");
-    }
+    // One batched fsync for the lot (`Storage::append_ops`, issue #192); calling
+    // this helper twice still plants a historic duplicated line, since the batch
+    // append does no dedup of its own.
+    storage.append_ops(ops).expect("append ops batch");
 }
 
 /// Node-id set of the `Op::Create` ops in `ops` (for `disk_has_all_nodes`).
