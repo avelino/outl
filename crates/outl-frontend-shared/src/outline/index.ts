@@ -12,7 +12,7 @@
  *   **ids only** — the selection-navigation walks (vim `j`/`k`,
  *   `zR`/`zM`, Visual ranges) operate on id lists.
  */
-import type { BlockNode } from "../api/types";
+import type { BlockNode, InlineToken } from "../api/types";
 
 /**
  * Reconstruct the wire-format text of a block (TODO/DONE prefix
@@ -27,6 +27,69 @@ import type { BlockNode } from "../api/types";
 export function rawTextWithTodo(block: BlockNode): string {
   if (!block.todo) return block.text;
   return `${block.todo} ${block.text}`;
+}
+
+/**
+ * Return the embed handle when `tokens` is a **single** `!((blk-X))`
+ * embed token surrounded only by whitespace `plain` tokens; `null`
+ * otherwise. A block that is *only* an embed triggers the read-only
+ * subtree expansion (`<EmbeddedSubtree />`); mixed prose keeps the
+ * inline `↳ text` render, so `null` is returned for it.
+ *
+ * Mirror of `outl-tui`'s `embed_only_handle` (view/outline.rs): there
+ * it tokenizes the trimmed text and accepts a lone `Embed`, skipping
+ * whitespace-only `Plain` runs; a `blockref` (`((…))` without the `!`),
+ * a second embed, or any other token disqualifies the block.
+ */
+export function embedOnlyHandle(tokens: InlineToken[]): string | null {
+  let handle: string | null = null;
+  for (const tok of tokens) {
+    if (tok.kind === "plain" && tok.value.trim() === "") continue;
+    if (tok.kind === "embed" && handle === null) {
+      handle = tok.value;
+      continue;
+    }
+    return null;
+  }
+  return handle;
+}
+
+/**
+ * Collect every distinct block-ref handle (`blk-XXXXXX`) reachable in
+ * an outline — both `((…))` inline refs (`blockref`) and `!((…))`
+ * embeds (`embed`) — so a client can batch-resolve them in one
+ * `resolveEmbeds` round-trip before rendering.
+ *
+ * DFS over `children`; within each block it also descends the `inner`
+ * span of `bold` / `italic` / `strike` tokens (a ref can live inside
+ * `**bold**`). Handles are de-duplicated by first appearance (`Set`
+ * insertion order), so the caller can slice / display them stably.
+ */
+export function collectBlockRefHandles(outline: BlockNode[]): string[] {
+  const handles = new Set<string>();
+  const walkTokens = (tokens: InlineToken[]) => {
+    for (const tok of tokens) {
+      switch (tok.kind) {
+        case "blockref":
+        case "embed":
+          handles.add(tok.value);
+          break;
+        case "bold":
+        case "italic":
+        case "strike":
+          walkTokens(tok.inner);
+          break;
+      }
+    }
+  };
+  const walkNodes = (nodes: BlockNode[]) => {
+    for (const node of nodes) {
+      walkTokens(node.tokens);
+      walkNodes(node.children);
+    }
+  };
+  walkNodes(outline);
+  return [...handles];
 }
 
 /** Locate a block by id anywhere in a (possibly nested) outline. */

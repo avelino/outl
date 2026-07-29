@@ -89,8 +89,10 @@ pub struct AutoRunReply {
     pub view: PageView,
 }
 
-/// Resolve a batch of embed handles (`blk-XXXXXX`) to their source
-/// content. Used by the frontend to expand `!((blk-…))` blocks.
+/// Resolve a batch of block-ref handles (`blk-XXXXXX`) to their source
+/// content. One reply serves both surfaces the handle can appear in:
+/// `((blk-…))` inline refs render `text`; `!((blk-…))` embeds render
+/// `text` plus the `children` subtree, mirroring the TUI.
 /// Wire reply for `resolve_embeds`.
 #[derive(Debug, Clone, Serialize)]
 pub struct EmbedContent {
@@ -99,6 +101,12 @@ pub struct EmbedContent {
     pub page_slug: String,
     /// `"todo"`, `"done"`, or `None` when the block is not a task.
     pub status: Option<String>,
+    /// The source block's subtree, projected with inline tokens so an
+    /// embed surface can expand it exactly as the source page would.
+    /// Empty for a leaf block. Ids are transient (see
+    /// [`outl_actions::project_parsed_subtree`]) — the subtree is a
+    /// read-only, re-resolved-on-navigation view, never a mutation target.
+    pub children: Vec<outl_actions::OutlineNode>,
 }
 
 /// Sweep the current page for blocks whose fence language has
@@ -176,6 +184,7 @@ pub fn resolve_embeds<S: AppHost>(
                     text,
                     page_slug: entry.source_slug.clone(),
                     status,
+                    children: outl_actions::project_parsed_subtree(&entry.children),
                 },
             );
         }

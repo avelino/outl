@@ -117,6 +117,7 @@ Every entry here routes through `Workspace::apply` — never build a `LogOp` fro
 | Non-fatal parser recovery records (heading instead of bullet, etc.) | `outl_md::ParseWarning` + `outl_md::ParseWarningKind` (re-exported from `parse`) | `crates/outl-md/src/parse.rs` |
 | The outline AST node DTO (UI-friendly, no `Workspace` coupling) | `outl_md::OutlineNode` / `outl_actions::outline::OutlineNode` | `crates/outl-md/src/parse.rs` + `crates/outl-actions/src/outline.rs` |
 | Project the workspace tree under a node into the UI DTO | `outl_actions::outline::project_outline` / `project_outline_node` | `crates/outl-actions/src/outline.rs` |
+| Project a **parsed** subtree (`.md` AST, no sidecar) into wire `OutlineNode`s with `tokens` attached — ids are **transient** (fresh per call), for read-only surfaces that re-resolve on navigation (the `!((blk))` embed subtree expansion) | `outl_actions::outline::project_parsed_subtree` (re-exported `outl_actions::project_parsed_subtree`) | `crates/outl-actions/src/outline.rs` |
 | Flatten an `OutlineNode` subtree to DFS paths (for selection / navigation) | `outl_actions::outline::flatten_subtree_paths` | `crates/outl-actions/src/outline.rs` |
 | Read a page from disk + project to outline view in one call | `outl_actions::outline::read_page_view` / `read_page_view_with_workspace` | `crates/outl-actions/src/outline.rs` |
 | Read a page **and** surface parser warnings (banner, doctor, status line) | `outl_actions::outline::read_page_outline` / `read_page_outline_with_workspace` → `PageOutline { nodes, warnings }` | `crates/outl-actions/src/outline.rs` |
@@ -307,6 +308,21 @@ This is *not* per-keystroke undo inside an uncommitted draft — that belongs to
 | Traceability property key constant (set on structural-instance root blocks) | `outl_actions::FROM_TEMPLATE_KEY` | `crates/outl-actions/src/template/mod.rs` |
 | Callable params key constant | `outl_actions::PARAMS_KEY` | `crates/outl-actions/src/template/mod.rs` |
 | Reserved template name for the daily journal body — a page with `template:: journal` is auto-instantiated (untraced) into every fresh daily note | `outl_actions::JOURNAL_TEMPLATE_NAME` | `crates/outl-actions/src/template/mod.rs` |
+
+---
+
+## 17. Frontend shared primitives (`@outl/shared`)
+
+The TS + Solid catalog's canonical home is [`crates/outl-frontend-shared/CLAUDE.md`](../crates/outl-frontend-shared/CLAUDE.md) → "Today's surface".
+The rows below are the embed / block-ref pieces the desktop wires for issue #147, mirrored here so a `grep` for the reuse index finds them.
+
+| Intent | Use this | File |
+|---|---|---|
+| Render inline markdown tokens to JSX; the `blockref` token (`((blk))` / `!((blk))`) resolves to the source block's text when `embeds` carries the handle (orphan = raw chip) | `<MarkdownInline embeds= … />` (`@outl/shared/markdown`) | `crates/outl-frontend-shared/src/markdown/MarkdownInline.tsx` |
+| Render an embed's subtree read-only — `↳`-nested, max depth 4 (mirrors the TUI's `emit_embedded_children`) | `<EmbeddedSubtree />` (`@outl/shared/markdown`) | `crates/outl-frontend-shared/src/markdown/EmbeddedSubtree.tsx` |
+| The reply shape of `resolveEmbeds` (`{ handle, text, page_slug, status, children: BlockNode[] }`); `EmbedMap` is `Record<string, ResolvedBlock>` | `ResolvedBlock` (`@outl/shared/api/types`) | `crates/outl-frontend-shared/src/api/types.ts` |
+| The handle **iff** a block is embed-only (a bare `!((blk))`), so a client knows to render `<EmbeddedSubtree />` below it | `embedOnlyHandle(tokens)` (`@outl/shared/outline`) | `crates/outl-frontend-shared/src/outline/index.ts` |
+| Collect every blockref + embed handle in an outline (DFS) so a client resolves them in one `resolveEmbeds` round-trip | `collectBlockRefHandles(outline)` (`@outl/shared/outline`) | `crates/outl-frontend-shared/src/outline/index.ts` |
 
 ---
 

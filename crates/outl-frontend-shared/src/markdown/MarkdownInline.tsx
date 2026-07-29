@@ -1,11 +1,19 @@
 import { For, JSX, Show } from "solid-js";
 
-import type { InlineToken } from "../api/types";
+import type { InlineToken, ResolvedBlock } from "../api/types";
 
-export type EmbedMap = Record<
-  string,
-  { handle: string; text: string; page_slug: string; status: string | null }
->;
+/** Resolved block content keyed by ref handle (`blk-XXXXXX`). Both
+ *  `((…))` inline refs and `!((…))` embeds resolve through the same
+ *  map — see {@link ResolvedBlock}. */
+export type EmbedMap = Record<string, ResolvedBlock>;
+
+/** TODO/DONE glyph prefix for a resolved block's `status`
+ *  (`"todo"`/`"done"`), shared by the `blockref` and `embed` renders. */
+function statusMark(status: ResolvedBlock["status"]): string {
+  if (status === "done") return "✓ ";
+  if (status === "todo") return "☐ ";
+  return "";
+}
 
 /**
  * Render a block's pre-tokenized inline markdown.
@@ -236,21 +244,43 @@ export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
                 </span>
               </Show>
             );
-          case "blockref":
+          case "blockref": {
+            // `((blk-XXXXXX))` inline ref. When the handle resolves
+            // (host passed `embeds`), render the source block's text
+            // Roam-style — an inline reference, not the raw handle.
+            // Orphan handles (unresolved) keep the neutral chip so a
+            // dangling ref is still visible. Display-only: the issue
+            // (#147) is the render layer; no onClick is added here.
+            const resolved = props.embeds?.[tok.value];
+            if (resolved) {
+              const mark = statusMark(resolved.status);
+              return (
+                <Show
+                  when={variant() === "inline"}
+                  fallback={
+                    <span class="rounded-md bg-(--color-ios-accent)/12 px-1.5 py-0.5 text-[15px] font-medium text-(--color-ios-accent) dark:bg-(--color-iosd-accent)/20 dark:text-(--color-iosd-accent)">
+                      {mark}
+                      {resolved.text}
+                    </span>
+                  }
+                >
+                  <span class="text-(--color-outl-ref-link-fg) underline decoration-(--color-outl-ref-link-fg)/40 underline-offset-2">
+                    {mark}
+                    {resolved.text}
+                  </span>
+                </Show>
+              );
+            }
             return (
               <span class="rounded bg-(--color-ios-divider)/30 px-1 font-mono text-[13px] text-(--color-ios-text-secondary) dark:bg-(--color-iosd-divider)/30 dark:text-(--color-iosd-text-secondary)">
                 {tok.value}
               </span>
             );
+          }
           case "embed": {
             const resolved = props.embeds?.[tok.value];
             if (resolved) {
-              const mark =
-                resolved.status === "done"
-                  ? "✓ "
-                  : resolved.status === "todo"
-                    ? "☐ "
-                    : "";
+              const mark = statusMark(resolved.status);
               return (
                 <span class="rounded bg-(--color-ios-accent)/8 px-1 py-0.5 text-[13px] text-(--color-ios-text) dark:bg-(--color-iosd-accent)/10 dark:text-(--color-iosd-text)">
                   ↳ {mark}{resolved.text}

@@ -33,6 +33,7 @@ import type {
   PluginTransformer,
   PluginTransformResult,
   RegistryItem,
+  ResolvedBlock,
   RunCodeBlockReply,
   TemplateDto,
   WorkspaceSummary,
@@ -505,14 +506,14 @@ export function runAutoRunBlocks(
 
 /**
  * Batch-resolve embed handles (`blk-XXXXXX`) to their source content.
- * Returns a map from handle to `{ handle, text, page_slug }`.
+ * Returns a map from handle to {@link ResolvedBlock} — the source
+ * block's `text`, `page_slug`, `status`, and its `children` subtree
+ * (populated for `!((…))` embeds, empty for a leaf).
  */
 export function resolveEmbeds(
   handles: string[],
-): Promise<Record<string, { handle: string; text: string; page_slug: string; status: string | null }>> {
-  return invoke<
-    Record<string, { handle: string; text: string; page_slug: string; status: string | null }>
-  >("resolve_embeds", { handles });
+): Promise<Record<string, ResolvedBlock>> {
+  return invoke<Record<string, ResolvedBlock>>("resolve_embeds", { handles });
 }
 
 /**

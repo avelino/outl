@@ -2,12 +2,13 @@ import { render } from "solid-js/web";
 import { describe, expect, it } from "vitest";
 
 import type { InlineToken } from "../api/types";
-import { MarkdownInline } from "./MarkdownInline";
+import { MarkdownInline, type EmbedMap } from "./MarkdownInline";
 
 function mount(
   tokens: InlineToken[],
   variant?: "inline",
   onLinkClick?: (href: string) => void,
+  embeds?: EmbedMap,
 ) {
   const host = document.createElement("div");
   document.body.appendChild(host);
@@ -17,6 +18,7 @@ function mount(
         tokens={tokens}
         variant={variant}
         onLinkClick={onLinkClick}
+        embeds={embeds}
       />
     ),
     host,
@@ -110,6 +112,58 @@ describe("MarkdownInline — external link rendering", () => {
     expect(span.getAttribute("tabindex")).toBeNull();
     expect(() => span.click()).not.toThrow();
     expect(span.className).not.toContain("cursor-pointer");
+    m.dispose();
+  });
+});
+
+describe("MarkdownInline — block-ref rendering (issue #147)", () => {
+  const handle = "blk-r6s4a1";
+  const refTok: InlineToken[] = [{ kind: "blockref", value: handle }];
+
+  function embedMap(status: string | null = null): EmbedMap {
+    return {
+      [handle]: {
+        handle,
+        text: "source block text",
+        page_slug: "notes",
+        status,
+        children: [],
+      },
+    };
+  }
+
+  it("renders the resolved text, not the raw handle (inline)", () => {
+    const m = mount(refTok, "inline", undefined, embedMap());
+    expect(m.host.textContent).toBe("source block text");
+    expect(m.host.textContent).not.toContain(handle);
+    m.dispose();
+  });
+
+  it("renders the resolved text, not the raw handle (pill)", () => {
+    const m = mount(refTok, undefined, undefined, embedMap());
+    expect(m.host.textContent).toBe("source block text");
+    expect(m.host.textContent).not.toContain(handle);
+    m.dispose();
+  });
+
+  it("prefixes the TODO/DONE marker from the resolved status", () => {
+    const todo = mount(refTok, "inline", undefined, embedMap("todo"));
+    expect(todo.host.textContent).toBe("☐ source block text");
+    todo.dispose();
+    const done = mount(refTok, "inline", undefined, embedMap("done"));
+    expect(done.host.textContent).toBe("✓ source block text");
+    done.dispose();
+  });
+
+  it("renders the raw handle chip when the ref is orphan (no embeds)", () => {
+    const m = mount(refTok, "inline");
+    expect(m.host.textContent).toBe(handle);
+    m.dispose();
+  });
+
+  it("orphan chip does not regress on the mobile (pill) variant", () => {
+    const m = mount(refTok);
+    expect(m.host.textContent).toBe(handle);
     m.dispose();
   });
 });

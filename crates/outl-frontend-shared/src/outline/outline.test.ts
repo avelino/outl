@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import type { BlockNode } from "../api/types";
+import type { BlockNode, InlineToken } from "../api/types";
 
 import {
+  collectBlockRefHandles,
   countDescendants,
+  embedOnlyHandle,
   findBlock,
   flattenAll,
   flattenNodes,
@@ -390,5 +392,90 @@ describe("sameCrumbTrail", () => {
 
   it("a shared prefix is not enough — the whole trail must match", () => {
     expect(sameCrumbTrail([crumb("a"), crumb("b")], [crumb("a"), crumb("c")])).toBe(false);
+  });
+});
+
+describe("embedOnlyHandle", () => {
+  it("returns the handle for a lone embed token", () => {
+    const tokens: InlineToken[] = [{ kind: "embed", value: "blk-r6s4a1" }];
+    expect(embedOnlyHandle(tokens)).toBe("blk-r6s4a1");
+  });
+
+  it("returns the handle ignoring surrounding whitespace-only plain tokens", () => {
+    const tokens: InlineToken[] = [
+      { kind: "plain", value: "  " },
+      { kind: "embed", value: "blk-r6s4a1" },
+      { kind: "plain", value: " " },
+    ];
+    expect(embedOnlyHandle(tokens)).toBe("blk-r6s4a1");
+  });
+
+  it("returns null when the embed is mixed with prose", () => {
+    const tokens: InlineToken[] = [
+      { kind: "plain", value: "see " },
+      { kind: "embed", value: "blk-r6s4a1" },
+      { kind: "plain", value: " context" },
+    ];
+    expect(embedOnlyHandle(tokens)).toBeNull();
+  });
+
+  it("returns null for a bare inline block-ref (no `!` embed)", () => {
+    const tokens: InlineToken[] = [{ kind: "blockref", value: "blk-r6s4a1" }];
+    expect(embedOnlyHandle(tokens)).toBeNull();
+  });
+
+  it("returns null when two embeds share one block", () => {
+    const tokens: InlineToken[] = [
+      { kind: "embed", value: "blk-aaaaaa" },
+      { kind: "plain", value: " " },
+      { kind: "embed", value: "blk-bbbbbb" },
+    ];
+    expect(embedOnlyHandle(tokens)).toBeNull();
+  });
+});
+
+describe("collectBlockRefHandles", () => {
+  function node(id: string, tokens: InlineToken[], children: BlockNode[] = []): BlockNode {
+    return { id, text: "", todo: null, tokens, collapsed: false, properties: [], children };
+  }
+
+  it("collects both blockref and embed handles", () => {
+    const outline = [
+      node("a", [{ kind: "blockref", value: "blk-aaaaaa" }]),
+      node("b", [{ kind: "embed", value: "blk-bbbbbb" }]),
+    ];
+    expect(collectBlockRefHandles(outline)).toEqual(["blk-aaaaaa", "blk-bbbbbb"]);
+  });
+
+  it("de-duplicates by first appearance, preserving order", () => {
+    const outline = [
+      node("a", [{ kind: "blockref", value: "blk-aaaaaa" }]),
+      node("b", [{ kind: "embed", value: "blk-aaaaaa" }]),
+      node("c", [{ kind: "blockref", value: "blk-cccccc" }]),
+    ];
+    expect(collectBlockRefHandles(outline)).toEqual(["blk-aaaaaa", "blk-cccccc"]);
+  });
+
+  it("recurses into children", () => {
+    const outline = [
+      node("a", [{ kind: "blockref", value: "blk-aaaaaa" }], [
+        node("b", [{ kind: "embed", value: "blk-bbbbbb" }]),
+      ]),
+    ];
+    expect(collectBlockRefHandles(outline)).toEqual(["blk-aaaaaa", "blk-bbbbbb"]);
+  });
+
+  it("descends the inner span of bold tokens", () => {
+    const outline = [
+      node("a", [
+        { kind: "bold", inner: [{ kind: "blockref", value: "blk-inbold" }] },
+      ]),
+    ];
+    expect(collectBlockRefHandles(outline)).toEqual(["blk-inbold"]);
+  });
+
+  it("returns an empty array when no handles are present", () => {
+    const outline = [node("a", [{ kind: "plain", value: "just text" }])];
+    expect(collectBlockRefHandles(outline)).toEqual([]);
   });
 });
