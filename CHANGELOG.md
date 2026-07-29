@@ -7,6 +7,10 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Fixed
 
+- **TUI: opening a page from the quick switcher (`Ctrl+P`) no longer lands on an empty duplicate when the page's on-disk slug contains slug-unsafe characters (issue #195).**
+  The switcher's preview resolved the page by its literal `pages/*.md` file stem, but Enter round-tripped that same stem through `slugify()` before opening — for a slug that isn't slugify-idempotent (`~`, `%`, uppercase; e.g. slugs written verbatim by the MCP's `page create`), the re-slugified path missed the real file and the "not found" branch silently created a fresh empty page (`title::` plus one empty bullet) next to the real one.
+  Enter now opens the candidate's literal on-disk slug, the same identifier the preview already used; opening by a user-visible name (following a `[[ref]]`, `/open`) still slugifies as before.
+
 - **Re-rendering a page from the op log no longer deletes its block-level `key:: value` property lines from the `.md`.**
   `reconcile` correctly turned block properties into `Op::SetProp` on the block node, but the reverse projection (`render_page_md` / `render_block_md` via `build_outline`) never wrote them back — so any mutation that re-rendered the page (a GUI edit, the importer's ref-resolution pass) silently dropped every `priority:: high`-style line from disk, and the next external-edit reconcile would emit property-removal ops: convergent data loss.
   Block properties now project back alpha-sorted, matching the page-property behavior, and the importer's end-to-end suite pins the round trip.

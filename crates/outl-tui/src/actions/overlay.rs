@@ -145,7 +145,9 @@ impl App {
             return Ok(());
         };
         match c.kind {
-            SwitchKind::Page => self.open_page_by_name(&c.key)?,
+            // `key` is the literal on-disk file stem, not a user-typed
+            // name — never re-slugify it (see `open_page_by_slug`).
+            SwitchKind::Page => self.open_page_by_slug(&c.key)?,
             SwitchKind::Journal => {
                 if let Ok(date) = chrono::NaiveDate::parse_from_str(&c.key, "%Y-%m-%d") {
                     self.view = View::Journal(date);
