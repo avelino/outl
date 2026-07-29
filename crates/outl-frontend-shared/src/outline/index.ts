@@ -72,7 +72,7 @@ export function collectBlockRefHandles(outline: BlockNode[]): string[] {
       switch (tok.kind) {
         case "blockref":
         case "embed":
-          handles.add(tok.value);
+          if (tok.value) handles.add(tok.value);
           break;
         case "bold":
         case "italic":
