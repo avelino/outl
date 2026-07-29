@@ -27,7 +27,7 @@ mod inline;
 mod tests;
 
 use crate::adapter::{ImportError, SourceAdapter};
-use crate::adapters::scan::parse_whole_fence;
+use crate::adapters::scan::{parse_prop_line, parse_whole_fence};
 use crate::ir::{
     BlockContent, ImportBlock, ImportGraph, ImportPage, PageBody, PageName, TaskState,
 };
@@ -425,20 +425,6 @@ fn strip_indent(line: &str, levels: usize, space_unit: usize) -> String {
         idx += c.len_utf8();
     }
     line[idx..].to_string()
-}
-
-/// `key:: value` → `(key, value)`. The key must be a bare word.
-fn parse_prop_line(trimmed: &str) -> Option<(String, String)> {
-    let (k, v) = trimmed.split_once(":: ")?;
-    let key = k.trim();
-    if key.is_empty()
-        || !key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
-    {
-        return None;
-    }
-    Some((key.to_ascii_lowercase(), v.trim().to_string()))
 }
 
 /// Leading Logseq task keyword → state + remaining text.

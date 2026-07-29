@@ -109,7 +109,10 @@ fn collapsed_state_lands_in_the_op_log() {
     .expect("source sidecar");
     // Depth-first: [0] = parent, [1] = "supporting detail" (open: false).
     assert!(ws.workspace.tree().is_collapsed(sc.blocks[1].id));
-    assert_eq!(report.collapsed_applied, 1);
+    // Two folds: `child-uid`'s `open: false`, plus `r5`'s inline
+    // `collapsed:: true` line — a structural attribute the adapter now
+    // maps to the fold flag instead of leaving it as a literal property.
+    assert_eq!(report.collapsed_applied, 2);
 }
 
 #[test]
@@ -203,6 +206,71 @@ fn markers_in_prop_values_and_post_prop_lines_never_survive() {
     );
     assert_eq!(report.refs_unresolved, 1);
     assert!(report.refs_page_fallback >= 1);
+}
+
+#[test]
+fn roam_page_attributes_land_as_page_properties() {
+    // The dominant real-world shape: a contact/company page whose head
+    // is Roam attribute blocks (`icon::`, `page-type::`, `work::`).
+    // These must reach the `.md` as page properties in the header — the
+    // form outl's index reads for the sidebar icon, `page-type` filter,
+    // and `@` mention autocomplete — never as stray text bullets.
+    let json = r#"[
+        {"title": "@Tonico", "children": [
+            {"string": "icon:: 👤\npage-type:: contact\nwork:: [[buser]]", "uid": "a1", "children": []},
+            {"string": "related:: [[triathlon]]", "uid": "a2", "children": []},
+            {"string": "met at the conference", "uid": "n1", "children": []}
+        ]}
+    ]"#;
+    let (ws, report) = import_fixture(json);
+    let page = read(&ws.root.join("pages/tonico.md"));
+    for line in [
+        "icon:: 👤",
+        "page-type:: contact",
+        "work:: [[buser]]",
+        "related:: [[triathlon]]",
+    ] {
+        assert!(
+            page.contains(line),
+            "missing page property `{line}`:\n{page}"
+        );
+    }
+    assert!(
+        !page.contains("- icon::") && !page.contains("- page-type::"),
+        "attribute lines must be page properties, not text bullets:\n{page}"
+    );
+    assert!(
+        page.contains("- met at the conference"),
+        "real note dropped:\n{page}"
+    );
+    assert!(
+        report.props_pages >= 4,
+        "page props not counted: {}",
+        report.props_pages
+    );
+}
+
+#[test]
+fn namespaced_page_keeps_title_and_flattens_slug() {
+    // A Roam page named `buser/tech/data` (1000+ of these in a real
+    // graph): the title must survive verbatim with its slashes, while
+    // the on-disk slug flattens to a single filesystem-safe component.
+    // A ref to it keeps the namespaced form and resolves via the slug.
+    let json = r#"[
+        {"title": "buser/tech/data", "children": [{"string": "the note", "uid": "n1", "children": []}]},
+        {"title": "elsewhere", "children": [{"string": "see [[buser/tech/data]] here", "uid": "r1", "children": []}]}
+    ]"#;
+    let (ws, _report) = import_fixture(json);
+    let page = read(&ws.root.join("pages/buser-tech-data.md"));
+    assert!(
+        page.contains("title:: buser/tech/data"),
+        "namespaced title must survive verbatim:\n{page}"
+    );
+    let referrer = read(&ws.root.join("pages/elsewhere.md"));
+    assert!(
+        referrer.contains("[[buser/tech/data]]"),
+        "namespaced ref must stay verbatim (resolves via slug):\n{referrer}"
+    );
 }
 
 #[test]

@@ -246,6 +246,108 @@ fn collapsed_and_heading_and_timestamps_carry_over() {
 }
 
 #[test]
+fn text_plus_prop_block_keeps_attribute_line_for_the_parser() {
+    // A block that mixes prose with a `key:: value` line: the adapter
+    // leaves the attribute in the text as a continuation line, so outl's
+    // own parser lifts it into a block property — and resolves any ref in
+    // its value through the placeholder pass. Extracting it here would
+    // bypass that resolution (the Omnivore `note:: ((uid))` shape).
+    let (b, _) = parse_one_block("[[2023-01-31]] #1on1\nwork:: [[buser]]");
+    assert!(b.props.is_empty());
+    let text: String = inline_tokens(&b)
+        .iter()
+        .filter_map(|t| match t {
+            Inline::Text(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(text.contains("[[2023-01-31]] #1on1"));
+    assert!(text.contains("work:: [[buser]]"));
+}
+
+#[test]
+fn multiple_property_lines_all_carry_over() {
+    let (b, _) = parse_one_block("icon:: 🏢\npage-type:: company\nsite:: https://x.com");
+    // Pure-prop block: no visible text, every attribute captured.
+    assert!(inline_tokens(&b)
+        .iter()
+        .all(|t| matches!(t, Inline::Text(s) if s.trim().is_empty())));
+    assert_eq!(
+        b.props,
+        vec![
+            ("icon".to_string(), "🏢".to_string()),
+            ("page-type".to_string(), "company".to_string()),
+            ("site".to_string(), "https://x.com".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn inline_collapsed_prop_sets_fold_flag_not_a_property() {
+    let (b, _) = parse_one_block("#buser some note\ncollapsed:: true");
+    assert!(b.collapsed);
+    assert!(b.props.is_empty());
+    assert_eq!(
+        inline_tokens(&b),
+        &[Inline::Text("#buser some note".into())]
+    );
+}
+
+#[test]
+fn id_line_is_stripped_as_artifact() {
+    let (b, report) = parse_one_block("real content\nid:: qnkrWK1ba");
+    assert!(b.props.is_empty());
+    assert_eq!(inline_tokens(&b), &[Inline::Text("real content".into())]);
+    assert_eq!(report.artifacts_stripped, 1);
+}
+
+#[test]
+fn code_fence_with_colons_keeps_props_untouched() {
+    // `::` inside a fence body must not be mistaken for a property.
+    let (b, _) = parse_one_block("```rust\nlet x = foo::bar();\n```");
+    assert!(b.props.is_empty());
+    match &b.content {
+        BlockContent::Code { body, .. } => assert!(body.contains("foo::bar()")),
+        other => panic!("expected code, got {other:?}"),
+    }
+}
+
+#[test]
+fn top_level_attribute_blocks_promote_to_page_props() {
+    let adapter = RoamAdapter;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("backup.json");
+    std::fs::write(
+        &src,
+        r#"[
+            {"title": "@Tonico", "children": [
+                {"string": "icon:: 👤\nrelated:: [[triathlon]]", "uid": "a1", "children": []},
+                {"string": "page-type:: contact", "uid": "a2", "children": []},
+                {"string": "actual note about Tonico", "uid": "n1", "children": []}
+            ]}
+        ]"#,
+    )
+    .expect("write fixture");
+    let mut report = ImportReport::new("roam");
+    let graph = adapter.parse(&src, &mut report).expect("parse");
+    let page = &graph.pages[0];
+    // The two pure-attribute blocks are lifted into the page header;
+    // only the real note remains in the outline.
+    assert_eq!(
+        page.props,
+        vec![
+            ("icon".to_string(), "👤".to_string()),
+            ("related".to_string(), "[[triathlon]]".to_string()),
+            ("page-type".to_string(), "contact".to_string()),
+        ]
+    );
+    match &page.body {
+        PageBody::Outline(blocks) => assert_eq!(blocks.len(), 1),
+        other => panic!("expected outline, got {other:?}"),
+    }
+}
+
+#[test]
 fn journal_titles_parse_as_dates() {
     let adapter = RoamAdapter;
     let dir = tempfile::tempdir().expect("tempdir");

@@ -199,6 +199,9 @@ fn render_markdown_inline_impl(
             InlineTok::Strike { inner } => {
                 out.push(Span::styled(inline_to_source(&inner), theme.strike))
             }
+            InlineTok::Highlight { inner } => {
+                out.push(Span::styled(inline_to_source(&inner), theme.highlight))
+            }
             InlineTok::Code { inner } => out.push(Span::styled(inner.to_string(), theme.code)),
             InlineTok::Link { text, .. } => out.push(Span::styled(text.to_string(), theme.md_link)),
             InlineTok::BlockRef { handle } => {
@@ -342,6 +345,11 @@ pub(crate) fn highlight_inline(text: &str, theme: &Theme) -> Vec<Span<'static>> 
                 out.push(Span::styled("~~".to_string(), dim));
                 out.push(Span::styled(inline_to_source(&inner), theme.strike));
                 out.push(Span::styled("~~".to_string(), dim));
+            }
+            InlineTok::Highlight { inner } => {
+                out.push(Span::styled("==".to_string(), dim));
+                out.push(Span::styled(inline_to_source(&inner), theme.highlight));
+                out.push(Span::styled("==".to_string(), dim));
             }
             InlineTok::Code { inner } => {
                 out.push(Span::styled("`".to_string(), dim));

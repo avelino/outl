@@ -31,6 +31,8 @@ export type InlineToken =
   | { kind: "bold"; inner: InlineToken[] }
   | { kind: "italic"; inner: InlineToken[] }
   | { kind: "strike"; inner: InlineToken[] }
+  // `==highlight==` — the on-disk form of Roam's `^^highlight^^`.
+  | { kind: "highlight"; inner: InlineToken[] }
   | { kind: "code"; value: string }
   | { kind: "link"; value: string; href: string }
   | { kind: "ref"; value: string }

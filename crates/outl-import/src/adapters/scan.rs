@@ -113,6 +113,28 @@ pub(crate) fn truncate(s: &str, max: usize) -> String {
     out
 }
 
+/// `key:: value` → `(key, value)`, lower-cased key. The key must be a
+/// bare word (alnum / `-` / `_` / `.`) — the same grammar outl's own
+/// parser accepts for a property line, so a key with spaces or a `::`
+/// buried in prose stays text. The value is trimmed; an empty value
+/// (`icon:: `) is kept so the property still round-trips.
+///
+/// Shared by the Logseq and Roam adapters: both surface properties as
+/// `key:: value` lines and must classify them identically, or the same
+/// note imported from two tools would diverge.
+pub(crate) fn parse_prop_line(trimmed: &str) -> Option<(String, String)> {
+    let (k, v) = trimmed.split_once(":: ")?;
+    let key = k.trim();
+    if key.is_empty()
+        || !key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return None;
+    }
+    Some((key.to_ascii_lowercase(), v.trim().to_string()))
+}
+
 /// A block whose whole text is one fenced code block →
 /// `(info-string, body)`. `None` when the text isn't a single
 /// complete fence.

@@ -48,7 +48,8 @@ Treat matching with the same paranoia as the CRDT.
   `is_valid_shortcode_char(c)` is the char-level alphabet check — exported so consumers walking buffers char-by-char (`try_emoji`, TUI's `detect_trigger`) avoid allocating a 1-char `String` per keystroke.
   The parser only tokenizes `:foo:` when `shortcode_to_unicode` finds `foo`, so unknown input (`:notarealemoji:`, `meeting at 14:00`) stays plain.
   **Never retro-translate `glyph → shortcode`** — multiple shortcodes can alias the same codepoint (`:+1:` and `:thumbsup:` both → 👍) so the disk form would become lossy.
-- **Inline tokenization** (`inline.rs`) — `**bold**`, `[[refs]]`, `#tags`, `((blk-XXXXXX))`, `!((blk-XXXXXX))`, `:shortcode:`.
+- **Inline tokenization** (`inline.rs`) — `**bold**`, `~~strike~~`, `==highlight==`, `[[refs]]`, `#tags`, `((blk-XXXXXX))`, `!((blk-XXXXXX))`, `:shortcode:`.
+  `==highlight==` (Roam's `^^highlight^^` on import) rejects a space adjacent to either marker so a spaced `==` operator stays plain — unlike `~~strike~~`.
 - **Cursor introspection** (`cursor.rs`) — "what token sits under the caret?", re-exported through `inline` so `outl_md::inline::{…}` paths still resolve.
   `ref_at_cursor` resolves to a navigable `RefTarget::{Page, Journal, Tag, Block}`;
   `link_at_cursor` resolves a markdown link `[text](url)` under the caret (anchor OR url) and returns its URL — the building block for a client that opens links externally (the TUI's `g x`, issue #183);

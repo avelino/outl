@@ -216,7 +216,8 @@ The third line (`- this is a regular child block`) is a real child.
 | `!((blk-XXXXXX))` | Block embed — renders the source block expanded with its subtree |
 | `:shortcode:` | GitHub gemoji shortcode — renders as the unicode glyph (`:tada:` → 🎉) |
 | `{{query: ...}}` | Inline query token (legacy — parsed as opaque; use ` ```query ` code blocks instead, see [Query code blocks](#query-code-blocks) below) |
-| `**bold**`, `*italic*` / `_italic_`, `` `code` `` | Standard CommonMark (underscore emphasis rules apply — see below) |
+| `**bold**`, `*italic*` / `_italic_`, `~~strike~~`, `` `code` `` | Standard CommonMark (underscore emphasis rules apply — see below) |
+| `==highlight==` | Highlight — renders the inner text marked (the on-disk form of Roam's `^^highlight^^` after import). The inner span may not begin or end with a space, so a spaced comparison (`a == b`) stays plain text |
 
 #### Underscore emphasis and intra-word identifiers
 
@@ -611,13 +612,13 @@ This section is only the **syntax-translation table**; for how paste works as a 
 | `- [x] foo` / `- [X] foo` | `- DONE foo` | GitHub / CommonMark |
 | `{{embed: ((blk-XXXXXX))}}` | `!((blk-XXXXXX))` | Roam |
 | `{{[[query]]: foo}}` | `{{query: foo}}` | Roam |
-| `^^highlight^^` | (stripped) | Roam |
+| `^^highlight^^` | `==highlight==` | Roam |
 | `{{video: url}}` and other unknown `{{…}}` | (stripped) | various |
 | `id:: <26-char Crockford ULID>` (alone on a line) | (line dropped) | Logseq |
 | `[[June 2nd, 2026]]`, `[[Apr 22nd, 2026]]`, `[[2026/04/22]]` | `[[2026-06-02]]` etc. | Roam / mixed |
 | 4-space indent | 2-space indent | Roam / Notion export |
 
-Unknown tokens (`{{…}}` and `^^…^^` that aren't outl-native) are stripped on purpose so blocks land clean.
+A balanced `^^highlight^^` is rewritten to outl's native `==highlight==`; unknown tokens (`{{…}}` that aren't outl-native, and an unbalanced stray `^^`) are stripped on purpose so blocks land clean.
 Block properties parsed off the source (`key:: value` indented under a bullet) become `Op::SetProp` on the newly-created node so they converge across devices like every other op.
 
 Date refs `[[…]]` whose inner text parses as a date land as the ISO slug outl uses for journals.

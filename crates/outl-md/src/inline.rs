@@ -14,7 +14,7 @@
 //! - `[[name]]` — outl page reference (lives in `pages/{slugify(name)}.md`).
 //! - `[[YYYY-MM-DD]]` — journal date reference.
 //! - `#tag` — tag (resolves to a page when opened).
-//! - `**bold**` / `*italic*` / `_italic_` / `~~strike~~` / `` `code` ``.
+//! - `**bold**` / `*italic*` / `_italic_` / `~~strike~~` / `==highlight==` / `` `code` ``.
 //! - `[text](url)` — standard markdown link.
 //! - Anything else: [`InlineTok::Plain`].
 //!
@@ -60,6 +60,11 @@ pub enum InlineTok<'a> {
     },
     /// `~~strike~~`.
     Strike {
+        /// Recursively-tokenized contents between the markers.
+        inner: Vec<InlineTok<'a>>,
+    },
+    /// `==highlight==` — the target of Roam's `^^highlight^^` on import.
+    Highlight {
         /// Recursively-tokenized contents between the markers.
         inner: Vec<InlineTok<'a>>,
     },
@@ -167,6 +172,11 @@ pub enum InlineToken {
         /// Tokens of the inner span.
         inner: Vec<InlineToken>,
     },
+    /// `==highlight==`.
+    Highlight {
+        /// Tokens of the inner span.
+        inner: Vec<InlineToken>,
+    },
     /// `` `code` ``.
     Code {
         /// Inner text between the backticks.
@@ -232,6 +242,9 @@ impl InlineToken {
                 inner: inner.iter().map(InlineToken::from_borrowed).collect(),
             },
             InlineTok::Strike { inner } => InlineToken::Strike {
+                inner: inner.iter().map(InlineToken::from_borrowed).collect(),
+            },
+            InlineTok::Highlight { inner } => InlineToken::Highlight {
                 inner: inner.iter().map(InlineToken::from_borrowed).collect(),
             },
             InlineTok::Code { inner } => InlineToken::Code {
@@ -343,6 +356,9 @@ fn match_one(s: &str, prev: Option<char>) -> Option<(InlineTok<'_>, usize)> {
         return Some(out);
     }
     if let Some(out) = try_strike(s) {
+        return Some(out);
+    }
+    if let Some(out) = try_highlight(s) {
         return Some(out);
     }
     if let Some(out) = try_italic_star(s) {
@@ -471,6 +487,11 @@ pub fn inline_to_source(toks: &[InlineTok<'_>]) -> String {
                 out.push_str(&inline_to_source(inner));
                 out.push_str("~~");
             }
+            InlineTok::Highlight { inner } => {
+                out.push_str("==");
+                out.push_str(&inline_to_source(inner));
+                out.push_str("==");
+            }
             InlineTok::Code { inner } => {
                 out.push('`');
                 out.push_str(inner);
@@ -550,6 +571,30 @@ fn try_strike(s: &str) -> Option<(InlineTok<'_>, usize)> {
     }
     Some((
         InlineTok::Strike {
+            inner: tokenize(inner_str),
+        },
+        2 + close + 2,
+    ))
+}
+
+/// `==highlight==` — the on-disk form of Roam's `^^highlight^^` after
+/// import. Unlike [`try_strike`], the inner span may not begin or end
+/// with a space: `^^…^^` always wraps text tightly, and the extra rule
+/// keeps a stray comparison operator (`count == total == 0`) from being
+/// swallowed as a highlight.
+fn try_highlight(s: &str) -> Option<(InlineTok<'_>, usize)> {
+    let rest = s.strip_prefix("==")?;
+    let close = rest.find("==")?;
+    let inner_str = &rest[..close];
+    if inner_str.is_empty()
+        || inner_str.contains('\n')
+        || inner_str.starts_with(' ')
+        || inner_str.ends_with(' ')
+    {
+        return None;
+    }
+    Some((
+        InlineTok::Highlight {
             inner: tokenize(inner_str),
         },
         2 + close + 2,
@@ -742,6 +787,7 @@ mod tokenize_owned_tests {
                 InlineToken::Bold { .. } => "bold",
                 InlineToken::Italic { .. } => "italic",
                 InlineToken::Strike { .. } => "strike",
+                InlineToken::Highlight { .. } => "highlight",
                 InlineToken::Code { .. } => "code",
                 InlineToken::Link { .. } => "link",
                 InlineToken::Ref { .. } => "ref",

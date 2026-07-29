@@ -73,6 +73,7 @@ fn theme_from_palette(name: &'static str, p: &Palette) -> Theme {
         strike: Style::default()
             .fg(hex_to_color(&p.strike_fg))
             .add_modifier(Modifier::CROSSED_OUT),
+        highlight: Style::default().bg(Color::Yellow).fg(Color::Black),
         code: Style::default().fg(hex_to_color(&p.code_fg)),
         todo_open: Style::default()
             .fg(hex_to_color(&p.todo_open_fg))
@@ -157,6 +158,8 @@ pub struct Theme {
     pub italic: Style,
     /// `~~strike~~` inner text.
     pub strike: Style,
+    /// `==highlight==` inner text (Roam `^^highlight^^` on import).
+    pub highlight: Style,
     /// `` `code` `` inner text.
     pub code: Style,
     /// Style for unfinished `TODO` prefix on a block.
@@ -292,6 +295,7 @@ pub fn default_dark() -> Theme {
         bold: Style::default().add_modifier(Modifier::BOLD),
         italic: Style::default().add_modifier(Modifier::ITALIC),
         strike: Style::default().add_modifier(Modifier::CROSSED_OUT),
+        highlight: Style::default().bg(Color::Yellow).fg(Color::Black),
         code: Style::default().fg(Color::Green),
         todo_open: Style::default()
             .fg(Color::Yellow)
@@ -366,6 +370,7 @@ pub fn light() -> Theme {
             .fg(Color::Black)
             .add_modifier(Modifier::ITALIC),
         strike: Style::default().add_modifier(Modifier::CROSSED_OUT),
+        highlight: Style::default().bg(Color::Yellow).fg(Color::Black),
         code: Style::default().fg(Color::Magenta),
         todo_open: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         todo_done: Style::default()

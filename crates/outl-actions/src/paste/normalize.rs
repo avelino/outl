@@ -116,7 +116,44 @@ fn convert_line(line: &str) -> String {
     // slug. Plain page refs (`[[Avelino]]`) stay verbatim.
     let rest = rewrite_date_refs(&rest);
 
+    // Roam highlight `^^text^^` → outl `==text==` (a native inline
+    // token now). Runs before the unknown-token strip so a balanced
+    // pair survives as a highlight instead of being deleted.
+    let rest = rewrite_highlight(&rest);
+
     format!("{indent}{rest}")
+}
+
+/// Roam `^^highlight^^` → outl `==highlight==`. A balanced, non-empty,
+/// single-line pair is rewritten; an unbalanced or empty `^^` is left
+/// untouched for [`strip_unknown_tokens`] to remove.
+fn rewrite_highlight(s: &str) -> String {
+    if !s.contains("^^") {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut cursor = 0usize;
+    while let Some(start) = s[cursor..].find("^^") {
+        let abs = cursor + start;
+        out.push_str(&s[cursor..abs]);
+        let after_open = abs + 2;
+        let Some(close_rel) = s[after_open..].find("^^") else {
+            out.push_str(&s[abs..]);
+            return out;
+        };
+        let close_pos = after_open + close_rel;
+        let inner = &s[after_open..close_pos];
+        if inner.is_empty() || inner.contains('\n') {
+            out.push_str(&s[abs..close_pos + 2]);
+        } else {
+            out.push_str("==");
+            out.push_str(inner);
+            out.push_str("==");
+        }
+        cursor = close_pos + 2;
+    }
+    out.push_str(&s[cursor..]);
+    out
 }
 
 /// Scan for `[[...]]` page refs and rewrite the inner text when it
@@ -374,9 +411,10 @@ mod tests {
         // {{video: ...}} not in the known set → stripped.
         let out = normalize_external_syntax("- check {{video: https://x.test}} this");
         assert_eq!(out, "- check this");
-        // ^^highlight^^ — same fate.
+        // A balanced `^^highlight^^` now converts to native `==…==`
+        // instead of being stripped (see roam_highlight_becomes_double_equals).
         let out = normalize_external_syntax("- ^^hot take^^ here");
-        assert_eq!(out, "- here");
+        assert_eq!(out, "- ==hot take== here");
     }
 
     #[test]
@@ -399,6 +437,21 @@ mod tests {
         // {{...}} strip, otherwise TODO becomes empty.
         let out = normalize_external_syntax("- {{[[TODO]]}} review");
         assert_eq!(out, "- TODO review");
+    }
+
+    #[test]
+    fn roam_highlight_becomes_double_equals() {
+        // Balanced `^^…^^` converts to the native `==…==`.
+        assert_eq!(
+            normalize_external_syntax("- mark ^^this^^ well"),
+            "- mark ==this== well"
+        );
+        // A single unpaired `^^` has no closing marker, so it stays
+        // verbatim (the strip pass only removes balanced pairs).
+        assert_eq!(
+            normalize_external_syntax("- a ^^ dangling"),
+            "- a ^^ dangling"
+        );
     }
 
     #[test]
