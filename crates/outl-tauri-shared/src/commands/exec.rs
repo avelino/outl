@@ -166,6 +166,12 @@ pub fn run_auto_run_blocks<S: AppHost>(state: &S, page_id: String) -> Result<Aut
     Ok(AutoRunReply { ran, view })
 }
 
+/// How deep an embed's subtree is projected into the reply. Mirror of
+/// the frontend's `EmbeddedSubtree` `MAX_DEPTH` (and the TUI's
+/// `EMBED_MAX_DEPTH`): the client never renders past this, so shipping
+/// deeper levels is pure IPC weight. Keep the three in step.
+const EMBED_SUBTREE_MAX_DEPTH: usize = 4;
+
 /// Batch-resolve embed handles to their source content.
 pub fn resolve_embeds<S: AppHost>(
     state: &S,
@@ -177,6 +183,8 @@ pub fn resolve_embeds<S: AppHost>(
     for handle in &handles {
         if let Some(entry) = index.resolve_block_ref(handle) {
             let (status, text) = split_todo_prefix(&entry.text);
+            let mut children = outl_actions::project_parsed_subtree(&entry.children);
+            truncate_children_depth(&mut children, EMBED_SUBTREE_MAX_DEPTH);
             result.insert(
                 handle.clone(),
                 EmbedContent {
@@ -184,12 +192,27 @@ pub fn resolve_embeds<S: AppHost>(
                     text,
                     page_slug: entry.source_slug.clone(),
                     status,
-                    children: outl_actions::project_parsed_subtree(&entry.children),
+                    children,
                 },
             );
         }
     }
     Ok(result)
+}
+
+/// Drop subtree levels the client won't render (beyond
+/// [`EMBED_SUBTREE_MAX_DEPTH`]). `nodes` is level 1; once `depth_left`
+/// hits 1, the current level keeps its text but loses its children.
+fn truncate_children_depth(nodes: &mut [outl_actions::OutlineNode], depth_left: usize) {
+    if depth_left <= 1 {
+        for node in nodes {
+            node.children.clear();
+        }
+        return;
+    }
+    for node in nodes {
+        truncate_children_depth(&mut node.children, depth_left - 1);
+    }
 }
 
 /// Split `"TODO body"` / `"DONE body"` into `(Some("todo"|"done"), "body")`,
