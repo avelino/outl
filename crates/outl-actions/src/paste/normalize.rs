@@ -124,10 +124,13 @@ fn convert_line(line: &str) -> String {
     format!("{indent}{rest}")
 }
 
-/// Roam `^^highlight^^` → outl `==highlight==`. A balanced, non-empty,
-/// single-line pair is rewritten. An empty pair (`^^^^`) is left for
-/// [`strip_unknown_tokens`] to delete; a lone unbalanced `^^` has no
-/// pair, so neither pass touches it and it survives verbatim.
+/// Roam `^^highlight^^` → outl `==highlight==`. A balanced, single-line
+/// pair whose inner has non-space content is rewritten, and the inner is
+/// **trimmed** first: the tokenizer rejects a highlight with a space next
+/// to either marker, so `^^ foo ^^` becomes `==foo==` (which renders),
+/// not `== foo ==` (which wouldn't). A space-only or empty pair is left
+/// for [`strip_unknown_tokens`]; a lone unbalanced `^^` has no pair, so
+/// neither pass touches it and it survives verbatim.
 fn rewrite_highlight(s: &str) -> String {
     if !s.contains("^^") {
         return s.to_string();
@@ -144,11 +147,12 @@ fn rewrite_highlight(s: &str) -> String {
         };
         let close_pos = after_open + close_rel;
         let inner = &s[after_open..close_pos];
-        if inner.is_empty() || inner.contains('\n') {
+        let trimmed = inner.trim();
+        if trimmed.is_empty() || inner.contains('\n') {
             out.push_str(&s[abs..close_pos + 2]);
         } else {
             out.push_str("==");
-            out.push_str(inner);
+            out.push_str(trimmed);
             out.push_str("==");
         }
         cursor = close_pos + 2;
@@ -452,6 +456,12 @@ mod tests {
         assert_eq!(
             normalize_external_syntax("- a ^^ dangling"),
             "- a ^^ dangling"
+        );
+        // Spaces adjacent to the markers are trimmed so the result is a
+        // real highlight the tokenizer accepts, not inert `== foo ==`.
+        assert_eq!(
+            normalize_external_syntax("- mark ^^ this ^^ well"),
+            "- mark ==this== well"
         );
     }
 

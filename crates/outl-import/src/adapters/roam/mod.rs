@@ -100,22 +100,21 @@ impl SourceAdapter for RoamAdapter {
                 .iter()
                 .map(|b| convert_block(b, &page.title, report))
                 .collect();
-            // Lift page-attribute blocks (`icon::`, `page-type::`, …) out
-            // of the outline and into the page header so the index reads
-            // them as page properties. Order-preserving.
+            // Lift only the *leading* run of pure-attribute blocks
+            // (`icon::`, `page-type::`, …) into the page header — that's how
+            // Roam models page attributes, at the head of the page. A
+            // pure-prop block that appears AFTER real content stays where the
+            // user put it: promoting it would reorder the outline and pull
+            // content out of place (the mid-page case the reviewer flagged).
             let mut props: Vec<(String, String)> = Vec::new();
-            blocks.retain_mut(|b| {
-                if is_pure_prop_block(b) {
-                    // `title::` is the emitter's own header line (it owns the
-                    // page name); a promoted `title::` attribute would emit a
-                    // second, conflicting one, so drop it here.
-                    b.props.retain(|(k, _)| k != "title");
-                    props.append(&mut b.props);
-                    false
-                } else {
-                    true
-                }
-            });
+            while blocks.first().is_some_and(is_pure_prop_block) {
+                let mut b = blocks.remove(0);
+                // `title::` is the emitter's own header line (it owns the page
+                // name); a promoted `title::` attribute would emit a second,
+                // conflicting one, so drop it here.
+                b.props.retain(|(k, _)| k != "title");
+                props.append(&mut b.props);
+            }
             graph.pages.push(ImportPage {
                 name,
                 props,

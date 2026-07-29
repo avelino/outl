@@ -113,26 +113,38 @@ pub(crate) fn truncate(s: &str, max: usize) -> String {
     out
 }
 
-/// `key:: value` → `(key, value)`, lower-cased key. The key must be a
-/// bare word (alnum / `-` / `_` / `.`) — the same grammar outl's own
-/// parser accepts for a property line, so a key with spaces or a `::`
-/// buried in prose stays text. The value is trimmed; an empty value
-/// (`icon:: `) is kept so the property still round-trips.
+/// `key:: value` → `(key, value)`, lower-cased key. Accepts both
+/// `key:: value` and a bare `key::` with no value and no trailing space
+/// (empty value), matching outl's own `parse_property_line`. The key
+/// must be a bare word (alnum / `-` / `_` / `.`), so a key with spaces
+/// or a `::` buried in prose (`foo::bar`, `see below::`) stays text.
 ///
 /// Shared by the Logseq and Roam adapters: both surface properties as
 /// `key:: value` lines and must classify them identically, or the same
 /// note imported from two tools would diverge.
 pub(crate) fn parse_prop_line(trimmed: &str) -> Option<(String, String)> {
-    let (k, v) = trimmed.split_once(":: ")?;
-    let key = k.trim();
-    if key.is_empty()
-        || !key
+    if let Some((k, v)) = trimmed.split_once(":: ") {
+        let key = k.trim();
+        if is_prop_key(key) {
+            return Some((key.to_ascii_lowercase(), v.trim().to_string()));
+        }
+    }
+    // `key::` with no value and no trailing space (outl accepts this too).
+    if let Some(key) = trimmed.strip_suffix("::") {
+        let key = key.trim_end();
+        if is_prop_key(key) {
+            return Some((key.to_ascii_lowercase(), String::new()));
+        }
+    }
+    None
+}
+
+/// A property key is a non-empty bare word: alnum / `-` / `_` / `.`.
+fn is_prop_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
-    {
-        return None;
-    }
-    Some((key.to_ascii_lowercase(), v.trim().to_string()))
 }
 
 /// A block whose whole text is one fenced code block →

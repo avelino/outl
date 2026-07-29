@@ -70,6 +70,10 @@ pub struct Palette {
     pub italic_fg: String,
     /// `~~strike~~` foreground (modifier always CROSSED_OUT).
     pub strike_fg: String,
+    /// `==highlight==` marker background (the highlighter fill).
+    pub highlight_bg: String,
+    /// `==highlight==` text foreground (must read against `highlight_bg`).
+    pub highlight_fg: String,
     /// `` `code` `` foreground.
     pub code_fg: String,
 
@@ -150,6 +154,8 @@ impl Palette {
             ("bold_fg", &self.bold_fg),
             ("italic_fg", &self.italic_fg),
             ("strike_fg", &self.strike_fg),
+            ("highlight_bg", &self.highlight_bg),
+            ("highlight_fg", &self.highlight_fg),
             ("code_fg", &self.code_fg),
             ("todo_open_fg", &self.todo_open_fg),
             ("todo_done_fg", &self.todo_done_fg),
