@@ -73,7 +73,9 @@ fn theme_from_palette(name: &'static str, p: &Palette) -> Theme {
         strike: Style::default()
             .fg(hex_to_color(&p.strike_fg))
             .add_modifier(Modifier::CROSSED_OUT),
-        highlight: Style::default().bg(Color::Yellow).fg(Color::Black),
+        highlight: Style::default()
+            .bg(hex_to_color(&p.highlight_bg))
+            .fg(hex_to_color(&p.highlight_fg)),
         code: Style::default().fg(hex_to_color(&p.code_fg)),
         todo_open: Style::default()
             .fg(hex_to_color(&p.todo_open_fg))

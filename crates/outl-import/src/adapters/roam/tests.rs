@@ -294,6 +294,54 @@ fn inline_collapsed_prop_sets_fold_flag_not_a_property() {
 }
 
 #[test]
+fn property_with_empty_value_and_no_space_is_recognized() {
+    // `key::` (no trailing space, empty value) is a property in outl's
+    // own parser, so the importer must classify it the same way instead
+    // of leaving it as text.
+    let (b, _) = parse_one_block("icon::\nrelated:: [[x]]");
+    assert!(inline_tokens(&b)
+        .iter()
+        .all(|t| matches!(t, Inline::Text(s) if s.trim().is_empty())));
+    assert_eq!(
+        b.props,
+        vec![
+            ("icon".to_string(), String::new()),
+            ("related".to_string(), "[[x]]".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn mid_page_attribute_block_is_not_promoted() {
+    // Only the LEADING run of pure-attribute blocks promotes to page
+    // props. A pure-prop block after real content stays in the outline,
+    // or promoting it would reorder content out of place.
+    let adapter = RoamAdapter;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src = dir.path().join("backup.json");
+    std::fs::write(
+        &src,
+        r#"[
+            {"title": "Note", "children": [
+                {"string": "icon:: 📌", "uid": "a1", "children": []},
+                {"string": "real content here", "uid": "n1", "children": []},
+                {"string": "status:: done", "uid": "a2", "children": []}
+            ]}
+        ]"#,
+    )
+    .expect("write fixture");
+    let mut report = ImportReport::new("roam");
+    let graph = adapter.parse(&src, &mut report).expect("parse");
+    let page = &graph.pages[0];
+    // Only the leading `icon::` promotes; `status::` stays in the body.
+    assert_eq!(page.props, vec![("icon".to_string(), "📌".to_string())]);
+    match &page.body {
+        PageBody::Outline(blocks) => assert_eq!(blocks.len(), 2),
+        other => panic!("expected outline, got {other:?}"),
+    }
+}
+
+#[test]
 fn id_line_is_stripped_as_artifact() {
     let (b, report) = parse_one_block("real content\nid:: qnkrWK1ba");
     assert!(b.props.is_empty());

@@ -8,14 +8,20 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 ### Added
 
 - **`==highlight==` is now a native inline token, so Roam's `^^highlight^^` renders as a highlight everywhere instead of vanishing.**
-  The importer already rewrote `^^…^^` to `==…==` on disk, but nothing rendered `==…==` — the marker just sat there as literal text. `outl_md::tokenize` now emits an `InlineTok::Highlight`, the shared `<MarkdownInline />` renderer wraps it in `<mark>`, and the TUI paints it with a reversed-video span. Pasting Roam content converts `^^…^^` to `==…==` too (previously it was stripped). The matcher rejects a space next to either marker, so a spaced comparison (`a == b`) stays plain text — unlike `~~strike~~`.
+  The importer already rewrote `^^…^^` to `==…==` on disk, but nothing rendered `==…==` — the marker just sat there as literal text.
+  `outl_md::tokenize` now emits an `InlineTok::Highlight`, the shared `<MarkdownInline />` renderer wraps it in `<mark>`, and the TUI paints it with a yellow background.
+  Pasting Roam content converts `^^…^^` to `==…==` too (previously it was stripped), trimming any space next to the markers so the result renders.
+  The matcher rejects a space next to either marker, so a spaced comparison (`a == b`) stays plain text — unlike `~~strike~~`.
 
 ### Fixed
 
 - **The Roam importer now carries `key:: value` attributes over as real properties instead of dropping them into bullet text.**
-  A Roam page's attribute blocks (`icon::`, `page-type::`, `work::`, `related::`, `oura-date::`, and every `key:: value` a graph accumulates) used to import as plain text bullets — the adapter set `props: Vec::new()` unconditionally, so a contact page's `page-type:: contact` never reached outl's index and the sidebar icon, the `page-type` filter, and the `@` mention autocomplete all came up empty on imported graphs. Blog-post frontmatter (`url::`, `draft::`, `public::`, `status::`, `tags::`) landed as text too.
-  The adapter now lifts attribute lines out of each `:block/string`: a **pure-attribute** block (only `key:: value` lines) at the head of a page is promoted to a **page property** in the `.md` header, and structural lines are normalized everywhere — `collapsed:: true` becomes the fold flag (`Op::SetCollapsed`) instead of a literal property, and `id::` (Logseq residue) is dropped and counted as an artifact.
-  A block that still has prose keeps its `key:: value` lines **in the text** on purpose: outl's own parser lifts trailing continuation properties *and* resolves any `((uid))` in their values through the placeholder pass, so the block-ref-in-a-property-value shape (Omnivore's `note:: ((uid))`) still degrades correctly instead of being silently bypassed. `parse_prop_line` moved to the shared `adapters/scan.rs` so the Roam and Logseq adapters classify a property line identically.
+  A Roam page's attribute blocks (`icon::`, `page-type::`, `work::`, `related::`, `oura-date::`, and every `key:: value` a graph accumulates) used to import as plain text bullets — the adapter set `props: Vec::new()` unconditionally, so a contact page's `page-type:: contact` never reached outl's index and the sidebar icon, the `page-type` filter, and the `@` mention autocomplete all came up empty on imported graphs.
+  Blog-post frontmatter (`url::`, `draft::`, `public::`, `status::`, `tags::`) landed as text too.
+  The adapter now lifts attribute lines out of each `:block/string`: the leading run of pure-attribute blocks (only `key:: value` lines) at the head of a page is promoted to page properties in the `.md` header, while a pure-prop block that appears after real content stays in place so promotion never reorders the outline.
+  Structural lines are normalized everywhere: `collapsed:: true` becomes the fold flag (`Op::SetCollapsed`) instead of a literal property, and `id::` (Logseq residue) is dropped and counted as an artifact.
+  A block that still has prose keeps its `key:: value` lines in the text on purpose: outl's own parser lifts trailing continuation properties and resolves any `((uid))` in their values through the placeholder pass, so the block-ref-in-a-property-value shape (Omnivore's `note:: ((uid))`) still degrades correctly instead of being silently bypassed.
+  `parse_prop_line` moved to the shared `adapters/scan.rs` so the Roam and Logseq adapters classify a property line identically.
 
 - **Pairing a device from the CLI (`outl peer pair --ticket`) now joins the host's workspace instead of leaving the two devices unable to sync (issue #197).**
   A machine that paired via the CLI kept its own freshly-generated workspace identity, so every later sync was refused with `rejecting sync from peer on a different workspace` — the paired devices looked like two unrelated graphs and nothing ever converged.
