@@ -414,19 +414,35 @@ fn main() -> Result<()> {
 
                     if let Some(ticket_str) = ticket {
                         println!("Connecting to the other device…");
-                        let entry = rt.block_on(outl_sync_iroh::join_pairing(
+                        let (entry, adopted) = rt.block_on(outl_sync_iroh::join_pairing(
                             identity,
                             &ticket_str,
                             &peers_path,
+                            &ws_root,
                             alias,
                         ))?;
                         let prefix = &entry.node_id[..entry.node_id.len().min(12)];
                         println!("Paired with {prefix}");
+                        match adopted {
+                            outl_sync_iroh::WorkspaceAdoption::Adopted(id) => println!(
+                                "Joined the host's workspace ({id}). Run `outl sync` (or just \
+                                 `outl`) to pull its notes."
+                            ),
+                            outl_sync_iroh::WorkspaceAdoption::AlreadyMatched => {
+                                println!("Already on the host's workspace — nothing to adopt.")
+                            }
+                            outl_sync_iroh::WorkspaceAdoption::HostSentNone => println!(
+                                "Warning: the host advertised no workspace id (older build?), so \
+                                 this device kept its own. Sync won't converge until the host \
+                                 upgrades and you re-pair."
+                            ),
+                        }
                     } else {
                         println!("Node ID: {}", identity.node_id());
                         let entry = rt.block_on(outl_sync_iroh::host_pairing(
                             identity,
                             &peers_path,
+                            &ws_root,
                             alias,
                             |ticket, qr| {
                                 println!();

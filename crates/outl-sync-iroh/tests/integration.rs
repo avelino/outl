@@ -22,7 +22,9 @@ use std::time::Duration;
 
 use outl_core::id::ActorId;
 use outl_core::WorkspaceId;
-use outl_sync_iroh::{host_pairing, join_pairing, test_support, IrohIdentity, PeersStore};
+use outl_sync_iroh::{
+    host_pairing, join_pairing, test_support, IrohIdentity, PeersStore, WorkspaceAdoption,
+};
 
 mod common;
 
@@ -45,6 +47,11 @@ async fn pairing_roundtrip() {
     let host_peers = host_dir.path().join("peers.json");
     let join_peers = join_dir.path().join("peers.json");
 
+    // The pairing functions read/write `<root>/.outl/workspace-id`; the tempdir
+    // is the workspace root here (peers.json sits directly in it).
+    let host_root = host_dir.path().to_path_buf();
+    let join_root = join_dir.path().to_path_buf();
+
     // Channel to hand the host's ticket to the joiner once it's printed.
     let (ticket_tx, ticket_rx) = tokio::sync::oneshot::channel::<String>();
 
@@ -56,6 +63,7 @@ async fn pairing_roundtrip() {
             host_pairing(
                 host_identity,
                 &host_peers_for_task,
+                &host_root,
                 Some("host-device".into()),
                 |ticket, _qr| {
                     // Fires synchronously inside host_pairing before it blocks
@@ -80,6 +88,7 @@ async fn pairing_roundtrip() {
                 join_identity,
                 &ticket,
                 &join_peers_for_task,
+                &join_root,
                 Some("join-device".into()),
             ),
         )
@@ -89,7 +98,22 @@ async fn pairing_roundtrip() {
     });
 
     let host_entry = host_task.await.expect("host task panicked");
-    let join_entry = join_task.await.expect("join task panicked");
+    let (join_entry, adoption) = join_task.await.expect("join task panicked");
+
+    // The joiner adopted the host's workspace id (issue #197): both sides now
+    // share one id on disk, so later delta-sync passes the workspace-id check
+    // instead of being rejected as a mismatch.
+    let host_wid = WorkspaceId::read_or_create(host_dir.path()).expect("host wid");
+    let join_wid = WorkspaceId::read_or_create(join_dir.path()).expect("join wid");
+    assert_eq!(
+        host_wid, join_wid,
+        "joiner must adopt the host's workspace id"
+    );
+    assert_eq!(
+        adoption,
+        WorkspaceAdoption::Adopted(host_wid),
+        "join_pairing should report the host id it adopted"
+    );
 
     // Each side persisted the OTHER side's node id.
     assert_eq!(

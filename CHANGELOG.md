@@ -7,6 +7,12 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Fixed
 
+- **Pairing a device from the CLI (`outl peer pair --ticket`) now joins the host's workspace instead of leaving the two devices unable to sync (issue #197).**
+  A machine that paired via the CLI kept its own freshly-generated workspace identity, so every later sync was refused with `rejecting sync from peer on a different workspace` — the paired devices looked like two unrelated graphs and nothing ever converged.
+  The CLI joiner now **adopts the host's `WorkspaceId`** during the handshake (persist-first: it writes the id to `<workspace>/.outl/workspace-id` before returning), exactly like the desktop/mobile GUI already did, and the host advertises its own id so a CLI host works too.
+  `outl peer pair --ticket` now prints what happened — `Joined the host's workspace (…)`, `Already on the host's workspace`, or a warning if the host is on a build too old to advertise an id.
+  The sync onboarding walkthrough in [`docs/sync.md`](docs/sync.md) was rewritten to hand-hold a new user step by step (which folder to pair from, that the joiner adopts the host's workspace, how to pull the notes) and gained a Troubleshooting section for the `workspace-mismatch` message.
+
 - **The desktop app now resolves `((blk))` block refs and expands `!((blk))` embeds instead of rendering the raw handle (issue #147).**
   An inline `((blk-XXXXXX))` used to show its literal handle on the desktop; it now renders the source block's text (Roam-style), and a `!((blk-XXXXXX))` embed expands the source block as `↳ text` plus its full subtree — nested and read-only — matching what the TUI already did.
   The rendering lives in the shared frontend so mobile can adopt it without a parallel implementation: `<MarkdownInline />` resolves the `blockref` token against an `embeds` map (orphan handle = raw chip), and a new `<EmbeddedSubtree />` component in `@outl/shared` renders the embed's subtree depth-capped at 4, mirroring the TUI's `emit_embedded_children`.

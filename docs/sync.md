@@ -375,14 +375,30 @@ The pair belongs to the graph, not the OS: pairing a device into one workspace m
 A one-time migration copies any legacy global `~/.outl/peers.json` into a workspace the first time that workspace is opened (the global is left in place).
 Both files are managed by `outl peer …` (below), not hand-edited.
 
-#### Pairing: `outl peer pair`
+#### Set up sync between two devices (`outl peer pair`)
 
-Two devices establish a pairing over a one-shot iroh handshake (ALPN `outl-sync/pair/1`).
-**Pairing is CLI-only today** — the GUI clients read and probe peers but don't run the handshake.
+This is the whole onboarding, start to finish.
+Read it once before you run anything — the order matters, and one step (which folder you're in on the joining device) is easy to get wrong.
 
-On the **host** device:
+**The mental model first.**
+Pairing joins one device *into another device's workspace*.
+There is always a **host** (the device that already has your notes, or that you decide is the "source") and a **joiner** (the device coming in).
+When the joiner pairs, it **adopts the host's workspace identity** — from that moment the two folders are the *same* graph on two machines, and their edits merge.
+The joiner does **not** keep whatever was in its folder before as a separate workspace; if it was empty (the usual case), it simply becomes a replica of the host.
+
+> Why this matters: every device stores a hidden `<workspace>/.outl/workspace-id`.
+> Two devices only sync if that id matches.
+> Pairing is what makes them match — the joiner rewrites its id to the host's.
+> If you skip pairing (or pair with an old build), the ids stay different and every sync is refused with `rejecting sync from peer on a different workspace` (see [Troubleshooting](#troubleshooting-sync), below).
+
+Pick which device is the host.
+It can be a desktop/GUI workspace or a CLI one — either works.
+
+**Step 1 — on the host, start pairing.**
+Run this *inside the workspace folder you want to share* (or pass `--workspace <dir>`):
 
 ```
+$ cd ~/my-notes          # the workspace you want on both devices
 $ outl peer pair
 Node ID: 35c8fc38bf…
 Scan this QR on the other device, or copy the ticket:
@@ -398,18 +414,43 @@ On the other device, run:
 Waiting for the other device to connect…
 ```
 
-On the **joining** device:
+Leave this running — it waits for the joiner to connect.
+
+**Step 2 — on the joining device, connect with the ticket.**
+Run this **from the folder you want to become the replica** — an empty directory is fine, and is the normal choice.
+Whatever folder you're in is the one that adopts the host's workspace, so don't run it from an unrelated notes folder you want to keep separate:
 
 ```
+$ mkdir ~/my-notes && cd ~/my-notes     # a fresh, empty folder is fine
 $ outl peer pair --ticket eyJpZCI6Ij…
 Connecting to the other device…
 Paired with 35c8fc38bf…
+Joined the host's workspace (01JBW…). Run `outl sync` (or just `outl`) to pull its notes.
 ```
+
+That last line is the confirmation the identity was adopted.
+If you instead see a warning that the host advertised no workspace id, the host is on an **older build** — upgrade it and re-pair, or sync will never converge.
+
+**Step 3 — pull the notes.**
+The ephemeral `outl peer pair` command doesn't transfer history itself.
+On the joiner, run one sync pass (or just open the app, which syncs on launch):
+
+```
+$ outl sync
+Syncing with paired devices…
+```
+
+Your host's pages and journals now appear in the joiner's folder.
+From here on, edits on either device propagate automatically whenever both are online.
+A running GUI/TUI syncs continuously.
+A bare CLI edit converges on the next `outl sync`, or the next time a long-lived client (GUI, TUI, or `outl mcp serve`) opens the workspace — the ephemeral CLI is a passive writer, documented in `crates/outl-cli/CLAUDE.md`.
 
 > The ticket is **not** an iroh `NodeTicket` — that type doesn't exist in iroh 1.0.0.
 > It is a base64 of `serde_json(EndpointAddr)` (node id + relay + direct addrs), which feeds straight back into `endpoint.connect`.
 
-Both sides exchange one `PeerEntry` over a single bi-directional stream and persist the other to `peers.json`.
+Under the hood: both sides exchange one `PeerEntry` (plus their workspace id) over a single bi-directional stream.
+The joiner persists the host to `peers.json` **and** writes the host's id to its own `.outl/workspace-id`.
+The host persists the joiner to *its* `peers.json` and keeps its own id.
 
 #### Managing peers
 
@@ -421,6 +462,30 @@ Both sides exchange one `PeerEntry` over a single bi-directional stream and pers
 
 The same three read/probe operations are exposed to the GUI clients as Tauri commands — `outl_peer_list`, `outl_peer_remove`, `outl_peer_status` — so the mobile and desktop apps can show and prune the peer list and surface live status.
 **Pairing stays CLI-only**; there is no `outl_peer_pair` command, because the handshake's interactive ticket exchange has no good GUI surface yet.
+
+#### Troubleshooting sync
+
+**`rejecting sync from peer on a different workspace` (in a log or the GUI).**
+The two devices have different `workspace-id`s, so the transport refuses to merge them — they look like two unrelated graphs.
+This almost always means the joining device **never adopted the host's workspace** during pairing.
+Fix it by re-pairing:
+
+1. Make sure **both** devices run the same, recent `outl` build (`outl --version`).
+   A host on a build that predates workspace-id pairing can't advertise its id, and the joiner will tell you so at pair time.
+2. On the joining device, from the folder you want as the replica, run `outl peer pair --ticket <ticket>` again with a fresh ticket from the host.
+   Watch for the `Joined the host's workspace (…)` confirmation line — that's the adoption.
+3. Run `outl sync` on the joiner.
+
+If you had already created separate notes in the joiner's folder before pairing, adopting the host's id merges the two graphs (both sides' content converges — nothing is deleted).
+If you want the joiner's folder to stay a *separate* workspace, pair from a **different** empty folder instead.
+
+**Paired, but nothing shows up.**
+`outl peer pair` sets up the link; it doesn't transfer history.
+Run `outl sync` on the device that's missing notes, or open a GUI/TUI client (it syncs on launch and keeps syncing while open).
+
+**`outl peer status` says a peer is offline.**
+The other device has to be running a long-lived client (GUI, TUI, or `outl mcp serve`) to answer.
+A device that only ever runs one-shot CLI commands has no endpoint to reach — the ephemeral CLI is a passive writer, documented in `crates/outl-cli/CLAUDE.md`.
 
 ---
 

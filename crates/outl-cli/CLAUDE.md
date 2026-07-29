@@ -76,6 +76,7 @@ The CLI/TUI/MCP read the device actor from `config.toml`, so pointing them at a 
   `pair` runs the real iroh handshake.
   The host prints a ticket + ASCII QR and waits for one inbound connection.
   `--ticket <str>` connects, exchanges `PeerEntry`s, and writes the peer to `peers.json`.
+  It **also adopts the host's `WorkspaceId`** (written to `<workspace>/.outl/workspace-id`) so later sync isn't refused as `workspace-mismatch` (issue #197), printing the `WorkspaceAdoption` outcome.
   `--name <str>` is the alias THIS device advertises (it lands under our node id in the peer's `peers.json`).
   It defaults to the machine hostname via `default_device_name` (best-effort `hostname` shell-out, `.local` trimmed) so the peer list reads a real name instead of a node-id stub.
   A small `tokio` runtime drives the async `host_pairing` / `join_pairing` helpers from this sync binary.

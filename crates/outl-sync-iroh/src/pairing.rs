@@ -63,6 +63,26 @@ use crate::identity::IrohIdentity;
 use crate::peers::{decode_endpoint_addr, encode_endpoint_addr, PeerEntry, PeersStore};
 use crate::protocol::PAIRING_ALPN;
 
+/// What happened to the joiner's [`WorkspaceId`] during CLI pairing.
+///
+/// The joiner joins the host's workspace, so it normally [`Adopted`] the host's
+/// id. The other two are the "sync won't converge yet" and "nothing to do"
+/// cases the CLI reports differently.
+///
+/// [`Adopted`]: WorkspaceAdoption::Adopted
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceAdoption {
+    /// The host's id was written to `<root>/.outl/workspace-id`; sync will now
+    /// converge. Carries the adopted id.
+    Adopted(WorkspaceId),
+    /// This device already had the host's id (a re-pair, or the two were seeded
+    /// from the same workspace). Nothing changed.
+    AlreadyMatched,
+    /// The host advertised no id — it predates workspace-id pairing. We kept our
+    /// own id, so sync with this host can't converge until it upgrades.
+    HostSentNone,
+}
+
 /// How long the host waits for an inbound pairing connection before giving up.
 const HOST_ACCEPT_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -316,15 +336,27 @@ pub(crate) async fn ready_addr(endpoint: &Endpoint) -> EndpointAddr {
 /// Binds an endpoint, hands its ticket (string + QR) to `on_ticket`, then waits
 /// for exactly one inbound connection, completes the handshake, persists the
 /// peer to `peers_path`, and returns the entry that was stored.
+///
+/// `workspace_root` is the graph the pairing belongs to; the host reads (or
+/// creates) its stable [`WorkspaceId`] from `<root>/.outl/workspace-id` and
+/// **advertises** it so the joiner can adopt it. The host keeps its own id — a
+/// joiner joins the host's workspace, never the other way around.
 pub async fn host_pairing<F>(
     identity: Arc<IrohIdentity>,
     peers_path: &Path,
+    workspace_root: &Path,
     alias: Option<String>,
     on_ticket: F,
 ) -> Result<PeerEntry>
 where
     F: FnOnce(&str, &str),
 {
+    // Advertise our stable workspace id so the joiner adopts it and both sides
+    // land on the same gossip topic + pass the `serve` workspace-id check.
+    // Without this the joiner keeps a fresh id and every later sync is rejected
+    // as `workspace-mismatch` (issue #197).
+    let local_wid = WorkspaceId::read_or_create(workspace_root)
+        .context("read or create local workspace id for pairing")?;
     let endpoint = bind_pairing_endpoint(&identity).await?;
 
     // Wait for the endpoint to discover its relay + direct addresses before
@@ -347,10 +379,11 @@ where
         .await
         .context("complete pairing handshake")?;
 
-    // CLI pairing isn't bound to one open workspace (it edits the device-global
-    // peers.json), so it doesn't advertise or adopt a workspace id; the GUI path
-    // (engine_pairing) is where adoption matters. `_remote_wid` is ignored here.
-    let (entry, _remote_wid) = accept_host_handshake(&conn, &identity, &addr, alias, None).await?;
+    // The host advertises its own id (`local_wid`) and keeps it; the joiner is
+    // the side that adopts (see `join_pairing`). `_remote_wid` is the joiner's
+    // id, which the host deliberately ignores.
+    let (entry, _remote_wid) =
+        accept_host_handshake(&conn, &identity, &addr, alias, Some(&local_wid)).await?;
     persist_peer(peers_path, entry.clone())?;
 
     // The host sends its payload LAST, so it must not slam the connection (or
@@ -411,28 +444,60 @@ pub(crate) async fn accept_host_handshake(
 /// The joining side of pairing.
 ///
 /// Parses `ticket`, connects to the host, completes the handshake, persists the
-/// peer to `peers_path`, and returns the entry that was stored.
+/// peer to `peers_path`, **adopts the host's [`WorkspaceId`]**, and returns the
+/// stored entry plus a [`WorkspaceAdoption`] describing what happened to our id.
+///
+/// Adoption is the load-bearing half: a CLI machine that pairs into an existing
+/// workspace must take on the host's id, or every later sync is refused as
+/// `workspace-mismatch` (issue #197). It is **persist-first** — the host's id is
+/// written to `<root>/.outl/workspace-id` before this returns, so the next
+/// `outl` / `outl sync` on this machine reads the adopted id instead of the
+/// fresh one `read_or_create` would otherwise mint.
 pub async fn join_pairing(
     identity: Arc<IrohIdentity>,
     ticket: &str,
     peers_path: &Path,
+    workspace_root: &Path,
     alias: Option<String>,
-) -> Result<PeerEntry> {
+) -> Result<(PeerEntry, WorkspaceAdoption)> {
+    // Our current id (advertised to the host; a host on the GUI path ignores it,
+    // but a CLI host would keep its own and we still send ours for symmetry).
+    let local_wid = WorkspaceId::read_or_create(workspace_root)
+        .context("read or create local workspace id for pairing")?;
     let endpoint = bind_pairing_endpoint(&identity).await?;
 
     // Snapshot a *ready* addr (relay + direct addrs) so the payload we send the
     // host stores a reachable joiner, not a bare node id.
     let our_addr = ready_addr(&endpoint).await;
 
-    // CLI pairing isn't bound to one open workspace, so it neither advertises nor
-    // adopts a workspace id (the GUI engine_pairing path owns adoption). The
-    // host's id is ignored here.
-    let (entry, _remote_wid) =
-        run_join_handshake(&endpoint, &identity, ticket, &our_addr, alias, None).await?;
+    let (entry, remote_wid) = run_join_handshake(
+        &endpoint,
+        &identity,
+        ticket,
+        &our_addr,
+        alias,
+        Some(&local_wid),
+    )
+    .await?;
+
+    // Adopt the host's id. Persist-first: write to disk, and only report success
+    // once it's durable, so a failed write leaves us on our old id (retry-safe)
+    // rather than half-adopted.
+    let adopted = match remote_wid {
+        Some(host_wid) if host_wid != local_wid => {
+            host_wid
+                .write(workspace_root)
+                .context("adopt host workspace id")?;
+            WorkspaceAdoption::Adopted(host_wid)
+        }
+        Some(_) => WorkspaceAdoption::AlreadyMatched,
+        None => WorkspaceAdoption::HostSentNone,
+    };
+
     persist_peer(peers_path, entry.clone())?;
 
     endpoint.close().await;
-    Ok(entry)
+    Ok((entry, adopted))
 }
 
 /// The joiner side of the pairing handshake, dialing out over `endpoint`.

@@ -41,10 +41,10 @@ Devices live at different paths (desktop `~/outl-p2p`, mobile `…/app.outl.mobi
   Issue #158: the id only proves the peer thinks it belongs; a removed device still knows it, so revocation needs the peer check.
 - **Pairing makes the joiner adopt the host's id.**
   The handshake `PairingPayload` carries each side's id; the **host keeps** its id and the **joiner adopts** it *before* the immediate post-pair `delta_sync` fires.
-  Adoption is **persist-first**: `adopt_workspace_id` writes the host's id to `.outl/workspace-id` and only then flips the in-memory handle; a failed disk write does NOT adopt (retry-safe).
-  A half-adopted state (memory new, disk old) would silently split the workspace on the next start, which reads the stale id from disk.
+  Adoption is **persist-first**: `adopt_workspace_id` writes the host's id to `.outl/workspace-id`, then flips the in-memory handle; a failed write does NOT adopt (retry-safe).
   Both sides then compute the same topic, validate as one workspace, and their op logs CRDT-merge (content from both converges — expected).
-  CLI `outl peer pair` neither advertises nor adopts (it edits `peers.json`, not the live workspace); adoption is a GUI concern, wired in `engine_pairing`.
+  **CLI `outl peer pair` adopts too** (issue #197): `join_pairing` writes the host's id to `<root>/.outl/workspace-id` and returns a `WorkspaceAdoption`.
+  Without it the paired machine keeps a fresh id and every sync is refused `workspace-mismatch` (guard `pairing_roundtrip`).
 - **Live handle.**
   The id lives behind a shared `RwLock` (`SharedWorkspaceId`) read at call time by `delta_sync` + serve, so an adopted id takes effect immediately for direct sync (boot connect, 8s catch-up, immediate post-pair dial — all carry the live id).
 - **Gossip re-subscribes on id change (no restart).**
@@ -224,7 +224,7 @@ Shared seed/read/wait helpers stay in `tests/common/mod.rs` (read-only); saga-sp
 | 3. Workspace identity = stable id, not path (END-TO-END sync) | `different_paths_same_workspace_id_sync_as_one` (two devices at different paths, same id, converge) | `tests/regression.rs` |
 | 3. Mismatched ids are rejected | `delta_sync_rejects_mismatched_workspace_id` (pre-existing) | `tests/integration.rs` |
 | 3b. Removed/unknown peer denied (issue #158) | `removed_peer_is_denied_sync` | `tests/regression.rs` |
-| 4. Pairing adoption (joiner adopts host id, syncs as one) | `gui_pairing_over_live_sync_endpoint` (pre-existing; asserts adopted id persisted in both peers.json) | `tests/integration.rs` |
+| 4. Pairing adoption — joiner adopts host id (GUI + CLI, #197) | `gui_pairing_over_live_sync_endpoint` + `pairing_roundtrip` (CLI: shared on-disk id, returns `Adopted`) | `tests/integration.rs` |
 | 5. Single endpoint per identity (pair AND sync over the live sync endpoint, no relay hijack) | `gui_pairing_over_live_sync_endpoint` (pre-existing; pairing rides the live sync endpoint, no second bind) | `tests/integration.rs` |
 | 6. Reachability resolution + off-LAN/IPv6 direct-addr filter (issue #133) | `iroh_endpoint_addr_*` + `is_reachable_lan_ipv4_*` (keep on-LAN IPv4, drop IPv6 + stale VPN IPs, fall back stored/bare/corrupt) | `src/peers.rs` |
 | 7. Bidirectional push materializes on BOTH sides AND fires BOTH reload signals | `bidirectional_sync_fires_reload_signal_on_both_sides` (set convergence + `peer_ready_tx` on initiator AND responder) | `tests/regression.rs` |
