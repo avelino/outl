@@ -29,7 +29,8 @@ fn toks_contain_tag(toks: &[InlineTok<'_>], tag: &str) -> bool {
         InlineTok::Tag { name } => *name == tag,
         InlineTok::Bold { inner }
         | InlineTok::Italic { inner, .. }
-        | InlineTok::Strike { inner } => toks_contain_tag(inner, tag),
+        | InlineTok::Strike { inner }
+        | InlineTok::Highlight { inner } => toks_contain_tag(inner, tag),
         _ => false,
     })
 }
@@ -81,6 +82,9 @@ mod tests {
         assert!(text_contains_tag("**#urgent** fix", "urgent"));
         assert!(text_contains_tag("*#urgent* fix", "urgent"));
         assert!(text_contains_tag("~~#urgent~~ fix", "urgent"));
+        // A tag inside a highlight must stay findable, or backlinks and
+        // tag search silently miss `==see #project==`.
+        assert!(text_contains_tag("==#urgent== fix", "urgent"));
     }
 
     #[test]

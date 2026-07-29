@@ -106,6 +106,10 @@ impl SourceAdapter for RoamAdapter {
             let mut props: Vec<(String, String)> = Vec::new();
             blocks.retain_mut(|b| {
                 if is_pure_prop_block(b) {
+                    // `title::` is the emitter's own header line (it owns the
+                    // page name); a promoted `title::` attribute would emit a
+                    // second, conflicting one, so drop it here.
+                    b.props.retain(|(k, _)| k != "title");
                     props.append(&mut b.props);
                     false
                 } else {

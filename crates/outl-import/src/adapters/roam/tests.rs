@@ -313,6 +313,37 @@ fn code_fence_with_colons_keeps_props_untouched() {
 }
 
 #[test]
+fn attribute_block_with_children_is_not_promoted() {
+    // A block that is only attribute lines but HAS children stays in the
+    // outline (promotion drops the block, which would orphan its subtree).
+    // Its attribute becomes a block property; the children survive.
+    let mut report = ImportReport::new("roam");
+    let b = RoamBlock {
+        string: "related:: [[x]]".to_string(),
+        uid: "p1".to_string(),
+        children: vec![RoamBlock {
+            string: "a child note".to_string(),
+            uid: "c1".to_string(),
+            children: Vec::new(),
+            heading: None,
+            open: None,
+            create_time: None,
+            edit_time: None,
+        }],
+        heading: None,
+        open: None,
+        create_time: None,
+        edit_time: None,
+    };
+    let out = convert_block(&b, "P", &mut report);
+    assert_eq!(
+        out.props,
+        vec![("related".to_string(), "[[x]]".to_string())]
+    );
+    assert_eq!(out.children.len(), 1);
+}
+
+#[test]
 fn top_level_attribute_blocks_promote_to_page_props() {
     let adapter = RoamAdapter;
     let dir = tempfile::tempdir().expect("tempdir");

@@ -125,8 +125,9 @@ fn convert_line(line: &str) -> String {
 }
 
 /// Roam `^^highlight^^` → outl `==highlight==`. A balanced, non-empty,
-/// single-line pair is rewritten; an unbalanced or empty `^^` is left
-/// untouched for [`strip_unknown_tokens`] to remove.
+/// single-line pair is rewritten. An empty pair (`^^^^`) is left for
+/// [`strip_unknown_tokens`] to delete; a lone unbalanced `^^` has no
+/// pair, so neither pass touches it and it survives verbatim.
 fn rewrite_highlight(s: &str) -> String {
     if !s.contains("^^") {
         return s.to_string();
