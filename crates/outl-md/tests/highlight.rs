@@ -66,6 +66,32 @@ fn newline_inside_is_not_a_highlight() {
 }
 
 #[test]
+fn highlight_composes_with_other_markers() {
+    // Pins the matcher order in `match_one`: bold/strike win over
+    // highlight when they wrap it, and a link swallows a `==…==` in its
+    // anchor. All must round-trip so a reorder can't silently break them.
+    for src in ["**==x==**", "~~==x==~~", "[==x==](url)"] {
+        assert_eq!(
+            inline_to_source(&tokenize(src)),
+            src,
+            "{src} must round-trip"
+        );
+    }
+    // Bold wrapping a highlight keeps the highlight as a real inner token.
+    let toks = tokenize("**==x==**");
+    let bold_inner = toks
+        .iter()
+        .find_map(|t| match t {
+            InlineTok::Bold { inner } => Some(inner),
+            _ => None,
+        })
+        .expect("one bold");
+    assert!(bold_inner
+        .iter()
+        .any(|t| matches!(t, InlineTok::Highlight { .. })));
+}
+
+#[test]
 fn multibyte_inner_round_trips() {
     // The matcher works on byte offsets, so multi-byte inner content
     // must survive intact (issue #52 acceptance).

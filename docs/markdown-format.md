@@ -618,7 +618,9 @@ This section is only the **syntax-translation table**; for how paste works as a 
 | `[[June 2nd, 2026]]`, `[[Apr 22nd, 2026]]`, `[[2026/04/22]]` | `[[2026-06-02]]` etc. | Roam / mixed |
 | 4-space indent | 2-space indent | Roam / Notion export |
 
-A balanced `^^highlight^^` is rewritten to outl's native `==highlight==`; unknown tokens (`{{…}}` that aren't outl-native, and an unbalanced stray `^^`) are stripped on purpose so blocks land clean.
+A balanced `^^highlight^^` is rewritten to outl's native `==highlight==`.
+Unknown `{{…}}` tokens that aren't outl-native are stripped on purpose so blocks land clean.
+A lone unbalanced `^^` has no pair to convert or strip, so it survives verbatim.
 Block properties parsed off the source (`key:: value` indented under a bullet) become `Op::SetProp` on the newly-created node so they converge across devices like every other op.
 
 Date refs `[[…]]` whose inner text parses as a date land as the ISO slug outl uses for journals.
