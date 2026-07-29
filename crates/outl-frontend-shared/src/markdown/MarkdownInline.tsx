@@ -122,6 +122,18 @@ export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
                 />
               </span>
             );
+          case "highlight":
+            return (
+              <mark class="rounded-[0.2em] bg-yellow-200/70 px-[0.15em] text-inherit dark:bg-yellow-400/30">
+                <MarkdownInline
+                  tokens={tok.inner}
+                  variant={props.variant}
+                  onRefClick={props.onRefClick}
+                  onTagClick={props.onTagClick}
+                  onLinkClick={props.onLinkClick}
+                />
+              </mark>
+            );
           case "code":
             return (
               <code class="rounded bg-(--color-ios-divider)/30 px-1 py-0.5 font-mono text-[14px] dark:bg-(--color-iosd-divider)/30">

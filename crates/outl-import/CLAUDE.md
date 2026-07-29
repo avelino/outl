@@ -70,7 +70,7 @@ src/
 │   ├── render.rs      # IR → markdown, placeholder emission, DFS bookkeeping
 │   └── resolve.rs     # pass B: uid → handle, edit_text, SetCollapsed
 └── adapters/
-    ├── scan.rs        # shared low-level scanners (balanced, is_uid, alias_link)
+    ├── scan.rs        # shared low-level scanners (balanced, is_uid, alias_link, parse_prop_line)
     ├── roam/          # mod.rs (JSON → IR) + inline.rs (dialect scanner) + tests.rs
     ├── logseq/        # mod.rs (outline parser) + inline.rs + tests.rs
     └── obsidian/      # mod.rs (frontmatter/wikilink policy) + stems.rs (collisions)

@@ -27,7 +27,7 @@ mod inline;
 mod tests;
 
 use crate::adapter::{ImportError, SourceAdapter};
-use crate::adapters::scan::parse_whole_fence;
+use crate::adapters::scan::{parse_prop_line, parse_whole_fence};
 use crate::ir::{
     BlockContent, ComponentKind, ImportBlock, ImportGraph, ImportPage, Inline, PageBody, PageName,
     TaskState,
@@ -95,14 +95,26 @@ impl SourceAdapter for RoamAdapter {
                 Some(d) => PageName::Journal(d),
                 None => PageName::Named(page.title.clone()),
             };
-            let blocks = page
+            let mut blocks: Vec<ImportBlock> = page
                 .children
                 .iter()
                 .map(|b| convert_block(b, &page.title, report))
                 .collect();
+            // Lift page-attribute blocks (`icon::`, `page-type::`, …) out
+            // of the outline and into the page header so the index reads
+            // them as page properties. Order-preserving.
+            let mut props: Vec<(String, String)> = Vec::new();
+            blocks.retain_mut(|b| {
+                if is_pure_prop_block(b) {
+                    props.append(&mut b.props);
+                    false
+                } else {
+                    true
+                }
+            });
             graph.pages.push(ImportPage {
                 name,
-                props: Vec::new(),
+                props,
                 body: PageBody::Outline(blocks),
                 stem_override: None,
             });
@@ -113,14 +125,25 @@ impl SourceAdapter for RoamAdapter {
 
 /// One Roam block → IR block (recursive).
 fn convert_block(b: &RoamBlock, page: &str, report: &mut ImportReport) -> ImportBlock {
-    let (task, raw) = split_task_marker(&b.string);
+    let (task, after_task) = split_task_marker(&b.string);
     if let Some(state) = task {
         report.count_task(state.report_key());
     }
 
+    // A fenced block is opaque: its body legitimately carries `::`
+    // (`foo::bar`, `use a::b`), so property extraction must skip it and
+    // let `convert_content` own the fence. Everything else may hold
+    // `key:: value` attribute lines to lift out of the text.
+    let is_fence = parse_whole_fence(after_task).is_some() || after_task.contains("```");
+    let (props, collapsed_prop, text) = if is_fence {
+        (Vec::new(), false, after_task.to_string())
+    } else {
+        split_block_props(after_task, report)
+    };
+
     ImportBlock {
         uid: (!b.uid.is_empty()).then(|| b.uid.clone()),
-        content: convert_content(raw, page, report),
+        content: convert_content(&text, page, report),
         children: b
             .children
             .iter()
@@ -128,10 +151,96 @@ fn convert_block(b: &RoamBlock, page: &str, report: &mut ImportReport) -> Import
             .collect(),
         task,
         heading: b.heading.filter(|h| (1..=3).contains(h)),
-        collapsed: b.open == Some(false),
-        props: Vec::new(),
+        collapsed: b.open == Some(false) || collapsed_prop,
+        props,
         created: b.create_time.and_then(ms_to_datetime),
         edited: b.edit_time.and_then(ms_to_datetime),
+    }
+}
+
+/// Split a Roam block string into `key:: value` property lines and the
+/// remaining prose. Roam attributes live *inside* `:block/string` —
+/// often a whole block of them (`icon:: 🏢\npage-type:: company`) or
+/// mixed with text (`[[2023-01-31]] #1on1\ncollapsed:: true`) — so a
+/// property line can sit on any line of the block.
+///
+/// Two classes of line are handled differently:
+///
+/// - **Structural** (`id::`, `collapsed::`) is never user data and is
+///   *always* stripped from the text: `id::` is Logseq residue (the
+///   block's ref identity is the Roam JSON `uid`) dropped + counted;
+///   `collapsed:: true` flips the returned fold flag (its own IR field).
+/// - **User attributes** (`icon::`, `work::`, …) are lifted into `props`
+///   **only when the block is nothing but attribute lines**. A block
+///   that still has prose keeps its attribute lines *in the text*: outl's
+///   own parser lifts trailing `key:: value` continuation lines into
+///   block properties AND resolves any `((uid))` in their values through
+///   the placeholder pass — extracting here would bypass that resolution
+///   (the Omnivore `note:: ((uid))` shape). Roam's page-attribute blocks
+///   (`icon::` at the head of a contact page) are pure-attribute, so this
+///   still captures the case that matters.
+fn split_block_props(
+    raw: &str,
+    report: &mut ImportReport,
+) -> (Vec<(String, String)>, bool, String) {
+    // Fast path: no `::` at all → nothing to lift, keep the string byte
+    // for byte (the common case, and it preserves exact whitespace).
+    if !raw.contains("::") {
+        return (Vec::new(), false, raw.to_string());
+    }
+    let mut collapsed = false;
+    let mut user_props: Vec<(String, String)> = Vec::new();
+    let mut kept: Vec<&str> = Vec::new(); // text + user-prop lines, in order
+    let mut has_prose = false;
+    for line in raw.split('\n') {
+        match parse_prop_line(line.trim()) {
+            Some((k, _)) if k == "id" => report.artifacts_stripped += 1,
+            Some((k, v)) if k == "collapsed" => collapsed |= v == "true",
+            Some((k, v)) => {
+                user_props.push((k, v));
+                kept.push(line);
+            }
+            None => {
+                if !line.trim().is_empty() {
+                    has_prose = true;
+                }
+                kept.push(line);
+            }
+        }
+    }
+    if has_prose {
+        // Prose present → leave user attributes in the text for outl's
+        // parser to lift and resolve. Only the structural lines were
+        // stripped from `kept`.
+        (Vec::new(), collapsed, kept.join("\n"))
+    } else {
+        // Pure-attribute block → lift the props; the text is now empty.
+        (user_props, collapsed, String::new())
+    }
+}
+
+/// A top-level block that is *only* attribute lines — no prose, no
+/// children, no task/heading. Roam models page attributes as such
+/// blocks at the head of a page (`icon::`, `page-type::`, `related::`),
+/// so they belong in the page's `title::`-style property header, not as
+/// a stray empty bullet. Promoting them is what lets outl's index see
+/// `page-type::` / `icon::` for the sidebar, type filter, and `@`
+/// mention autocomplete.
+fn is_pure_prop_block(b: &ImportBlock) -> bool {
+    b.task.is_none()
+        && b.heading.is_none()
+        && b.children.is_empty()
+        && !b.props.is_empty()
+        && content_is_blank(&b.content)
+}
+
+/// True when the block carries no visible text — only whitespace runs.
+fn content_is_blank(content: &BlockContent) -> bool {
+    match content {
+        BlockContent::Inline(toks) => toks
+            .iter()
+            .all(|t| matches!(t, Inline::Text(s) if s.trim().is_empty())),
+        BlockContent::Code { .. } | BlockContent::Verbatim(_) => false,
     }
 }
 

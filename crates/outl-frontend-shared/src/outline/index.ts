@@ -77,6 +77,7 @@ export function collectBlockRefHandles(outline: BlockNode[]): string[] {
         case "bold":
         case "italic":
         case "strike":
+        case "highlight":
           walkTokens(tok.inner);
           break;
       }
