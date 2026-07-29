@@ -664,6 +664,20 @@ impl App {
     /// preserved in the page's `title::` property.
     pub(crate) fn open_page_by_name(&mut self, name: &str) -> Result<()> {
         let slug = outl_md::slug::slugify(name);
+        self.open_page_slug(&slug, name)
+    }
+
+    /// Open (or create) a page whose on-disk slug is already known.
+    /// On-disk slugs are not always slugify-idempotent (MCP/CLI `page
+    /// create` writes the caller's slug verbatim, so `~`, `%`, or
+    /// uppercase can appear in the filename); re-slugifying one here
+    /// would resolve to a different path and silently create an empty
+    /// duplicate page.
+    pub(crate) fn open_page_by_slug(&mut self, slug: &str) -> Result<()> {
+        self.open_page_slug(slug, slug)
+    }
+
+    fn open_page_slug(&mut self, slug: &str, name: &str) -> Result<()> {
         let path = self.workspace_root.join("pages").join(format!("{slug}.md"));
         let created_new = !path.exists();
         if created_new {
@@ -724,5 +738,62 @@ mod word_tests {
             Some("hello".to_string()),
             "cursor past EOL still picks up the last word"
         );
+    }
+}
+
+#[cfg(test)]
+mod open_page_tests {
+    use crate::state::App;
+    use outl_core::{ActorId, Workspace};
+    use tempfile::TempDir;
+
+    fn fresh_app() -> (App, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let actor = ActorId::new();
+        let ws = Workspace::open_in_memory(actor).unwrap();
+        let app = App::new(
+            dir.path().to_path_buf(),
+            ws,
+            actor,
+            crate::theme::default_theme(),
+            false,
+            outl_config::SyncConfig::default(),
+        )
+        .unwrap();
+        (app, dir)
+    }
+
+    // Regression for the quick-switcher "preview shows content, open is
+    // empty" bug: an on-disk slug that isn't slugify-idempotent (`~`,
+    // `%` — MCP-written) must open verbatim, not be re-slugified into a
+    // fresh empty duplicate page.
+    #[test]
+    fn open_by_slug_uses_the_literal_stem() {
+        let (mut app, dir) = fresh_app();
+        let pages = dir.path().join("pages");
+        std::fs::create_dir_all(&pages).unwrap();
+        let slug = "ai-memory~abc~sessions%2Fdef.md";
+        let real = pages.join(format!("{slug}.md"));
+        std::fs::write(&real, "- real content\n").unwrap();
+
+        app.open_page_by_slug(slug).unwrap();
+
+        assert_eq!(app.current_path(), real);
+        assert_eq!(app.page.blocks[0].text, "real content");
+        let slugified = pages.join(format!("{}.md", outl_md::slug::slugify(slug)));
+        assert!(
+            !slugified.exists(),
+            "opening by literal slug must not mint a slugified duplicate"
+        );
+    }
+
+    // `open_page_by_name` keeps its semantics: a user-visible name is
+    // slugified before hitting disk.
+    #[test]
+    fn open_by_name_still_slugifies() {
+        let (mut app, dir) = fresh_app();
+        app.open_page_by_name("My Fancy Page").unwrap();
+        let expected = dir.path().join("pages").join("my-fancy-page.md");
+        assert_eq!(app.current_path(), expected);
     }
 }
