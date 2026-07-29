@@ -399,6 +399,24 @@ impl<'a> SidecarBlockCursor<'a> {
     }
 }
 
+/// Project a parsed subtree (bare `.md` AST, no sidecar) into wire
+/// [`OutlineNode`]s with inline tokens attached.
+///
+/// Ids are **transient** — freshly minted per call, not the blocks'
+/// stable ULIDs — because the parsed AST carries no ids (they live in
+/// the sidecar). This suits read-only surfaces that re-resolve on
+/// navigation rather than hold identity: the embed subtree
+/// (`!((blk-XXXXXX))` expansion) is the caller, mirroring the TUI's
+/// visual-only child expansion. Do **not** use it where a client needs
+/// a stable id to mutate a block.
+pub fn project_parsed_subtree(children: &[ParsedOutlineNode]) -> Vec<OutlineNode> {
+    let mut cursor = SidecarBlockCursor::None;
+    children
+        .iter()
+        .map(|child| outline_from_parsed(child, &mut cursor))
+        .collect()
+}
+
 fn outline_from_parsed(
     block: &ParsedOutlineNode,
     iter: &mut SidecarBlockCursor<'_>,
@@ -489,6 +507,43 @@ mod tests {
     fn flatten_subtree_paths_leaf_returns_just_root() {
         let only = leaf("only-me");
         assert_eq!(flatten_subtree_paths(&only), vec![Vec::<usize>::new()]);
+    }
+
+    fn parsed(text: &str, children: Vec<ParsedOutlineNode>) -> ParsedOutlineNode {
+        ParsedOutlineNode {
+            text: text.into(),
+            properties: Vec::new(),
+            children,
+        }
+    }
+
+    #[test]
+    fn project_parsed_subtree_attaches_tokens_and_recurses() {
+        // The embed subtree (`!((blk-…))` expansion) rides this: a parsed
+        // subtree with inline markup + a nested child must come back as
+        // wire nodes carrying tokens, or the client renders empty rows.
+        let tree = vec![parsed(
+            "parent **bold**",
+            vec![parsed("TODO child", Vec::new())],
+        )];
+
+        let wire = project_parsed_subtree(&tree);
+
+        assert_eq!(wire.len(), 1);
+        let parent = &wire[0];
+        assert_eq!(parent.text, "parent **bold**");
+        // Tokens are attached (not the empty vec a bare clone would leave).
+        assert!(
+            parent.tokens.len() > 1,
+            "expected tokenized inline markup, got {:?}",
+            parent.tokens
+        );
+        // The child recurses, and its TODO prefix is split off text into `todo`.
+        assert_eq!(parent.children.len(), 1);
+        let child = &parent.children[0];
+        assert_eq!(child.todo, Some(TodoState::Todo));
+        assert_eq!(child.text, "child");
+        assert!(!child.tokens.is_empty());
     }
 
     #[test]

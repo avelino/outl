@@ -1,4 +1,5 @@
 export { MarkdownInline, type EmbedMap } from "./MarkdownInline";
+export { EmbeddedSubtree } from "./EmbeddedSubtree";
 export {
   QUOTE_PREFIX,
   isQuote,

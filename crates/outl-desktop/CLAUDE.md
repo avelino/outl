@@ -6,8 +6,8 @@ Solid + Tailwind frontend, Rust backend that **must stay thin** — every worksp
 ## Status
 
 **Feature-complete v0.**
-Outline edit, journal nav, picker (Cmd+P), backlinks panel, `outl-exec` code blocks, cross-platform FS watcher + auto-reload, settings modal, and the `desktop.yml` CI workflow are all in.
-Signed bundles, Homebrew cask, and graph view ride incrementally on top.
+Outline edit, journal nav, picker, backlinks, `outl-exec` code blocks, FS watcher + auto-reload, settings, and `desktop.yml` CI are all in.
+Signed bundles, Homebrew cask, and graph view ride on top.
 
 ## Layering
 
@@ -296,23 +296,19 @@ It beats the ref popup at the same caret (`detectEmojiContext` only fires on wor
 Inside an open `[[…]]`, `BlockRow` shows `RefSuggestPopup`, reusing the shared `detectRefContext` / `applySuggestion` helpers and the `search_pages` command the `Cmd+P` picker already calls.
 Accept inserts the page title (or ISO slug for journals).
 
-### `((block ref))` autocomplete
+### `((block ref))` autocomplete + rendering
 
-The `((` counterpart of `[[page]]` (issue #116).
-Inside an open `((…))`, `BlockRow` shows `BlockSuggestPopup`, reusing `detectRefContext` (`kind: "block"`) / `applySuggestion` plus `search_blocks` (`outl_md::WorkspaceIndex::search_block_text`).
-Rows show snippet + slug; the pick inserts the **ref handle** (`((blk-XXXXXX))`), never the text; mobile registers the command for parity, popup unwired.
-`search_blocks` rebuilds the index from disk, so it's debounced ~150ms.
+Inside an open `((…))` (issue #116), `BlockRow` shows `BlockSuggestPopup` — `detectRefContext` (`kind: "block"`) / `applySuggestion` + `search_blocks` (`WorkspaceIndex::search_block_text`, from disk so debounced ~150ms).
+The pick inserts the **ref handle** (`((blk-XXXXXX))`), never the text; mobile registers it for parity, popup unwired.
+Rendering then **resolves** the handle (issue #147, TUI parity): `OutlineView` gathers blockref + embed handles with `collectBlockRefHandles`, resolves them via `resolveEmbeds`, and holds the `Record<handle, ResolvedBlock>` in `appState.embeds`.
+`BlockRow` feeds it to `<MarkdownInline embeds= />` (inline `((blk))` → source text, orphan → raw chip).
+An embed-only block (`embedOnlyHandle`) also renders `<EmbeddedSubtree />` beneath it — source `↳ text` + subtree, read-only, depth 4, from `ResolvedBlock.children` (backend `resolve_embeds`).
 
 ### Clicking external `[label](url)` links
 
-`<MarkdownInline />` renders external markdown links clickable when given an `onLinkClick(href)` prop.
-`OutlineView` wires it to `openExternalUrl` (`@outl/shared/api/commands`),
-which scheme-guards to `http(s)`/`mailto` and opens in the system browser via **`tauri-plugin-opener`** (registered in `src-tauri/src/lib.rs`;
-the capability grants a scoped `opener:allow-open-url` for `http`/`https`/`mailto` in `capabilities/default.json`).
-Failures (malformed URL, disallowed scheme) land on the status line via `appState.lastError`.
-The `[[ref]]` / `#tag` click handlers are unchanged (they navigate the workspace, not the browser).
-The opener call lives in the shared wrapper (not a custom command), so mobile can opt in later.
-Backlink rows stay inert (the whole row is already a navigate-to-source button; nesting a second click target would conflict).
+`<MarkdownInline />` renders external links clickable via an `onLinkClick(href)` prop.
+`OutlineView` wires it to `openExternalUrl` (`@outl/shared/api/commands`), which scheme-guards to `http(s)`/`mailto` and opens via **`tauri-plugin-opener`** (registered in `lib.rs`; capability `opener:allow-open-url` in `capabilities/default.json`).
+Failures land on the status line (`appState.lastError`); `[[ref]]` / `#tag` clicks still navigate the workspace, and backlink rows stay inert.
 
 ### `/template` slash entry
 

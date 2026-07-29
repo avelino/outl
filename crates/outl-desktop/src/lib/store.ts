@@ -16,6 +16,7 @@ import type {
   BlockNode,
   ParseWarning,
   PageMeta,
+  ResolvedBlock,
   WorkspaceSummary,
 } from "@outl/shared/api/types";
 
@@ -43,8 +44,10 @@ export interface AppStateShape {
    * a clean file.
    */
   parseWarnings: ParseWarning[];
-  /** Resolved embed content for `!((blk-…))` tokens on the current page. */
-  embeds: Record<string, { handle: string; text: string; page_slug: string; status: string | null }>;
+  /** Resolved source blocks keyed by ref handle, for `((blk-…))` inline
+   *  refs and `!((blk-…))` embeds on the current page. Inline refs render
+   *  `text`; embeds also expand `children` as a subtree. */
+  embeds: Record<string, ResolvedBlock>;
   /** DFS path of the selected block, or `null` for no selection. */
   selectedPath: number[] | null;
   /**

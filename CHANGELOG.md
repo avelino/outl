@@ -7,6 +7,12 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Fixed
 
+- **The desktop app now resolves `((blk))` block refs and expands `!((blk))` embeds instead of rendering the raw handle (issue #147).**
+  An inline `((blk-XXXXXX))` used to show its literal handle on the desktop; it now renders the source block's text (Roam-style), and a `!((blk-XXXXXX))` embed expands the source block as `↳ text` plus its full subtree — nested and read-only — matching what the TUI already did.
+  The rendering lives in the shared frontend so mobile can adopt it without a parallel implementation: `<MarkdownInline />` resolves the `blockref` token against an `embeds` map (orphan handle = raw chip), and a new `<EmbeddedSubtree />` component in `@outl/shared` renders the embed's subtree depth-capped at 4, mirroring the TUI's `emit_embedded_children`.
+  The desktop only wires the loop — `OutlineView` collects every ref + embed handle on the page with `collectBlockRefHandles` and resolves them in one round-trip through the `resolve_embeds` backend command, which was extended to carry each source block's subtree (`EmbedContent.children`, projected with tokens via the new `outl_actions::project_parsed_subtree`).
+  The resolution logic itself is shared (`@outl/shared` + `outl-tauri-shared`), so the client holds no client-owned ref/embed rendering path.
+
 - **TUI: opening a page from the quick switcher (`Ctrl+P`) no longer lands on an empty duplicate when the page's on-disk slug contains slug-unsafe characters (issue #195).**
   The switcher's preview resolved the page by its literal `pages/*.md` file stem, but Enter round-tripped that same stem through `slugify()` before opening — for a slug that isn't slugify-idempotent (`~`, `%`, uppercase; e.g. slugs written verbatim by the MCP's `page create`), the re-slugified path missed the real file and the "not found" branch silently created a fresh empty page (`title::` plus one empty bullet) next to the real one.
   Enter now opens the candidate's literal on-disk slug, the same identifier the preview already used; opening by a user-visible name (following a `[[ref]]`, `/open`) still slugifies as before.

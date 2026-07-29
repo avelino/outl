@@ -19,6 +19,7 @@ import type {
 } from "@outl/shared/api/types";
 import type { BlockHit } from "@outl/shared/api/commands";
 import {
+  EmbeddedSubtree,
   MarkdownInline,
   QuoteWrap,
   isBlockQuoted,
@@ -48,7 +49,7 @@ import {
   searchPersons,
 } from "@outl/shared/api/commands";
 import { HighlightedCode } from "@outl/shared/highlight";
-import { rawTextWithTodo } from "@outl/shared/outline";
+import { embedOnlyHandle, rawTextWithTodo } from "@outl/shared/outline";
 import {
   choosePasteRoute,
   utf16OffsetToCharOffset,
@@ -981,39 +982,59 @@ export function BlockRow(props: {
                           const hasContent = split.quoted
                             ? split.body.length > 0
                             : Boolean(props.block.text);
+                          // When the block is *only* an embed (`!((blk-…))`
+                          // with no surrounding prose), expand the resolved
+                          // source subtree below the `↳ text` line —
+                          // read-only, mirroring the TUI's child expansion.
+                          const embedHandle = embedOnlyHandle(
+                            props.block.tokens,
+                          );
+                          const embedded = embedHandle
+                            ? appState.embeds[embedHandle]
+                            : undefined;
                           return (
-                            <div
-                              class="cursor-text whitespace-pre-wrap break-words"
-                              onClick={() => {
-                                setDraft(rawTextWithTodo(props.block));
-                                props.cb.onStartEdit(props.block.id);
-                                focusTextarea();
-                              }}
-                            >
-                              <Show
-                                when={
-                                  renderedTokens && renderedTokens.length > 0
-                                }
-                                fallback={
-                                  <span class={!hasContent ? "opacity-30" : ""}>
-                                    {hasContent
-                                      ? split.quoted
-                                        ? split.body
-                                        : props.block.text
-                                      : "Click to add text…"}
-                                  </span>
-                                }
+                            <>
+                              <div
+                                class="cursor-text whitespace-pre-wrap break-words"
+                                onClick={() => {
+                                  setDraft(rawTextWithTodo(props.block));
+                                  props.cb.onStartEdit(props.block.id);
+                                  focusTextarea();
+                                }}
                               >
-                                <MarkdownInline
-                                  tokens={renderedTokens}
-                                  variant="inline"
-                                  onRefClick={props.cb.onRefClick}
-                                  onTagClick={props.cb.onTagClick}
-                                  onLinkClick={props.cb.onLinkClick}
+                                <Show
+                                  when={
+                                    renderedTokens && renderedTokens.length > 0
+                                  }
+                                  fallback={
+                                    <span
+                                      class={!hasContent ? "opacity-30" : ""}
+                                    >
+                                      {hasContent
+                                        ? split.quoted
+                                          ? split.body
+                                          : props.block.text
+                                        : "Click to add text…"}
+                                    </span>
+                                  }
+                                >
+                                  <MarkdownInline
+                                    tokens={renderedTokens}
+                                    variant="inline"
+                                    onRefClick={props.cb.onRefClick}
+                                    onTagClick={props.cb.onTagClick}
+                                    onLinkClick={props.cb.onLinkClick}
+                                    embeds={appState.embeds}
+                                  />
+                                </Show>
+                              </div>
+                              <Show when={embedded?.children?.length}>
+                                <EmbeddedSubtree
+                                  nodes={embedded!.children}
                                   embeds={appState.embeds}
                                 />
                               </Show>
-                            </div>
+                            </>
                           );
                         })()
                       )

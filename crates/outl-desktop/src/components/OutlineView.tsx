@@ -27,7 +27,11 @@ import type { PageView } from "@outl/shared/api/types";
 
 import { ParseWarningsBanner } from "@outl/shared/warnings";
 import { journalSlugToDate } from "@outl/shared/journal";
-import { focusSubtree, visualRangeSet } from "@outl/shared/outline";
+import {
+  collectBlockRefHandles,
+  focusSubtree,
+  visualRangeSet,
+} from "@outl/shared/outline";
 import { NATIVE_TEMPLATE_PLUGIN_ID } from "../lib/slash-commands";
 import { playPluginViews } from "../lib/plugin-views";
 import { appState, setAppState, setOutline } from "../lib/store";
@@ -201,20 +205,11 @@ export function OutlineView() {
     void resolvePageEmbeds(view.outline);
   }
 
-  /** Collect unique embed handles from the outline and batch-resolve. */
+  /** Collect unique block-ref handles (`((…))` refs + `!((…))` embeds)
+   *  from the outline and batch-resolve them to source blocks. */
   function resolvePageEmbeds(outline: import("@outl/shared/api/types").BlockNode[]) {
-    const handleSet = new Set<string>();
-    const walk = (nodes: import("@outl/shared/api/types").BlockNode[]) => {
-      for (const n of nodes) {
-        for (const tok of n.tokens) {
-          if (tok.kind === "embed" && tok.value) handleSet.add(tok.value);
-        }
-        if (n.children.length > 0) walk(n.children);
-      }
-    };
-    walk(outline);
-    if (handleSet.size === 0) return;
-    const handles = [...handleSet];
+    const handles = collectBlockRefHandles(outline);
+    if (handles.length === 0) return;
     void resolveEmbeds(handles)
       .then((map) => {
         setAppState("embeds", map);
