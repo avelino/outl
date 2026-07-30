@@ -73,6 +73,24 @@ pub enum ActionError {
     #[error("reconcile: {0}")]
     Reconcile(#[from] outl_md::ReconcileError),
 
+    /// An asset upload was refused because the source file exceeds the
+    /// configured `[assets] max_bytes` cap. Carries the actual size and
+    /// the limit so the UI can tell the user by how much.
+    #[error("asset is {size} bytes, over the {limit}-byte limit")]
+    AssetTooLarge {
+        /// Size of the rejected file, in bytes.
+        size: u64,
+        /// The configured cap, in bytes.
+        limit: u64,
+    },
+
+    /// An asset link resolved to a path outside `<workspace>/assets/`
+    /// (absolute, `..` traversal, or a different subtree). Rejected
+    /// before any file is opened — `.md` arrives from untrusted peers,
+    /// so a crafted link must never reach outside the assets dir.
+    #[error("invalid asset path `{0}`")]
+    InvalidAssetPath(String),
+
     /// Code-block execution orchestration failed (sidecar IO, op log
     /// apply, `.md` reconcile during the run). Runtime-level failures
     /// (`unknown language`, timeout) come back through the success

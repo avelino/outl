@@ -17,6 +17,7 @@
 //!   [`crate::PluginService`] with a refreshed page view.
 //! - [`exec`] — `run_code_block` over `outl_actions::exec`.
 
+pub mod asset;
 pub mod block;
 pub mod exec;
 pub mod page;

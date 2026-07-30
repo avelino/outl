@@ -120,6 +120,10 @@ pub(crate) async fn catch_up_loop(
         Some(in_flight),
         Some(wid_changed),
         progress,
+        // Production: also converge binary assets each successful sync, so an
+        // uploaded PDF / image reaches every device continuously (not just at
+        // pairing). Best-effort — a peer without the asset ALPN is a fast skip.
+        true,
     )
     .await
 }
@@ -285,6 +289,7 @@ pub(crate) async fn run_catch_up<F>(
     in_flight: Option<InFlightPeers>,
     mut wid_changed: Option<tokio::sync::broadcast::Receiver<outl_core::WorkspaceId>>,
     progress: crate::progress::ProgressSink,
+    pull_assets: bool,
 ) where
     F: FnMut() -> Vec<iroh::EndpointAddr>,
 {
@@ -371,7 +376,7 @@ pub(crate) async fn run_catch_up<F>(
                 .clone();
             match delta_sync(
                 &endpoint,
-                addr,
+                addr.clone(),
                 &workspace_root,
                 &wid_snapshot,
                 actor,
@@ -388,6 +393,29 @@ pub(crate) async fn run_catch_up<F>(
                     last_synced.insert(nid, Instant::now());
                     if let Some(h) = &health {
                         h.record_success(nid, started);
+                    }
+                    // Converge binary assets too (best-effort): pull any
+                    // content-addressed uploads the peer holds that this device
+                    // lacks. A separate `ASSET_ALPN` connection after the op
+                    // sync; an error (e.g. a test peer without the ALPN) is a
+                    // debug-logged no-op. Tests pass `pull_assets = false`.
+                    if pull_assets {
+                        match crate::engine_assets::pull_assets_from_peer(
+                            &endpoint,
+                            addr,
+                            &workspace_root,
+                            &progress,
+                        )
+                        .await
+                        {
+                            Ok(n) if n > 0 => {
+                                info!("catch-up: pulled {n} assets from {}", nid.fmt_short())
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                debug!("catch-up: asset pull from {} failed: {e}", nid.fmt_short())
+                            }
+                        }
                     }
                 }
                 Err(e) => {

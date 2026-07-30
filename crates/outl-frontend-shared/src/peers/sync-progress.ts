@@ -79,8 +79,8 @@ export function createSyncProgress(): SyncProgressState {
       case "failed":
         pushEntry(p);
         break;
-      // `connecting` + `snapshot` update `current` only (spinner / progress
-      // bar); flooding the feed with per-chunk snapshot ticks would bury it.
+      // `connecting` + `snapshot` + `asset` update `current` only (spinner /
+      // progress bar); flooding the feed with per-chunk byte ticks would bury it.
     }
   });
 

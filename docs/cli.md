@@ -151,6 +151,19 @@ Prefer this over chained `outl block append` calls when authoring structured con
 `<date>` accepts ISO (`2026-05-31`) and natural (`"April 22nd, 2026"`, `"yesterday"`, `"tomorrow"`).
 Range is inclusive on both sides and emits one entry per day in the interval — days that have no materialised journal come back as `{ exists: false }` placeholders so the caller can spot gaps.
 
+### Asset
+
+| CLI                                                         | MCP tool          |
+|-------------------------------------------------------------|-------------------|
+| `outl asset add <file> [--page=<slug>] [--daily] [--json]`  | `outl_asset_add`  |
+
+Copies `<file>` into `<workspace>/assets/<hash>.<ext>` (content-addressed, so re-importing identical bytes is idempotent) and appends its markdown link as a new block.
+The link is `[name](assets/<hash>.<ext>)` for a document, `![name](…)` for an image.
+Target defaults to today's journal (`--daily`); pass `--page=<slug>` to append to an existing page instead — `--page` and `--daily` are mutually exclusive (`INVALID_ARG`), and an unknown slug returns `PAGE_NOT_FOUND`.
+A file over `[assets] max_bytes` in `config.toml` (default 100 MiB, `0` = unbounded) is rejected before the copy with `INVALID_ARG`.
+The MCP tool takes the file as a `path` argument (MCP is stdio — it receives a filesystem path, not bytes) plus optional `page` / `daily`.
+Only the link enters the op log; the asset's bytes are a plain blob replicated alongside the `.md` projections, never through the CRDT.
+
 ### Search / Query
 
 | CLI                                                              | MCP tool          |

@@ -42,6 +42,14 @@ Calls `outl_actions::paste_plain` directly.
 The raw clipboard text is inserted as a single block with no normalisation, outline parsing, or paragraph splitting.
 Use `P` when the clipboard contains identifiers with underscores, brackets, or other characters that `paste_markdown` would misread as markdown syntax.
 
+### Drag-and-drop file import (Insert mode)
+
+Dragging a file into the terminal window (Finder, Files app over SSH, a file manager) delivers its path as pasted text — terminals have no separate "file drop" event.
+In Insert mode, outl checks whether the pasted payload is exactly the path of one or more existing files before falling back to a normal paste.
+When it is, each file is imported into `<root>/assets/<hash>.<ext>` (content-addressed, size-capped by `[assets] max_bytes`) and its markdown link is spliced at the cursor, same as typing it.
+A pasted path that isn't an existing file (or spans more than one line without every line being a file) is left alone and pastes as plain text.
+See [`markdown-format.md` → Asset links](markdown-format.md#asset-links-nameassetshashext) for the link format.
+
 ## Mouse capture (opt-in)
 
 By default the TUI does not capture mouse events, preserving the terminal's native text-selection (Shift-drag to copy a URL, etc.).
@@ -247,6 +255,17 @@ Unknown commands surface in the status line as `unknown command: <name>`.
 > **Clipboard fallback**: `y r` / `/refer` / `/refer-embed` use [`arboard`](https://crates.io/crates/arboard) to talk to the OS clipboard.
 > The status line reads `copied … to clipboard` on success and `yanked … (clipboard unavailable)` on terminals / SSH sessions without a clipboard backend — the token still lives in `last_yanked_ref` so the in-app paste path keeps working.
 
+#### Files
+
+| Command | Aliases | Action |
+|---------|---------|--------|
+| `upload` | `attach` | Attach a file: pick it, copy it into `<workspace>/assets/<hash>.<ext>`, and insert its `[name](assets/…)` link at the cursor |
+
+> **File picker**: on macOS / Windows `/upload` opens the native "open file" dialog.
+> On Linux (and any build without the dialog) it takes a typed path — `/upload` hands off to the `:` palette pre-filled `upload `, so `upload /path/to/file.pdf` works everywhere, including over SSH.
+> Dragging a file into the terminal also works: in Insert mode a pasted path to an existing file is imported and linked automatically (see [Drag-and-drop file import](#drag-and-drop-file-import-insert-mode)).
+> outl never renders the file — clicking the link (`g x`) opens it in the OS default app.
+
 #### Code execution
 
 | Command | Aliases | Action |
@@ -412,12 +431,13 @@ The result lands as a `> **result:**` subblock right below the source, and re-ru
 
 | Key | Action |
 |-----|--------|
-| `g x` | Run the code block under the cursor — or, when the block isn't code, open the markdown link `[text](url)` under the cursor in the system browser (issue #183) |
+| `g x` | Run the code block under the cursor — or, when the block isn't code, open the markdown link `[text](url)` under the cursor (issue #183) |
 | `:run` (also `:x`) | Same, via the command palette |
 
 `g x` prioritizes code: a fenced block always runs.
 Only when the current block is **not** a code block does `g x` look for a markdown link under the cursor and open it — the cursor may sit on the link's text or its URL.
-Only `http` / `https` / `mailto` links are opened; anything else is refused.
+An asset link (`[name](assets/<hash>.<ext>)`) opens the file in the OS default app; outl never renders it.
+Any other link opens in the system browser, and only `http` / `https` / `mailto` are allowed — anything else is refused.
 Following a `[[page]]` / `#tag` / `((block ref))` is still `Enter`, unchanged.
 
 ```

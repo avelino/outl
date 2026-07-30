@@ -190,6 +190,22 @@ Either condition sends the paste to the backend (structured path) on `Cmd/Ctrl+V
 With `[tui] mouse_capture = true` in `~/.config/outl/config.toml`, dragging across blocks in the TUI selects a range and copies it as outl markdown on release.
 See [tui.md → Mouse capture](tui.md#mouse-capture-opt-in) and [config.md → `[tui]`](config.md#tui) for details.
 
+## Attach / drag-and-drop file import
+
+Every client can bring an outside file (PDF, image) into a workspace as an asset link, without leaving the outline.
+All three routes land on the same backend copy: content-addressed into `<root>/assets/<hash>.<ext>`, idempotent, size-capped by `[assets] max_bytes`.
+See [markdown-format.md → Asset links](markdown-format.md#asset-links-nameassetshashext) for the link format and the OS-open behavior.
+
+| Client | File picker | Drag-and-drop |
+|---|---|---|
+| Desktop | `📎 Attach file` button **or** `/upload` slash command → OS file dialog → new block at page end | Drop a file on a row → link lands in the drop-on block (else selection, else the block being edited via caret splice) |
+| Mobile | Block long-press → "Attach file" → new block after it | iPad only: drop a file on a row, same target resolution as desktop; degrades to the long-press action on iPhone |
+| TUI | `/upload` slash command (alias `/attach`) → native OS dialog on macOS/Windows, typed path (`upload <path>`) on Linux/SSH → link at the cursor | Insert mode: paste a payload that is exactly an existing file's path (how terminals report a dropped file) → link spliced at the caret |
+
+Desktop and mobile share the drop-handling code (`installFileDrop` + `importAssetFile`, `@outl/shared/drag-drop`), so the drop-target resolution can't drift between the two GUI clients.
+See [`outl-frontend-shared/CLAUDE.md`](../crates/outl-frontend-shared/CLAUDE.md#todays-surface) for the pure helpers underneath.
+The TUI has no OS drag events over SSH/tmux, so it treats a lone pasted file path as a drop instead (`outl-tui/CLAUDE.md` → "Drag-and-drop file upload").
+
 ## TODO/DONE convention
 
 A block's TODO state is **a prefix on its text**, not a property:
@@ -415,7 +431,8 @@ What each phase shows:
 | Phase | What the user sees |
 |---|---|
 | Connecting | "Connecting to `<peer>`…" |
-| Snapshot | A real progress bar (%). This is the **only** phase with a true percentage — the total byte count comes from the frame's length prefix, known before the body arrives. |
+| Snapshot | A real progress bar (%) — the total byte count comes from the frame's length prefix, known before the body arrives. |
+| Asset | A real progress bar (%) for each binary asset (PDF / image) transferring, in bytes of the current file. Assets are content-addressed blobs replicated outside the op log; over iroh they travel on the `outl-asset/1` stream. |
 | Received ops / Pushed ops | A live count ("Receiving 42 changes from `<peer>`"), never a bar — a batch's size is only known once it finishes landing, so it can't be turned into a percentage. |
 | Synced / Failed | A one-line result for the pass. |
 

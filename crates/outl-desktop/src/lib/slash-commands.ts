@@ -13,6 +13,32 @@ import type { PluginCommand, TemplateDto } from "@outl/shared/api/types";
 export const NATIVE_TEMPLATE_PLUGIN_ID = "@outl/template";
 
 /**
+ * Reserved `plugin_id` for the native `/upload` slash entry. File upload
+ * is a core feature (also reachable via the 📎 button, TUI `/upload`, and
+ * drag-drop), so it appears in the slash menu WITHOUT a plugin. Same
+ * sentinel trick as {@link NATIVE_TEMPLATE_PLUGIN_ID}: `OutlineView`'s
+ * `onRunPluginCommand` intercepts this id and opens the file picker
+ * instead of calling `pluginRun`.
+ */
+export const NATIVE_ASSET_PLUGIN_ID = "@outl/asset";
+
+/**
+ * The single native `/upload` row for the slash menu — opens the OS file
+ * picker and attaches the chosen file's link. Kept as a one-element array
+ * so it merges into the command list the same way
+ * {@link templateSlashCommands} does.
+ */
+export function assetSlashCommands(): PluginCommand[] {
+  return [
+    {
+      plugin_id: NATIVE_ASSET_PLUGIN_ID,
+      command_id: "upload",
+      title: "upload: attach a file",
+    },
+  ];
+}
+
+/**
  * Project the workspace's structural templates onto synthetic
  * {@link PluginCommand} rows for the slash menu. `command_id` carries the
  * template's invocation name (what `instantiateTemplateAt` needs);

@@ -33,6 +33,7 @@
 
 mod bind;
 mod engine;
+mod engine_assets;
 mod engine_catchup;
 mod engine_gossip;
 mod engine_membership;
@@ -55,5 +56,5 @@ pub use engine::IrohSyncTransport;
 pub use identity::IrohIdentity;
 pub use pairing::{host_pairing, join_pairing, WorkspaceAdoption};
 pub use peers::{migrate_global_peers_if_absent, workspace_peers_path, PeerEntry, PeersStore};
-pub use protocol::{PAIRING_ALPN, SNAPSHOT_ALPN, SYNC_ALPN};
+pub use protocol::{ASSET_ALPN, PAIRING_ALPN, SNAPSHOT_ALPN, SYNC_ALPN};
 pub use status::{probe_peers, probe_peers_blocking, PeerStatus};

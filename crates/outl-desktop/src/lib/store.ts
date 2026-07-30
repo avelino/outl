@@ -206,6 +206,14 @@ export interface AppStateShape {
    * or when the focused block goes stale (deleted / moved off-page).
    */
   focusBlockId: string | null;
+  /**
+   * Block currently under an in-flight OS file drag (drag-and-drop
+   * upload). Set on `enter` / `over`, cleared on `leave` / `drop`.
+   * `<BlockRow />` highlights the matching row so the user sees where
+   * the dropped file's link will land. Pure transient UI state — never
+   * an Op.
+   */
+  dropTargetBlockId: string | null;
   /** Last error surfaced to the user (status line). */
   lastError: string | null;
 }
@@ -236,6 +244,7 @@ const [state, setState] = createStore<AppStateShape>({
   marketplaceOpen: false,
   helpOpen: false,
   focusBlockId: null,
+  dropTargetBlockId: null,
   lastError: null,
 });
 

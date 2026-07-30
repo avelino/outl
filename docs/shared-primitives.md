@@ -323,6 +323,24 @@ The rows below are the embed / block-ref pieces the desktop wires for issue #147
 | The reply shape of `resolveEmbeds` (`{ handle, text, page_slug, status, children: BlockNode[] }`); `EmbedMap` is `Record<string, ResolvedBlock>` | `ResolvedBlock` (`@outl/shared/api/types`) | `crates/outl-frontend-shared/src/api/types.ts` |
 | The handle **iff** a block is embed-only (a bare `!((blk))`), so a client knows to render `<EmbeddedSubtree />` below it | `embedOnlyHandle(tokens)` (`@outl/shared/outline`) | `crates/outl-frontend-shared/src/outline/index.ts` |
 | Collect every blockref + embed handle in an outline (DFS) so a client resolves them in one `resolveEmbeds` round-trip | `collectBlockRefHandles(outline)` (`@outl/shared/outline`) | `crates/outl-frontend-shared/src/outline/index.ts` |
+| Wire the Tauri webview's OS file drag-drop to a block-resolved handler; desktop and mobile both consume this so the drop geometry (physical→CSS pixels, `data-block-id` hit-test) can't drift | `installFileDrop(handlers)`, `physicalToCss`, `blockIdFromElement` / `blockIdAtPhysical`, `joinAssetMarkdowns`, `appendMarkdownToBlock` (`@outl/shared/drag-drop`) | `crates/outl-frontend-shared/src/drag-drop/index.ts` |
+| Import a dropped file **without** creating a block, returning the ready-to-insert markdown link for the caller to splice at the drop target | `importAssetFile(sourcePath) → Promise<ImportedAsset>` (`@outl/shared/api/commands`) | `crates/outl-frontend-shared/src/api/commands.ts`; backend `import_asset_file` wraps `outl_actions::import_asset` (§18) |
+
+---
+
+## 18. Asset links (outl-md::asset + outl-actions::asset)
+
+Uploaded files (PDFs, images) referenced from a block as `[name](assets/<hash>.<ext>)`.
+The bytes are not workspace state and never enter the op log; only the link does, as an ordinary `Op::Edit`.
+
+| Intent | Use this | File |
+|---|---|---|
+| Directory name for uploaded assets, relative to the workspace root | `outl_md::ASSETS_DIR` | `crates/outl-md/src/asset.rs` |
+| Content-hash an uploaded file's bytes (hex SHA-256, used as the on-disk filename stem so identical uploads dedupe to one file) | `outl_md::hash_bytes` | `crates/outl-md/src/asset.rs` |
+| Build the workspace-relative link target for a hash + extension | `outl_md::asset_rel_path` | `crates/outl-md/src/asset.rs` |
+| Does a link target point at a workspace asset rather than an external URL? | `outl_md::is_asset_link` | `crates/outl-md/src/asset.rs` |
+| Copy an uploaded file into `<root>/assets/<hash>.<ext>` and return the ready-to-insert markdown link (content-addressed, atomic tmp+rename, size-capped by `[assets] max_bytes` from `outl-config`) | `outl_actions::import_asset` → `ImportedAsset` | `crates/outl-actions/src/asset.rs` |
+| Resolve a `[name](assets/…)` link back to an on-disk path for "open outside outl" handlers (rejects traversal / external schemes via `ActionError::InvalidAssetPath`) | `outl_actions::resolve_asset_path` | `crates/outl-actions/src/asset.rs` |
 
 ---
 

@@ -56,6 +56,30 @@ export function wrapSelection(prefix: string, suffix: string = prefix) {
 }
 
 /**
+ * Splice `text` into `ta` at the current caret (replacing any active
+ * selection), keep the Solid draft signal in sync via an `input` event,
+ * and park the caret just after the inserted text.
+ *
+ * Used by the file drag-drop path to drop an asset link into the block
+ * that is currently being edited — same "write value + fire input +
+ * reposition caret" contract as `wrapSelection`, so the in-flight draft
+ * is respected instead of racing a backend mutation.
+ */
+export function spliceTextAtCaret(ta: HTMLTextAreaElement, text: string) {
+  const start = ta.selectionStart ?? ta.value.length;
+  const end = ta.selectionEnd ?? start;
+  const before = ta.value.slice(0, start);
+  const after = ta.value.slice(end);
+
+  ta.value = `${before}${text}${after}`;
+  fireInputEvent(ta);
+
+  const caret = start + text.length;
+  ta.setSelectionRange(caret, caret);
+  ta.focus();
+}
+
+/**
  * Insert `[label](url)`. When the user has a selection, that text
  * becomes the label and `url` is highlighted for them to type into.
  * Otherwise we splice `[text](url)` and select `text` first — the

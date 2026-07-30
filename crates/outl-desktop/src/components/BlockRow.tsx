@@ -64,6 +64,7 @@ import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-mana
 import { appState, setAppState } from "../lib/store";
 import { handlePopupNav } from "../lib/popup-nav";
 import {
+  assetSlashCommands,
   rankSlashCommands,
   templateSlashCommands,
 } from "../lib/slash-commands";
@@ -204,7 +205,11 @@ export function BlockRow(props: {
       pluginList().catch(() => []),
       listTemplates().catch(() => []),
     ]);
-    allSlashCommands = [...templateSlashCommands(templates), ...plugins];
+    allSlashCommands = [
+      ...assetSlashCommands(),
+      ...templateSlashCommands(templates),
+      ...plugins,
+    ];
     return allSlashCommands;
   }
   // `query` last sent to the backend — skip redundant round-trips when
@@ -814,6 +819,9 @@ export function BlockRow(props: {
   const isPendingCut = () =>
     appState.blockClipboard?.kind === "cut" &&
     appState.blockClipboard.nodeId === props.block.id;
+  /** An OS file drag is hovering this block — highlight it so the user
+   *  sees where the dropped file's link will be inserted. */
+  const isDropTarget = () => appState.dropTargetBlockId === props.block.id;
   const isInteractive = () => isEditing() || props.block.todo !== null;
 
   /** Outer row click — select without entering Insert. Lets the
@@ -835,15 +843,19 @@ export function BlockRow(props: {
         class={`outl-row group relative flex items-start rounded-sm py-[3px] pr-2 ${
           isPendingCut() ? "opacity-50 " : ""
         }${
+          isDropTarget() ? "ring-2 ring-inset ring-(--color-outl-accent) " : ""
+        }${
           isInVisual()
             ? "bg-(--color-outl-accent)/[0.18]"
             : isSelected()
               ? "bg-(--color-outl-accent)/[0.06]"
               : "hover:bg-(--color-outl-bg-elev)/30"
         }`}
+        data-block-id={props.block.id}
         data-selected={isSelected() ? "true" : "false"}
         data-visual={isInVisual() ? "true" : "false"}
         data-editing={isEditing() ? "true" : "false"}
+        data-drop-target={isDropTarget() ? "true" : "false"}
         onClick={selectRow}
       >
         {/* Vertical accent bar for the selected row — Bear-style

@@ -118,6 +118,17 @@ TUI-specific contracts worth remembering:
 - **`Backspace` on an empty block deletes the block** and moves selection to the previous one — the only structural mutation that can happen from Insert.
 - **Autocomplete triggers** are pure trigger-detection inside the buffer (`[[`, `#`, `((`, `/`); they own the keystream while their popup is open.
   See `actions/autocomplete.rs` for the trigger detector contract.
+- **Drag-and-drop file upload (`actions/paste.rs`).**
+  Terminals report a file dragged into the window as its path pasted as text (bracketed `Event::Paste`).
+  In Insert mode, `paste_external` first runs the pure `looks_like_dropped_files` decision *before* the normal paste flow.
+  If the payload is exactly the path(s) of existing file(s), it imports each via `outl_actions::import_asset` (into `<root>/assets/<hash>.<ext>`, capped by `[assets] max_bytes`).
+  The returned markdown link(s) splice at the caret through the same `EditBuffer::insert_str` the normal Insert-mode paste uses, so the edit commits on the next Esc like any keystroke (AST-first model intact).
+  **Anti-hijack heuristic**: the pure `looks_like_dropped_file_path(&str) -> Option<PathBuf>` returns `Some` only when the trimmed payload is a **single line** AND names an **existing file** (`Path::is_file()`).
+  Pasting a real file's path into an outliner is rare, so both guards together keep a legitimate text paste from being stolen.
+  Multi-file (`looks_like_dropped_files`) requires **every** newline-separated line to be an existing file, else the whole payload falls back to normal paste.
+  macOS backslash-escaped spaces (`/dir/my\ file.pdf`) are unescaped as a fallback only when the raw token isn't already a file.
+  On an import error (too large, IO) the status line shows the error and **nothing** is inserted — a raw path in the block is worse than a retryable no-op.
+  The pure decision lives apart from the import effect so it's unit-tested without touching the workspace.
 
 ## Visual conventions
 

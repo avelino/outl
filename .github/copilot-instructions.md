@@ -251,6 +251,8 @@ Recently added — check these before writing a parallel template helper (catalo
 | Insert a sibling after a path, seeded with text (the TUI's in-flight block-split: tail of the split goes into the new sibling) | `outline_ops::insert_sibling_after_with_text` | `crates/outl-md/src/outline_ops.rs` |
 | Resolve the markdown link `[text](url)` under a caret position (anchor OR url) — the URL a client opens externally (TUI `gx` opens it in the browser when the block isn't code) | `outl_md::inline::link_at_cursor` → `Option<&str>` | `crates/outl-md/src/cursor.rs` |
 | Project a **parsed** subtree (`.md` AST, no sidecar) into wire `OutlineNode`s with `tokens` attached — ids are **transient** (fresh per call), for read-only surfaces that re-resolve on navigation (the `!((blk))` embed subtree expansion) | `outl_actions::outline::project_parsed_subtree` (re-exported `outl_actions::project_parsed_subtree`) | `crates/outl-actions/src/outline.rs` |
+| Content-hash an uploaded file's bytes / build its workspace-relative link target / test whether a link points at a workspace asset (`assets/<hash>.<ext>`, pure, no filesystem) | `outl_md::hash_bytes` / `outl_md::asset_rel_path` / `outl_md::is_asset_link` (+ `outl_md::ASSETS_DIR`) | `crates/outl-md/src/asset.rs` |
+| Copy an uploaded file into `<root>/assets/<hash>.<ext>` (content-addressed, atomic, size-capped by `[assets] max_bytes`) and resolve a `[name](assets/…)` link back to an on-disk path (traversal-safe) — the bytes never enter the op log, only the link does | `outl_actions::import_asset` / `outl_actions::resolve_asset_path` | `crates/outl-actions/src/asset.rs` |
 
 Frontend shared primitives (`@outl/shared`) — canonical home is [`crates/outl-frontend-shared/CLAUDE.md`](../crates/outl-frontend-shared/CLAUDE.md) → "Today's surface"; the embed / block-ref pieces the desktop wires for issue #147:
 
@@ -261,6 +263,8 @@ Frontend shared primitives (`@outl/shared`) — canonical home is [`crates/outl-
 | The reply shape of `resolveEmbeds` (`{ handle, text, page_slug, status, children: BlockNode[] }`); `EmbedMap` is `Record<string, ResolvedBlock>` | `ResolvedBlock` (`@outl/shared/api/types`) | `crates/outl-frontend-shared/src/api/types.ts` |
 | The handle **iff** a block is embed-only (a bare `!((blk))`), so a client knows to render `<EmbeddedSubtree />` below it | `embedOnlyHandle(tokens)` (`@outl/shared/outline`) | `crates/outl-frontend-shared/src/outline/index.ts` |
 | Collect every blockref + embed handle in an outline (DFS) so a client resolves them in one `resolveEmbeds` round-trip | `collectBlockRefHandles(outline)` (`@outl/shared/outline`) | `crates/outl-frontend-shared/src/outline/index.ts` |
+| Wire the Tauri webview's OS file drag-drop to a block-resolved handler; desktop and mobile both consume this so the drop geometry (physical→CSS pixels, `data-block-id` hit-test) can't drift | `installFileDrop(handlers)`, `physicalToCss`, `blockIdFromElement` / `blockIdAtPhysical`, `joinAssetMarkdowns`, `appendMarkdownToBlock` (`@outl/shared/drag-drop`) | `crates/outl-frontend-shared/src/drag-drop/index.ts` |
+| Import a dropped file **without** creating a block, returning the ready-to-insert markdown link for the caller to splice at the drop target | `importAssetFile(sourcePath) → Promise<ImportedAsset>` (`@outl/shared/api/commands`) | `crates/outl-frontend-shared/src/api/commands.ts`; backend `import_asset_file` wraps `outl_actions::import_asset` |
 
 ### 5.2 Reuse-first violations — no parallel implementations
 

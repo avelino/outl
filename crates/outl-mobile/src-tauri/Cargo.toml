@@ -54,6 +54,9 @@ tauri = { workspace = true }
 tauri-plugin-log = { workspace = true }
 tauri-plugin-opener = { workspace = true }
 tauri-plugin-os = { workspace = true }
+# File picker for "attach a file" (import an asset). On iOS the picker is
+# the system document picker. Desktop already has its own dialog dep.
+tauri-plugin-dialog = "2"
 log = { workspace = true }
 # `outl://` deep links (links shared into the app, parity with desktop).
 # iOS has no second-instance problem, so no single-instance plugin here.

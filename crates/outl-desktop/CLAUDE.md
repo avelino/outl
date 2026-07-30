@@ -158,7 +158,7 @@ The desktop fetches it via the `list_shortcut_bindings` Tauri command on boot an
 Two of these chords also have **visible icon affordances** in a fixed bottom-left cluster (`components/ChromeToggleBar.tsx`, mounted by `AppShell`):
 the **sidebar toggle** (`◫`, mirrors `Cmd/Ctrl+Shift+E`) and the **shortcuts-help toggle** (`?`, mirrors `?` / `Cmd/Ctrl+/`).
 They carry no business logic — clicking flips the same store signal the dispatcher flips, so button and keyboard stay in sync.
-The cluster floats over the main pane on an elevated, bordered surface (active toggle inverts to the accent color), so the sidebar button stays reachable even after the left pane is hidden.
+The cluster floats over the main pane on an elevated surface (active toggle inverts to accent) so the sidebar button stays reachable with the left pane hidden.
 
 ### OS-standard chrome and undo / redo
 
@@ -298,17 +298,20 @@ Accept inserts the page title (or ISO slug for journals).
 
 ### `((block ref))` autocomplete + rendering
 
-Inside an open `((…))` (issue #116), `BlockRow` shows `BlockSuggestPopup` — `detectRefContext` (`kind: "block"`) / `applySuggestion` + `search_blocks` (`WorkspaceIndex::search_block_text`, from disk so debounced ~150ms).
-The pick inserts the **ref handle** (`((blk-XXXXXX))`), never the text; mobile registers it for parity, popup unwired.
-Rendering then **resolves** the handle (issue #147, TUI parity): `OutlineView` gathers blockref + embed handles with `collectBlockRefHandles`, resolves them via `resolveEmbeds`, and holds the `Record<handle, ResolvedBlock>` in `appState.embeds`.
+Inside an open `((…))` (issue #116), `BlockRow` shows `BlockSuggestPopup` — `detectRefContext` (`kind: "block"`) / `applySuggestion` + `search_blocks` (from disk, debounced ~150ms).
+The pick inserts the **ref handle** (`((blk-XXXXXX))`), never the text; mobile registers it, popup unwired.
+Rendering then **resolves** the handle (issue #147, TUI parity): `OutlineView` gathers handles via `collectBlockRefHandles` + `resolveEmbeds` into `appState.embeds`.
 `BlockRow` feeds it to `<MarkdownInline embeds= />` (inline `((blk))` → source text, orphan → raw chip).
-An embed-only block (`embedOnlyHandle`) also renders `<EmbeddedSubtree />` beneath it — source `↳ text` + subtree, read-only, depth 4, from `ResolvedBlock.children` (backend `resolve_embeds`).
+An embed-only block (`embedOnlyHandle`) renders `<EmbeddedSubtree />` beneath it — read-only, depth 4, from `ResolvedBlock.children` (`resolve_embeds`).
 
 ### Clicking external `[label](url)` links
 
 `<MarkdownInline />` renders external links clickable via an `onLinkClick(href)` prop.
-`OutlineView` wires it to `openExternalUrl` (`@outl/shared/api/commands`), which scheme-guards to `http(s)`/`mailto` and opens via **`tauri-plugin-opener`** (registered in `lib.rs`; capability `opener:allow-open-url` in `capabilities/default.json`).
-Failures land on the status line (`appState.lastError`); `[[ref]]` / `#tag` clicks still navigate the workspace, and backlink rows stay inert.
+`OutlineView` wires it to `openExternalUrl` — scheme-guarded to `http(s)`/`mailto`, opened via **`tauri-plugin-opener`** (registered in `lib.rs`, capability `opener:allow-open-url`).
+Failures land on the status line; ref/tag clicks still navigate, backlink rows stay inert.
+An `assets/…` link routes to `openAsset` instead (via `isAssetLink`, `@outl/shared/links`) — opens in the OS default app.
+Two import paths share the backend `commands::asset`: the `📎 Attach file` button (`@tauri-apps/plugin-dialog`) calls `attachAsset`, a new block at the end.
+Dragging a file onto a row calls the shared `installFileDrop` + `importAssetFile` (`@outl/shared/drag-drop`) instead, landing the link in the drop-on block (else selection, else the block being edited via caret splice, else a fresh end block).
 
 ### `/template` slash entry
 
@@ -372,15 +375,14 @@ The core gates these on the capability and surfaces them on `PluginRun.views`, p
 The desktop plays each as an **ephemeral, fully sandboxed `<iframe>` overlay**:
 
 - `lib/plugin-views.ts` owns a Solid signal queue (`playPluginViews` enqueues, `dismissPluginView` pops).
-- `components/PluginEffectLayer.tsx` (mounted once in `AppShell`) renders one iframe per entry: `position: fixed; inset: 0` fullscreen, transparent, `pointer-events: none` (click-through), `z-index: 9999`, auto-removed after 6s.
-  Multiple views stack.
+- `components/PluginEffectLayer.tsx` (in `AppShell`) renders one fullscreen, click-through, `z-index: 9999` iframe per entry, auto-removed after 6s; multiple stack.
 - **Security (load-bearing — never weaken):** the iframe is `sandbox="allow-scripts"` **without** `allow-same-origin`.
   The plugin JS runs in a null origin — no app DOM, cookies, `localStorage`, or credentialed fetch.
   HTML enters via `srcdoc`, never `innerHTML` on the host document.
   This is untrusted third-party code; the isolation is the whole point.
 
 Played from three call sites: `PluginPalette` (after `pluginRun`), `OutlineView.onCommit`, and the `ToggleTodo` handler (after `pluginSyncHooks`).
-The confetti example (`examples/confetti`, `op-hook` + `ui-render`) rides this: mark a block DONE → op → `sync_hooks` → its `onOp` emits the confetti HTML → `views` → overlay.
+The confetti example (`op-hook` + `ui-render`) rides this: mark a block DONE → `sync_hooks` → `onOp` emits confetti HTML → overlay.
 
 Frontend pieces: plugin DTOs + wrappers from `@outl/shared/api` (`lib/api.ts` keeps only `pluginKeybindings`); `lib/plugin-views.ts` + `components/PluginEffectLayer.tsx` (overlay queue).
 The `⧉` button in `ChromeToggleBar` toggles `appState.pluginsOpen`; `components/PluginPalette.tsx` lists + runs commands.
@@ -389,7 +391,7 @@ The `⧉` button in `ChromeToggleBar` toggles `appState.pluginsOpen`; `component
 
 A plugin can declare a transformer for a code-fence language (`mermaid`, …); matching fences render through it in `CodeFenceView` (`components/BlockRow.tsx`).
 Registry + cache glue: `@outl/shared/plugins/transformer-registry` (shared with mobile); keeps `BlockRow` a renderer.
-It owns a `lang → PluginTransformer` registry (Solid signal, loaded via `loadTransformers` — `AppShell.onMount` + re-run on `workspace-ready`; plugins load lazily, a boot fetch can be empty).
+It owns a `lang → PluginTransformer` registry (Solid signal via `loadTransformers`, re-run on `workspace-ready`; a boot fetch can be empty since plugins load lazily).
 A `(blockId, body)` result cache (`runTransform`) re-runs plugin JS only when the body changes.
 `kind: "text"` renders as plain whitespace-preserving text (no client-side markdown parse — a transformer wanting formatting emits `rich`).
 `kind: "rich"` renders the HTML in an **inline** `<iframe>` (`RichFenceFrame`), sized via an optional `parent.postMessage({outlHeight})` handshake.
@@ -465,7 +467,7 @@ Only the cheap tail (history invalidation + `Mutex` swap + reconcile spawn) runs
 ## Deep links (`outl://`)
 
 The desktop registers the `outl://` scheme so external launchers (the Raycast extension, shared links) jump straight to a page or daily note (issue #98).
-The scheme contract and the shared parser live in `outl-actions` — see [`docs/clients.md` → Deep links](../../docs/clients.md#deep-links-outl) — so the desktop and mobile handlers can't drift.
+The scheme contract and shared parser live in `outl-actions` — see [`docs/clients.md` → Deep links](../../docs/clients.md#deep-links-outl) — so handlers can't drift.
 
 Wiring (all in `src-tauri/src/lib.rs`):
 
@@ -473,7 +475,7 @@ Wiring (all in `src-tauri/src/lib.rs`):
   `tauri-plugin-single-instance` is registered **first**.
   Its `deep-link` feature forwards an `outl://` URL opened while the app runs to the existing instance on Linux/Windows; the callback just focuses the `main` window.
   `tauri-plugin-deep-link` follows.
-  The scheme is declared in `tauri.conf.json` under `plugins.deep-link.desktop.schemes` and granted via `deep-link:default` in `capabilities/default.json`.
+  The scheme is declared in `tauri.conf.json` (`plugins.deep-link.desktop.schemes`), granted via `deep-link:default` in `capabilities/default.json`.
 - **Warm path** (`dispatch_deep_link`, fired by `on_open_url`) parses the URL with `outl_actions::parse_deep_link` — the one owner, this crate adds no parsing.
   It then **emits** `deep-link://navigate` with one of `{kind:"today"}` / `{kind:"daily",date}` / `{kind:"page",slug}` and focuses the window.
   A malformed URL is logged at `warn` and ignored — never a crash, never a stray page.
@@ -482,7 +484,7 @@ Wiring (all in `src-tauri/src/lib.rs`):
   Only the launch URL populates the buffer; the warm path never does, so a stale target can't replay on the next plain launch.
 - **Frontend.**
   `AppShell` listens via `onDeepLinkNavigate` (`lib/events.ts`) for the warm path.
-  On mount it calls `takePendingDeepLink()` (`lib/api.ts`) for the cold path — if a target is buffered it navigates there instead of loading today's journal (which would otherwise race and overwrite it).
+  On mount it calls `takePendingDeepLink()` (`lib/api.ts`) for the cold path — a buffered target wins over loading today's journal, which would otherwise race and overwrite it.
   Both map onto the same `openTodayJournal` / `openJournalFor` / `openPageBySlug` commands the picker already calls, then `applyView`.
   The backend, not the frontend, owns parsing + window focus.
 

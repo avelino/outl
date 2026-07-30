@@ -49,6 +49,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod asset;
 pub mod backlinks;
 pub mod backlinks_index;
 pub mod backlinks_sort;
@@ -78,6 +79,7 @@ mod text;
 pub mod todo;
 pub mod tree;
 
+pub use asset::{assets_dir, import_asset, link_markdown, resolve_asset_path, ImportedAsset};
 pub use backlinks::{
     backlinks_for_page, backlinks_for_target, extract_refs, Backlink, BacklinkCrumb,
 };

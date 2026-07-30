@@ -137,6 +137,11 @@ impl From<Settings> for Config {
             display: DisplayCfg {
                 backlinks_order: parse_backlinks_order(&s.backlinks_order),
             },
+            // `[assets]` (upload size cap) is core-managed; the desktop
+            // doesn't model it. `save` restores it from disk so a
+            // hand-set `max_bytes` survives a settings write (same
+            // restore-on-save pattern as `[calendar]` / `[tui]`).
+            assets: outl_config::AssetsCfg::default(),
         }
     }
 }
@@ -169,6 +174,9 @@ pub fn save(_app_config_dir: &std::path::Path, settings: &Settings) -> anyhow::R
     // The backlinks toggle owns `[display]` via `set_backlinks_order`;
     // restore it so a modal save can't revert the user's direction.
     cfg.display = on_disk.display;
+    // `[assets]` (upload size cap) is core-managed and not modeled in the
+    // flat Settings; restore it so a modal save keeps a custom max_bytes.
+    cfg.assets = on_disk.assets;
     outl_config::save(&cfg)
 }
 

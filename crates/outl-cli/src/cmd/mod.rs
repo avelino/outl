@@ -1,5 +1,6 @@
 //! Subcommand handlers for the `outl` binary.
 
+pub mod asset;
 pub mod backlinks;
 pub mod batch;
 pub mod block;

@@ -7,6 +7,8 @@
     "core:default",
     "log:default",
     "deep-link:default",
+    "dialog:default",
+    "dialog:allow-open",
     {
       "identifier": "opener:allow-open-url",
       "allow": [

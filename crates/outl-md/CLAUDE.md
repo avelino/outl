@@ -99,6 +99,11 @@ Treat matching with the same paranoia as the CRDT.
 - **`BlockEntry.text_fold: String`** — lowercased cache of the block's `text`, populated at index build.
   Powers `search_block_text` without allocating per keystroke.
   Public field, but consumers must not build `BlockEntry` by hand — go through the index population path so `text_fold` stays consistent with `text`.
+- **Asset links** (`asset.rs`) — the pure text/hash primitives behind `[name](assets/<hash>.<ext>)`.
+  `ASSETS_DIR` (`"assets"`), `hash_bytes(bytes) -> String` (hex SHA-256, used as the on-disk filename stem so identical uploads dedupe to one file), `asset_rel_path(hash, ext) -> String`.
+  `is_asset_link(url) -> bool` distinguishes a workspace-relative `assets/…` / `./assets/…` / `/assets/…` link from an external scheme.
+  Re-exported at the crate root as `outl_md::{asset_rel_path, hash_bytes, is_asset_link, ASSETS_DIR}`.
+  This module never touches the filesystem — the copy-into-workspace step lives in `outl_actions::asset` (`import_asset`, `resolve_asset_path`), and cross-device transfer lives in `outl-sync-iroh`.
 
 ## What this crate does NOT own
 
@@ -213,6 +218,7 @@ src/
 ├── slug.rs         # slugify page names
 ├── tag.rs          # text_contains_tag — boundary-correct #tag predicate over the tokenizer
 ├── view.rs         # render helpers consumed by UIs
+├── asset.rs        # ASSETS_DIR, hash_bytes, asset_rel_path, is_asset_link (pure; no filesystem)
 └── atomic.rs       # crash-safe write_atomic
 
 tests/

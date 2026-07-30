@@ -19,9 +19,11 @@
 //! first, then paste, then reload the workspace from disk so the new
 //! tree shows up.
 
+use std::path::{Path, PathBuf};
+
 use outl_actions::{
-    children_of, find_by_slug, looks_like_outline, paste_markdown, paste_plain, PasteAnchor,
-    PasteOutcome,
+    children_of, find_by_slug, import_asset, looks_like_outline, paste_markdown, paste_plain,
+    PasteAnchor, PasteOutcome,
 };
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
@@ -57,6 +59,19 @@ impl App {
     pub(crate) fn paste_external(&mut self, text: String) {
         if text.is_empty() {
             return;
+        }
+        // Drag-and-drop upload. Terminals report a file dragged into the
+        // window as its path pasted as text (bracketed paste). While
+        // editing a block, if the payload is exactly the path(s) of
+        // existing file(s), import them into the workspace and splice the
+        // markdown link(s) at the caret instead of the raw path. Gated on
+        // Insert mode + the file actually existing on disk so a legitimate
+        // paste of a path string in the outline is never hijacked.
+        if matches!(self.mode, Mode::Insert { .. }) {
+            if let Some(paths) = looks_like_dropped_files(&text) {
+                self.insert_dropped_assets(&paths);
+                return;
+            }
         }
         // Plain-text paste inside Insert mode is the common "drop a
         // URL / snippet into what I'm writing" workflow. Splicing the
@@ -201,6 +216,37 @@ impl App {
         }
     }
 
+    /// Import the dragged file(s) into `<root>/assets/` and splice the
+    /// resulting markdown link(s) at the Insert caret.
+    ///
+    /// The asset bytes land on disk immediately (`import_asset`); only
+    /// the link enters the block text, and it does so through the same
+    /// buffer splice the normal Insert-mode paste uses — so the edit
+    /// commits on the next Esc like any other keystroke, keeping the
+    /// AST-first persistence model intact.
+    ///
+    /// On an import error (file too large, IO) we surface a status-line
+    /// message and insert **nothing** — pasting the raw path would leave
+    /// junk in the block, which is worse than a no-op the user can retry.
+    fn insert_dropped_assets(&mut self, paths: &[PathBuf]) {
+        let max_bytes = outl_config::load().assets.max_bytes;
+        let mut links: Vec<String> = Vec::with_capacity(paths.len());
+        for path in paths {
+            match import_asset(&self.workspace_root, path, max_bytes) {
+                Ok(imported) => links.push(imported.markdown),
+                Err(e) => {
+                    self.status = format!("import failed: {e}");
+                    return;
+                }
+            }
+        }
+        if let Mode::Insert { buffer, .. } = &mut self.mode {
+            buffer.insert_str(&links.join(" "));
+        }
+        let n = links.len();
+        self.status = format!("imported {n} file{s}", s = if n == 1 { "" } else { "s" });
+    }
+
     /// Locate a freshly-pasted block in the current AST so the caller
     /// can move the selection cursor onto it. Tries the last pasted
     /// id first, falls back to the anchor block.
@@ -208,6 +254,69 @@ impl App {
         let target = last_pasted.unwrap_or(anchor);
         self.id_by_flat.iter().position(|id| *id == target)
     }
+}
+
+/// Resolve one trimmed token to an existing file path.
+///
+/// Honours the macOS drag convention of backslash-escaping spaces
+/// (`/My\ Files/report.pdf`): the raw token is tried first, then — only
+/// when it isn't already a file — the `\ ` → ` ` unescaped form. Returns
+/// `None` when neither points at an existing file.
+fn existing_file_from_token(token: &str) -> Option<PathBuf> {
+    let direct = Path::new(token);
+    if direct.is_file() {
+        return Some(direct.to_path_buf());
+    }
+    if token.contains('\\') {
+        let unescaped = token.replace("\\ ", " ");
+        let candidate = Path::new(&unescaped);
+        if candidate.is_file() {
+            return Some(candidate.to_path_buf());
+        }
+    }
+    None
+}
+
+/// Decide whether a bracketed-paste payload is a **single** dragged file.
+///
+/// Returns `Some(path)` only when the trimmed payload is one line that
+/// names an existing file on disk; `None` otherwise. This is the pure
+/// anti-hijack heuristic: pasting a real file's path into an outliner is
+/// rare, so requiring a single line **and** `is_file()` keeps the common
+/// case (dragging a file out of the terminal) from stealing legitimate
+/// text pastes. Kept side-effect-free so it can be unit-tested apart from
+/// the import.
+pub(crate) fn looks_like_dropped_file_path(pasted: &str) -> Option<PathBuf> {
+    let trimmed = pasted.trim();
+    if trimmed.is_empty() || trimmed.contains('\n') {
+        return None;
+    }
+    existing_file_from_token(trimmed)
+}
+
+/// Extend [`looks_like_dropped_file_path`] to the multi-file drop:
+/// terminals separate several dragged files by newlines. Returns the
+/// paths only when **every** non-empty line is an existing file, so a
+/// single stray non-path line falls the whole payload back to the normal
+/// paste flow. A single-file drop short-circuits through the same
+/// per-token check, so the two paths can't disagree on what counts.
+pub(crate) fn looks_like_dropped_files(pasted: &str) -> Option<Vec<PathBuf>> {
+    if let Some(path) = looks_like_dropped_file_path(pasted) {
+        return Some(vec![path]);
+    }
+    let lines: Vec<&str> = pasted
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.len() < 2 {
+        return None;
+    }
+    let mut paths = Vec::with_capacity(lines.len());
+    for line in lines {
+        paths.push(existing_file_from_token(line)?);
+    }
+    Some(paths)
 }
 
 /// Walk the tree from `page_id` following the DFS path produced by
@@ -227,4 +336,84 @@ pub(crate) fn resolve_node_id_at_path(
         current = child;
     }
     Some(current)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{looks_like_dropped_file_path, looks_like_dropped_files};
+    use tempfile::tempdir;
+
+    #[test]
+    fn single_existing_file_is_detected() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("report.pdf");
+        std::fs::write(&file, b"%PDF fake").unwrap();
+        let pasted = file.to_string_lossy().to_string();
+
+        assert_eq!(looks_like_dropped_file_path(&pasted), Some(file));
+    }
+
+    #[test]
+    fn surrounding_whitespace_is_trimmed() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("note.txt");
+        std::fs::write(&file, b"hi").unwrap();
+        let pasted = format!("  {}\n", file.to_string_lossy());
+
+        assert_eq!(looks_like_dropped_file_path(&pasted), Some(file));
+    }
+
+    #[test]
+    fn nonexistent_path_is_ignored() {
+        // A plausible path string that isn't a real file must not be
+        // hijacked — this is the anti-hijack guard.
+        assert_eq!(looks_like_dropped_file_path("/does/not/exist.pdf"), None);
+    }
+
+    #[test]
+    fn multi_line_single_path_is_not_a_single_drop() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        std::fs::write(&file, b"x").unwrap();
+        // Two lines where only the first is a file → not a single drop.
+        let pasted = format!("{}\njust some text", file.to_string_lossy());
+        assert_eq!(looks_like_dropped_file_path(&pasted), None);
+    }
+
+    #[test]
+    fn backslash_escaped_space_resolves() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("my report.pdf");
+        std::fs::write(&file, b"x").unwrap();
+        // macOS drags escape spaces: `/dir/my\ report.pdf`.
+        let escaped = file.to_string_lossy().replace(' ', "\\ ");
+        assert_eq!(looks_like_dropped_file_path(&escaped), Some(file));
+    }
+
+    #[test]
+    fn multiple_files_by_newline_all_import() {
+        let dir = tempdir().unwrap();
+        let a = dir.path().join("a.pdf");
+        let b = dir.path().join("b.png");
+        std::fs::write(&a, b"x").unwrap();
+        std::fs::write(&b, b"y").unwrap();
+        let pasted = format!("{}\n{}", a.to_string_lossy(), b.to_string_lossy());
+
+        assert_eq!(looks_like_dropped_files(&pasted), Some(vec![a, b]));
+    }
+
+    #[test]
+    fn multi_drop_with_one_bogus_line_falls_back() {
+        let dir = tempdir().unwrap();
+        let a = dir.path().join("a.pdf");
+        std::fs::write(&a, b"x").unwrap();
+        let pasted = format!("{}\n/nope/missing.png", a.to_string_lossy());
+        assert_eq!(looks_like_dropped_files(&pasted), None);
+    }
+
+    #[test]
+    fn empty_paste_is_never_a_drop() {
+        assert_eq!(looks_like_dropped_file_path(""), None);
+        assert_eq!(looks_like_dropped_files("   \n  "), None);
+    }
 }

@@ -333,15 +333,17 @@ export interface PeerStatusDto {
  * the pairing-screen progress feed; the load-bearing reload signal is separate.
  *
  * `peer` is the peer's short node id; the UI resolves it to a friendly alias
- * against the peer list it already holds. `snapshot` is the only phase with an
- * honest percentage (`received` / `total` in bytes, total known up front); op
- * counts surface as a live number, not a bar. `received-ops.nodes` carries the
- * (capped) block ids touched, resolved to page slugs via `resolvePageLabels`;
- * empty on a bulk pass (the initial pair).
+ * against the peer list it already holds. `snapshot` and `asset` are the phases
+ * with an honest percentage (`received` / `total` in bytes, total known up
+ * front — for `asset`, the bytes of the file currently transferring); op counts
+ * surface as a live number, not a bar. `received-ops.nodes` carries the (capped)
+ * block ids touched, resolved to page slugs via `resolvePageLabels`; empty on a
+ * bulk pass (the initial pair).
  */
 export type SyncProgress =
   | { phase: "connecting"; peer: string }
   | { phase: "snapshot"; peer: string; received: number; total: number }
+  | { phase: "asset"; peer: string; received: number; total: number }
   | { phase: "received-ops"; peer: string; count: number; nodes: string[] }
   | { phase: "pushed-ops"; peer: string; count: number }
   | { phase: "synced"; peer: string }

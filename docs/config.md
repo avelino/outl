@@ -70,6 +70,13 @@ relay_url = ""
 # puts the most recently referenced page at the top; "oldest" flips
 # it. A pure display preference — never converges between devices.
 backlinks_order = "newest"
+
+[assets]
+# Maximum size, in bytes, of a single uploaded file (`outl asset add`,
+# the desktop/mobile "Attach file" action). 0 = unbounded. Default is
+# 100 MiB. The `assets/` directory itself is fixed at
+# `<workspace>/assets/` and is not configurable.
+max_bytes = 104857600
 ```
 
 ### Field reference
@@ -127,6 +134,12 @@ See [theming.md](theming.md) for the look of each.
 | Field | Type | Default | Read by | Effect |
 |---|---|---|---|---|
 | `backlinks_order` | `"newest"` \| `"oldest"` | `"newest"` | every client (TUI, desktop, mobile) | Sort direction for the backlinks ("Linked from") list. `"newest"` puts the page holding the most recently created referencing block at the top; `"oldest"` flips it. Blocks within a page always keep document order. The TUI toggles it with `Ctrl+O` (see [shortcuts.md](shortcuts.md)); the desktop and mobile apps expose a direction button in the backlinks header. A pure display preference — it never converges between devices (issue #142). |
+
+#### `[assets]`
+
+| Field | Type | Default | Read by | Effect |
+|---|---|---|---|---|
+| `max_bytes` | integer (bytes) | `104857600` (100 MiB) | every client that imports a file (CLI `outl asset add`, MCP `outl_asset_add`, desktop/mobile "Attach file") | Upper bound on a single uploaded file. A file over the cap is rejected before it is copied into `<workspace>/assets/`. `0` means unbounded. The `assets/` directory location itself is fixed, not configurable. |
 
 > The iroh transport also reads `~/.outl/identity.key` (this device's ed25519 keypair, per-machine) and `<workspace>/.outl/peers.json` (the paired-device list, per-graph).
 > Those are managed by `outl peer …`, not by this config file — see [sync.md → iroh transport](sync.md#transport-2-iroh-p2p).

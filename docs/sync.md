@@ -360,6 +360,11 @@ What it gives you:
   A can therefore get C's ops through an A↔B sync even if A never connects to C directly.
 - **An HLC sanity gate.**
   Ops timestamped more than 24 h in the future are logged and skipped rather than applied, so one device with a wrong clock can't poison the merge.
+- **Binary-asset transfer.**
+  Uploaded files (PDFs, images) live at `<root>/assets/<hash>.<ext>` and are *not* ops — their bytes never enter the op log.
+  The `file` transport gets them for free from the folder sync.
+  Over iroh they travel on a dedicated `outl-asset/1` stream that negotiates a manifest of the peer's asset filenames (the names are content hashes), then pulls only the files the device is missing, verifying each against its hash.
+  This runs after pairing and continuously on the catch-up loop, so a `SyncProgress` `asset` phase reports byte progress as large files transfer.
 
 The device identity is per-machine and lives in `~/.outl/`; the paired-peer list is per-graph and lives inside the workspace, in `<workspace>/.outl/`:
 

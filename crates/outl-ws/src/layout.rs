@@ -1,6 +1,6 @@
 //! Filesystem layout of an outl workspace.
 //!
-//! A workspace is a directory containing five subtrees:
+//! A workspace is a directory containing six subtrees:
 //!
 //! - `.outl/`     — config, peers, orphan log, lock.
 //! - `ops/`       — per-actor JSONL op log (`ops-<actor>.jsonl`),
@@ -8,6 +8,10 @@
 //! - `pages/`     — user-named `.md` files (clean markdown).
 //! - `journals/`  — daily-note `.md` files keyed by date.
 //! - `templates/` — optional `.md` templates (e.g. `journal.md`).
+//! - `assets/`    — uploaded files (PDFs, images) referenced by
+//!   `[name](assets/<hash>.<ext>)` links; content-addressed, replicated
+//!   between devices alongside the `.md` (file transport) or over the
+//!   `outl-asset/1` iroh stream (P2P transport).
 //!
 //! This module exposes helpers for constructing those paths and the
 //! workspace config file.
@@ -67,6 +71,8 @@ pub struct Paths {
     pub journals: PathBuf,
     /// `templates/` directory.
     pub templates: PathBuf,
+    /// `assets/` directory holding uploaded files (content-addressed).
+    pub assets: PathBuf,
     /// `ops/` directory holding per-actor JSONL op logs.
     pub ops: PathBuf,
     /// `.outl/config.toml`.
@@ -93,6 +99,7 @@ impl Paths {
             journals: root.join("journals"),
             journal_template: root.join("templates").join("journal.md"),
             templates: root.join("templates"),
+            assets: root.join("assets"),
             dot_outl,
             root,
         }
@@ -122,6 +129,7 @@ pub fn init(paths: &Paths) -> Result<()> {
         &paths.pages,
         &paths.journals,
         &paths.templates,
+        &paths.assets,
     ] {
         fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }

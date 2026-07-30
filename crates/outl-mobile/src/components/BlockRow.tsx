@@ -287,6 +287,12 @@ function BlockBody(props: {
 
   return (
     <div
+      // `data-block-id` lets the drag-and-drop drop handler resolve which
+      // block a dropped file landed on (`document.elementFromPoint` →
+      // `.closest("[data-block-id]")`). This div wraps only the block's own
+      // row (bullet + body); children render in a sibling container, so a
+      // point over a child resolves to the nearest child's id, not this one.
+      data-block-id={props.block.id}
       class="group flex items-start gap-2.5 py-[5px] pr-4"
       style={{ "padding-left": `${padLeft()}px` }}
       onPointerDown={onPointerDown}
