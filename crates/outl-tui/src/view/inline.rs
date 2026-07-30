@@ -204,6 +204,25 @@ fn render_markdown_inline_impl(
             }
             InlineTok::Code { inner } => out.push(Span::styled(inner.to_string(), theme.code)),
             InlineTok::Link { text, .. } => out.push(Span::styled(text.to_string(), theme.md_link)),
+            InlineTok::Image { alt, url } => {
+                // A terminal can't paint pixels, so surface a placeholder:
+                // an image glyph for image extensions, a generic file
+                // glyph otherwise, followed by the alt text (or the
+                // filename when alt is empty). The glyph decision reuses
+                // `outl_md::wikilink::is_image_target` so the extension
+                // list stays owned by one place.
+                let glyph = if outl_md::wikilink::is_image_target(url) {
+                    "🖼"
+                } else {
+                    "📄"
+                };
+                let label = if alt.is_empty() {
+                    url.rsplit('/').next().unwrap_or(url)
+                } else {
+                    alt
+                };
+                out.push(Span::styled(format!("{glyph} {label}"), theme.md_link));
+            }
             InlineTok::BlockRef { handle } => {
                 // Resolve the handle to the source block's text and
                 // surface it inline, Roam-style. Citing-block readers
@@ -361,6 +380,16 @@ pub(crate) fn highlight_inline(text: &str, theme: &Theme) -> Vec<Span<'static>> 
                 out.push(Span::styled(text.to_string(), theme.md_link));
                 out.push(Span::styled(format!("]({url})"), dim));
             }
+            InlineTok::Image { alt, url } => {
+                // Cursor-bearing render: emit the raw source verbatim
+                // (mirroring the Link arm with the leading `!`) so the
+                // visible cursor columns stay 1:1 with the source bytes.
+                // No placeholder glyph here — that lives in the pretty
+                // render only.
+                out.push(Span::styled("![".to_string(), dim));
+                out.push(Span::styled(alt.to_string(), theme.md_link));
+                out.push(Span::styled(format!("]({url})"), dim));
+            }
             InlineTok::BlockRef { handle } => {
                 // Cursor-bearing render keeps the `((...))` delimiters
                 // dimmed so column-to-byte alignment for the visible
@@ -486,6 +515,38 @@ mod tests {
         assert_eq!(split_block_prefixes("foo"), (None, false, "foo"));
         // Nested `>>` keeps inner `>` in body — no double-strip.
         assert_eq!(split_block_prefixes("> > foo"), (None, true, "> foo"));
+    }
+
+    /// An image embed renders as a placeholder in pretty mode (the
+    /// terminal can't paint pixels) but survives verbatim in the
+    /// cursor-bearing raw render so column-to-byte alignment holds.
+    #[test]
+    fn image_pretty_shows_glyph_raw_keeps_source() {
+        let theme = default_theme();
+        let idx = empty_index();
+
+        // Image extension → 🖼 placeholder in the pretty render.
+        let pretty = render_pretty_block_text("![cover](assets/x.png)", &theme, &idx);
+        assert!(
+            pretty.iter().any(|s| s.content.contains('🖼')),
+            "expected 🖼 placeholder for an image asset, got {pretty:#?}",
+        );
+
+        // Non-image extension → 📄 generic-file placeholder.
+        let pretty_doc = render_pretty_block_text("![doc](assets/x.pdf)", &theme, &idx);
+        assert!(
+            pretty_doc.iter().any(|s| s.content.contains('📄')),
+            "expected 📄 placeholder for a non-image asset, got {pretty_doc:#?}",
+        );
+
+        // Cursor-bearing render keeps the raw `![alt](url)` delimiters so
+        // the visible cursor stays aligned with the source bytes.
+        let raw = highlight_inline("![cover](assets/x.png)", &theme);
+        let joined: String = raw.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(
+            joined, "![cover](assets/x.png)",
+            "raw render must reproduce the source verbatim, got {joined:?}",
+        );
     }
 
     /// Plain (non-quoted) text must not get a leading bar.

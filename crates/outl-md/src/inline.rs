@@ -80,6 +80,20 @@ pub enum InlineTok<'a> {
         /// URL target.
         url: &'a str,
     },
+    /// `![alt](url)` — markdown image / embedded asset.
+    ///
+    /// Mirrors [`InlineTok::Link`] with a leading `!`. `url` is either a
+    /// workspace-relative `assets/<hash>.<ext>` path (imported / uploaded
+    /// files, resolved against the workspace root by the client) or a
+    /// remote `http(s)` URL. `alt` may be empty (`![](url)` is valid).
+    /// The client decides how to render by inspecting `url` — inline
+    /// `<img>` for image extensions, a viewer / chip for other files.
+    Image {
+        /// Alt text (may be empty).
+        alt: &'a str,
+        /// Image / asset target — relative `assets/…` path or remote URL.
+        url: &'a str,
+    },
     /// `((blk-XXXXXX))` — inline reference to another block.
     ///
     /// The `handle` is the short, stable id persisted in the sidecar
@@ -189,6 +203,16 @@ pub enum InlineToken {
         /// URL target.
         href: String,
     },
+    /// `![alt](url)` image / embedded asset. `href` is a
+    /// workspace-relative `assets/<hash>.<ext>` path or a remote URL;
+    /// the client renders an `<img>` for image extensions and a viewer
+    /// / file chip for other kinds.
+    Image {
+        /// Alt text (may be empty).
+        alt: String,
+        /// Image / asset target.
+        href: String,
+    },
     /// `[[name]]` page reference.
     Ref {
         /// Page name (display form, kept verbatim).
@@ -252,6 +276,10 @@ impl InlineToken {
             },
             InlineTok::Link { text, url } => InlineToken::Link {
                 value: (*text).to_owned(),
+                href: (*url).to_owned(),
+            },
+            InlineTok::Image { alt, url } => InlineToken::Image {
+                alt: (*alt).to_owned(),
                 href: (*url).to_owned(),
             },
             InlineTok::PageRef { name } => InlineToken::Ref {
@@ -344,6 +372,12 @@ fn match_one(s: &str, prev: Option<char>) -> Option<(InlineTok<'_>, usize)> {
     // want the whole `!((handle))` consumed as one token instead of
     // a stray `Plain("!")` followed by a `BlockRef`.
     if let Some(out) = try_embed(s) {
+        return Some(out);
+    }
+    // `try_image` shares the `!` opener with `try_embed` (`![` vs `!((`),
+    // so it sits next to it and, crucially, before `try_md_link` — the
+    // bare `[` link — so `![alt](url)` isn't split into `!` + a link.
+    if let Some(out) = try_image(s) {
         return Some(out);
     }
     if let Some(out) = try_block_ref(s) {
@@ -500,6 +534,13 @@ pub fn inline_to_source(toks: &[InlineTok<'_>]) -> String {
             InlineTok::Link { text, url } => {
                 out.push('[');
                 out.push_str(text);
+                out.push_str("](");
+                out.push_str(url);
+                out.push(')');
+            }
+            InlineTok::Image { alt, url } => {
+                out.push_str("![");
+                out.push_str(alt);
                 out.push_str("](");
                 out.push_str(url);
                 out.push(')');
@@ -705,6 +746,32 @@ pub(crate) fn try_md_link(s: &str) -> Option<(InlineTok<'_>, usize)> {
     Some((InlineTok::Link { text, url }, consumed))
 }
 
+/// `![alt](url)` — markdown image / embedded asset.
+///
+/// Mirrors [`try_md_link`] with a leading `!`. Unlike a link, the alt
+/// text may be empty (`![](url)` is valid CommonMark); the url must be
+/// non-empty. `![[…]]` (Obsidian wiki-embed) does not match — the inner
+/// `[` is consumed as the first alt char and the `](` shape then fails,
+/// leaving that form for the wiki-link rewriter at import time.
+fn try_image(s: &str) -> Option<(InlineTok<'_>, usize)> {
+    let rest = s.strip_prefix("![")?;
+    let bracket_close = rest.find(']')?;
+    let alt = &rest[..bracket_close];
+    let after_bracket = bracket_close + 1;
+    if !rest[after_bracket..].starts_with('(') {
+        return None;
+    }
+    let paren_rest = &rest[after_bracket + 1..];
+    let paren_close = paren_rest.find(')')?;
+    let url = &paren_rest[..paren_close];
+    if url.is_empty() || alt.contains('\n') || url.contains('\n') {
+        return None;
+    }
+    // Consumed: `![` + alt + `]` + `(` + url + `)`.
+    let consumed = 2 + after_bracket + 1 + paren_close + 1;
+    Some((InlineTok::Image { alt, url }, consumed))
+}
+
 /// `:shortcode:` — GitHub gemoji shortcode.
 ///
 /// Strict on both ends:
@@ -765,121 +832,6 @@ fn try_tag(s: &str) -> Option<(InlineTok<'_>, usize)> {
     ))
 }
 
-#[cfg(test)]
-mod tokenize_owned_tests {
-    use super::*;
-
-    #[test]
-    fn round_trips_every_variant_into_serializable_form() {
-        // Block-ref handles need `REF_HANDLE_TAIL_LEN` chars after
-        // `blk-` (6 today) to pass `is_valid_block_handle`; shorter
-        // handles correctly degrade to plain text.
-        let toks = tokenize_owned(
-            "**b** *i* ~~s~~ `c` [t](u) [[p]] #tag ((blk-aaaaaa)) !((blk-bbbbbb)) :tada: tail",
-        );
-        // Spot-check shape (kind discriminant) and the `tag` prefixing,
-        // since that's the one place `from_borrowed` does more than a
-        // string copy.
-        let kinds: Vec<&str> = toks
-            .iter()
-            .map(|t| match t {
-                InlineToken::Plain { .. } => "plain",
-                InlineToken::Bold { .. } => "bold",
-                InlineToken::Italic { .. } => "italic",
-                InlineToken::Strike { .. } => "strike",
-                InlineToken::Highlight { .. } => "highlight",
-                InlineToken::Code { .. } => "code",
-                InlineToken::Link { .. } => "link",
-                InlineToken::Ref { .. } => "ref",
-                InlineToken::Tag { .. } => "tag",
-                InlineToken::BlockRef { .. } => "blockref",
-                InlineToken::Embed { .. } => "embed",
-                InlineToken::Emoji { .. } => "emoji",
-            })
-            .collect();
-        assert_eq!(
-            kinds,
-            vec![
-                "bold", "plain", "italic", "plain", "strike", "plain", "code", "plain", "link",
-                "plain", "ref", "plain", "tag", "plain", "blockref", "plain", "embed", "plain",
-                "emoji", "plain",
-            ],
-        );
-        // Tag value carries the leading `#` so the mobile renderer
-        // doesn't have to re-prefix.
-        let tag = toks
-            .iter()
-            .find_map(|t| match t {
-                InlineToken::Tag { value } => Some(value.clone()),
-                _ => None,
-            })
-            .expect("tokenize_owned should emit one Tag");
-        assert_eq!(tag, "#tag");
-    }
-
-    #[test]
-    fn empty_input_yields_no_tokens() {
-        // Replaces coverage from the deleted mobile `markdown.test.ts`
-        // — the old TS tokenizer used to push a phantom `plain` run on
-        // empty input. Pin the Rust behaviour so a future refactor
-        // doesn't reintroduce it.
-        assert!(tokenize_owned("").is_empty());
-    }
-
-    #[test]
-    fn bare_text_is_one_plain_run() {
-        let toks = tokenize_owned("tail");
-        assert_eq!(toks.len(), 1);
-        assert!(matches!(
-            &toks[0],
-            InlineToken::Plain { value } if value == "tail"
-        ));
-    }
-
-    #[test]
-    fn plain_text_after_last_match_survives() {
-        // The deleted TS test "preserves trailing text after the last
-        // match" guarded a tokenizer bug where the tail run got
-        // dropped. Pin the same invariant on the Rust side.
-        let toks = tokenize_owned("**bold** tail");
-        let trailing = toks.last().expect("at least one token");
-        assert!(
-            matches!(trailing, InlineToken::Plain { value } if value == " tail"),
-            "expected trailing Plain(\" tail\"), got {trailing:?}",
-        );
-    }
-
-    /// The `> ` blockquote marker is block-level, not inline. It must
-    /// not become a token: the inline tokenizer is called on a body
-    /// that already had the prefix stripped by
-    /// `outl_actions::quote::split_quote`. If the marker ever shows up
-    /// inside the body (the user typed `"> > foo"` — single split, the
-    /// inner `"> foo"` is the body), it stays Plain so the inline
-    /// surface doesn't accidentally double-style it.
-    #[test]
-    fn quote_prefix_is_not_tokenized_as_an_inline() {
-        let toks = tokenize_owned("> still plain");
-        assert_eq!(toks.len(), 1);
-        assert!(
-            matches!(&toks[0], InlineToken::Plain { value } if value == "> still plain"),
-            "expected the whole string as Plain, got {toks:?}"
-        );
-    }
-
-    #[test]
-    fn serde_json_kind_field_matches_mobile_dto() {
-        // Mobile reads `kind` lowercase via Serde's
-        // `rename_all = "lowercase"`. If we ever change the rename
-        // policy, the iOS client silently goes to plain — this test
-        // pins the wire shape.
-        let toks = vec![
-            InlineToken::Plain { value: "hi".into() },
-            InlineToken::BlockRef {
-                value: "blk-x1".into(),
-            },
-        ];
-        let json = serde_json::to_string(&toks).unwrap();
-        assert!(json.contains(r#""kind":"plain""#));
-        assert!(json.contains(r#""kind":"blockref""#));
-    }
-}
+// Tests for the owned `InlineToken` / `tokenize_owned` wire form live
+// in `tests/tokenize_owned.rs` (moved out to keep this module under the
+// file-size-guard).

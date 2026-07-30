@@ -63,11 +63,11 @@ use crate::commands::{
     paste_plain_at, plugin_config_set, plugin_install_official, plugin_keybindings, plugin_list,
     plugin_registry_list, plugin_run, plugin_secret_remove, plugin_secret_set, plugin_set_enabled,
     plugin_settings_describe, plugin_sync_hooks, plugin_toolbar, plugin_transform,
-    plugin_transformers, plugin_uninstall, previous_day, redo_page, reload_workspace,
-    resolve_embeds, resolve_page_labels, resolve_ref, run_auto_run_blocks, run_code_block,
-    search_blocks, search_pages, search_persons, set_backlinks_order, set_block_collapsed,
-    set_workspace, split_block, today_slug_cmd, toggle_quote, toggle_todo, undo_page,
-    update_settings, workspace_stats,
+    plugin_transformers, plugin_uninstall, previous_day, read_asset_data_url, redo_page,
+    reload_workspace, resolve_embeds, resolve_page_labels, resolve_ref, run_auto_run_blocks,
+    run_code_block, search_blocks, search_pages, search_persons, set_backlinks_order,
+    set_block_collapsed, set_workspace, split_block, today_slug_cmd, toggle_quote, toggle_todo,
+    undo_page, update_settings, workspace_stats,
 };
 use crate::plugin_service::spawn_plugin_service;
 use crate::state::AppState;
@@ -372,8 +372,10 @@ pub fn run() {
             paste_markdown_at,
             paste_plain_at,
             copy_markdown,
-            // Assets (open uploaded file / import a file as a block)
+            // Assets (open uploaded file / import a file as a block /
+            // read bytes as a data URL for inline render)
             open_asset,
+            read_asset_data_url,
             attach_asset,
             import_asset_file,
             // Undo / redo

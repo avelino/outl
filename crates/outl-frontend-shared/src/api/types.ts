@@ -35,6 +35,11 @@ export type InlineToken =
   | { kind: "highlight"; inner: InlineToken[] }
   | { kind: "code"; value: string }
   | { kind: "link"; value: string; href: string }
+  // `![alt](href)` image / embedded asset. `href` is a workspace-relative
+  // `assets/<hash>.<ext>` path or a remote URL. The renderer shows an
+  // `<img>` for image extensions and a file chip for other kinds (pdf,
+  // …). Mirrors `outl_md::InlineToken::Image { alt, href }`.
+  | { kind: "image"; alt: string; href: string }
   | { kind: "ref"; value: string }
   | { kind: "tag"; value: string }
   | { kind: "blockref"; value: string }

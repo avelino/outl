@@ -7,6 +7,15 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Added
 
+- **Embedded assets now render: `![alt](url)` shows an inline image on desktop/mobile and a placeholder in the TUI, and imported images stop being dead links (issue #203).**
+  Uploading or importing a file already copied it into `assets/<hash>.<ext>`, but nothing rendered it — every asset, images included, landed as a plain `[name](assets/…)` link, so an imported graph showed clickable text where you expected to *see* the picture.
+  `![alt](url)` is now a first-class inline token (`InlineTok::Image` / owned `InlineToken::Image { alt, href }`), parsed by `try_image` right after the embed matcher so the leading `!` is never stranded before the bare-`[` link — one parser in `outl-md`, consumed by every client (no parallel TS/Swift tokenizer).
+  **Desktop and mobile** render an image inline through the shared `<MarkdownInline />`: a local `assets/…` asset loads its bytes through a new `read_asset_data_url` backend command (resolved with the existing traversal-safe `resolve_asset_path`, capped at 25 MB, returned as a `data:` URL — no Tauri asset-protocol config, identical on both clients), and a remote `http(s)` image loads directly.
+  A non-image `![…]` (e.g. `![notes](assets/x.pdf)`) degrades to a clickable file chip (`📄 name`) that opens in the OS app, so nothing is ever left unrendered.
+  **The TUI** paints a `🖼 alt` / `📄 name` placeholder (a terminal can't show pixels), keeping the raw `![alt](url)` verbatim in edit mode so cursor alignment stays exact.
+  **The importers** (`roam` / `logseq` / `obsidian`) now emit the embed form `![…]` for image assets and keep the plain link for everything else, so a migrated graph's images render on first open.
+  Client-side image-vs-file classification reuses `wikilink::is_image_target` / the mirrored `assetKind` helper — no second extension list.
+
 - **`==highlight==` is now a native inline token, so Roam's `^^highlight^^` renders as a highlight everywhere instead of vanishing.**
   The importer already rewrote `^^…^^` to `==…==` on disk, but nothing rendered `==…==` — the marker just sat there as literal text.
   `outl_md::tokenize` now emits an `InlineTok::Highlight`, the shared `<MarkdownInline />` renderer wraps it in `<mark>`, and the TUI paints it with a yellow background.

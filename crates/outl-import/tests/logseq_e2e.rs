@@ -139,15 +139,14 @@ fn local_asset_is_copied_content_addressed_and_linked() {
     let (ws, report) = import_with(&LogseqAdapter, g.path());
 
     let media = read(&ws.root.join("pages/media.md"));
-    // Rewritten to a content-addressed plain link — never `![`, and no
-    // leftover placeholder.
+    // Rewritten to a content-addressed image embed — no leftover placeholder.
     assert!(
         !media.contains("outl-import-asset:"),
         "placeholder survived:\n{media}"
     );
     assert!(
-        media.contains("](assets/") && !media.contains("![pic.png]"),
-        "not a content-addressed plain link:\n{media}"
+        media.contains("![pic.png](assets/") && !media.contains("assets/pic.png"),
+        "not a content-addressed image embed:\n{media}"
     );
     assert_eq!(report.assets_copied, 1);
     assert_eq!(report.assets_missing, 0);
