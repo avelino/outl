@@ -23,8 +23,9 @@ use std::path::{Component, Path, PathBuf};
 /// pushing an [`AssetRef`] into `assets` for each one. `base_dir` roots
 /// relative local targets (the directory of the note / block's source
 /// file); it's irrelevant to remote targets. Returns the rewritten
-/// text; non-asset links (`#anchor`, `mailto:`, `[[wikilinks]]`,
-/// already-`assets/<hash>` links) pass through verbatim.
+/// text; non-asset links (`#anchor`, `mailto:`, `[[wikilinks]]`, a plain
+/// `[text](https://…)` hyperlink, already-`assets/<hash>` links) pass
+/// through verbatim.
 pub(crate) fn scan_assets(text: &str, base_dir: &Path, assets: &mut Vec<AssetRef>) -> String {
     let mut out = String::with_capacity(text.len());
     let mut i = 0usize;
@@ -44,10 +45,11 @@ pub(crate) fn scan_assets(text: &str, base_dir: &Path, assets: &mut Vec<AssetRef
             continue;
         };
 
+        let is_embed = bracket_off == 1;
         if let Some((alias, target, len)) = alias_link(&rest[bracket_off..]) {
             let whole_len = bracket_off + len;
             let whole = &rest[..whole_len];
-            match classify(alias, target, whole, base_dir) {
+            match classify(alias, target, whole, base_dir, is_embed) {
                 Some(asset) => {
                     let idx = assets.len();
                     assets.push(asset);
@@ -69,16 +71,28 @@ pub(crate) fn scan_assets(text: &str, base_dir: &Path, assets: &mut Vec<AssetRef
 }
 
 /// Classify a `[alias](target)` link into an [`AssetRef`], or `None`
-/// when the target isn't a file the workspace should pull in.
-fn classify(alias: &str, target: &str, whole: &str, base_dir: &Path) -> Option<AssetRef> {
+/// when the target isn't a file the workspace should pull in. `is_embed`
+/// is `true` for the image form `![alias](target)`.
+fn classify(
+    alias: &str,
+    target: &str,
+    whole: &str,
+    base_dir: &Path,
+    is_embed: bool,
+) -> Option<AssetRef> {
     let target = target.trim();
     if target.is_empty() {
         return None;
     }
     let alias = alias.trim();
 
-    // Remote image / file — download it during emit.
+    // Remote target. Only an **image embed** (`![](url)`) is an asset to
+    // download — a plain `[text](url)` is a hyperlink (a LinkedIn profile,
+    // a Google Doc, a GitHub PR), NOT a file, so it stays verbatim.
     if target.starts_with("http://") || target.starts_with("https://") {
+        if !is_embed {
+            return None;
+        }
         let display = if alias.is_empty() {
             url_leaf(target)
         } else {
@@ -229,6 +243,20 @@ mod tests {
         }
         // Alias wins over the URL leaf as the display name.
         assert_eq!(assets[0].display_name, "diagram");
+    }
+
+    #[test]
+    fn remote_plain_link_is_a_hyperlink_not_an_asset() {
+        // A bare `[text](https://…)` is a hyperlink (LinkedIn, a Google
+        // Doc, a GitHub PR), not a file — it must pass through untouched,
+        // never queued for download. Only the `![](url)` image embed form
+        // is a remote asset.
+        let (out, assets) = scan("see [Vinícius](https://www.linkedin.com/in/foo/) profile");
+        assert_eq!(
+            out,
+            "see [Vinícius](https://www.linkedin.com/in/foo/) profile"
+        );
+        assert!(assets.is_empty());
     }
 
     #[test]
