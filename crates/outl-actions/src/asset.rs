@@ -75,23 +75,44 @@ pub fn import_asset(
     std::fs::File::open(source)?
         .take(read_limit)
         .read_to_end(&mut bytes)?;
+
+    let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let display_name = source
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_string();
+    import_asset_bytes(root, &bytes, ext, &display_name, max_bytes)
+}
+
+/// Import already-in-memory bytes as an asset — the shared core of
+/// [`import_asset`], and the entry point for content that has no local
+/// path (a remote image downloaded during a Roam graph import).
+///
+/// `ext` is the source extension (with or without a leading dot; sanitized
+/// to alphanumeric before it lands in the link target). `display_name` is
+/// the link label. Same content-addressed, atomic, size-capped, idempotent
+/// guarantees as [`import_asset`]; a `display_name` fallback to the
+/// `rel_path` keeps the label non-empty.
+pub fn import_asset_bytes(
+    root: &Path,
+    bytes: &[u8],
+    ext: &str,
+    display_name: &str,
+    max_bytes: u64,
+) -> Result<ImportedAsset, ActionError> {
     if max_bytes > 0 && bytes.len() as u64 > max_bytes {
         return Err(ActionError::AssetTooLarge {
-            // We stopped reading at the cap, so we can't report the true
-            // size; `limit + 1` marks "over the limit" honestly.
             size: bytes.len() as u64,
             limit: max_bytes,
         });
     }
 
-    let hash = hash_bytes(&bytes);
+    let hash = hash_bytes(bytes);
     // Keep only an alphanumeric extension: it lands in the link target
-    // unescaped, so a filename like `report.pd)f` must not smuggle `)` into
+    // unescaped, so a name like `report.pd)f` must not smuggle `)` into
     // `(assets/…)` and break the link.
-    let ext: String = source
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or_default()
+    let ext: String = ext
         .chars()
         .filter(|c| c.is_ascii_alphanumeric())
         .map(|c| c.to_ascii_lowercase())
@@ -111,7 +132,7 @@ pub fn import_asset(
             std::process::id(),
             TMP_SEQ.fetch_add(1, Ordering::Relaxed)
         ));
-        std::fs::write(&tmp, &bytes)?;
+        std::fs::write(&tmp, bytes)?;
         match std::fs::rename(&tmp, &dest) {
             Ok(()) => {}
             // Another import won the race and created the same content-
@@ -126,17 +147,17 @@ pub fn import_asset(
         }
     }
 
-    let display_name = source
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(&rel_path)
-        .to_string();
+    let display_name = if display_name.is_empty() {
+        rel_path.clone()
+    } else {
+        display_name.to_string()
+    };
     let is_image = outl_md::wikilink::is_image_target(&rel_path);
     // Always a plain link: clicking opens the file in the OS app, outl does
     // not render assets inline yet (`![]` image embeds are a future step).
-    // The label is escaped so a filename with `]` / `(` / `\` can't break
-    // the link or inject markdown; `rel_path` is `assets/<hex>.<ext>` with
-    // an alphanumeric ext, so the target needs no escaping.
+    // The label is escaped so a name with `]` / `(` / `\` can't break the
+    // link or inject markdown; `rel_path` is `assets/<hex>.<ext>` with an
+    // alphanumeric ext, so the target needs no escaping.
     let markdown = format!("[{}]({})", escape_link_label(&display_name), rel_path);
 
     Ok(ImportedAsset {
@@ -230,6 +251,22 @@ mod tests {
         assert!(!a.is_image);
         assert_eq!(a.markdown, format!("[report.pdf]({})", a.rel_path));
         assert!(ws.path().join(&a.rel_path).exists());
+    }
+
+    #[test]
+    fn import_bytes_content_addresses_with_given_ext() {
+        let ws = tempdir().unwrap();
+        // The remote-download path: no source file, just bytes + ext + name.
+        let a = import_asset_bytes(ws.path(), b"fake png bytes", "png", "photo.png", 0).unwrap();
+        assert!(a.rel_path.starts_with("assets/"));
+        assert!(a.rel_path.ends_with(".png"));
+        assert_eq!(a.markdown, format!("[photo.png]({})", a.rel_path));
+        assert!(ws.path().join(&a.rel_path).exists());
+        // Same bytes via the path API land on the same file.
+        let src = tempdir().unwrap();
+        let f = write_source(src.path(), "other.png", b"fake png bytes");
+        let b = import_asset(ws.path(), &f, 0).unwrap();
+        assert_eq!(a.rel_path, b.rel_path);
     }
 
     #[test]

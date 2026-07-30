@@ -151,6 +151,10 @@ enum Command {
         /// `edited::` block properties.
         #[arg(long)]
         preserve_timestamps: bool,
+        /// Don't pull referenced files into `assets/` — keep the
+        /// original relative/remote links verbatim.
+        #[arg(long)]
+        no_assets: bool,
     },
     /// Import a file (PDF, image, …) and link it into the workspace.
     Asset {
@@ -320,6 +324,7 @@ fn main() -> Result<()> {
             dry_run,
             json,
             preserve_timestamps,
+            no_assets,
         }) => cmd::import::run(
             &format,
             &src,
@@ -328,6 +333,7 @@ fn main() -> Result<()> {
                 dry_run,
                 json,
                 preserve_timestamps,
+                no_assets,
             },
         ),
         Some(Command::Asset { sub }) => {

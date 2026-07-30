@@ -27,9 +27,10 @@ mod inline;
 mod tests;
 
 use crate::adapter::{ImportError, SourceAdapter};
+use crate::adapters::asset_scan::scan_assets;
 use crate::adapters::scan::{parse_prop_line, parse_whole_fence};
 use crate::ir::{
-    BlockContent, ImportBlock, ImportGraph, ImportPage, PageBody, PageName, TaskState,
+    AssetRef, BlockContent, ImportBlock, ImportGraph, ImportPage, PageBody, PageName, TaskState,
 };
 use crate::report::{ImportReport, SkippedFile};
 use outl_md::slug::slugify;
@@ -70,19 +71,9 @@ impl SourceAdapter for LogseqAdapter {
             }
         }
 
-        let assets = src.join("assets");
-        let has_assets = std::fs::read_dir(&assets)
-            .map(|mut i| i.next().is_some())
-            .unwrap_or(false);
-        if has_assets {
-            report.skipped.push(SkippedFile {
-                path: "assets/".to_string(),
-                reason: "assets are not imported yet — copy the folder next to the workspace \
-                         so relative links keep resolving"
-                    .to_string(),
-            });
-        }
-
+        // Assets referenced from blocks (`![](../assets/x.png)`) are
+        // scanned during `parse_outline` and copied into the workspace's
+        // `assets/` dir by the emit stage — no skip warning needed.
         Ok(graph)
     }
 }
@@ -124,7 +115,11 @@ fn convert_file(
     let decoded = decode_page_name(stem);
 
     let label = decoded.clone();
-    let (mut props, blocks) = parse_outline(&text, report);
+    // Relative asset links (`![](../assets/x.png)`) resolve against the
+    // `.md` file's own directory (`pages/` or `journals/`), so
+    // `../assets/x.png` lands on `<graph>/assets/x.png`.
+    let base_dir = src.parent().unwrap_or(src).to_path_buf();
+    let (mut props, blocks) = parse_outline(&text, &base_dir, &mut graph.assets, report);
 
     // `title::` / `#+title:` overrides the display name; the file
     // keeps its filename-derived slug so existing `[[refs]]` resolve.
@@ -183,8 +178,13 @@ struct RawBlock {
 }
 
 /// Parse a whole file into page properties + an outline tree.
+///
+/// `base_dir` / `assets` thread through to [`finalize`], where each
+/// block's text is scanned for asset links before inline tokenization.
 fn parse_outline(
     text: &str,
+    base_dir: &Path,
+    assets: &mut Vec<AssetRef>,
     report: &mut ImportReport,
 ) -> (Vec<(String, String)>, Vec<ImportBlock>) {
     let lines: Vec<&str> = text.lines().collect();
@@ -254,7 +254,7 @@ fn parse_outline(
 
         if let Some(content) = bullet_content(trimmed) {
             let level = indent_level(line, space_unit);
-            close_to(&mut stack, &mut roots, level, report);
+            close_to(&mut stack, &mut roots, level, base_dir, assets, report);
 
             let (task, rest) = split_task(content);
             if let Some(state) = task {
@@ -325,7 +325,7 @@ fn parse_outline(
             .push(strip_indent(line, top.level + 1, space_unit));
     }
 
-    close_to(&mut stack, &mut roots, 0, report);
+    close_to(&mut stack, &mut roots, 0, base_dir, assets, report);
     (page_props, roots)
 }
 
@@ -335,11 +335,13 @@ fn close_to(
     stack: &mut Vec<RawBlock>,
     roots: &mut Vec<ImportBlock>,
     level: usize,
+    base_dir: &Path,
+    assets: &mut Vec<AssetRef>,
     report: &mut ImportReport,
 ) {
     while stack.last().is_some_and(|b| b.level >= level) {
         let raw = stack.pop().expect("checked by is_some_and");
-        let block = finalize(raw, report);
+        let block = finalize(raw, base_dir, assets, report);
         match stack.last_mut() {
             Some(parent) => parent.children.push(block),
             None => roots.push(block),
@@ -348,14 +350,23 @@ fn close_to(
 }
 
 /// Raw text lines → typed content + assembled [`ImportBlock`].
-fn finalize(raw: RawBlock, report: &mut ImportReport) -> ImportBlock {
+fn finalize(
+    raw: RawBlock,
+    base_dir: &Path,
+    assets: &mut Vec<AssetRef>,
+    report: &mut ImportReport,
+) -> ImportBlock {
     let text = raw.text_lines.join("\n");
     let content = if let Some((lang, body)) = parse_whole_fence(&text) {
         BlockContent::Code { lang, body }
     } else if text.contains("```") {
         BlockContent::Verbatim(text)
     } else {
-        BlockContent::Inline(inline::tokenize(&text, report))
+        // Scan for asset links first so the emitted placeholder survives
+        // tokenization as inert text; a fenced block is skipped above so
+        // a `[x](y)` inside code is never mistaken for a file link.
+        let scanned = scan_assets(&text, base_dir, assets);
+        BlockContent::Inline(inline::tokenize(&scanned, report))
     };
     ImportBlock {
         uid: raw.uid,

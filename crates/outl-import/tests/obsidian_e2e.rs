@@ -84,17 +84,31 @@ fn wikilink_variants_collapse() {
 
 #[test]
 fn note_embeds_keep_shape_image_embeds_become_md_links() {
-    let v = fixture_tree(&[(
-        "Media.md",
-        "- embed ![[Other Note]]\n- image ![[assets/pic.png]]\n",
-    )]);
-    let (ws, _) = import_with(&ObsidianAdapter, v.path());
+    let v = fixture_tree(&[
+        (
+            "Media.md",
+            "- embed ![[Other Note]]\n- image ![[assets/pic.png]]\n",
+        ),
+        ("assets/pic.png", "PNG fake bytes"),
+    ]);
+    let (ws, report) = import_with(&ObsidianAdapter, v.path());
     let out = read(&ws.root.join("pages/media.md"));
     assert!(out.contains("![[Other Note]]"), "note embed kept:\n{out}");
+    // The image embed's file was pulled into the workspace and its link
+    // rewritten to the content-addressed path (plain link, not `![`).
     assert!(
-        out.contains("![pic.png](assets/pic.png)"),
-        "image embed → md link:\n{out}"
+        !out.contains("outl-import-asset:") && !out.contains("assets/pic.png"),
+        "image link not content-addressed:\n{out}"
     );
+    assert!(out.contains("](assets/"), "no assets link emitted:\n{out}");
+    assert_eq!(report.assets_copied, 1);
+    assert_eq!(report.assets_missing, 0);
+    let copied: Vec<_> = std::fs::read_dir(ws.root.join("assets"))
+        .expect("assets dir")
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("png"))
+        .collect();
+    assert_eq!(copied.len(), 1, "exactly one png copied");
 }
 
 #[test]

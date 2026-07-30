@@ -27,10 +27,11 @@ mod inline;
 mod tests;
 
 use crate::adapter::{ImportError, SourceAdapter};
+use crate::adapters::asset_scan::scan_assets;
 use crate::adapters::scan::{parse_prop_line, parse_whole_fence};
 use crate::ir::{
-    BlockContent, ComponentKind, ImportBlock, ImportGraph, ImportPage, Inline, PageBody, PageName,
-    TaskState,
+    AssetRef, BlockContent, ComponentKind, ImportBlock, ImportGraph, ImportPage, Inline, PageBody,
+    PageName, TaskState,
 };
 use crate::report::ImportReport;
 use chrono::{DateTime, TimeZone, Utc};
@@ -86,6 +87,9 @@ impl SourceAdapter for RoamAdapter {
         let pages: Vec<RoamPage> = serde_json::from_str(&text)
             .map_err(|e| ImportError::Parse(format!("roam backup JSON: {e}")))?;
 
+        // Roam images are firebase-hosted URLs, so relative resolution
+        // rarely fires; the backup file's dir is the base_dir anyway.
+        let base_dir = src.parent().unwrap_or(src).to_path_buf();
         let mut graph = ImportGraph::default();
         for page in &pages {
             if page.title.trim().is_empty() {
@@ -98,7 +102,7 @@ impl SourceAdapter for RoamAdapter {
             let mut blocks: Vec<ImportBlock> = page
                 .children
                 .iter()
-                .map(|b| convert_block(b, &page.title, report))
+                .map(|b| convert_block(b, &page.title, &base_dir, &mut graph.assets, report))
                 .collect();
             // Lift only the *leading* run of pure-attribute blocks
             // (`icon::`, `page-type::`, …) into the page header — that's how
@@ -127,7 +131,13 @@ impl SourceAdapter for RoamAdapter {
 }
 
 /// One Roam block → IR block (recursive).
-fn convert_block(b: &RoamBlock, page: &str, report: &mut ImportReport) -> ImportBlock {
+fn convert_block(
+    b: &RoamBlock,
+    page: &str,
+    base_dir: &Path,
+    assets: &mut Vec<AssetRef>,
+    report: &mut ImportReport,
+) -> ImportBlock {
     let (task, after_task) = split_task_marker(&b.string);
     if let Some(state) = task {
         report.count_task(state.report_key());
@@ -146,11 +156,11 @@ fn convert_block(b: &RoamBlock, page: &str, report: &mut ImportReport) -> Import
 
     ImportBlock {
         uid: (!b.uid.is_empty()).then(|| b.uid.clone()),
-        content: convert_content(&text, page, report),
+        content: convert_content(&text, page, base_dir, assets, report),
         children: b
             .children
             .iter()
-            .map(|c| convert_block(c, page, report))
+            .map(|c| convert_block(c, page, base_dir, assets, report))
             .collect(),
         task,
         heading: b.heading.filter(|h| (1..=3).contains(h)),
@@ -264,7 +274,13 @@ fn split_task_marker(raw: &str) -> (Option<TaskState>, &str) {
 }
 
 /// Roam block string → IR content.
-fn convert_content(raw: &str, page: &str, report: &mut ImportReport) -> BlockContent {
+fn convert_content(
+    raw: &str,
+    page: &str,
+    base_dir: &Path,
+    assets: &mut Vec<AssetRef>,
+    report: &mut ImportReport,
+) -> BlockContent {
     if let Some((lang, body)) = parse_whole_fence(raw) {
         return BlockContent::Code { lang, body };
     }
@@ -275,6 +291,9 @@ fn convert_content(raw: &str, page: &str, report: &mut ImportReport) -> BlockCon
     }
 
     let pre = convert_org_dates(raw, report);
+    // Pull image/file links out to placeholders before tokenizing; a
+    // remote `![](https://…)` becomes an `AssetSource::Remote` ref.
+    let pre = scan_assets(&pre, base_dir, assets);
     let toks = inline::tokenize(&pre, page, report);
 
     // A block that IS a single query component becomes a ` ```query `

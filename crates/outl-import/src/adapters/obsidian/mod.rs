@@ -30,6 +30,7 @@
 mod stems;
 
 use crate::adapter::{ImportError, SourceAdapter};
+use crate::adapters::asset_scan::scan_assets;
 use crate::ir::{ImportGraph, ImportPage, PageBody, PageName};
 use crate::report::ImportReport;
 use outl_md::frontmatter::{extract_leading_h1, split_frontmatter, Frontmatter};
@@ -170,8 +171,12 @@ fn convert_file(
     let is_journal = matches!(name, PageName::Journal(_));
 
     // 4. Text-level rewrites: image wiki-links → CommonMark, then the
-    //    remaining wiki-link variants collapse to `[[Note]]`.
+    //    remaining wiki-link variants collapse to `[[Note]]`. Finally,
+    //    scan the resulting CommonMark links for assets to pull in —
+    //    relative targets resolve against the note's own directory.
     let body = rewrite_wikilinks(&convert_image_links(&body_after_title));
+    let note_dir = src.parent().unwrap_or(vault_root);
+    let body = scan_assets(&body, note_dir, &mut graph.assets);
 
     // 5. Page properties: frontmatter props + `path::` (non-journal —
     //    journals already live in `journals/`).

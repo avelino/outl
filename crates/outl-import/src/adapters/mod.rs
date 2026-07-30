@@ -1,5 +1,6 @@
 //! Source adapters. One module per dialect.
 
+pub(crate) mod asset_scan;
 pub mod logseq;
 pub mod obsidian;
 pub mod roam;

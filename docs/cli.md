@@ -266,7 +266,7 @@ CLI exit code is `1` in that case; MCP returns the payload via the normal envelo
 | `outl plugin init\|search\|list\|install\|run\|config\|secret\|enable\|disable\|remove` | — |
 | `outl sync`                                  | —                       |
 | `outl workspace info [--json]`               | `outl_workspace_info`   |
-| `outl import roam\|logseq\|obsidian\|auto <src> <dst> [--dry-run] [--json] [--preserve-timestamps]` | — |
+| `outl import roam\|logseq\|obsidian\|auto <src> <dst> [--dry-run] [--json] [--preserve-timestamps] [--no-assets]` | — |
 
 `init`, `serve`, `reconcile`, `import`, `mcp serve`, `peer`, `plugin`, and `sync` are CLI-only on purpose — they're either interactive, long-running, or bootstrap commands that don't fit a tool-call shape.
 
@@ -277,6 +277,10 @@ Each dialect is translated on the way in.
 Roam: `__italic__` → `*italic*`, flat `{{[[query]]}}` → ` ```query ` fences.
 Logseq: `DOING`/`NOW`/`LATER`/`WAITING` states → `TODO` + `state::` property, `CANCELED` → `DONE` + `state::`, `[#A]` → `priority::`, `SCHEDULED:`/`DEADLINE:` → `[[date]]` links, `:LOGBOOK:` drawers dropped and counted.
 Obsidian: frontmatter → `key:: value` properties, wiki-link variants collapse to `[[Note]]`.
+Referenced files are pulled into the workspace's `assets/` dir, content-addressed.
+A local attachment (`![](../assets/pic.png)`) is copied and a remote image (Roam's firebase URLs) is downloaded; either way the link is rewritten to `[name](assets/<hash>.<ext>)`.
+A file that can't be pulled (missing, download failed, over `[assets] max_bytes`) keeps its original link and is counted in `assets missing` — never fatal.
+`--no-assets` skips all of that, keeping every original relative/remote link verbatim.
 A real (non-dry) import paints a live progress line on stderr — phase, page counter, percentage, current page, elapsed — TTY-only, so piped output stays clean.
 `--dry-run` parses and reports without writing a byte — run it against a real backup to measure fidelity before migrating.
 `--json` prints the full report (per-feature counts, warnings with location) as JSON.

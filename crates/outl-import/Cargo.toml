@@ -21,6 +21,12 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# Remote asset download (Roam firebase-hosted images). rustls only —
+# never OpenSSL. Blocking client: the import pipeline is synchronous.
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "rustls-tls",
+] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

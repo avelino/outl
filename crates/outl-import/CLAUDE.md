@@ -51,6 +51,49 @@ Two page-body shapes (`PageBody`):
 
 Adapters with their own collision policy (Obsidian's path-derived suffixes in `adapters/obsidian/stems.rs`) pin the on-disk stem via `ImportPage::stem_override`; everyone else lets the emitter slugify the title.
 
+## Assets: scan in parse, resolve in emit
+
+Referenced files (local attachments, remote images) follow the same
+"adapter detects, emit does the IO" split as everything else.
+
+- **parse** (each adapter) runs
+  [`adapters::asset_scan::scan_assets`](src/adapters/asset_scan.rs) over
+  block text: it finds CommonMark links (`![alt](target)` /
+  `[alt](target)`), records each as an `AssetRef` in `graph.assets`
+  (`AssetSource::Local(abs)` for a relative path resolved against the
+  source file's dir, `AssetSource::Remote(url)` for `http(s)`), and
+  swaps the link for an inert `((outl-import-asset:<idx>))` placeholder.
+  It does **no asset IO** — never opens, copies, downloads, or stat's a
+  file.
+  Block refs (`[a](((uid)))`), page links (`[a]([[Page]])`),
+  anchors, `mailto:`, other schemes, and our own re-imported
+  `assets/<64-hex>` links pass through untouched.
+  Wiring points: Obsidian after `convert_image_links`+`rewrite_wikilinks`
+  (`obsidian/mod.rs`, base = the note's dir); Logseq in `finalize` before
+  inline tokenization (`logseq/mod.rs`, base = the `.md`'s dir); Roam in
+  `convert_content` before tokenize (`roam/mod.rs`, base = the backup's
+  dir — its images are remote).
+- **emit** ([`emit::assets`](src/emit/assets.rs)) runs once, right after
+  render and **before** any file is written: it copies each local file
+  (`outl_actions::import_asset`) or downloads each remote URL
+  (`reqwest::blocking`, rustls, 30 s timeout, body read bounded by
+  `max_bytes`; extension from the URL path then `Content-Type`) and
+  imports the bytes (`outl_actions::import_asset_bytes`), then rewrites
+  every `((outl-import-asset:<idx>))` — in both the page text **and**
+  each placeholder-block text — to the final content-addressed
+  `[name](assets/<hash>.<ext>)` link.
+  A file that can't be pulled keeps
+  its original link verbatim (`AssetRef::original`) and lands in
+  `assets_missing`; a pull is never fatal.
+  `import_assets: false`
+  (`outl import --no-assets`) keeps every original link and copies
+  nothing.
+  Because asset substitution happens before write/reconcile, no
+  asset placeholder ever reaches the ref/embed resolve pass or the
+  sidecar; `dry_run` does no IO and counts every asset as
+  `assets_copied` (optimistic estimate, same asymmetry as
+  `refs_page_fallback`).
+
 ## The report is the fidelity contract
 
 Everything translated, degraded, or dropped is counted in `ImportReport` — per-feature, serializable, with located warnings.
@@ -68,9 +111,11 @@ src/
 ├── emit/
 │   ├── mod.rs         # pipeline orchestration + dry-run simulation
 │   ├── render.rs      # IR → markdown, placeholder emission, DFS bookkeeping
+│   ├── assets.rs      # asset resolution: copy/download + placeholder → link (pre-write)
 │   └── resolve.rs     # pass B: uid → handle, edit_text, SetCollapsed
 └── adapters/
     ├── scan.rs        # shared low-level scanners (balanced, is_uid, alias_link, parse_prop_line)
+    ├── asset_scan.rs  # shared asset-link scanner: CommonMark link → AssetRef + placeholder
     ├── roam/          # mod.rs (JSON → IR) + inline.rs (dialect scanner) + tests.rs
     ├── logseq/        # mod.rs (outline parser) + inline.rs + tests.rs
     └── obsidian/      # mod.rs (frontmatter/wikilink policy) + stems.rs (collisions)
