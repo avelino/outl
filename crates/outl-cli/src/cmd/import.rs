@@ -25,6 +25,8 @@ pub struct ImportFlags {
     pub json: bool,
     /// Keep source create/edit timestamps as block properties.
     pub preserve_timestamps: bool,
+    /// Skip pulling referenced files into `assets/` — keep original links.
+    pub no_assets: bool,
 }
 
 /// Dispatch on the source format chosen by the user.
@@ -170,6 +172,8 @@ fn run_adapter(
 ) -> Result<()> {
     let opts = outl_import::ImportOptions {
         preserve_timestamps: flags.preserve_timestamps,
+        import_assets: !flags.no_assets,
+        max_bytes: outl_config::load().assets.max_bytes,
     };
 
     let report = if flags.dry_run {

@@ -14,7 +14,46 @@ use chrono::{DateTime, NaiveDate, Utc};
 pub struct ImportGraph {
     /// Every page, journal or named.
     pub pages: Vec<ImportPage>,
+    /// Files referenced by the pages that should be pulled into the
+    /// workspace's `assets/` dir. The adapter records each one and drops a
+    /// placeholder ([`asset_placeholder`]) in the page text; emit (which
+    /// has the destination root) copies / downloads the bytes and rewrites
+    /// the placeholder to the final `[name](assets/<hash>.<ext>)` link.
+    pub assets: Vec<AssetRef>,
 }
+
+/// A file a source page references, to be imported into `assets/`.
+#[derive(Debug, Clone)]
+pub struct AssetRef {
+    /// Where the bytes come from.
+    pub source: AssetSource,
+    /// Link label — the file's display name.
+    pub display_name: String,
+    /// The exact original link text, restored verbatim when the asset
+    /// can't be pulled (missing local file, failed download) so a broken
+    /// reference still round-trips instead of vanishing.
+    pub original: String,
+}
+
+/// Where an imported asset's bytes come from.
+#[derive(Debug, Clone)]
+pub enum AssetSource {
+    /// An absolute path to a local file (Logseq graph, Obsidian vault).
+    Local(std::path::PathBuf),
+    /// A remote URL to download (Roam's firebase-hosted images).
+    Remote(String),
+}
+
+/// The inert placeholder an adapter emits in place of an asset link at
+/// index `idx` in [`ImportGraph::assets`]. emit rewrites it once the file
+/// is pulled. Distinct marker family from the ref/embed placeholders so
+/// the substitution passes never collide.
+pub fn asset_placeholder(idx: usize) -> String {
+    format!("(({ASSET_PLACEHOLDER_PREFIX}{idx}))")
+}
+
+/// Marker prefix inside an [`asset_placeholder`].
+pub const ASSET_PLACEHOLDER_PREFIX: &str = "outl-import-asset:";
 
 /// Where a page lands in the workspace.
 #[derive(Debug, Clone, PartialEq, Eq)]

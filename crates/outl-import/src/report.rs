@@ -60,6 +60,15 @@ pub struct ImportReport {
     /// `#+` directives, `:LOGBOOK:` drawers, dropped frontmatter
     /// keys, `logseq.*` properties).
     pub artifacts_stripped: usize,
+    /// Referenced files pulled into `assets/` (local copy or remote
+    /// download), content-addressed.
+    pub assets_copied: usize,
+    /// Referenced files that could not be pulled (missing local file,
+    /// failed download, over the size cap) — the original link is kept
+    /// verbatim so nothing dangles silently.
+    pub assets_missing: usize,
+    /// Total bytes of the assets pulled in.
+    pub assets_bytes: u64,
     /// Source files skipped entirely, with the reason.
     pub skipped: Vec<SkippedFile>,
     /// Non-fatal fidelity warnings, with location.
@@ -180,6 +189,19 @@ impl ImportReport {
             println!(
                 "  artifacts stripped:  {} (id:: lines, #+ directives, LOGBOOK drawers, dropped frontmatter keys)",
                 self.artifacts_stripped
+            );
+        }
+        if self.assets_copied > 0 {
+            println!(
+                "  assets copied:       {} ({} KiB)",
+                self.assets_copied,
+                self.assets_bytes / 1024
+            );
+        }
+        if self.assets_missing > 0 {
+            println!(
+                "  assets missing:      {} (original link kept — file not found / download failed / too large)",
+                self.assets_missing
             );
         }
         for s in &self.skipped {

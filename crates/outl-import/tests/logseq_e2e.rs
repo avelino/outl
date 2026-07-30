@@ -128,6 +128,57 @@ fn journals_route_to_iso_and_filenames_decode() {
 }
 
 #[test]
+fn local_asset_is_copied_content_addressed_and_linked() {
+    let g = fixture_tree(&[
+        (
+            "pages/media.md",
+            "- here is ![my pic](../assets/pic.png) inline\n",
+        ),
+        ("assets/pic.png", "PNG fake bytes"),
+    ]);
+    let (ws, report) = import_with(&LogseqAdapter, g.path());
+
+    let media = read(&ws.root.join("pages/media.md"));
+    // Rewritten to a content-addressed plain link — never `![`, and no
+    // leftover placeholder.
+    assert!(
+        !media.contains("outl-import-asset:"),
+        "placeholder survived:\n{media}"
+    );
+    assert!(
+        media.contains("](assets/") && !media.contains("![pic.png]"),
+        "not a content-addressed plain link:\n{media}"
+    );
+    assert_eq!(report.assets_copied, 1);
+    assert_eq!(report.assets_missing, 0);
+
+    // The copied file exists under the workspace `assets/` dir.
+    let assets = std::fs::read_dir(ws.root.join("assets")).expect("assets dir");
+    let copied: Vec<_> = assets
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("png"))
+        .collect();
+    assert_eq!(copied.len(), 1, "exactly one png copied");
+}
+
+#[test]
+fn missing_local_asset_keeps_original_link() {
+    let g = fixture_tree(&[(
+        "pages/broken.md",
+        "- see ![gone](../assets/missing.png) here\n",
+    )]);
+    let (ws, report) = import_with(&LogseqAdapter, g.path());
+
+    let broken = read(&ws.root.join("pages/broken.md"));
+    assert!(
+        broken.contains("![gone](../assets/missing.png)"),
+        "original link not preserved:\n{broken}"
+    );
+    assert_eq!(report.assets_copied, 0);
+    assert_eq!(report.assets_missing, 1);
+}
+
+#[test]
 fn org_files_are_counted_as_skipped() {
     let g = fixture_tree(&[
         ("pages/keep.md", "- kept\n"),

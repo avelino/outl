@@ -42,6 +42,47 @@ fn import_fixture(json: &str) -> (TestWs, ImportReport) {
     import_with(&RoamAdapter, &src)
 }
 
+/// A remote image link in a Roam block is scanned into a remote asset
+/// ref and, with `--no-assets` (which the harness sets so no download
+/// hits the network), the original `![](url)` is kept verbatim.
+///
+/// The real remote-download path needs network access and is exercised
+/// only manually; the ext-derivation + remote-scan units cover its
+/// pure pieces (`emit::assets` + `adapters::asset_scan` tests).
+#[test]
+fn remote_image_without_download_keeps_original_link() {
+    let json = r#"[
+        {
+            "title": "Gallery",
+            "children": [
+                {"string": "shot ![cover](https://firebasestorage.example/o/img.png?alt=media)", "uid": "g1", "children": []}
+            ]
+        }
+    ]"#;
+    let src_dir = tempfile::tempdir().expect("src tempdir");
+    let src = src_dir.path().join("backup.json");
+    fs::write(&src, json).expect("write fixture");
+
+    let opts = ImportOptions {
+        import_assets: false,
+        ..Default::default()
+    };
+    let (ws, report) = import_with_opts(&RoamAdapter, &src, &opts);
+
+    let gallery = read(&ws.root.join("pages/gallery.md"));
+    assert!(
+        gallery.contains("![cover](https://firebasestorage.example/o/img.png?alt=media)"),
+        "original remote link kept with --no-assets:\n{gallery}"
+    );
+    assert!(
+        !gallery.contains("outl-import-asset:"),
+        "placeholder must not survive:\n{gallery}"
+    );
+    // Nothing was pulled (assets off) — neither copied nor missing.
+    assert_eq!(report.assets_copied, 0);
+    assert_eq!(report.assets_missing, 0);
+}
+
 #[test]
 fn refs_and_embeds_resolve_to_real_handles() {
     let (ws, report) = import_fixture(FIXTURE);
@@ -300,6 +341,7 @@ fn timestamps_dropped_by_default_kept_on_opt_in() {
     fs::write(&src, json).expect("write fixture");
     let opts = ImportOptions {
         preserve_timestamps: true,
+        ..Default::default()
     };
     let (ws, report) = import_with_opts(&RoamAdapter, &src, &opts);
     assert_eq!(report.timestamps_dropped, 0);

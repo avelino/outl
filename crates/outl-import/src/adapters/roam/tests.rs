@@ -14,7 +14,7 @@ fn parse_one_block(s: &str) -> (ImportBlock, ImportReport) {
         create_time: None,
         edit_time: None,
     };
-    let out = convert_block(&b, "Test Page", &mut report);
+    let out = convert_block(&b, "Test Page", Path::new(""), &mut Vec::new(), &mut report);
     (out, report)
 }
 
@@ -239,7 +239,7 @@ fn collapsed_and_heading_and_timestamps_carry_over() {
         create_time: Some(1_700_000_000_000),
         edit_time: None,
     };
-    let out = convert_block(&b, "P", &mut report);
+    let out = convert_block(&b, "P", Path::new(""), &mut Vec::new(), &mut report);
     assert_eq!(out.heading, Some(2));
     assert!(out.collapsed);
     assert!(out.created.is_some());
@@ -383,7 +383,7 @@ fn attribute_block_with_children_is_not_promoted() {
         create_time: None,
         edit_time: None,
     };
-    let out = convert_block(&b, "P", &mut report);
+    let out = convert_block(&b, "P", Path::new(""), &mut Vec::new(), &mut report);
     assert_eq!(
         out.props,
         vec![("related".to_string(), "[[x]]".to_string())]

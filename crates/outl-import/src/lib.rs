@@ -60,13 +60,32 @@ pub struct ImportDest<'a> {
 }
 
 /// Import tuning knobs. `Default` matches the CLI defaults.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ImportOptions {
     /// Write `created::` / `edited::` block properties when the source
     /// carries per-block timestamps. Off by default — two extra
     /// property lines per block pollute the markdown for metadata most
     /// users never read. Dropped timestamps are counted in the report.
     pub preserve_timestamps: bool,
+    /// Pull referenced files into the workspace's `assets/` dir (copy a
+    /// local file, download a remote URL) and rewrite the link to the
+    /// content-addressed path. On by default (`outl import --no-assets`
+    /// turns it off, keeping the original relative/remote link). A
+    /// referenced file that can't be pulled is counted, never fatal.
+    pub import_assets: bool,
+    /// Upper bound in bytes on a single imported asset (`0` = unbounded).
+    /// The CLI fills this from `[assets] max_bytes`.
+    pub max_bytes: u64,
+}
+
+impl Default for ImportOptions {
+    fn default() -> Self {
+        Self {
+            preserve_timestamps: false,
+            import_assets: true,
+            max_bytes: 0,
+        }
+    }
 }
 
 /// Parse + render in memory, write nothing.

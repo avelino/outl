@@ -6,7 +6,7 @@ use crate::ir::Inline;
 
 fn parse_page(text: &str) -> (Vec<(String, String)>, Vec<ImportBlock>, ImportReport) {
     let mut report = ImportReport::new("logseq");
-    let (props, blocks) = parse_outline(text, &mut report);
+    let (props, blocks) = parse_outline(text, Path::new(""), &mut Vec::new(), &mut report);
     (props, blocks, report)
 }
 

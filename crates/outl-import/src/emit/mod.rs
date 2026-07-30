@@ -4,6 +4,7 @@
 //! `resolve` (pass B) maps source UIDs to real handles through the
 //! stamped sidecars and applies the rewrite through the op log.
 
+mod assets;
 pub mod render;
 mod resolve;
 
@@ -22,8 +23,12 @@ pub fn run(
     report: &mut ImportReport,
     sink: ProgressSink<'_>,
 ) -> Result<(), ImportError> {
-    let (pages, uid_map) =
+    let (mut pages, uid_map) =
         render::render_graph(graph, &dest.pages_dir, &dest.journals_dir, opts, report);
+    // Resolve assets (copy / download) and rewrite every asset
+    // placeholder BEFORE anything hits disk — the ref/embed resolve pass
+    // that runs after reconcile must never see an asset placeholder.
+    assets::apply(&mut pages, graph, &dest.root, opts, report);
     sink(ImportProgress::Rendered { pages: pages.len() });
 
     // Pass A: write every file, then reconcile so sidecars are
@@ -88,5 +93,12 @@ pub fn dry_run(graph: &ImportGraph, opts: &ImportOptions, report: &mut ImportRep
             });
         }
         report.collapsed_applied += page.collapsed.len();
+    }
+    // Asymmetry (documented, like `refs_page_fallback`): a dry-run does
+    // no asset IO, so it can't tell a copyable file from a missing one.
+    // It counts every referenced asset as "would copy" — the optimistic
+    // estimate — rather than downloading or stat'ing anything.
+    if opts.import_assets {
+        report.assets_copied += graph.assets.len();
     }
 }
