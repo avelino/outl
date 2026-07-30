@@ -60,7 +60,7 @@ concurrency:
 jobs:
   upload:
     name: Upload IPA to TestFlight
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-15
     # workflow_run fires on every conclusion; only proceed when:
     #   1. a human triggered us manually (workflow_dispatch), or
     #   2. the Mobile workflow finished `success` AND was triggered

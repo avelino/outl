@@ -48,7 +48,7 @@ concurrency:
 jobs:
   prepare:
     name: Compute version
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
       base: ${{ steps.compute.outputs.base }}
       version: ${{ steps.compute.outputs.version }}
@@ -93,7 +93,7 @@ jobs:
     name: Create tag
     needs: prepare
     if: needs.prepare.outputs.create_tag == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
         with:
@@ -117,7 +117,7 @@ jobs:
     needs: [prepare, tag]
     # `tag` is skipped for tag-triggered runs; don't let that fail us.
     if: always() && needs.prepare.result == 'success' && (needs.tag.result == 'success' || needs.tag.result == 'skipped')
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
         with:
@@ -274,7 +274,7 @@ jobs:
     name: build desktop macOS (universal)
     needs: [prepare, create_release]
     if: needs.create_release.result == 'success'
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-15
     # Single universal dmg instead of a matrix split. Tauri 2's
     # `--target universal-apple-darwin` builds both aarch64 and
     # x86_64 binaries on the arm64 runner and `lipo`-merges them
@@ -388,7 +388,7 @@ jobs:
     # runner's glibc + webkit2gtk, so building on the oldest supported
     # image gives the widest downstream compatibility. `ubuntu-latest`
     # (24.04) would raise the glibc floor and break older distros.
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     steps:
       - uses: actions/checkout@v4
         with:
@@ -494,7 +494,7 @@ jobs:
     name: build Android (arm64 APK)
     needs: [prepare, create_release]
     if: needs.create_release.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     # Optimized (release-build) APK, debug-signed, attached to the GitHub
     # Release (no Google Play). Like iOS, the build is RELEASE (optimized);
     # only the *signature* is a throwaway debug key — a real upload
@@ -644,7 +644,7 @@ jobs:
       needs.build.result == 'success' &&
       needs.build_desktop.result == 'success' &&
       needs.build_desktop_linux.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
 
@@ -665,7 +665,7 @@ jobs:
     # GA cask by hand the first time; after that we can add a
     # similar job for GA.
     if: needs.publish_release.result == 'success' && needs.prepare.outputs.prerelease == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
     steps:
@@ -735,7 +735,7 @@ jobs:
     # Both publish under the `latest` dist-tag, so `npm i @outl/plugin-sdk`
     # always resolves the newest build cut from main.
     if: needs.prepare.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     # `NPM_TOKEN` lives in the `release` environment.
     environment: release
     steps:
@@ -805,7 +805,7 @@ jobs:
     # {`outl-core`, `outl-md`, `outl-exec`}); every other crate carries
     # `publish = false` in its manifest.
     if: needs.prepare.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     # `CARGO_REGISTRY_TOKEN` lives in the `release` environment.
     environment: release
     steps:

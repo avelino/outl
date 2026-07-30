@@ -66,7 +66,7 @@ concurrency:
 jobs:
   check:
     name: Linux x86_64
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     # `cargo test -p outl-desktop` links the desktop's test binaries with
     # tauri + webkit + wasmtime + iroh all in one image; since wasmtime 46
     # that link peaks past the runner's ~7 GB RAM and the OOM killer reaps

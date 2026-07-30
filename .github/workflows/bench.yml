@@ -45,7 +45,7 @@ jobs:
   bench-quick:
     # PR + push + manual + schedule all hit this job.
     name: bench (small + medium + large)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain
@@ -88,7 +88,7 @@ jobs:
     # 10k files. Only scheduled or manual — GH runners are noisy and
     # this takes minutes, not seconds. Keeps PR feedback fast.
     name: bench (xlarge, 10k files)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
@@ -131,7 +131,7 @@ jobs:
     # `bench-xlarge` above stays focused on the algorithm; this job
     # catches regressions in the surface that wraps it.
     name: bench CLI (xlarge, 10k via outl batch)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4

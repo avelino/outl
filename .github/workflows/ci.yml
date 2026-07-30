@@ -48,7 +48,7 @@ concurrency:
 jobs:
   fmt:
     name: rustfmt
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain (rustfmt)
@@ -58,7 +58,7 @@ jobs:
 
   clippy:
     name: clippy
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain (clippy)
@@ -82,7 +82,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [blacksmith-4vcpu-ubuntu-2404, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain
@@ -101,7 +101,7 @@ jobs:
 
   docs:
     name: cargo doc
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain
@@ -137,7 +137,7 @@ jobs:
   # declare.)
   sync:
     name: sync
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     env:
       # Higher than the dev default baked into the proptest files so CI
       # explores the convergence/chaos space. Bump further (2048+) when
