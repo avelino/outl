@@ -18,6 +18,26 @@ use crate::helpers::{finish_in_page, parse_node_id, storage_root_or_err};
 use crate::host::AppHost;
 use crate::state::PageView;
 
+/// Normalize a path the OS file picker handed back into a plain filesystem
+/// path `std::fs` can open.
+///
+/// On desktop the Tauri dialog returns a bare path and this is a no-op. On
+/// iOS it returns a `file://` URL (often percent-encoded), so we strip the
+/// scheme and decode `%XX` before `import_asset` reads it. Android's
+/// `content://` URIs are not filesystem paths and can't be handled here —
+/// they're left as-is and fail loudly downstream (Android is not a target
+/// platform yet).
+fn normalize_picker_path(raw: &str) -> String {
+    let Some(rest) = raw.strip_prefix("file://") else {
+        return raw.to_string();
+    };
+    // `file:///path` → `/path`; drop an empty authority if present.
+    let path = rest.strip_prefix("localhost").unwrap_or(rest);
+    percent_encoding::percent_decode_str(path)
+        .decode_utf8_lossy()
+        .into_owned()
+}
+
 /// Open an `assets/<hash>.<ext>` link in the OS default app.
 ///
 /// The URL is a workspace-relative asset link the user clicked. We
@@ -55,7 +75,8 @@ pub fn import_asset_file<S: AppHost>(
 ) -> Result<ImportedAsset, String> {
     let root = storage_root_or_err(state)?;
     let max_bytes = outl_config::load().assets.max_bytes;
-    import_asset(&root, Path::new(&source_path), max_bytes).map_err(|e| e.to_string())
+    let source = normalize_picker_path(&source_path);
+    import_asset(&root, Path::new(&source), max_bytes).map_err(|e| e.to_string())
 }
 
 /// Import `source_path` into the workspace and attach its link as a new
@@ -80,8 +101,8 @@ pub fn attach_asset<S: AppHost>(
     let root = storage_root_or_err(state)?;
     let page = parse_node_id(&page_id)?;
     let max_bytes = outl_config::load().assets.max_bytes;
-    let imported =
-        import_asset(&root, Path::new(&source_path), max_bytes).map_err(|e| e.to_string())?;
+    let source = normalize_picker_path(&source_path);
+    let imported = import_asset(&root, Path::new(&source), max_bytes).map_err(|e| e.to_string())?;
     let markdown = imported.markdown;
     finish_in_page(state, page, |ws| {
         if let Some(id) = &after_block_id {
@@ -91,4 +112,29 @@ pub fn attach_asset<S: AppHost>(
             append_block(ws, state.hlc(), Some(page), Some(&markdown)).map(|_| ())
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_picker_path;
+
+    #[test]
+    fn desktop_plain_path_is_untouched() {
+        assert_eq!(
+            normalize_picker_path("/Users/me/report.pdf"),
+            "/Users/me/report.pdf"
+        );
+    }
+
+    #[test]
+    fn ios_file_url_is_stripped_and_decoded() {
+        assert_eq!(
+            normalize_picker_path("file:///private/var/My%20File.pdf"),
+            "/private/var/My File.pdf"
+        );
+        assert_eq!(
+            normalize_picker_path("file://localhost/tmp/a.pdf"),
+            "/tmp/a.pdf"
+        );
+    }
 }

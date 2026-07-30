@@ -31,7 +31,7 @@ pub mod tag;
 pub mod view;
 pub mod wikilink;
 
-pub use asset::{asset_rel_path, hash_bytes, is_asset_link, ASSETS_DIR};
+pub use asset::{asset_rel_path, hash_bytes, is_asset_link, is_safe_asset_name, ASSETS_DIR};
 pub use atomic::write_atomic;
 pub use block_index::{BlockEntry, BlockIndex, BlockReference};
 pub use diff::{diff_to_ops, DiffPlan};

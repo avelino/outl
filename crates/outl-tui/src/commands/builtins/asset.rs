@@ -46,6 +46,14 @@ impl SlashCommand for UploadCommand {
     }
 
     fn execute(&self, app: &mut App, args: &str) -> Result<bool> {
+        // The link goes into the live buffer, so refuse (and import nothing)
+        // outside Insert mode — otherwise a `:upload` from Normal would copy
+        // an unreferenced asset while reporting it did nothing.
+        if !matches!(app.mode, Mode::Insert { .. }) {
+            app.status = "/upload only works in Insert mode".into();
+            return Ok(false);
+        }
+
         // An explicit path argument wins (the Linux prompt, or
         // `:upload <path>` from the palette on any platform); otherwise
         // open the native picker.
@@ -65,21 +73,15 @@ impl SlashCommand for UploadCommand {
 
         let max_bytes = outl_config::load().assets.max_bytes;
         match import_asset(&app.workspace_root, &source, max_bytes) {
-            Ok(asset) => insert_or_warn(app, &asset.markdown),
+            Ok(asset) => {
+                if let Mode::Insert { buffer, .. } = &mut app.mode {
+                    buffer.insert_str(&asset.markdown);
+                    app.status = format!("attached {}", asset.markdown);
+                }
+            }
             Err(e) => app.status = format!("upload failed: {e}"),
         }
         Ok(false)
-    }
-}
-
-/// Insert `markdown` at the cursor when in Insert mode; otherwise warn —
-/// like the date inserters, `/upload` only makes sense while typing.
-fn insert_or_warn(app: &mut App, markdown: &str) {
-    if let Mode::Insert { buffer, .. } = &mut app.mode {
-        buffer.insert_str(markdown);
-        app.status = format!("attached {markdown}");
-    } else {
-        app.status = format!("/upload only works in Insert mode (would insert {markdown})");
     }
 }
 

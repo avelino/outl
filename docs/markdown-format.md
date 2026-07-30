@@ -269,13 +269,14 @@ An uploaded file (PDF, image, anything) is a **standard CommonMark link**, not a
 `outl asset add`, the MCP `outl_asset_add` tool, and the desktop/mobile "Attach file" action all copy the file into `<workspace>/assets/` under its content hash and insert this link.
 So does dropping a file onto an outline row (desktop, and mobile on iPad) or pasting a dropped file's path in the TUI's Insert mode — see [clients.md → Attach / drag-and-drop file import](clients.md#attach--drag-and-drop-file-import):
 
-```
+```markdown
 - see the spec: [proposal.pdf](assets/1b2c3d...e4f5.pdf)
-- ![screenshot](assets/9a8b7c...d6e5.png)
+- the diagram: [diagram.png](assets/9a8b7c...d6e5.png)
 ```
 
 The filename stem is the hex SHA-256 of the file's bytes, so re-uploading identical content reuses the same file and link everywhere.
-An image (`.png`, `.jpg`, `.gif`, …) uses the `![]()` image form; anything else uses `[]()`.
+Every asset, images included, uses the plain `[]()` link form: clicking it opens the file in the OS default app, outl does not render assets inline yet.
+The `![]()` image-embed form is reserved for a future inline-image render.
 Clicking the link opens the file in the OS default app (TUI `g x`, desktop/mobile tap) — outl never renders the file inline.
 A file over `[assets] max_bytes` in `config.toml` (default 100 MiB) is rejected before the copy; see [Configuration](config.md).
 

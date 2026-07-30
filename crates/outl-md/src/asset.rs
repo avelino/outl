@@ -51,6 +51,32 @@ pub fn is_asset_link(url: &str) -> bool {
     trimmed.starts_with(&format!("{ASSETS_DIR}/"))
 }
 
+/// True when `name` is a single safe asset basename (`<hash>.<ext>`), with
+/// no path traversal.
+///
+/// The one owner of the "is this a plain, safe filename?" check for assets:
+/// the P2P transport (`outl-sync-iroh`) validates every name a peer sends
+/// through here, and the local link resolver relies on the same rule. A
+/// name coming off the wire is untrusted, so this rejects anything that
+/// could climb out of the `assets/` directory:
+///
+/// - empty, or containing a NUL;
+/// - either separator — `/` **and** `\` (backslash is a plain char on unix,
+///   so a Windows-style `..\..\x` from a peer would otherwise slip past the
+///   component check on a unix device);
+/// - `.` / `..` / an absolute root — anything that isn't exactly one
+///   `Component::Normal` equal to the input.
+pub fn is_safe_asset_name(name: &str) -> bool {
+    if name.is_empty() || name.contains('\0') || name.contains('/') || name.contains('\\') {
+        return false;
+    }
+    let mut comps = std::path::Path::new(name).components();
+    match (comps.next(), comps.next()) {
+        (Some(std::path::Component::Normal(c)), None) => c == name,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,5 +112,27 @@ mod tests {
         assert!(!is_asset_link("mailto:a@b.com"));
         assert!(!is_asset_link("pages/other.md"));
         assert!(!is_asset_link("my-assets/x.pdf"));
+    }
+
+    #[test]
+    fn safe_asset_names_accept_plain_basenames() {
+        assert!(is_safe_asset_name("abc123.pdf"));
+        assert!(is_safe_asset_name("deadbeef"));
+        assert!(is_safe_asset_name("0f0f.png"));
+    }
+
+    #[test]
+    fn safe_asset_names_reject_traversal_and_separators() {
+        for bad in [
+            "",
+            ".",
+            "..",
+            "a/b.pdf",
+            "..\\..\\x", // Windows-style separator
+            "/etc/passwd",
+            "a\0b.pdf",
+        ] {
+            assert!(!is_safe_asset_name(bad), "must reject {bad:?}");
+        }
     }
 }

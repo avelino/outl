@@ -339,6 +339,7 @@ The bytes are not workspace state and never enter the op log; only the link does
 | Content-hash an uploaded file's bytes (hex SHA-256, used as the on-disk filename stem so identical uploads dedupe to one file) | `outl_md::hash_bytes` | `crates/outl-md/src/asset.rs` |
 | Build the workspace-relative link target for a hash + extension | `outl_md::asset_rel_path` | `crates/outl-md/src/asset.rs` |
 | Does a link target point at a workspace asset rather than an external URL? | `outl_md::is_asset_link` | `crates/outl-md/src/asset.rs` |
+| Is `name` a safe asset basename (`<hash>.<ext>`, no traversal)? The one owner of the anti-traversal check — the P2P transport validates every peer-sent name through it | `outl_md::is_safe_asset_name` | `crates/outl-md/src/asset.rs` |
 | Copy an uploaded file into `<root>/assets/<hash>.<ext>` and return the ready-to-insert markdown link (content-addressed, atomic tmp+rename, size-capped by `[assets] max_bytes` from `outl-config`) | `outl_actions::import_asset` → `ImportedAsset` | `crates/outl-actions/src/asset.rs` |
 | Resolve a `[name](assets/…)` link back to an on-disk path for "open outside outl" handlers (rejects traversal / external schemes via `ActionError::InvalidAssetPath`) | `outl_actions::resolve_asset_path` | `crates/outl-actions/src/asset.rs` |
 

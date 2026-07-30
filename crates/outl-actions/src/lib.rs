@@ -79,7 +79,7 @@ mod text;
 pub mod todo;
 pub mod tree;
 
-pub use asset::{assets_dir, import_asset, link_markdown, resolve_asset_path, ImportedAsset};
+pub use asset::{assets_dir, import_asset, resolve_asset_path, ImportedAsset};
 pub use backlinks::{
     backlinks_for_page, backlinks_for_target, extract_refs, Backlink, BacklinkCrumb,
 };
