@@ -96,10 +96,9 @@ pub fn add_asset(
     target: &AssetTarget,
     max_bytes: u64,
 ) -> Result<Value, ApiError> {
-    // Copy + content-hash + link generation is entirely upstream; this
-    // never touches the op log (an asset's bytes are not workspace state).
-    let imported = import_asset(&ctx.root, source, max_bytes).map_err(map_import_error)?;
-
+    // Resolve the target page FIRST, before importing: a missing `--page`
+    // must fail without leaving an unreferenced blob on disk (which would
+    // waste storage and replicate to peers).
     let (page_id, target_json) = match target {
         AssetTarget::Daily => {
             let id = open_today(&mut ctx.workspace, &ctx.hlc).map_err(ApiError::internal)?;
@@ -115,6 +114,10 @@ pub fn add_asset(
             (id, json!({ "kind": "page", "page": slug }))
         }
     };
+
+    // Copy + content-hash + link generation is entirely upstream; this
+    // never touches the op log (an asset's bytes are not workspace state).
+    let imported = import_asset(&ctx.root, source, max_bytes).map_err(map_import_error)?;
 
     // The link is ordinary workspace state — it goes through the op log
     // as a plain block append, never a hand-written `.md` edit.

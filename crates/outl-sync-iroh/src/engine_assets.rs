@@ -42,6 +42,7 @@ use iroh::protocol::{AcceptError, ProtocolHandler};
 use tracing::{debug, info, warn};
 
 use outl_actions::{assets_dir, SyncProgress};
+use outl_md::asset::is_safe_asset_name;
 
 use crate::engine_sync::{read_frame, read_frame_reporting};
 use crate::protocol::{
@@ -57,30 +58,6 @@ const ASSET_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Monotonic sequence for temp-file names, so two concurrent pulls of the same
 /// asset (a pair + a catch-up tick landing together) never share a tmp path.
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
-
-/// True when `name` is a safe asset basename to read/write: a single plain path
-/// component (no `/`, no `\`, no `..`, no `.`, non-empty, no interior NUL).
-///
-/// Anti-traversal guard on BOTH sides — a `.md` (hence a manifest name derived
-/// from a peer's disk) arrives from an untrusted peer, so a crafted
-/// `../../etc/passwd` must never reach the filesystem. Same shape as
-/// `outl_actions::resolve_asset_path`'s component check.
-fn is_safe_asset_name(name: &str) -> bool {
-    // Reject NUL and BOTH separators explicitly: `\` is a plain char (not a path
-    // separator) on unix, so a Windows-style `..\..\x` from a peer would slip
-    // through the component check below on a unix device.
-    if name.is_empty() || name.contains('\0') || name.contains('/') || name.contains('\\') {
-        return false;
-    }
-    let path = Path::new(name);
-    let mut comps = path.components();
-    match (comps.next(), comps.next()) {
-        // Exactly one component, and it is a plain normal name equal to the
-        // input (rejects `.`, `..`, absolute roots, and any separator).
-        (Some(std::path::Component::Normal(c)), None) => c == name,
-        _ => false,
-    }
-}
 
 /// The content hash a file named `<hash>.<ext>` (or bare `<hash>`) claims, as the
 /// stem before the first `.`. A sha-256 hex hash carries no dot, so this always
@@ -373,29 +350,8 @@ pub(crate) async fn pull_assets_from_peer(
 mod tests {
     use super::*;
 
-    #[test]
-    fn safe_asset_names_accept_plain_basenames() {
-        assert!(is_safe_asset_name("abc123.pdf"));
-        assert!(is_safe_asset_name("deadbeef"));
-        assert!(is_safe_asset_name("0f0f.png"));
-    }
-
-    #[test]
-    fn safe_asset_names_reject_traversal_and_separators() {
-        for bad in [
-            "",
-            ".",
-            "..",
-            "../x",
-            "a/b.pdf",
-            "/etc/passwd",
-            "assets/x.pdf",
-            "a\0b",
-            "..\\x",
-        ] {
-            assert!(!is_safe_asset_name(bad), "must reject {bad:?}");
-        }
-    }
+    // `is_safe_asset_name` is owned + tested in `outl_md::asset`; this crate
+    // consumes it as the single anti-traversal validator.
 
     #[test]
     fn claimed_hash_isolates_the_stem() {

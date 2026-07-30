@@ -18,11 +18,16 @@
 //! - [`resolve_asset_path`] maps a link back to an on-disk path for the
 //!   "open outside outl" handlers, rejecting anything outside `assets/`.
 
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use outl_md::asset::{asset_rel_path, hash_bytes, is_asset_link, ASSETS_DIR};
 
 use crate::error::ActionError;
+
+/// Per-process counter for unique import temp file names.
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// The `assets/` directory inside a workspace `root`.
 pub fn assets_dir(root: &Path) -> PathBuf {
@@ -58,20 +63,39 @@ pub fn import_asset(
     source: &Path,
     max_bytes: u64,
 ) -> Result<ImportedAsset, ActionError> {
-    let bytes = std::fs::read(source)?;
+    // Cap the read so an oversized file can't allocate its whole length
+    // before we reject it (`fs::read` would read the entire blob first).
+    // Read one byte past the limit to tell "exactly at the cap" from "over".
+    let read_limit = if max_bytes == 0 {
+        u64::MAX
+    } else {
+        max_bytes.saturating_add(1)
+    };
+    let mut bytes = Vec::new();
+    std::fs::File::open(source)?
+        .take(read_limit)
+        .read_to_end(&mut bytes)?;
     if max_bytes > 0 && bytes.len() as u64 > max_bytes {
         return Err(ActionError::AssetTooLarge {
+            // We stopped reading at the cap, so we can't report the true
+            // size; `limit + 1` marks "over the limit" honestly.
             size: bytes.len() as u64,
             limit: max_bytes,
         });
     }
 
     let hash = hash_bytes(&bytes);
-    let ext = source
+    // Keep only an alphanumeric extension: it lands in the link target
+    // unescaped, so a filename like `report.pd)f` must not smuggle `)` into
+    // `(assets/…)` and break the link.
+    let ext: String = source
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
     let rel_path = asset_rel_path(&hash, &ext);
 
     let dir = assets_dir(root);
@@ -79,12 +103,27 @@ pub fn import_asset(
     let dest = root.join(&rel_path);
     // Content-addressed: identical bytes already on disk need no rewrite.
     if !dest.exists() {
-        // Build the tmp name from the basename directly — `with_extension`
-        // mangles a hash that has no extension (empty `ext`).
-        let file_name = dest.file_name().and_then(|n| n.to_str()).unwrap_or(&hash);
-        let tmp = dir.join(format!("{file_name}.tmp"));
+        // Unique hidden temp so two concurrent imports of the same content
+        // can't rename each other's half-written file. iCloud skips dotted
+        // paths, so a temp leaked by a crash never syncs as garbage.
+        let tmp = dir.join(format!(
+            ".import-{}-{}.tmp",
+            std::process::id(),
+            TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::write(&tmp, &bytes)?;
-        std::fs::rename(&tmp, &dest)?;
+        match std::fs::rename(&tmp, &dest) {
+            Ok(()) => {}
+            // Another import won the race and created the same content-
+            // addressed file; drop our temp and treat it as done.
+            Err(_) if dest.exists() => {
+                let _ = std::fs::remove_file(&tmp);
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(e.into());
+            }
+        }
     }
 
     let display_name = source
@@ -93,7 +132,12 @@ pub fn import_asset(
         .unwrap_or(&rel_path)
         .to_string();
     let is_image = outl_md::wikilink::is_image_target(&rel_path);
-    let markdown = link_markdown(&display_name, &rel_path, is_image);
+    // Always a plain link: clicking opens the file in the OS app, outl does
+    // not render assets inline yet (`![]` image embeds are a future step).
+    // The label is escaped so a filename with `]` / `(` / `\` can't break
+    // the link or inject markdown; `rel_path` is `assets/<hex>.<ext>` with
+    // an alphanumeric ext, so the target needs no escaping.
+    let markdown = format!("[{}]({})", escape_link_label(&display_name), rel_path);
 
     Ok(ImportedAsset {
         rel_path,
@@ -103,14 +147,23 @@ pub fn import_asset(
     })
 }
 
-/// Build the markdown link for an asset: `![name](rel)` when it's an
-/// image (so clients that render images inline can), else `[name](rel)`.
-pub fn link_markdown(display_name: &str, rel_path: &str, is_image: bool) -> String {
-    if is_image {
-        format!("![{display_name}]({rel_path})")
-    } else {
-        format!("[{display_name}]({rel_path})")
+/// Escape the characters that would break a markdown link label or let a
+/// crafted filename inject markdown: `\`, `[`, `]` are backslash-escaped;
+/// newlines / control characters are flattened to a space or dropped.
+fn escape_link_label(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        match c {
+            '\\' | '[' | ']' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '\n' | '\r' | '\t' => out.push(' '),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
     }
+    out
 }
 
 /// Resolve a `[name](assets/...)` link target to an absolute on-disk
@@ -205,13 +258,37 @@ mod tests {
     }
 
     #[test]
-    fn image_uses_embed_markdown() {
+    fn image_uses_plain_link_not_embed() {
         let ws = tempdir().unwrap();
         let src = tempdir().unwrap();
         let file = write_source(src.path(), "pic.png", b"\x89PNG fake");
         let a = import_asset(ws.path(), &file, 0).unwrap();
         assert!(a.is_image);
-        assert!(a.markdown.starts_with("!["));
+        // Assets never render inline yet — even images get a plain link so
+        // clicking opens them in the OS app (`![]` is a future step).
+        assert!(a.markdown.starts_with("[pic.png]("));
+        assert!(!a.markdown.starts_with("!"));
+    }
+
+    #[test]
+    fn filename_special_chars_are_escaped_in_the_label() {
+        let ws = tempdir().unwrap();
+        let src = tempdir().unwrap();
+        // Brackets in the name would break the `[label]` without escaping.
+        let file = write_source(src.path(), "a]b[c.pdf", b"bytes");
+        let a = import_asset(ws.path(), &file, 0).unwrap();
+        assert!(a.markdown.starts_with(r"[a\]b\[c.pdf](assets/"));
+    }
+
+    #[test]
+    fn weird_extension_is_sanitised_to_alnum() {
+        let ws = tempdir().unwrap();
+        let src = tempdir().unwrap();
+        // `)` in the extension would break `(assets/…)`.
+        let file = write_source(src.path(), "report.pd)f", b"bytes");
+        let a = import_asset(ws.path(), &file, 0).unwrap();
+        assert!(a.rel_path.ends_with(".pdf"));
+        assert!(!a.rel_path.contains(')'));
     }
 
     #[test]
@@ -220,13 +297,9 @@ mod tests {
         let src = tempdir().unwrap();
         let file = write_source(src.path(), "big.bin", &[0u8; 100]);
         let err = import_asset(ws.path(), &file, 10).unwrap_err();
-        assert!(matches!(
-            err,
-            ActionError::AssetTooLarge {
-                size: 100,
-                limit: 10
-            }
-        ));
+        // The read stops at the cap, so `size` is `limit + 1` (over), not
+        // the true 100 — we deliberately don't read the whole blob.
+        assert!(matches!(err, ActionError::AssetTooLarge { limit: 10, .. }));
         // Nothing was copied.
         assert!(
             !assets_dir(ws.path()).exists()

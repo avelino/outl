@@ -116,7 +116,7 @@ If the field **must converge between devices**, it doesn't belong in TOML at all
 | `sync.transport` / `sync.relay_url` | TUI peer-sync wiring | `crates/outl-tui/src/actions/lifecycle/peer_sync.rs::wire_sync_transport` (config-driven; replaces the `OUTL_IROH=1` env gate) |
 | `tui.mouse_capture` | TUI only | `crates/outl-tui/src/runtime.rs` (conditionally emits `EnableMouseCapture` and arms the `Event::Mouse` branch) |
 | `display.backlinks_order` | TUI at boot (`runtime.rs`, applied post-construction); GUI clients on every `build_page_view` call | `crates/outl-tui/src/runtime.rs`, `crates/outl-tauri-shared/src/helpers.rs::build_page_view` (desktop + mobile share this reader) |
-| `assets.max_bytes` | Every file-import path: CLI `outl asset add`, MCP `outl_asset_add`, desktop/mobile "Attach file" | `crates/outl-cli/src/cmd/asset.rs`, `crates/outl-tauri-shared/src/commands/asset.rs` (all route through `outl_actions::asset::import_asset(root, source, max_bytes)`) |
+| `assets.max_bytes` | Every file-import path: CLI `outl asset add`, MCP `outl_asset_add`, desktop/mobile "Attach file" + drag-drop, TUI `/upload` + paste-a-path | `crates/outl-cli/src/cmd/asset.rs`, `crates/outl-tauri-shared/src/commands/asset.rs`, `crates/outl-tui/src/commands/builtins/asset.rs` + `crates/outl-tui/src/actions/paste.rs` (all route through `outl_actions::asset::import_asset(root, source, max_bytes)`) |
 
 Update this table whenever a new reader appears.
 

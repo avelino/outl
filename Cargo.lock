@@ -6437,6 +6437,7 @@ dependencies = [
  "outl-shortcuts",
  "outl-sync-iroh",
  "parking_lot",
+ "percent-encoding",
  "serde",
  "serde_json",
  "tauri",

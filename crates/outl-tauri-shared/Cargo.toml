@@ -35,6 +35,9 @@ walkdir = "2"
 # Opens an asset in the OS default app (Preview, image viewer). Same
 # crate + version the TUI uses in `actions/exec.rs`.
 open = "5"
+# Decode the iOS document picker's `file://` percent-encoded paths (already
+# in the tree via tauri). Beats a hand-rolled `%XX` decoder on untrusted input.
+percent-encoding = "2"
 
 [dev-dependencies]
 tempfile = { workspace = true }

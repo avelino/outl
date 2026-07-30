@@ -327,6 +327,24 @@ mod tests {
     }
 
     #[test]
+    fn partial_assets_section_keeps_other_defaults() {
+        // A config with ONLY [assets] populated must leave every other
+        // section at its default (the schema-change checklist).
+        let c: Config = toml::from_str("[assets]\nmax_bytes = 5000\n").unwrap();
+        assert_eq!(c.assets.max_bytes, 5000);
+        assert_eq!(c.theme.preset, "outl");
+        assert!(c.editor.vim_mode);
+        assert_eq!(c.sync.transport, SyncTransportKind::Iroh);
+        assert_eq!(c.display.backlinks_order, BacklinksOrder::Newest);
+    }
+
+    #[test]
+    fn missing_assets_section_defaults_to_100_mib() {
+        let c: Config = toml::from_str("[theme]\npreset = \"nord\"\n").unwrap();
+        assert_eq!(c.assets.max_bytes, 100 * 1024 * 1024);
+    }
+
+    #[test]
     fn calendar_section_parses_timezone() {
         let c: Config = toml::from_str("[calendar]\ntimezone = \"Europe/London\"\n").unwrap();
         assert_eq!(c.calendar.timezone.as_deref(), Some("Europe/London"));
