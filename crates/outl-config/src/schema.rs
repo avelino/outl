@@ -31,6 +31,7 @@ pub struct Config {
     pub snapshot: SnapshotCfg,
     pub storage: StorageCfg,
     pub display: DisplayCfg,
+    pub assets: AssetsCfg,
 }
 
 /// Direction of the backlinks ("Linked from") list.
@@ -263,6 +264,30 @@ pub struct StorageCfg {
 impl Default for StorageCfg {
     fn default() -> Self {
         Self { lru_cap: 20_000 }
+    }
+}
+
+/// Assets section — policy for uploaded files (`assets/<hash>.<ext>`).
+///
+/// The directory itself is fixed at `<workspace>/assets/` (part of the
+/// workspace layout, not configurable), so the only policy here is the
+/// upper bound on a single upload. A file over the cap is rejected
+/// before it is copied, so a fat-fingered drag of a multi-GB file can't
+/// balloon the workspace (and, on the P2P transport, every paired
+/// device).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AssetsCfg {
+    /// Maximum size, in bytes, of a single uploaded file. `0` means
+    /// "unbounded". Default is 100 MiB.
+    pub max_bytes: u64,
+}
+
+impl Default for AssetsCfg {
+    fn default() -> Self {
+        Self {
+            max_bytes: 100 * 1024 * 1024,
+        }
     }
 }
 

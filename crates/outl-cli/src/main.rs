@@ -152,6 +152,11 @@ enum Command {
         #[arg(long)]
         preserve_timestamps: bool,
     },
+    /// Import a file (PDF, image, …) and link it into the workspace.
+    Asset {
+        #[command(subcommand)]
+        sub: cmd::asset::AssetCommand,
+    },
     /// Page-level operations.
     Page {
         #[command(subcommand)]
@@ -325,6 +330,10 @@ fn main() -> Result<()> {
                 preserve_timestamps,
             },
         ),
+        Some(Command::Asset { sub }) => {
+            let p = resolve_path(cli.workspace.as_ref(), None)?;
+            std::process::exit(cmd::asset::run(&sub, &p));
+        }
         Some(Command::Page { sub }) => {
             let p = resolve_path(cli.workspace.as_ref(), None)?;
             std::process::exit(cmd::page::run(&sub, &p));

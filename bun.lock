@@ -63,6 +63,7 @@
       "dependencies": {
         "@tauri-apps/api": "catalog:",
         "@tauri-apps/plugin-barcode-scanner": "^2",
+        "@tauri-apps/plugin-dialog": "^2.7.1",
         "@tauri-apps/plugin-log": "^2",
         "@tauri-apps/plugin-opener": "catalog:",
         "@tauri-apps/plugin-os": "catalog:",
@@ -218,7 +219,7 @@
     },
     "plugin-sdk": {
       "name": "@outl/plugin-sdk",
-      "version": "1.0.0",
+      "version": "0.8.0-beta.130",
     },
   },
   "catalog": {

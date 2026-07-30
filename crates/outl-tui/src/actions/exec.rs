@@ -169,13 +169,24 @@ impl App {
         }
     }
 
-    /// Open an external URL in the system's default handler (browser,
-    /// mail client). Scheme-guarded to mirror the desktop frontend's
-    /// `openExternalUrl` (`outl-frontend-shared/src/api/commands.ts`):
-    /// only `http` / `https` / `mailto` are allowed; `file:`,
-    /// `javascript:`, and anything else are refused so a crafted link in
-    /// a synced note can't launch an arbitrary handler.
+    /// Open a markdown link's target in the system's default handler.
+    ///
+    /// Two kinds of target:
+    /// - A **workspace asset** (`assets/<hash>.<ext>`) resolves to a file
+    ///   inside `<workspace>/assets/` via
+    ///   [`outl_actions::resolve_asset_path`] (which rejects traversal /
+    ///   external schemes) and opens it in the OS default app — a PDF in
+    ///   Preview, an image in the viewer. outl renders nothing itself.
+    /// - An **external URL** is scheme-guarded to `http` / `https` /
+    ///   `mailto`, mirroring the desktop frontend's `openExternalUrl`
+    ///   (`outl-frontend-shared/src/api/commands.ts`): `file:`,
+    ///   `javascript:`, and anything else are refused so a crafted link
+    ///   in a synced note can't launch an arbitrary handler.
     pub(crate) fn open_external_url(&mut self, url: &str) {
+        if outl_md::is_asset_link(url) {
+            self.open_asset(url);
+            return;
+        }
         if !is_safe_external_url(url) {
             self.status = format!("refused to open non-web link: {url}");
             return;
@@ -183,6 +194,23 @@ impl App {
         match open::that(url) {
             Ok(()) => self.status = format!("opened {url}"),
             Err(e) => self.show_error("open failed", format!("{e}")),
+        }
+    }
+
+    /// Resolve a `[name](assets/…)` link against the workspace and open
+    /// the file outside outl. A link that resolves to no file on this
+    /// device (the asset hasn't synced yet) surfaces a friendly status
+    /// line rather than an error modal.
+    fn open_asset(&mut self, url: &str) {
+        match outl_actions::resolve_asset_path(&self.workspace_root, url) {
+            Ok(Some(path)) => match open::that(&path) {
+                Ok(()) => self.status = format!("opened {}", path.display()),
+                Err(e) => self.show_error("open failed", format!("{e}")),
+            },
+            Ok(None) => {
+                self.status = format!("asset not found on this device yet: {url}");
+            }
+            Err(e) => self.status = format!("refused to open asset: {e}"),
         }
     }
 

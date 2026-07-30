@@ -59,6 +59,8 @@ function phaseLabel(p: SyncProgress, peers: PeerDto[]): string {
       return `Connecting to ${who}…`;
     case "snapshot":
       return `Downloading snapshot from ${who}`;
+    case "asset":
+      return `Downloading file from ${who}`;
     case "received-ops":
       return `Receiving ${fmtCount(p.count)} changes from ${who}`;
     case "pushed-ops":
@@ -106,8 +108,8 @@ export function SyncProgressView(props: SyncProgressViewProps): JSX.Element {
               </span>
               <Show
                 when={
-                  p().phase === "snapshot"
-                    ? (p() as Extract<SyncProgress, { phase: "snapshot" }>)
+                  p().phase === "snapshot" || p().phase === "asset"
+                    ? (p() as Extract<SyncProgress, { phase: "snapshot" | "asset" }>)
                     : undefined
                 }
               >

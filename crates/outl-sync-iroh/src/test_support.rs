@@ -242,6 +242,56 @@ pub async fn run_snapshot_pull(
     .await
 }
 
+/// Mount the production `AssetProtocolHandler` on a `Router` and return it.
+///
+/// The responder serves `<workspace_root>/assets/` (the manifest + per-name
+/// bytes) to any dialer on [`crate::ASSET_ALPN`] — an empty manifest when the
+/// dir is absent. Keep the returned `Router` alive for as long as it must accept
+/// connections. Lets a loopback test exercise the real binary-asset transfer
+/// (server side) over real QUIC.
+pub fn spawn_asset_responder(endpoint: iroh::Endpoint, workspace_root: PathBuf) -> Router {
+    Router::builder(endpoint)
+        .accept(
+            crate::protocol::ASSET_ALPN,
+            crate::engine_assets::AssetProtocolHandler { workspace_root },
+        )
+        .spawn()
+}
+
+/// Write a content-addressed asset (`<root>/assets/<hash>.<ext>`) exactly like
+/// `outl_actions::import_asset` would, and return its basename.
+///
+/// Lets a loopback test seed a peer's `assets/` without pulling `outl-actions` /
+/// `outl-md` into the test crate's own dependency set — the filename IS the
+/// sha-256 of `bytes`, so the puller's content-hash check passes.
+pub fn write_test_asset(workspace_root: &Path, bytes: &[u8], ext: &str) -> String {
+    let dir = outl_actions::assets_dir(workspace_root);
+    std::fs::create_dir_all(&dir).expect("create assets dir");
+    let name = format!("{}.{ext}", outl_md::asset::hash_bytes(bytes));
+    std::fs::write(dir.join(&name), bytes).expect("write test asset");
+    name
+}
+
+/// Run the production asset pull (initiator side) against `peer` — the exact call
+/// `drain_pair_completions` / the catch-up loop make after the delta-sync.
+///
+/// Dials `peer` on [`crate::ASSET_ALPN`], negotiates the manifest, and writes
+/// every asset the peer holds that `workspace_root/assets/` lacks (atomically,
+/// content-hash-verified). Returns how many assets were written.
+pub async fn run_asset_pull(
+    endpoint: &iroh::Endpoint,
+    peer: impl Into<iroh::EndpointAddr>,
+    workspace_root: &Path,
+) -> Result<usize> {
+    crate::engine_assets::pull_assets_from_peer(
+        endpoint,
+        peer.into(),
+        workspace_root,
+        &crate::progress::ProgressSink::default(),
+    )
+    .await
+}
+
 /// Run the production `delta_sync` initiator against `peer` (a full
 /// [`iroh::EndpointAddr`] from the responder's `endpoint.addr()`).
 pub async fn run_delta_sync(
@@ -314,6 +364,10 @@ pub async fn run_catch_up_loop<F>(
         None,
         wid_changed,
         crate::progress::ProgressSink::default(),
+        // Tests assert op convergence over loopback responders that mount only
+        // SYNC_ALPN; don't fire the extra asset-ALPN pull (asset transfer has its
+        // own dedicated regression harness below).
+        false,
     )
     .await
 }

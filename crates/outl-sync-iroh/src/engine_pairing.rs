@@ -359,7 +359,7 @@ pub(crate) async fn drain_pair_completions(
         // its own `peer_ready_tx` so the reload adopts the cached snapshot.
         match crate::engine_snapshot::pull_snapshot_from_peer(
             &endpoint,
-            addr,
+            addr.clone(),
             &workspace_root,
             &peer_ready_tx,
             &progress,
@@ -372,6 +372,25 @@ pub(crate) async fn drain_pair_completions(
                 "pairing: snapshot pull from {} failed: {e}",
                 nid.fmt_short()
             ),
+        }
+
+        // Asset sync: pull the peer's binary assets (uploaded PDFs / images) that
+        // never entered the op log. Another separate connection on `ASSET_ALPN`,
+        // still sequential inside this peer's in-flight guard. Best-effort: an
+        // absent / unreadable / hash-mismatched asset is skipped — a link to a
+        // not-yet-transferred asset just renders dead until the next pull. See
+        // `crate::engine_assets`.
+        match crate::engine_assets::pull_assets_from_peer(
+            &endpoint,
+            addr,
+            &workspace_root,
+            &progress,
+        )
+        .await
+        {
+            Ok(n) if n > 0 => info!("pairing: pulled {n} assets from {}", nid.fmt_short()),
+            Ok(_) => {}
+            Err(e) => warn!("pairing: asset pull from {} failed: {e}", nid.fmt_short()),
         }
     }
 }

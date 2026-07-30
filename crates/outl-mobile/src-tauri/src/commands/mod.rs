@@ -13,6 +13,7 @@
 //! `tauri::generate_handler!` in `lib.rs` doesn't have to know about
 //! the file split.
 
+pub(crate) mod asset;
 pub(crate) mod block;
 pub(crate) mod exec;
 pub(crate) mod page;
@@ -21,6 +22,7 @@ pub(crate) mod plugin;
 pub(crate) mod template;
 pub(crate) mod workspace;
 
+pub(crate) use asset::*;
 pub(crate) use block::*;
 pub(crate) use page::*;
 pub(crate) use peers::*;

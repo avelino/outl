@@ -1069,3 +1069,109 @@ async fn snapshot_pull_absent_is_harmless() {
         "op-sync must still work with the snapshot ALPN mounted on the same endpoint"
     );
 }
+
+// ── Phase 2: asset sync (binary uploaded-file transfer over iroh) ─────────────
+
+/// Asset sync — a device pulls a peer's content-addressed binary assets
+/// (uploaded PDFs / images) over `ASSET_ALPN`, receiving only the files it
+/// lacks (the filename IS the content hash, so a name it already holds is
+/// skipped). Mirrors `snapshot_transfers_from_peer_on_pair` for the multi-blob,
+/// manifest-negotiated asset protocol.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn assets_transfer_from_peer() {
+    let dir_host = tempfile::tempdir().expect("host tempdir");
+    let dir_joiner = tempfile::tempdir().expect("joiner tempdir");
+
+    // Host holds two content-addressed assets.
+    let pdf = b"%PDF-1.7 fake pdf bytes for the asset transfer regression test";
+    let png = b"\x89PNG fake image bytes for the asset transfer regression test";
+    let pdf_name = test_support::write_test_asset(dir_host.path(), pdf, "pdf");
+    let png_name = test_support::write_test_asset(dir_host.path(), png, "png");
+
+    // The joiner ALREADY has the PDF (identical content → identical name), so the
+    // diff must skip it and transfer only the PNG.
+    let joiner_pdf_name = test_support::write_test_asset(dir_joiner.path(), pdf, "pdf");
+    assert_eq!(
+        joiner_pdf_name, pdf_name,
+        "identical content must yield an identical content-addressed name"
+    );
+
+    let id_host = fresh_identity(dir_host.path(), "host");
+    let id_joiner = fresh_identity(dir_joiner.path(), "joiner");
+
+    let ep_host = test_support::bind_sync_endpoint(&id_host)
+        .await
+        .expect("bind host endpoint");
+    let host_addr = ep_host.addr();
+    let _router_host = test_support::spawn_asset_responder(ep_host, dir_host.path().to_path_buf());
+
+    let ep_joiner = test_support::bind_sync_endpoint(&id_joiner)
+        .await
+        .expect("bind joiner endpoint");
+    let written = tokio::time::timeout(
+        STEP_TIMEOUT,
+        test_support::run_asset_pull(&ep_joiner, host_addr, dir_joiner.path()),
+    )
+    .await
+    .expect("asset pull timed out")
+    .expect("asset pull failed");
+    assert_eq!(
+        written, 1,
+        "only the one asset the joiner lacked (the PNG) should transfer"
+    );
+
+    // The joiner now holds the PNG byte-identical, and still holds the PDF.
+    let joiner_assets = dir_joiner.path().join("assets");
+    let joiner_png = joiner_assets.join(&png_name);
+    assert!(
+        wait_until(STEP_TIMEOUT, || joiner_png.exists()),
+        "the joiner must end up with the peer's PNG asset on disk"
+    );
+    assert_eq!(
+        std::fs::read(&joiner_png).expect("read joiner png"),
+        png,
+        "the pulled asset must be byte-identical to the peer's"
+    );
+    assert!(
+        joiner_assets.join(&pdf_name).exists(),
+        "the pre-existing PDF must be left untouched"
+    );
+}
+
+/// Asset sync — pulling from a peer with no assets is harmless: the peer replies
+/// with an empty manifest, the joiner writes nothing and does not error, and no
+/// `assets/` dir is conjured on the joiner.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn asset_pull_from_peer_without_assets_is_harmless() {
+    let dir_host = tempfile::tempdir().expect("host tempdir");
+    let dir_joiner = tempfile::tempdir().expect("joiner tempdir");
+
+    let id_host = fresh_identity(dir_host.path(), "host");
+    let id_joiner = fresh_identity(dir_joiner.path(), "joiner");
+
+    // Host never created an assets/ dir.
+    let ep_host = test_support::bind_sync_endpoint(&id_host)
+        .await
+        .expect("bind host endpoint");
+    let host_addr = ep_host.addr();
+    let _router_host = test_support::spawn_asset_responder(ep_host, dir_host.path().to_path_buf());
+
+    let ep_joiner = test_support::bind_sync_endpoint(&id_joiner)
+        .await
+        .expect("bind joiner endpoint");
+    let written = tokio::time::timeout(
+        STEP_TIMEOUT,
+        test_support::run_asset_pull(&ep_joiner, host_addr, dir_joiner.path()),
+    )
+    .await
+    .expect("asset pull timed out")
+    .expect("an absent-assets pull must not error");
+    assert_eq!(written, 0, "nothing transfers when the peer has no assets");
+
+    // An empty manifest must not conjure an assets dir with content.
+    let joiner_assets = dir_joiner.path().join("assets");
+    let empty = std::fs::read_dir(&joiner_assets)
+        .map(|mut it| it.next().is_none())
+        .unwrap_or(true);
+    assert!(empty, "an empty manifest writes nothing on the joiner");
+}

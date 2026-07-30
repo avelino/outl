@@ -263,6 +263,25 @@ Both the winner and the loser stay resolvable through their own (distinct) handl
 The on-disk sidecar still records the deterministic 6-char handle — the divergence lives in memory until a future reconcile rewrites it.
 Workspaces that ever expanded a handle to 7+ characters keep working forever because lookup goes through the in-memory handle, not the literal sidecar field.
 
+#### Asset links (`[name](assets/<hash>.<ext>)`)
+
+An uploaded file (PDF, image, anything) is a **standard CommonMark link**, not a new token.
+`outl asset add`, the MCP `outl_asset_add` tool, and the desktop/mobile "Attach file" action all copy the file into `<workspace>/assets/` under its content hash and insert this link.
+So does dropping a file onto an outline row (desktop, and mobile on iPad) or pasting a dropped file's path in the TUI's Insert mode — see [clients.md → Attach / drag-and-drop file import](clients.md#attach--drag-and-drop-file-import):
+
+```
+- see the spec: [proposal.pdf](assets/1b2c3d...e4f5.pdf)
+- ![screenshot](assets/9a8b7c...d6e5.png)
+```
+
+The filename stem is the hex SHA-256 of the file's bytes, so re-uploading identical content reuses the same file and link everywhere.
+An image (`.png`, `.jpg`, `.gif`, …) uses the `![]()` image form; anything else uses `[]()`.
+Clicking the link opens the file in the OS default app (TUI `g x`, desktop/mobile tap) — outl never renders the file inline.
+A file over `[assets] max_bytes` in `config.toml` (default 100 MiB) is rejected before the copy; see [Configuration](config.md).
+
+Asset bytes are **not** workspace state and never enter the op log — only the link text does, as an ordinary block edit.
+The file itself replicates like the `.md` projections: the file transport (iCloud/shared filesystem) carries it for free, and the iroh transport ships it over a dedicated `outl-asset/1` stream (see [Sync](sync.md)).
+
 #### Emoji shortcodes (`:tada:`)
 
 `:shortcode:` is the GitHub / Slack / Discord / Logseq convention.

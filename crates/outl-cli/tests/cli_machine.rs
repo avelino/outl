@@ -315,6 +315,75 @@ fn batch_stops_on_first_error_and_persists_prefix() {
 }
 
 #[test]
+fn asset_add_daily_imports_file_and_links_it() {
+    let ws = init_workspace();
+
+    // Fixture file living outside the workspace.
+    let src = TempDir::new().unwrap();
+    let file = src.path().join("report.pdf");
+    std::fs::write(&file, b"%PDF-1.7 fake bytes").unwrap();
+
+    let env = ok(outl()
+        .args(["--workspace"])
+        .arg(ws.path())
+        .arg("asset")
+        .arg("add")
+        .arg(&file)
+        .arg("--json")
+        .output()
+        .unwrap());
+    assert_eq!(env["ok"], true);
+    let rel = env["data"]["rel_path"].as_str().unwrap();
+    assert!(
+        rel.starts_with("assets/"),
+        "rel_path under assets/, got {rel}"
+    );
+    assert!(rel.ends_with(".pdf"), "keeps the extension, got {rel}");
+    assert_eq!(env["data"]["target"]["kind"], "daily");
+    let md = env["data"]["markdown"].as_str().unwrap();
+    assert!(md.contains(rel), "markdown must link the asset, got {md}");
+
+    // The file was copied into the workspace's assets/ dir.
+    assert!(
+        ws.path().join(rel).exists(),
+        "asset must be copied into the workspace"
+    );
+
+    // The link block was appended to today's journal (op log → .md).
+    let today = ok(outl()
+        .args(["--workspace"])
+        .arg(ws.path())
+        .args(["daily", "today", "--json"])
+        .output()
+        .unwrap());
+    assert!(
+        today["data"]["md"].as_str().unwrap().contains(rel),
+        "today's journal md must contain the asset link, got {today}"
+    );
+}
+
+#[test]
+fn asset_add_page_and_daily_are_mutually_exclusive() {
+    let ws = init_workspace();
+    let src = TempDir::new().unwrap();
+    let file = src.path().join("pic.png");
+    std::fs::write(&file, b"\x89PNG fake").unwrap();
+
+    let out = outl()
+        .args(["--workspace"])
+        .arg(ws.path())
+        .arg("asset")
+        .arg("add")
+        .arg(&file)
+        .args(["--page", "ideas", "--daily", "--json"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "--page + --daily must error");
+    let env: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(env["error"]["code"], "INVALID_ARG");
+}
+
+#[test]
 fn workspace_info_returns_summary() {
     let ws = init_workspace();
     let info = ok(outl()

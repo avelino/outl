@@ -10,6 +10,11 @@ publish = false
 [dependencies]
 outl-actions = { workspace = true }
 outl-core = { workspace = true }
+# `outl_md::asset::hash_bytes` re-computes an asset's sha-256 to verify the
+# pulled bytes match the content-addressed filename (defense in depth against a
+# corrupt/malicious peer). Reusing the canonical hasher keeps the naming rule in
+# one place. See `crate::engine_assets`.
+outl-md = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 anyhow.workspace = true

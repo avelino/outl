@@ -544,6 +544,75 @@ export async function openExternalUrl(href: string): Promise<void> {
   await openUrl(href);
 }
 
+/**
+ * Open a workspace asset (`assets/<hash>.<ext>`) in the OS default app
+ * (Preview, an image viewer, …). outl does **not** render the file — the
+ * backend resolves the link to an absolute path under `<root>/assets/`
+ * (rejecting traversal / external schemes) and hands it to the OS.
+ *
+ * The promise rejects when the asset hasn't synced to this device yet or
+ * the link is invalid; callers surface it on the status line. Route a
+ * clicked link here only when {@link isAssetLink} is true — external
+ * links go through {@link openExternalUrl}.
+ */
+export function openAsset(url: string): Promise<void> {
+  return invoke<void>("open_asset", { url });
+}
+
+/**
+ * Import a file from the OS into the workspace and attach its link as a
+ * new block, returning the refreshed {@link PageView}.
+ *
+ * The backend copies the file into `<root>/assets/<hash>.<ext>`
+ * (content-addressed, idempotent, size-capped by `[assets] max_bytes`)
+ * and inserts a block carrying its markdown link. `afterBlockId` places
+ * the new block right after that block (tolerating a stale anchor);
+ * omitting it appends at the end of the page.
+ */
+export function attachAsset(
+  sourcePath: string,
+  pageId: string,
+  afterBlockId?: string,
+): Promise<PageView> {
+  return invoke<PageView>("attach_asset", {
+    sourcePath,
+    pageId,
+    afterBlockId: afterBlockId ?? null,
+  });
+}
+
+/**
+ * The result of importing a file: where it landed under `assets/` and the
+ * ready-to-insert markdown link. Mirror of `outl_actions::ImportedAsset`.
+ */
+export interface ImportedAsset {
+  /** Workspace-relative link target, e.g. `assets/<hash>.pdf`. */
+  rel_path: string;
+  /** Original file name — the link's display text. */
+  display_name: string;
+  /** Whether the asset is an image (`![]()` vs `[]()`). */
+  is_image: boolean;
+  /** Ready-to-insert markdown: `![name](rel)` for images, else `[name](rel)`. */
+  markdown: string;
+}
+
+/**
+ * Import a file into the workspace **without** touching the outline, and
+ * return its {@link ImportedAsset} (with `markdown` ready to splice).
+ *
+ * This is the drag-and-drop path: a file dropped onto the active line is
+ * imported here, then the client inserts `markdown` straight into that
+ * block's editor text at the caret — so the insert respects an in-flight
+ * edit instead of racing it through a backend mutation. The copy is
+ * content-addressed / idempotent / size-capped, exactly like
+ * {@link attachAsset}, but no block is created here; the client's own
+ * commit writes the block text. Use {@link attachAsset} when you want a
+ * fresh block instead (the file-picker button).
+ */
+export function importAssetFile(sourcePath: string): Promise<ImportedAsset> {
+  return invoke<ImportedAsset>("import_asset_file", { sourcePath });
+}
+
 // ---------------------------------------------------------------------------
 // Peer / device pairing (iroh sync transport)
 // ---------------------------------------------------------------------------

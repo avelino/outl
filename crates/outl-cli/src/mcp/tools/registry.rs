@@ -248,6 +248,20 @@ pub fn list() -> Vec<Value> {
                 "required": ["from", "to"]
             }),
         ),
+        // Asset
+        tool_def(
+            "outl_asset_add",
+            "Import a file (PDF, image, …) into the workspace's `assets/` dir and append its markdown link as a new block. `path` is a filesystem path to the file on this machine (MCP is stdio — pass a path, not bytes). By default the link is appended to today's journal; pass `page` (a slug) to append it to a page instead. `daily` defaults to true and is mutually exclusive with `page`.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "page": { "type": "string" },
+                    "daily": { "type": "boolean" }
+                },
+                "required": ["path"]
+            }),
+        ),
         // Search / Query
         tool_def(
             "outl_search",

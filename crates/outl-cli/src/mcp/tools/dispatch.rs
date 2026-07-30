@@ -16,10 +16,10 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::cmd::{
-    backlinks as bl_cmd, batch as batch_cmd, block as block_cmd, daily as daily_cmd,
-    doctor as doctor_cmd, export_v2 as exp_cmd, page as page_cmd, prop as prop_cmd,
-    query as query_cmd, search as search_cmd, tag as tag_cmd, template as tpl_cmd,
-    workspace_info as wi_cmd,
+    asset as asset_cmd, backlinks as bl_cmd, batch as batch_cmd, block as block_cmd,
+    daily as daily_cmd, doctor as doctor_cmd, export_v2 as exp_cmd, page as page_cmd,
+    prop as prop_cmd, query as query_cmd, search as search_cmd, tag as tag_cmd,
+    template as tpl_cmd, workspace_info as wi_cmd,
 };
 use crate::mcp::protocol::JsonRpcError;
 use crate::mcp::{tool_error_payload, tool_success_payload, ServerCtx};
@@ -53,6 +53,7 @@ const MUTATING: &[&str] = &[
     "outl_daily_today",
     "outl_daily_get",
     "outl_daily_append",
+    "outl_asset_add",
     "outl_page_prop_set",
     "outl_batch",
     "outl_template_apply",
@@ -235,6 +236,18 @@ fn run_tool(name: &str, args: &Value, ctx: &Arc<ServerCtx>) -> Result<Value, Api
             let from = require_str(args, "from")?.to_string();
             let to = require_str(args, "to")?.to_string();
             ctx.with_workspace(|wc| daily_cmd::range(wc, &from, &to))
+        }
+
+        // --- asset ---
+        "outl_asset_add" => {
+            let path = require_str(args, "path")?.to_string();
+            let page = opt_str(args, "page").map(str::to_string);
+            let daily = args.get("daily").and_then(Value::as_bool).unwrap_or(false);
+            let target = asset_cmd::resolve_target(page.as_deref(), daily)?;
+            let max_bytes = outl_config::load().assets.max_bytes;
+            ctx.with_workspace(|wc| {
+                asset_cmd::add_asset(wc, std::path::Path::new(&path), &target, max_bytes)
+            })
         }
 
         // --- search / query ---

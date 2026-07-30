@@ -185,11 +185,13 @@ The backend command is the shared `outl_tauri_shared::commands::page::delete_pag
 
 ## Opening an external `[label](url)` link
 
-Tapping an external markdown link opens it in the system browser via **`tauri-plugin-opener`** (registered in `src-tauri/src/lib.rs`; the capability grants a scoped `opener:allow-open-url` for `http`/`https`/`mailto` in `capabilities/default.json`).
-`Journal.tsx`'s `handleLinkClick` calls the shared `openExternalUrl` wrapper (`@outl/shared/api/commands`) — the same one desktop uses, so the scheme allow-list (`http(s)`/`mailto` only; `file:`/`javascript:` rejected) lives in one place.
-`<MarkdownInline />` gets `onLinkClick` threaded from `Journal.tsx` → `BlockRow` (recursively) → the renderer.
-`[[ref]]`/`#tag` taps are unchanged — they still route through `openRef` (see above).
-Backlink rows stay inert: the whole row is already a tap-to-source button.
+Tapping an external link opens it in the system browser via **`tauri-plugin-opener`** (registered in `lib.rs`, capability `opener:allow-open-url` for `http(s)`/`mailto`).
+`Journal.tsx`'s `handleLinkClick` calls the shared `openExternalUrl` — same as desktop, so the allow-list (`http(s)`/`mailto`; `file:`/`javascript:` rejected) lives in one place.
+`<MarkdownInline />` gets `onLinkClick` threaded from `Journal.tsx` → `BlockRow` → the renderer.
+An `assets/…` link routes instead (via `isAssetLink`) to `openAsset` — `open_asset` opens the file in the OS viewer.
+The block long-press **Attach file** action picks a file (`@tauri-apps/plugin-dialog`) → `attachAsset` (shared `commands::asset`).
+On iPad, dragging a file onto a block imports it the same way via the shared `installFileDrop` + `importAssetFile` (`@outl/shared/drag-drop`), best-effort — iPhone rarely delivers a webview drop, so long-press stays the only import path there.
+`[[ref]]`/`#tag` taps still route through `openRef`; backlink rows stay inert.
 
 ## Blockquote chrome
 
@@ -314,7 +316,7 @@ The header `<SyncDot>` and the refresh button / `PullToRefresh` reflect and driv
   `handleRefresh` (the button **and** `PullToRefresh`) calls `syncNow()` (force a P2P pull — dial every peer now instead of waiting for the 8s catch-up tick) THEN `reloadWorkspace()` (re-render with whatever landed).
   Both calls are wrapped in `withError` (toast on failure, never wedge the local reload), and the `syncing` spinner brackets the whole pass.
 - **Auto-sync (no button).**
-  `Journal.tsx` shares the refresh core as `pullAndReload()` and fires it automatically: on `onMount` (opening the app), on `visibilitychange` → visible (iOS froze JS in the background), and on the 5s poll tick (alongside the peer-status probe).
+  `Journal.tsx` shares the refresh core as `pullAndReload()`, fired on `onMount`, on `visibilitychange` → visible (iOS froze JS in the background), and on the 5s poll tick.
   The mobile side initiating the dial is NAT-friendly — waiting for the desktop to reach an iPhone behind carrier NAT is not — so this is what makes a desktop edit show up without the user touching refresh.
   The `workspace-ready` reload skips while a block is being edited (guarded by `editingId()`) so it never resets the textarea mid-edit.
   It also routes through `pullAndReload` (not a raw `openJournalFor` + `applyView`) so it inherits its guards.
@@ -334,8 +336,8 @@ They were extracted to **`crates/outl-frontend-shared/`** so mobile and desktop 
 | `looksLikeOutline` | `@outl/shared/paste` | `outl_actions::paste::looks_like_outline` |
 | `<MarkdownInline />` (renderer of `InlineToken[]`) | `@outl/shared/markdown` | `outl_md::tokenize_owned` (backend produces the tokens; the renderer is a discriminant-to-JSX switch) |
 | `detectRefContext` (+ `autoClose/DeletePair`, `insertPair/Text`, `applySuggestion`) | `@outl/shared/autocomplete` | `outl_tui::actions::overlay::detect_trigger` (the `[[` and `((` triggers; TUI also covers `#` and `/`) |
-| `autoPairBracket` (auto-pair `(`/`[`/`{` + step over auto-inserted closers; wired through `BlockRow`'s `onBeforeInput` because iOS soft keyboards don't emit reliable per-char `keydown`) | `@outl/shared/autocomplete` | `outl_tui::input::insert` (`insert_pair`) + `EditBuffer::delete_pair_back` |
-| `utf16OffsetToCharOffset` | `@outl/shared/paste` | runtime gap, no Rust mirror — `textarea.selectionStart` is UTF-16; the backend expects codepoints. Skipping this conversion shifts the splice by one per supplementary-plane character |
+| `autoPairBracket` (auto-pair `(`/`[`/`{` + step over auto-inserted closers; wired via `onBeforeInput` since iOS soft keyboards skip per-char `keydown`) | `@outl/shared/autocomplete` | `outl_tui::input::insert` (`insert_pair`) + `EditBuffer::delete_pair_back` |
+| `utf16OffsetToCharOffset` | `@outl/shared/paste` | runtime gap, no Rust mirror — `selectionStart` is UTF-16, the backend expects codepoints, or the splice shifts per supplementary-plane char |
 
 **Adding a new cross-runtime contract = add it in `@outl/shared` from day one.**
 Never add it under `outl-mobile/src/lib/` first — the next time desktop catches up to the feature, it has to consume from the same file.
@@ -462,8 +464,8 @@ Wiring:
 - **Scheme registration is the iOS `Info.plist`, not config.**
   Tauri's `plugins.deep-link.desktop.schemes` key is desktop-only.
   For an iOS **custom scheme** the `CFBundleURLTypes` entry is added directly to `gen/apple/outl-mobile_iOS/Info.plist`, alongside the existing `UIBackgroundModes` / iCloud keys this project already hand-maintains there.
-  Universal Links (`https://outl.app/…`) would instead need the `mobile` config + an Associated Domains entitlement + a hosted `apple-app-site-association`; that's a separate follow-up.
-- **Warm path** (`dispatch_deep_link`, fired by `on_open_url`) mirrors the desktop: parse with `outl_actions::parse_deep_link`, emit `deep-link://navigate` (`{kind:"today"}` / `{kind:"daily",date}` / `{kind:"page",slug}`), focus the window.
+  Universal Links (`https://outl.app/…`) would need the `mobile` config + Associated Domains + a hosted `apple-app-site-association` — a separate follow-up.
+- **Warm path** (`dispatch_deep_link`, on `on_open_url`) mirrors desktop: parse via `outl_actions::parse_deep_link`, emit `deep-link://navigate` (`today`/`daily`/`page`), focus the window.
   A malformed URL is logged at `warn` and ignored.
 - **Cold path** (a URL that *launched* the app) buffers the parsed payload in a managed `PendingDeepLink(Mutex<Option<Value>>)` during `setup()`, because the frontend listener isn't up yet.
   The `take_pending_deep_link` command drains it once `Journal` mounts.
@@ -475,7 +477,7 @@ Wiring:
   The cold drain runs after the workspace is open, so it overrides today's journal with the launch target.
 
 **Validation needs a device build.**
-The Rust side is `cargo check`-clean, but the iOS scheme registration + the OS routing only exercise on a real device / simulator build (`cargo tauri ios dev`), the same constraint the `BGTaskScheduler` and `NSMetadataQuery` paths carry.
+The Rust side is `cargo check`-clean, but scheme registration + OS routing only exercise on a real device / simulator build (`cargo tauri ios dev`), same constraint as `BGTaskScheduler` / `NSMetadataQuery`.
 Don't mark the mobile half "verified" from a host `cargo check` alone.
 
 ## Testing

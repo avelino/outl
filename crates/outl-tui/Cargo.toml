@@ -59,5 +59,12 @@ base64 = "0.22"
 # `tauri-plugin-opener`; the TUI isn't Tauri, so it uses the `open` crate.
 open = "5"
 
+# Native "open file" dialog for the `/upload` slash command. Excluded on
+# Linux so the workspace CI build (ubuntu) never pulls GTK — there
+# `/upload` prompts for a typed path instead. macOS uses Cocoa and Windows
+# the Win32 dialog, neither of which needs extra system libraries.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+rfd = { version = "0.15", default-features = false }
+
 [dev-dependencies]
 tempfile = { workspace = true }

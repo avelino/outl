@@ -14,16 +14,20 @@ import type {
   PageView,
   PluginToolbarButton,
 } from "@outl/shared/api/types";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
+  attachAsset,
   copyMarkdown,
   createBlock,
   dateTitle,
   deleteBlock,
   editBlock,
+  importAssetFile,
   indentBlock,
   moveBlockDown,
   moveBlockUp,
   nextDay,
+  openAsset,
   openJournalFor,
   openPageBySlug,
   openExternalUrl,
@@ -51,6 +55,8 @@ import {
   workspaceStats,
 } from "@outl/shared/api/commands";
 import { utf16OffsetToCharOffset } from "@outl/shared/paste";
+import { isAssetLink } from "@outl/shared/links";
+import { installFileDrop } from "@outl/shared/drag-drop";
 import { peersOnline } from "@outl/shared/peers";
 import { detectFence } from "@outl/shared/highlight";
 import {
@@ -392,6 +398,7 @@ export function Journal() {
     void withTimeout(syncNow(), SYNC_TIMEOUT_MS, "sync timed out").catch(() => {});
     listenForWorkspaceReady();
     listenForDeepLink();
+    listenForFileDrop();
     await loadTodayWithRetry();
     // Cold-start deep link: a URL that *launched* the app was buffered
     // by the backend before the listener above existed. Drain it now
@@ -597,6 +604,36 @@ export function Journal() {
       .then((un) => {
         if (disposed) un();
         else unlisten = un;
+      });
+  }
+
+  /**
+   * Wire the Tauri webview drag-and-drop event (iPad: drag a file from the
+   * Files app or split-view onto a block). Registered like the deep-link
+   * listener above — cleanup armed synchronously inside the component owner,
+   * the dynamic import resolves the real handle afterwards. Best-effort: on
+   * iPhone the OS rarely delivers a webview drop, and a registration failure
+   * just leaves the long-press "Attach file" action as the import path.
+   */
+  function listenForFileDrop() {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    onCleanup(() => {
+      disposed = true;
+      unlisten?.();
+    });
+    // Shared `installFileDrop` resolves the block under the drop point
+    // (physical→CSS pixels, `data-block-id` hit-test) identically to the
+    // desktop, so the two clients can't drift on the geometry.
+    installFileDrop({
+      onDrop: (paths, blockId) => handleFileDrop(paths, blockId),
+    })
+      .then((un) => {
+        if (disposed) un();
+        else unlisten = un;
+      })
+      .catch((e) => {
+        console.warn("failed to register drag-drop listener", e);
       });
   }
 
@@ -998,6 +1035,104 @@ export function Journal() {
   }
 
   /**
+   * Import a file (PDF, image, …) via the system document picker and
+   * attach its link as a new block right after `id`. On iOS the picker
+   * is the native document picker. The backend copies the file into
+   * `<root>/assets/` and returns the refreshed view; outl never renders
+   * the file — tapping the link opens it in the OS default viewer.
+   */
+  async function handleAttachFile(id: string) {
+    const pid = pageId();
+    if (!pid) return;
+    const selected = await open({ multiple: false, directory: false });
+    // A cancelled picker resolves `null`; a single pick is a string.
+    if (typeof selected !== "string") return;
+    haptic("light");
+    const next = await withError(() => attachAsset(selected, pid, id));
+    if (next) applyView(next);
+  }
+
+  /**
+   * A file was dropped onto the outline via iPad drag-and-drop (Files app,
+   * split-view). Import each file (content-addressed copy, size-capped) and
+   * insert its ready-made markdown link into the block under the drop point.
+   *
+   * Target resolution: the block row under the drop position, else the block
+   * being edited, else the last block on the page (empty page → a fresh
+   * block). When the drop lands on the block being edited, the link is
+   * spliced into the live textarea at the caret (respecting the in-flight
+   * edit) instead of racing a backend mutation; otherwise it's appended to
+   * the block's text via `editBlock`.
+   *
+   * Best-effort throughout: an import failure surfaces a toast and drops
+   * that one file without wedging the rest, mirroring the long-press
+   * "Attach file" action's error handling.
+   */
+  async function handleFileDrop(paths: string[], droppedBlockId: string | null) {
+    const pid = pageId();
+    if (!pid || paths.length === 0) return;
+    // The dropped-on block (resolved by the shared hit-test) is the target;
+    // fall back to the block being edited, then the last top-level block.
+    const targetId = droppedBlockId ?? editingId() ?? lastBlockId();
+    const dropInEditor = targetId !== null && editingId() === targetId;
+    haptic("light");
+    // Import each file and collect the ready-to-insert markdown links.
+    const links: string[] = [];
+    for (const path of paths) {
+      const asset = await withError(() => importAssetFile(path));
+      if (asset) links.push(asset.markdown);
+    }
+    if (links.length === 0) return;
+    const markdown = links.join(" ");
+
+    // Dropped on the block being edited: splice into the live textarea at
+    // the caret, same pattern as paste / toolbar insert.
+    const el = activeTextarea;
+    if (dropInEditor && el) {
+      const start = el.selectionStart ?? el.value.length;
+      const end = el.selectionEnd ?? el.value.length;
+      // Space the link off the preceding word so it doesn't glue on.
+      const lead =
+        start > 0 && !/\s$/.test(el.value.slice(0, start)) ? " " : "";
+      const insert = `${lead}${markdown}`;
+      const caret = start + insert.length;
+      spliceText(el, start, end, insert);
+      parkCaret(el, caret);
+      setDraft(el.value);
+      parkCaret(el, caret);
+      return;
+    }
+
+    // A different block is mid-edit: commit it first so applying the fresh
+    // view below doesn't yank that textarea out (the same guard the reloads
+    // honour).
+    if (editingId()) await commitEdit();
+
+    // No block to attach to (empty page): create a fresh block carrying the
+    // link at the end of the page.
+    if (!targetId) {
+      const reply = await withError(() =>
+        createBlock(pid, { afterId: null, parentId: null, text: markdown }),
+      );
+      if (reply) applyView(reply.view);
+      return;
+    }
+
+    // Append the link to the target block's existing text.
+    const block = findBlock(view()?.outline ?? [], targetId);
+    const base = block ? rawTextWithTodo(block) : "";
+    const text = base ? `${base} ${markdown}` : markdown;
+    const next = await withError(() => editBlock(pid, targetId, text));
+    if (next) applyView(next);
+  }
+
+  /** Last top-level block on the current page, or null when it's empty. */
+  function lastBlockId(): string | null {
+    const roots = view()?.outline ?? [];
+    return roots.length > 0 ? roots[roots.length - 1].id : null;
+  }
+
+  /**
    * Run a `\`\`\`lang …\`\`\`` block through `outl-exec`. Triggered
    * from the long-press context menu (the only "Run code" surface on
    * mobile — desktop has Cmd+X too). The backend persists the
@@ -1209,12 +1344,15 @@ export function Journal() {
   }
 
   function handleLinkClick(href: string) {
-    // External `[label](url)` → open in the system browser via the
-    // shared opener wrapper (scheme-guarded to http(s)/mailto). Mirrors
-    // desktop; errors surface on the same status line as everything
-    // else instead of throwing into the tap handler.
+    // A `[label](assets/…)` link opens the uploaded file in the OS
+    // default app (`open_asset` → iOS document/quick-look viewer);
+    // everything else is an external `[label](url)` opened in the system
+    // browser (scheme-guarded to http(s)/mailto). Mirrors desktop;
+    // errors surface on the same status line instead of throwing into
+    // the tap handler.
     haptic("light");
-    void openExternalUrl(href).catch((e) => {
+    const opening = isAssetLink(href) ? openAsset(href) : openExternalUrl(href);
+    void opening.catch((e) => {
       setError(e instanceof Error ? e.message : String(e));
     });
   }
@@ -1779,6 +1917,7 @@ export function Journal() {
             delete: handleDelete,
             runCode: handleRunCodeBlock,
             insertTemplate: (id) => setTemplateBlockId(id),
+            attachFile: handleAttachFile,
             copy: async (id) => {
               // Copy the block as clean outl markdown (its subtree
               // included) — the inverse of paste, so it re-pastes into
@@ -1936,6 +2075,7 @@ function buildContextActions(
     runCode: (id: string) => void;
     insertTemplate: (id: string) => void;
     copy: (id: string) => void;
+    attachFile: (id: string) => void;
   },
 ): BlockContextAction[] {
   if (!blockId || !pageView) return [];
@@ -2003,6 +2143,14 @@ function buildContextActions(
       iconPath:
         "M9 3H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4 M15 7h4a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2z",
       onSelect: () => handlers.insertTemplate(blockId),
+    },
+    {
+      id: "attachFile",
+      label: "Attach file",
+      // "paperclip" — reads as "attach an uploaded file".
+      iconPath:
+        "M21 11.5l-9 9a5 5 0 0 1-7-7l9-9a3.5 3.5 0 0 1 5 5l-9 9a2 2 0 0 1-3-3l8-8",
+      onSelect: () => handlers.attachFile(blockId),
     },
     {
       id: "indent",

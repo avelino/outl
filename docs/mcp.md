@@ -74,6 +74,10 @@ For multi-block authoring, prefer the composite tools over a chain of single-op 
   Supported ops cover every other write tool.
   See [`docs/cli.md` → Batch](cli.md#batch) for the payload shape.
 
+For file uploads, `outl_asset_add` imports a file into `<workspace>/assets/` and appends its markdown link as a new block (today's journal by default, or a `page` slug).
+Because MCP is stdio, it takes the file as a `path` argument — a filesystem path on the machine running the server, not base64 bytes.
+See [`docs/cli.md` → Asset](cli.md#asset).
+
 ### Resources
 
 URIs the host can attach as context without an explicit tool call.

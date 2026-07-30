@@ -24,6 +24,7 @@
 //! - Arg-taking commands explain expected format in `description`.
 #![allow(missing_docs)]
 
+mod asset;
 mod dates;
 mod exec;
 mod page;
@@ -33,6 +34,7 @@ mod workspace;
 
 use super::CommandRegistry;
 
+use asset::UploadCommand;
 use dates::{
     DateCommand, DateLastWeekCommand, DateNextFridayCommand, DateNextMondayCommand,
     DateNextSaturdayCommand, DateNextSundayCommand, DateNextThursdayCommand,
@@ -76,6 +78,9 @@ pub(super) fn register_all(reg: &mut CommandRegistry) {
 
     // template — instantiate structural templates
     reg.register(TemplateCommand);
+
+    // asset — upload a file and insert its link
+    reg.register(UploadCommand);
 
     // dates — Insert-mode inserters. The slash dispatcher uses
     // `inserts_inline()` (set true in each command) to skip

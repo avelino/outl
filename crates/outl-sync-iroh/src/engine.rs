@@ -30,11 +30,12 @@ use crate::engine_pairing::{
 // The delta-sync wire protocol lives in `engine_sync`; re-exported here so
 // `crate::engine::{delta_sync, SyncProtocolHandler}` keeps resolving for the
 // catch-up loop, pairing drain, the router below, and `test_support`.
+use crate::engine_assets::AssetProtocolHandler;
 use crate::engine_snapshot::SnapshotProtocolHandler;
 pub(crate) use crate::engine_sync::{delta_sync, SyncProtocolHandler};
 use crate::identity::IrohIdentity;
 use crate::peers::{PeerEntry, PeersStore};
-use crate::protocol::{PAIRING_ALPN, SNAPSHOT_ALPN, SYNC_ALPN};
+use crate::protocol::{ASSET_ALPN, PAIRING_ALPN, SNAPSHOT_ALPN, SYNC_ALPN};
 
 /// iroh-based P2P transport.
 ///
@@ -457,11 +458,13 @@ async fn run_iroh(
     let workspace_id: SharedWorkspaceId = Arc::new(std::sync::RwLock::new(workspace_id));
     // Build the iroh endpoint with our identity and the n0 discovery preset.
     //
-    // Advertise ALL THREE ALPNs on the ONE endpoint (one endpoint per identity —
+    // Advertise ALL the ALPNs on the ONE endpoint (one endpoint per identity —
     // a separate endpoint would hijack the relay route and kill sync):
     // `SYNC_ALPN` for op-sync, `PAIRING_ALPN` so GUI pairing rides this same
-    // endpoint, and `SNAPSHOT_ALPN` so a freshly-paired peer can pull this
-    // device's materialized snapshot (Phase 2 snapshot sync).
+    // endpoint, `SNAPSHOT_ALPN` so a freshly-paired peer can pull this device's
+    // materialized snapshot (Phase 2 snapshot sync), and `ASSET_ALPN` so peers
+    // can transfer content-addressed binary assets (uploaded files) that never
+    // enter the op log (see `crate::engine_assets`).
     //
     // STOPGAP: IPv4-only bind. iroh 1.0.0 multipath stalls on unreachable IPv6
     // direct paths; binding IPv4-only stops this endpoint from advertising a
@@ -479,6 +482,7 @@ async fn run_iroh(
             SYNC_ALPN.to_vec(),
             PAIRING_ALPN.to_vec(),
             SNAPSHOT_ALPN.to_vec(),
+            ASSET_ALPN.to_vec(),
         ])
         .bind()
         .await
@@ -545,6 +549,12 @@ async fn run_iroh(
             SnapshotProtocolHandler {
                 workspace_root: workspace_root.clone(),
                 actor,
+            },
+        )
+        .accept(
+            ASSET_ALPN,
+            AssetProtocolHandler {
+                workspace_root: workspace_root.clone(),
             },
         )
         .spawn();

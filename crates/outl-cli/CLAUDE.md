@@ -90,6 +90,9 @@ Each handler returns a `serde_json::Value` so the same code path serves both the
 - `outl page get|create|update|delete|list|rename|render` (`create` takes `--content=<JSON|->` to seed the outline in one call)
 - `outl block get|append|append-tree|insert|update|move|delete|toggle-todo|tree` (`append-tree` takes `--tree=<JSON|->`)
 - `outl daily today|get|append|range`
+- `outl asset add <file> [--page=<slug>] [--daily]` — import a file into `<workspace>/assets/` (content-addressed) and append its markdown link as a new block (daily by default, or a page).
+  Glue only: copy + hash + link live in `outl_actions::import_asset`; the block append routes through `outl-actions` like every other mutation.
+  CLI + MCP (`outl_asset_add`) share the `cmd::asset::add_asset` handler so they can't drift.
 - `outl search "<query>" [--in=blocks|pages|all] [--limit=N]`
 - `outl query [--tag=…] [--priority=…] [--since=…d] [--kind=…] [--prop key=value …]`
 - `outl backlinks page|block|embed`
@@ -175,6 +178,7 @@ src/
 │   ├── migrate_to_shared.rs
 │   ├── export.rs          # legacy `outl export --to fmt` placeholder
 │   ├── export_v2.rs       # outl export {hugo,md,json}
+│   ├── asset.rs          # outl asset add … (+ shared add_asset for MCP)
 │   ├── page.rs            # outl page …
 │   ├── plugin.rs          # outl plugin …
 │   ├── block.rs           # outl block …

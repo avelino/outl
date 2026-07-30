@@ -197,17 +197,21 @@ Conservative guards on the merge:
 
 If membership ever needs to *gate* who can join (beyond "is on the topic"), that's a new trust surface — stop and design it; do not loosen these guards silently.
 
-## Snapshot sync (Phase 2, ALPN `outl-snapshot/1`)
+## Phase-2 blob transfer (snapshot + asset)
 
-A freshly-paired device that would otherwise receive + replay a huge op log (76 MB / 200k+ ops) instead pulls a peer's materialized **snapshot** (`snap-<actor>.bin`) and boots from it via `outl_core::snapshot::read_best_from_disk`.
-This crate owns **only the transport** (in `engine_snapshot.rs`); the boot-adoption half is done in `outl-core` and never touched here.
+Two ALPNs ship binary blobs that are NOT ops.
+Both mount on the one sync endpoint's router, hold no workspace lock, never write the op log, and are best-effort (failure = logged no-op).
 
-- **Responder** (`SnapshotProtocolHandler`, under `SNAPSHOT_ALPN`) reads this device's own `snap-<self.actor>.bin` off disk and ships it as one length-prefixed frame (`protocol::encode_blob_frame`; empty when absent → peer skips).
-  No workspace lock — it reads a cache file and holds no `Workspace`.
-- **Puller** (`pull_snapshot_from_peer`, fired from `drain_pair_completions` right after the immediate `delta_sync`, still inside the peer's in-flight guard) dials `SNAPSHOT_ALPN` and reads the frame.
-  It `SnapshotBody::decode`s the blob (validate + learn actor id), writes it to `snap-<peer-actor>.bin` via `snapshot::write_to_disk` (atomic tmp+rename), and fires `peer_ready_tx` so boot adopts it.
-- Not an op-log write → **no `AppendLock` / flock**; it's a local boot cache in the dotfile dir `.outl/snapshots/`, off the file-sync surface (the transfer is the only way it crosses devices).
-- Best-effort: an absent / corrupt / undecodable peer snapshot is skipped, never fatal — the op log stays source of truth and boot falls back to full replay.
+**Snapshot** — `SNAPSHOT_ALPN` `outl-snapshot/1`, `engine_snapshot.rs`.
+A freshly-paired device pulls a peer's `snap-<actor>.bin` and boots from settled state, not the full op log (`pull_snapshot_from_peer`).
+Responder `SnapshotProtocolHandler` sends one length-prefixed frame (empty when absent); the puller writes `snap-<peer-actor>.bin` under `.outl/snapshots/` and fires `peer_ready_tx`.
+
+**Asset** — `ASSET_ALPN` `outl-asset/1`, `engine_assets.rs`.
+Uploaded files live at `<root>/assets/<hash>.<ext>` (content-addressed by SHA-256); their bytes NEVER enter the op log (`outl_actions::asset`).
+Since a device holds N assets, the protocol negotiates a manifest: responder `AssetProtocolHandler` sends its `assets/` basenames (`protocol::encode_asset_manifest`).
+The initiator pulls each file it lacks as a blob frame (atomic tmp+rename).
+`is_safe_asset_name` (both sides, anti-traversal) blocks any non-basename; the initiator re-hashes each file (`outl_md::asset::hash_bytes`) and drops a name mismatch.
+Fires after the post-pair snapshot pull and every catch-up `delta_sync` (`run_catch_up`'s `pull_assets`).
 
 ## Regression suite (Pilar 2)
 
@@ -231,7 +235,8 @@ Shared seed/read/wait helpers stay in `tests/common/mod.rs` (read-only); saga-sp
 | 7. (set-convergence half) both sides hold all ops | `bidirectional_delta_sync` (pre-existing) | `tests/integration.rs` |
 | 8. Membership merge is ADD-only (never clobber a local entry, drop self, drop undialable) | `merge_unknown_never_clobbers_a_known_entry` + `merge_skips_self` / `merge_adds_unknown_and_dedups_known` / `merge_skips_unreachable_peer` | `src/peers.rs`, `src/engine_membership.rs` `#[cfg(test)]` |
 | 9. Watermark gap — ops below a receiver's max-HLC stayed permanently invisible after out-of-order ingest; the v2 `ActorClock` count detects the gap, the full-log fallback + ingest dedup converge without duplicating | `backlog_below_watermark_crosses_after_gap_detected` / `ingest_dedups_already_present_ops` / `full_actor_resend_converges_and_dedups` | `tests/regression.rs` |
-| 10. Snapshot sync — peer snapshot transferred on pair (byte-identical, reload fired); absent snapshot harmless, op-sync still works | `snapshot_transfers_from_peer_on_pair` / `snapshot_pull_absent_is_harmless` | `tests/regression.rs` |
+| 10. Snapshot sync — peer snapshot on pair (byte-identical, reload fired); absent harmless | `snapshot_transfers_from_peer_on_pair` / `snapshot_pull_absent_is_harmless` | `tests/regression.rs` |
+| 11. Asset sync — peer asset on pull (byte-identical, held file skipped); absent harmless | `assets_transfer_from_peer` / `asset_pull_from_peer_without_assets_is_harmless` | `tests/regression.rs` |
 
 Names map 1:1 to the saga checklist; do NOT delete one without deleting the bug it guards.
 

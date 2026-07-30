@@ -54,18 +54,19 @@ use tauri_plugin_deep_link::DeepLinkExt;
 use tracing::info;
 
 use crate::commands::{
-    add_block, copy_block_markdown, copy_markdown, create_block, date_title, delete_block,
-    delete_page, edit_block, exec, indent_block, instantiate_template_at, list_all_pages,
-    list_outline, list_templates_cmd, move_block_after, move_block_down, move_block_up, next_day,
-    open_journal_for, open_page_by_slug, open_ref, open_today_journal, outdent_block,
-    outl_emoji_search, outl_peer_list, outl_peer_pair_host, outl_peer_pair_join, outl_peer_remove,
-    outl_peer_status, outl_sync_now, page_backlinks, paste_block_after, paste_markdown_at,
-    paste_plain_at, plugin_config_set, plugin_install_official, plugin_list, plugin_registry_list,
-    plugin_run, plugin_secret_remove, plugin_secret_set, plugin_set_enabled,
-    plugin_settings_describe, plugin_sync_hooks, plugin_toolbar, plugin_transform,
-    plugin_transformers, plugin_uninstall, previous_day, reload_workspace, resolve_page_labels,
-    resolve_ref, search_blocks, search_pages, search_persons, set_backlinks_order,
-    set_block_collapsed, split_block, today_slug_cmd, toggle_quote, toggle_todo, workspace_stats,
+    add_block, attach_asset, copy_block_markdown, copy_markdown, create_block, date_title,
+    delete_block, delete_page, edit_block, exec, import_asset_file, indent_block,
+    instantiate_template_at, list_all_pages, list_outline, list_templates_cmd, move_block_after,
+    move_block_down, move_block_up, next_day, open_asset, open_journal_for, open_page_by_slug,
+    open_ref, open_today_journal, outdent_block, outl_emoji_search, outl_peer_list,
+    outl_peer_pair_host, outl_peer_pair_join, outl_peer_remove, outl_peer_status, outl_sync_now,
+    page_backlinks, paste_block_after, paste_markdown_at, paste_plain_at, plugin_config_set,
+    plugin_install_official, plugin_list, plugin_registry_list, plugin_run, plugin_secret_remove,
+    plugin_secret_set, plugin_set_enabled, plugin_settings_describe, plugin_sync_hooks,
+    plugin_toolbar, plugin_transform, plugin_transformers, plugin_uninstall, previous_day,
+    reload_workspace, resolve_page_labels, resolve_ref, search_blocks, search_pages,
+    search_persons, set_backlinks_order, set_block_collapsed, split_block, today_slug_cmd,
+    toggle_quote, toggle_todo, workspace_stats,
 };
 use crate::plugin_service::spawn_plugin_service;
 use crate::state::AppState;
@@ -181,6 +182,7 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_deep_link::init());
 
     // Camera/QR scanning is the device-pairing entry point and only
@@ -338,6 +340,10 @@ pub fn run() {
             paste_plain_at,
             copy_markdown,
             copy_block_markdown,
+            // Assets (open uploaded file / import a file as a block)
+            open_asset,
+            attach_asset,
+            import_asset_file,
             reload_workspace,
             // Peer / device management
             outl_peer_list,

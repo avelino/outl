@@ -32,6 +32,9 @@ chrono = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
 walkdir = "2"
+# Opens an asset in the OS default app (Preview, image viewer). Same
+# crate + version the TUI uses in `actions/exec.rs`.
+open = "5"
 
 [dev-dependencies]
 tempfile = { workspace = true }

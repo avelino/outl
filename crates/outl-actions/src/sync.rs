@@ -90,6 +90,20 @@ pub enum SyncProgress {
         /// Total snapshot frame size, from the length prefix.
         total: u64,
     },
+    /// Pulling a peer's binary asset (an uploaded file: PDF, image). Fired per
+    /// asset the initiator is missing; `received` / `total` are the bytes of the
+    /// asset currently transferring, from that file's frame length prefix — the
+    /// same honest-percentage shape as [`Self::Snapshot`]. Asset bytes are
+    /// content-addressed blobs replicated outside the op log (see
+    /// `outl_actions::asset`); over iroh they travel on `outl-asset/1`.
+    Asset {
+        /// Peer's short node id.
+        peer: String,
+        /// Bytes of the current asset frame received so far.
+        received: u64,
+        /// Total size of the current asset frame, from the length prefix.
+        total: u64,
+    },
     /// Ingested `count` ops the peer had that this device lacked. `nodes`
     /// carries the (capped) distinct block ids touched so the UI can name the
     /// pages that changed — empty on a bulk pass (the initial pair), where
