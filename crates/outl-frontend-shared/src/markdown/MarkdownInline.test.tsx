@@ -1,8 +1,21 @@
 import { render } from "solid-js/web";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { InlineToken } from "../api/types";
 import { MarkdownInline, type EmbedMap } from "./MarkdownInline";
+
+// The `image` render branch resolves a local `assets/…` asset to a
+// `data:` URL through this command. Mock the wrapper so the test never
+// touches a real Tauri backend (and the module's `@tauri-apps/*` imports
+// are never evaluated).
+const readAssetDataUrlMock = vi.fn((_url: string) =>
+  Promise.resolve("data:image/png;base64,QUJD"),
+);
+vi.mock("../api/commands", () => ({
+  readAssetDataUrl: (url: string) => readAssetDataUrlMock(url),
+}));
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 function mount(
   tokens: InlineToken[],
@@ -112,6 +125,51 @@ describe("MarkdownInline — external link rendering", () => {
     expect(span.getAttribute("tabindex")).toBeNull();
     expect(() => span.click()).not.toThrow();
     expect(span.className).not.toContain("cursor-pointer");
+    m.dispose();
+  });
+});
+
+describe("MarkdownInline — image / asset rendering (issue #203)", () => {
+  it("resolves a local image asset to an <img> via readAssetDataUrl", async () => {
+    readAssetDataUrlMock.mockClear();
+    const tokens: InlineToken[] = [
+      { kind: "image", alt: "diagram", href: "assets/abc.png" },
+    ];
+    const m = mount(tokens);
+    // A local asset has no web origin — its bytes come back as a data URL.
+    expect(readAssetDataUrlMock).toHaveBeenCalledWith("assets/abc.png");
+    await tick();
+    const img = m.host.querySelector("img") as HTMLImageElement;
+    expect(img).not.toBeNull();
+    expect(img.getAttribute("src")).toBe("data:image/png;base64,QUJD");
+    expect(img.getAttribute("alt")).toBe("diagram");
+    m.dispose();
+  });
+
+  it("uses a remote image href directly (no backend round-trip)", () => {
+    readAssetDataUrlMock.mockClear();
+    const tokens: InlineToken[] = [
+      { kind: "image", alt: "logo", href: "https://example.com/logo.png" },
+    ];
+    const m = mount(tokens);
+    expect(readAssetDataUrlMock).not.toHaveBeenCalled();
+    const img = m.host.querySelector("img") as HTMLImageElement;
+    expect(img.getAttribute("src")).toBe("https://example.com/logo.png");
+    m.dispose();
+  });
+
+  it("renders a clickable file chip for a .pdf (no <img>)", () => {
+    const opened: string[] = [];
+    const tokens: InlineToken[] = [
+      { kind: "image", alt: "spec", href: "assets/spec.pdf" },
+    ];
+    const m = mount(tokens, undefined, (href) => opened.push(href));
+    expect(m.host.querySelector("img")).toBeNull();
+    const chip = m.host.querySelector('[role="button"]') as HTMLElement;
+    expect(chip).not.toBeNull();
+    expect(chip.textContent).toContain("spec");
+    chip.click();
+    expect(opened).toEqual(["assets/spec.pdf"]);
     m.dispose();
   });
 });

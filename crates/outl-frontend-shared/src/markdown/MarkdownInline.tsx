@@ -1,6 +1,8 @@
-import { For, JSX, Show } from "solid-js";
+import { createResource, For, JSX, Match, Show, Switch } from "solid-js";
 
+import { readAssetDataUrl } from "../api/commands";
 import type { InlineToken, ResolvedBlock } from "../api/types";
+import { assetFileName, isAssetLink, isImagePath } from "../links";
 
 /** Resolved block content keyed by ref handle (`blk-XXXXXX`). Both
  *  `((…))` inline refs and `!((…))` embeds resolve through the same
@@ -13,6 +15,65 @@ function statusMark(status: ResolvedBlock["status"]): string {
   if (status === "done") return "✓ ";
   if (status === "todo") return "☐ ";
   return "";
+}
+
+/**
+ * Button affordances (role / tabindex / click + Enter/Space handlers) for
+ * a `<span>` that behaves as a link when `onLinkClick` is wired. Returns
+ * `{}` when it isn't — an inert link must stay a plain span, not a fake
+ * button that makes a screen reader announce a dead control and traps a
+ * keyboard tab stop. Shared by the `link` case and the asset `FileChip`.
+ */
+function clickableAttrs(
+  href: string,
+  onLinkClick?: (href: string) => void,
+): JSX.HTMLAttributes<HTMLSpanElement> {
+  if (!onLinkClick) return {};
+  const fire = () => onLinkClick(href);
+  return {
+    role: "button",
+    tabindex: 0,
+    onClick: (e: MouseEvent) => {
+      e.stopPropagation();
+      fire();
+    },
+    onKeyDown: (e: KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        e.stopPropagation();
+        fire();
+      }
+    },
+  };
+}
+
+/**
+ * A clickable chip standing in for an asset that isn't rendered inline
+ * (a PDF, an unknown file type, or an image whose bytes failed to load).
+ *
+ * Clicking / Enter / Space fires `onLinkClick(href)` — the client routes
+ * an `assets/…` href to `openAsset` (OS default viewer), the same path
+ * the `link` case uses. When no handler is wired the chip is inert text,
+ * not a fake button (screen-reader / keyboard parity with the link case).
+ */
+function FileChip(props: {
+  href: string;
+  label: string;
+  icon?: string;
+  onLinkClick?: (href: string) => void;
+}): JSX.Element {
+  const a11y = clickableAttrs(props.href, props.onLinkClick);
+  return (
+    <span
+      {...a11y}
+      title={props.href}
+      class="inline-flex items-center gap-1 rounded-md bg-(--color-ios-divider)/30 px-1.5 py-0.5 text-[14px] text-(--color-ios-text) dark:bg-(--color-iosd-divider)/30 dark:text-(--color-iosd-text)"
+      classList={{ "cursor-pointer": !!props.onLinkClick }}
+    >
+      <span aria-hidden="true">{props.icon ?? "📄"}</span>
+      {props.label}
+    </span>
+  );
 }
 
 /**
@@ -33,6 +94,10 @@ function statusMark(status: ResolvedBlock["status"]): string {
  * - `[[page name]]` wiki refs and `#tag` (visual style controlled
  *   by `variant`)
  * - `((blk-XXXXXX))` block refs and `!((blk-XXXXXX))` embeds
+ * - `![alt](href)` images / assets — an `<img>` for image extensions
+ *   (local `assets/…` resolved to a `data:` URL via `readAssetDataUrl`,
+ *   remote `http(s)` loaded directly), a clickable file chip for pdf /
+ *   other kinds (opens via `onLinkClick` → the client's `openAsset`)
  *
  * ## `variant`
  *
@@ -141,28 +206,7 @@ export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
               </code>
             );
           case "link": {
-            const fire = () => props.onLinkClick?.(tok.href);
-            const onClick = (e: MouseEvent) => {
-              if (!props.onLinkClick) return;
-              e.stopPropagation();
-              fire();
-            };
-            const onKeyDown = (e: KeyboardEvent) => {
-              if (!props.onLinkClick) return;
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                e.stopPropagation();
-                fire();
-              }
-            };
-            // Only expose the button affordances (role / tabindex /
-            // handlers / pointer cursor) when a handler is actually
-            // wired. An inert link is a plain `<span>`, not a fake
-            // button — otherwise screen readers announce a control that
-            // does nothing and keyboard users land on a dead tab stop.
-            const a11y: JSX.HTMLAttributes<HTMLSpanElement> = props.onLinkClick
-              ? { role: "button", tabindex: 0, onClick, onKeyDown }
-              : {};
+            const a11y = clickableAttrs(tok.href, props.onLinkClick);
             return (
               <Show
                 when={variant() === "inline"}
@@ -186,6 +230,73 @@ export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
                   {tok.value}
                 </span>
               </Show>
+            );
+          }
+          case "image": {
+            const label = assetFileName(tok.href);
+            // Non-image file (pdf, unknown) → clickable chip that opens
+            // in the OS viewer (via the client's onLinkClick asset
+            // routing). No inline embed for the MVP.
+            // TODO(#203): inline PDF viewer
+            if (!isImagePath(tok.href)) {
+              return (
+                <FileChip
+                  href={tok.href}
+                  label={tok.alt || label}
+                  onLinkClick={props.onLinkClick}
+                />
+              );
+            }
+            const imgClass =
+              "my-1 block h-auto max-h-96 max-w-full rounded-lg";
+            // A remote http(s) image loads straight from its URL. A local
+            // `assets/…` asset has no web origin the webview can reach, so
+            // its bytes come back from the backend as a `data:` URL.
+            if (!isAssetLink(tok.href)) {
+              return (
+                <img
+                  src={tok.href}
+                  alt={tok.alt}
+                  loading="lazy"
+                  class={imgClass}
+                />
+              );
+            }
+            const [dataUrl] = createResource(
+              () => tok.href,
+              readAssetDataUrl,
+            );
+            return (
+              <Switch
+                fallback={
+                  <FileChip
+                    href={tok.href}
+                    label={tok.alt || label}
+                    icon="🖼️"
+                    onLinkClick={props.onLinkClick}
+                  />
+                }
+              >
+                <Match when={dataUrl.loading}>
+                  <span
+                    class="inline-flex items-center gap-1 rounded-md bg-(--color-ios-divider)/30 px-1.5 py-0.5 text-[14px] text-(--color-ios-text-secondary) dark:bg-(--color-iosd-divider)/30 dark:text-(--color-iosd-text-secondary)"
+                    aria-label={tok.alt || label}
+                  >
+                    <span aria-hidden="true">🖼️</span>
+                    {tok.alt || label}…
+                  </span>
+                </Match>
+                <Match when={!dataUrl.error && dataUrl()}>
+                  {(src) => (
+                    <img
+                      src={src()}
+                      alt={tok.alt}
+                      loading="lazy"
+                      class={imgClass}
+                    />
+                  )}
+                </Match>
+              </Switch>
             );
           }
           case "ref":

@@ -560,6 +560,22 @@ export function openAsset(url: string): Promise<void> {
 }
 
 /**
+ * Resolve a workspace asset (`assets/<hash>.<ext>`) to a
+ * `data:<mime>;base64,<…>` URL the webview can load directly — an
+ * `<img src>` for images, a PDF viewer for pdf.
+ *
+ * The backend resolves the link under `<root>/assets/` (rejecting
+ * traversal / external schemes), reads the bytes (size-capped so a giant
+ * file can't wedge the renderer) and base64-encodes them. Use only when
+ * {@link isAssetLink} is true; a remote `http(s)` image can be an `<img
+ * src>` directly. The promise rejects when the asset hasn't synced to
+ * this device yet or is too large — callers show a fallback chip.
+ */
+export function readAssetDataUrl(url: string): Promise<string> {
+  return invoke<string>("read_asset_data_url", { url });
+}
+
+/**
  * Import a file from the OS into the workspace and attach its link as a
  * new block, returning the refreshed {@link PageView}.
  *

@@ -153,12 +153,18 @@ pub fn import_asset_bytes(
         display_name.to_string()
     };
     let is_image = outl_md::wikilink::is_image_target(&rel_path);
-    // Always a plain link: clicking opens the file in the OS app, outl does
-    // not render assets inline yet (`![]` image embeds are a future step).
-    // The label is escaped so a name with `]` / `(` / `\` can't break the
-    // link or inject markdown; `rel_path` is `assets/<hex>.<ext>` with an
+    // Images become `![]` embeds so they render inline; every other file
+    // stays a plain `[]` link (clicking opens it in the OS app). The label
+    // is escaped so a name with `]` / `(` / `\` can't break the link or
+    // inject markdown; `rel_path` is `assets/<hex>.<ext>` with an
     // alphanumeric ext, so the target needs no escaping.
-    let markdown = format!("[{}]({})", escape_link_label(&display_name), rel_path);
+    let prefix = if is_image { "!" } else { "" };
+    let markdown = format!(
+        "{}[{}]({})",
+        prefix,
+        escape_link_label(&display_name),
+        rel_path
+    );
 
     Ok(ImportedAsset {
         rel_path,
@@ -260,7 +266,9 @@ mod tests {
         let a = import_asset_bytes(ws.path(), b"fake png bytes", "png", "photo.png", 0).unwrap();
         assert!(a.rel_path.starts_with("assets/"));
         assert!(a.rel_path.ends_with(".png"));
-        assert_eq!(a.markdown, format!("[photo.png]({})", a.rel_path));
+        // A `.png` is an image → `![]` embed so it renders inline.
+        assert!(a.is_image);
+        assert_eq!(a.markdown, format!("![photo.png]({})", a.rel_path));
         assert!(ws.path().join(&a.rel_path).exists());
         // Same bytes via the path API land on the same file.
         let src = tempdir().unwrap();
@@ -295,16 +303,28 @@ mod tests {
     }
 
     #[test]
-    fn image_uses_plain_link_not_embed() {
+    fn image_uses_embed_not_plain_link() {
         let ws = tempdir().unwrap();
         let src = tempdir().unwrap();
         let file = write_source(src.path(), "pic.png", b"\x89PNG fake");
         let a = import_asset(ws.path(), &file, 0).unwrap();
         assert!(a.is_image);
-        // Assets never render inline yet — even images get a plain link so
-        // clicking opens them in the OS app (`![]` is a future step).
-        assert!(a.markdown.starts_with("[pic.png]("));
+        // Images render inline via an `![]` embed.
+        assert!(a.markdown.starts_with("!["));
+        assert!(a.markdown.contains("](assets/"));
+    }
+
+    #[test]
+    fn non_image_uses_plain_link_not_embed() {
+        let ws = tempdir().unwrap();
+        let src = tempdir().unwrap();
+        let file = write_source(src.path(), "doc.pdf", b"%PDF fake");
+        let a = import_asset(ws.path(), &file, 0).unwrap();
+        assert!(!a.is_image);
+        // Non-images stay a plain link so clicking opens them in the OS app.
+        assert!(a.markdown.starts_with("[doc.pdf]("));
         assert!(!a.markdown.starts_with("!"));
+        assert!(a.markdown.contains("](assets/"));
     }
 
     #[test]

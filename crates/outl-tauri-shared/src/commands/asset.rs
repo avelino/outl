@@ -9,6 +9,7 @@
 
 use std::path::Path;
 
+use base64::Engine as _;
 use outl_actions::{
     append_block, create_after_or_append, import_asset, resolve_asset_path, ActionError,
     ImportedAsset,
@@ -56,6 +57,76 @@ pub fn open_asset<S: AppHost>(state: &S, url: String) -> Result<(), String> {
         Ok(None) => Err("asset not found on this device yet".to_string()),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// Ceiling on the bytes we're willing to inline into a `data:` URL. A
+/// base64 payload is ~4/3 the file size and lives entirely in the
+/// webview's memory, so an unbounded read would let one giant asset wedge
+/// the renderer. Images / small PDFs (the only kinds the frontend fetches)
+/// sit well under this.
+const MAX_DATA_URL_BYTES: u64 = 25 * 1024 * 1024;
+
+/// Guess a MIME type from a file extension, covering the kinds the
+/// frontend inlines (images + pdf). Anything else falls back to the
+/// generic binary type — the webview still renders images/pdf correctly,
+/// and the frontend only asks for kinds it knows how to show.
+fn mime_from_ext(path: &Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "avif" => "image/avif",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "tiff" | "tif" => "image/tiff",
+        "pdf" => "application/pdf",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Resolve an `assets/<hash>.<ext>` link to a `data:<mime>;base64,<…>`
+/// URL the webview loads directly (an `<img src>` or a PDF viewer).
+///
+/// The Tauri asset protocol is deliberately **not** used: it needs a
+/// static `assetProtocol.scope`, but outl's workspace root is picked at
+/// runtime, so there's nothing to scope ahead of time. Encoding the bytes
+/// into a `data:` URL sidesteps the protocol entirely — same code path on
+/// desktop and mobile, zero Tauri config.
+///
+/// The path resolves through the shared [`resolve_asset_path`] guard
+/// (rejects traversal / external schemes), and reads are capped at
+/// `MAX_DATA_URL_BYTES` so a huge file can never be base64'd into the
+/// webview. `Ok(None)` from the resolver means the asset hasn't synced to
+/// this device yet — surfaced as a distinct error, mirroring
+/// [`open_asset`].
+pub fn read_asset_data_url<S: AppHost>(state: &S, url: String) -> Result<String, String> {
+    let root = storage_root_or_err(state)?;
+    let path = match resolve_asset_path(&root, &url) {
+        Ok(Some(path)) => path,
+        Ok(None) => return Err("asset not found on this device yet".to_string()),
+        Err(e) => return Err(e.to_string()),
+    };
+
+    let size = std::fs::metadata(&path)
+        .map_err(|e| format!("failed to read asset: {e}"))?
+        .len();
+    if size > MAX_DATA_URL_BYTES {
+        return Err(format!(
+            "asset too large to display inline ({size} bytes, limit {MAX_DATA_URL_BYTES})"
+        ));
+    }
+
+    let bytes = std::fs::read(&path).map_err(|e| format!("failed to read asset: {e}"))?;
+    let mime = mime_from_ext(&path);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{mime};base64,{b64}"))
 }
 
 /// Import `source_path` into the workspace and return the ready-to-insert

@@ -121,6 +121,48 @@ fn md_link_extracts_text_and_url() {
 }
 
 #[test]
+fn image_extracts_alt_and_url() {
+    let toks = tokenize("look ![cover](assets/ab12.png) here");
+    assert!(toks.contains(&InlineTok::Image {
+        alt: "cover",
+        url: "assets/ab12.png"
+    }));
+    // The leading `!` is consumed by the image, never stranded as Plain.
+    assert!(!toks.iter().any(|t| matches!(t, InlineTok::Plain("!"))));
+}
+
+#[test]
+fn image_with_empty_alt_is_recognized() {
+    let toks = tokenize("![](https://example.com/x.png)");
+    assert!(toks.contains(&InlineTok::Image {
+        alt: "",
+        url: "https://example.com/x.png"
+    }));
+}
+
+#[test]
+fn bang_before_a_link_is_an_image_not_a_stranded_bang() {
+    // `![alt](url)` must win over `!` + `[alt](url)`.
+    let toks = tokenize("![a](u)");
+    assert!(toks.contains(&InlineTok::Image { alt: "a", url: "u" }));
+    assert!(!toks.iter().any(|t| matches!(t, InlineTok::Link { .. })));
+}
+
+#[test]
+fn bare_bang_stays_plain() {
+    let toks = tokenize("watch out! really.");
+    assert!(!toks.iter().any(|t| matches!(t, InlineTok::Image { .. })));
+}
+
+#[test]
+fn obsidian_wiki_embed_is_not_a_markdown_image() {
+    // `![[img.png]]` is handled by the wiki-link rewriter at import,
+    // not the inline image matcher.
+    let toks = tokenize("![[img.png]]");
+    assert!(!toks.iter().any(|t| matches!(t, InlineTok::Image { .. })));
+}
+
+#[test]
 fn unclosed_marker_falls_back_to_plain() {
     let toks = tokenize("a **brave");
     assert!(matches!(toks.first(), Some(InlineTok::Plain(_))));

@@ -95,12 +95,15 @@ fn note_embeds_keep_shape_image_embeds_become_md_links() {
     let out = read(&ws.root.join("pages/media.md"));
     assert!(out.contains("![[Other Note]]"), "note embed kept:\n{out}");
     // The image embed's file was pulled into the workspace and its link
-    // rewritten to the content-addressed path (plain link, not `![`).
+    // rewritten to the content-addressed path as an `![]` image embed.
     assert!(
         !out.contains("outl-import-asset:") && !out.contains("assets/pic.png"),
         "image link not content-addressed:\n{out}"
     );
-    assert!(out.contains("](assets/"), "no assets link emitted:\n{out}");
+    assert!(
+        out.contains("![pic.png](assets/"),
+        "no image embed emitted:\n{out}"
+    );
     assert_eq!(report.assets_copied, 1);
     assert_eq!(report.assets_missing, 0);
     let copied: Vec<_> = std::fs::read_dir(ws.root.join("assets"))

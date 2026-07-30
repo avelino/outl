@@ -214,6 +214,7 @@ The third line (`- this is a regular child block`) is a real child.
 | `#name` | Tag (page reference with classification semantics) |
 | `((blk-XXXXXX))` | Block reference — renders as the source block's text, links to it |
 | `!((blk-XXXXXX))` | Block embed — renders the source block expanded with its subtree |
+| `![alt](url)` | Image / embedded asset — renders inline (`<img>` on desktop/mobile, a `🖼`/`📄` placeholder in the TUI); `url` is a workspace-relative `assets/<hash>.<ext>` path or a remote URL. See [Asset links](#asset-links-nameassetshashext) |
 | `:shortcode:` | GitHub gemoji shortcode — renders as the unicode glyph (`:tada:` → 🎉) |
 | `{{query: ...}}` | Inline query token (legacy — parsed as opaque; use ` ```query ` code blocks instead, see [Query code blocks](#query-code-blocks) below) |
 | `**bold**`, `*italic*` / `_italic_`, `~~strike~~`, `` `code` `` | Standard CommonMark (underscore emphasis rules apply — see below) |
@@ -265,20 +266,26 @@ Workspaces that ever expanded a handle to 7+ characters keep working forever bec
 
 #### Asset links (`[name](assets/<hash>.<ext>)`)
 
-An uploaded file (PDF, image, anything) is a **standard CommonMark link**, not a new token.
-`outl asset add`, the MCP `outl_asset_add` tool, and the desktop/mobile "Attach file" action all copy the file into `<workspace>/assets/` under its content hash and insert this link.
-So does dropping a file onto an outline row (desktop, and mobile on iPad) or pasting a dropped file's path in the TUI's Insert mode — see [clients.md → Attach / drag-and-drop file import](clients.md#attach--drag-and-drop-file-import):
+An uploaded file is copied into `<workspace>/assets/` under its content hash and referenced from a block.
+`outl asset add`, the MCP `outl_asset_add` tool, and the desktop/mobile "Attach file" action all do this.
+So does dropping a file onto an outline row (desktop, and mobile on iPad) or pasting a dropped file's path in the TUI's Insert mode — see [clients.md → Attach / drag-and-drop file import](clients.md#attach--drag-and-drop-file-import).
+
+The reference takes one of two forms, chosen by the file kind:
 
 ```markdown
-- see the spec: [proposal.pdf](assets/1b2c3d...e4f5.pdf)
-- the diagram: [diagram.png](assets/9a8b7c...d6e5.png)
+- the diagram: ![diagram.png](assets/9a8b7c...d6e5.png)   ← image → embed form, renders inline
+- see the spec: [proposal.pdf](assets/1b2c3d...e4f5.pdf)   ← other file → plain link
 ```
 
-The filename stem is the hex SHA-256 of the file's bytes, so re-uploading identical content reuses the same file and link everywhere.
-Every asset, images included, uses the plain `[]()` link form: clicking it opens the file in the OS default app, outl does not render assets inline yet.
-The `![]()` image-embed form is reserved for a future inline-image render.
-Clicking the link opens the file in the OS default app (TUI `g x`, desktop/mobile tap) — outl never renders the file inline.
+- **Images** (`png`, `jpg`, `jpeg`, `gif`, `webp`, `svg`, `bmp`, `avif`, `ico`, `tiff`) use the **embed form `![alt](url)`** and render **inline**: an `<img>` on desktop/mobile, and a `🖼 alt` placeholder in the TUI (a terminal can't paint pixels).
+- **Every other file** (PDF, anything) uses the **plain link `[name](url)`** and renders as a **file chip** (`📄 name`); activating it opens the file in the OS default app (TUI `g x`, desktop/mobile tap).
+
+The importers (`outl import roam|logseq|obsidian`) apply the same rule: an imported image lands as `![…]` and renders inline, while other imported files stay `[…]` links.
+The filename stem is the hex SHA-256 of the file's bytes, so re-uploading identical content reuses the same file and reference everywhere.
 A file over `[assets] max_bytes` in `config.toml` (default 100 MiB) is rejected before the copy; see [Configuration](config.md).
+
+Inline image rendering resolves the `assets/<hash>.<ext>` path against the workspace root on the client and loads the bytes through the backend (no external network fetch for a local asset); a remote `http(s)` image `url` is loaded directly.
+A `![…]` whose target is **not** an image extension (e.g. `![notes](assets/x.pdf)`) degrades to the same file chip as the plain-link form, so no reference is ever left unrendered.
 
 Asset bytes are **not** workspace state and never enter the op log — only the link text does, as an ordinary block edit.
 The file itself replicates like the `.md` projections: the file transport (iCloud/shared filesystem) carries it for free, and the iroh transport ships it over a dedicated `outl-asset/1` stream (see [Sync](sync.md)).

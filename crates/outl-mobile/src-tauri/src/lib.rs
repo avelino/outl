@@ -64,9 +64,9 @@ use crate::commands::{
     plugin_install_official, plugin_list, plugin_registry_list, plugin_run, plugin_secret_remove,
     plugin_secret_set, plugin_set_enabled, plugin_settings_describe, plugin_sync_hooks,
     plugin_toolbar, plugin_transform, plugin_transformers, plugin_uninstall, previous_day,
-    reload_workspace, resolve_page_labels, resolve_ref, search_blocks, search_pages,
-    search_persons, set_backlinks_order, set_block_collapsed, split_block, today_slug_cmd,
-    toggle_quote, toggle_todo, workspace_stats,
+    read_asset_data_url, reload_workspace, resolve_page_labels, resolve_ref, search_blocks,
+    search_pages, search_persons, set_backlinks_order, set_block_collapsed, split_block,
+    today_slug_cmd, toggle_quote, toggle_todo, workspace_stats,
 };
 use crate::plugin_service::spawn_plugin_service;
 use crate::state::AppState;
@@ -340,8 +340,10 @@ pub fn run() {
             paste_plain_at,
             copy_markdown,
             copy_block_markdown,
-            // Assets (open uploaded file / import a file as a block)
+            // Assets (open uploaded file / import a file as a block /
+            // read bytes as a data URL for inline render)
             open_asset,
+            read_asset_data_url,
             attach_asset,
             import_asset_file,
             reload_workspace,

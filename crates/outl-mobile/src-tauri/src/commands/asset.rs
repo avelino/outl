@@ -14,6 +14,14 @@ pub(crate) fn open_asset(url: String, state: State<'_, AppState>) -> Result<(), 
 }
 
 #[tauri::command]
+pub(crate) fn read_asset_data_url(
+    url: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    shared::read_asset_data_url(state.inner(), url)
+}
+
+#[tauri::command]
 pub(crate) fn import_asset_file(
     source_path: String,
     state: State<'_, AppState>,
