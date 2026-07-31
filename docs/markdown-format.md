@@ -277,7 +277,8 @@ The reference takes one of two forms, chosen by the file kind:
 - see the spec: [proposal.pdf](assets/1b2c3d...e4f5.pdf)   ← other file → plain link
 ```
 
-- **Images** (`png`, `jpg`, `jpeg`, `gif`, `webp`, `svg`, `bmp`, `avif`, `ico`, `tiff`) use the **embed form `![alt](url)`** and render **inline**: an `<img>` on desktop/mobile, and a `🖼 alt` placeholder in the TUI (a terminal can't paint pixels).
+- **Images** (`png`, `jpg`, `jpeg`, `gif`, `webp`, `svg`, `bmp`, `avif`, `ico`, `tiff`, `tif`) use the **embed form `![alt](url)`** and render **inline**.
+  Desktop and mobile show an `<img>`, the TUI shows a `🖼 alt` placeholder (a terminal can't paint pixels).
 - **Every other file** (PDF, anything) uses the **plain link `[name](url)`** and renders as a **file chip** (`📄 name`); activating it opens the file in the OS default app (TUI `g x`, desktop/mobile tap).
 
 The importers (`outl import roam|logseq|obsidian`) apply the same rule: an imported image lands as `![…]` and renders inline, while other imported files stay `[…]` links.

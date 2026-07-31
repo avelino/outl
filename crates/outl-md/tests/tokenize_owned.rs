@@ -130,8 +130,18 @@ fn serde_json_kind_field_matches_mobile_dto() {
         InlineToken::BlockRef {
             value: "blk-x1".into(),
         },
+        InlineToken::Image {
+            alt: "cover".into(),
+            href: "assets/ab12.png".into(),
+        },
     ];
     let json = serde_json::to_string(&toks).unwrap();
     assert!(json.contains(r#""kind":"plain""#));
     assert!(json.contains(r#""kind":"blockref""#));
+    // The image token's wire shape is what the frontend switches on; pin
+    // the discriminant and both field names so a rename can't silently
+    // drop images to "renders as nothing" on a client.
+    assert!(json.contains(r#""kind":"image""#));
+    assert!(json.contains(r#""alt":"cover""#));
+    assert!(json.contains(r#""href":"assets/ab12.png""#));
 }

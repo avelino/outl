@@ -2,7 +2,12 @@ import { createResource, For, JSX, Match, Show, Switch } from "solid-js";
 
 import { readAssetDataUrl } from "../api/commands";
 import type { InlineToken, ResolvedBlock } from "../api/types";
-import { assetFileName, isAssetLink, isImagePath } from "../links";
+import {
+  assetFileName,
+  isAssetLink,
+  isImagePath,
+  isSafeHttpUrl,
+} from "../links";
 
 /** Resolved block content keyed by ref handle (`blk-XXXXXX`). Both
  *  `((…))` inline refs and `!((…))` embeds resolve through the same
@@ -234,6 +239,20 @@ export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
           }
           case "image": {
             const label = assetFileName(tok.href);
+            // The compact inline variant (breadcrumbs, previews) can't
+            // hold a block image without breaking the line, so any asset
+            // renders as an inline-sized chip there. The block/pill
+            // variant renders the real <img> below.
+            if (variant() === "inline") {
+              return (
+                <FileChip
+                  href={tok.href}
+                  label={tok.alt || label}
+                  icon={isImagePath(tok.href) ? "🖼️" : "📄"}
+                  onLinkClick={props.onLinkClick}
+                />
+              );
+            }
             // Non-image file (pdf, unknown) → clickable chip that opens
             // in the OS viewer (via the client's onLinkClick asset
             // routing). No inline embed for the MVP.
@@ -249,10 +268,24 @@ export function MarkdownInline(props: MarkdownInlineProps): JSX.Element {
             }
             const imgClass =
               "my-1 block h-auto max-h-96 max-w-full rounded-lg";
-            // A remote http(s) image loads straight from its URL. A local
-            // `assets/…` asset has no web origin the webview can reach, so
-            // its bytes come back from the backend as a `data:` URL.
+            // A remote image loads straight from its URL, but only over
+            // http(s): the href comes from synced / imported markdown, so
+            // an arbitrary scheme (file:, data:, javascript:) is refused
+            // and shown as a chip instead of being hit as an <img src>. A
+            // local `assets/…` asset has no web origin the webview can
+            // reach, so its bytes come back from the backend as a `data:`
+            // URL.
             if (!isAssetLink(tok.href)) {
+              if (!isSafeHttpUrl(tok.href)) {
+                return (
+                  <FileChip
+                    href={tok.href}
+                    label={tok.alt || label}
+                    icon="🖼️"
+                    onLinkClick={props.onLinkClick}
+                  />
+                );
+              }
               return (
                 <img
                   src={tok.href}
