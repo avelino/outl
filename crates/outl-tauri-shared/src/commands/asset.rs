@@ -7,6 +7,7 @@
 //! into `<root>/assets/<hash>.<ext>` and hands the OS the file so the
 //! user's default viewer (Preview, an image viewer) opens it.
 
+use std::io::Read as _;
 use std::path::Path;
 
 use base64::Engine as _;
@@ -101,11 +102,11 @@ fn mime_from_ext(path: &Path) -> &'static str {
 /// desktop and mobile, zero Tauri config.
 ///
 /// The path resolves through the shared [`resolve_asset_path`] guard
-/// (rejects traversal / external schemes), and reads are capped at
-/// `MAX_DATA_URL_BYTES` so a huge file can never be base64'd into the
-/// webview. `Ok(None)` from the resolver means the asset hasn't synced to
-/// this device yet — surfaced as a distinct error, mirroring
-/// [`open_asset`].
+/// (rejects traversal / external schemes). Only a regular file is served,
+/// and the read itself is bounded to `MAX_DATA_URL_BYTES`, so a huge file
+/// can never be base64'd into the webview. `Ok(None)` from the resolver
+/// means the asset hasn't synced to this device yet — surfaced as a
+/// distinct error, mirroring [`open_asset`].
 pub fn read_asset_data_url<S: AppHost>(state: &S, url: String) -> Result<String, String> {
     let root = storage_root_or_err(state)?;
     let path = match resolve_asset_path(&root, &url) {
@@ -114,16 +115,31 @@ pub fn read_asset_data_url<S: AppHost>(state: &S, url: String) -> Result<String,
         Err(e) => return Err(e.to_string()),
     };
 
-    let size = std::fs::metadata(&path)
+    // Reject anything that isn't a plain file. `metadata().len()` is
+    // meaningless for a FIFO / device node (reports 0), and reading one
+    // would block forever (FIFO) or never reach EOF (`/dev/zero`) — the
+    // one gap `resolve_asset_path` leaves, since such a node is still a
+    // `Component::Normal` entry under `assets/`.
+    let meta = std::fs::metadata(&path).map_err(|e| format!("failed to read asset: {e}"))?;
+    if !meta.file_type().is_file() {
+        return Err("asset is not a regular file".to_string());
+    }
+
+    // Bound the read structurally (not just a pre-check on the reported
+    // size): read one byte past the cap, and if we got it the file is over
+    // the limit. Mirrors the capped read in `outl_actions::import_asset`.
+    let mut bytes = Vec::new();
+    std::fs::File::open(&path)
         .map_err(|e| format!("failed to read asset: {e}"))?
-        .len();
-    if size > MAX_DATA_URL_BYTES {
+        .take(MAX_DATA_URL_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("failed to read asset: {e}"))?;
+    if bytes.len() as u64 > MAX_DATA_URL_BYTES {
         return Err(format!(
-            "asset too large to display inline ({size} bytes, limit {MAX_DATA_URL_BYTES})"
+            "asset too large to display inline (over {MAX_DATA_URL_BYTES} bytes)"
         ));
     }
 
-    let bytes = std::fs::read(&path).map_err(|e| format!("failed to read asset: {e}"))?;
     let mime = mime_from_ext(&path);
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     Ok(format!("data:{mime};base64,{b64}"))
@@ -187,7 +203,72 @@ pub fn attach_asset<S: AppHost>(
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_picker_path;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    use base64::Engine as _;
+    use outl_actions::SyncTransport;
+    use outl_core::hlc::HlcGenerator;
+    use outl_core::id::ActorId;
+    use outl_core::workspace::Workspace;
+    use outl_exec::RuntimeRegistry;
+    use parking_lot::Mutex;
+    use tempfile::TempDir;
+
+    use super::{mime_from_ext, normalize_picker_path, read_asset_data_url, MAX_DATA_URL_BYTES};
+    use crate::host::AppHost;
+
+    /// Minimal [`AppHost`] for the read-only asset commands: they only touch
+    /// `storage_root()`, never the workspace lock, so the workspace slot
+    /// stays `None` and the rest is trait boilerplate. Mirrors the shape in
+    /// `tests/resolve_embeds.rs` and both real clients.
+    struct TestHost {
+        workspace: Arc<Mutex<Option<Workspace>>>,
+        hlc: HlcGenerator,
+        root: PathBuf,
+        registry: Arc<RuntimeRegistry>,
+    }
+
+    impl AppHost for TestHost {
+        fn workspace(&self) -> &Mutex<Option<Workspace>> {
+            &self.workspace
+        }
+        fn workspace_arc(&self) -> Arc<Mutex<Option<Workspace>>> {
+            self.workspace.clone()
+        }
+        fn hlc(&self) -> &HlcGenerator {
+            &self.hlc
+        }
+        fn storage_root(&self) -> Result<PathBuf, String> {
+            Ok(self.root.clone())
+        }
+        fn sync_transport(&self) -> Option<Arc<dyn SyncTransport>> {
+            None
+        }
+        fn exec_registry(&self) -> Arc<RuntimeRegistry> {
+            self.registry.clone()
+        }
+    }
+
+    /// A temp workspace root with an `assets/` dir, plus a host pointed at
+    /// it. `read_asset_data_url` never locks the workspace, so the slot is
+    /// left empty (`None`).
+    fn setup() -> (TempDir, TestHost) {
+        let dir = TempDir::new().expect("temp dir");
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets")).expect("create assets dir");
+        let host = TestHost {
+            workspace: Arc::new(Mutex::new(None)),
+            hlc: HlcGenerator::new(ActorId::new()),
+            root,
+            registry: Arc::new(RuntimeRegistry::default()),
+        };
+        (dir, host)
+    }
+
+    fn write_asset(host: &TestHost, name: &str, bytes: &[u8]) {
+        std::fs::write(host.root.join("assets").join(name), bytes).expect("write asset");
+    }
 
     #[test]
     fn desktop_plain_path_is_untouched() {
@@ -207,5 +288,150 @@ mod tests {
             normalize_picker_path("file://localhost/tmp/a.pdf"),
             "/tmp/a.pdf"
         );
+    }
+
+    // ---- mime_from_ext ---------------------------------------------------
+
+    #[test]
+    fn mime_covers_known_and_unknown_extensions() {
+        assert_eq!(mime_from_ext(Path::new("assets/a.png")), "image/png");
+        assert_eq!(mime_from_ext(Path::new("assets/a.jpg")), "image/jpeg");
+        assert_eq!(mime_from_ext(Path::new("assets/a.jpeg")), "image/jpeg");
+        assert_eq!(mime_from_ext(Path::new("assets/a.svg")), "image/svg+xml");
+        assert_eq!(mime_from_ext(Path::new("assets/a.pdf")), "application/pdf");
+        // Unknown / extensionless falls back to the generic binary type.
+        assert_eq!(
+            mime_from_ext(Path::new("assets/a.xyz")),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            mime_from_ext(Path::new("assets/noext")),
+            "application/octet-stream"
+        );
+    }
+
+    #[test]
+    fn mime_lowercases_the_extension() {
+        // An uppercase extension must still map — the fn lowercases first.
+        assert_eq!(mime_from_ext(Path::new("assets/a.PNG")), "image/png");
+        assert_eq!(mime_from_ext(Path::new("assets/a.Jpeg")), "image/jpeg");
+    }
+
+    // ---- read_asset_data_url: happy path ---------------------------------
+
+    #[test]
+    fn happy_path_returns_data_url_with_original_bytes() {
+        let (_dir, host) = setup();
+        let bytes = b"\x89PNG\r\n\x1a\n not a real png but real bytes";
+        write_asset(&host, "pic.png", bytes);
+
+        let url = read_asset_data_url(&host, "assets/pic.png".to_string())
+            .expect("a regular file under assets/ resolves");
+
+        let b64 = url
+            .strip_prefix("data:image/png;base64,")
+            .expect("data URL carries the png mime + base64 marker");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .expect("tail is valid base64");
+        assert_eq!(decoded, bytes, "round-trips the original bytes");
+    }
+
+    // ---- read_asset_data_url: traversal / bad links ----------------------
+
+    #[test]
+    fn traversal_link_is_rejected() {
+        let (_dir, host) = setup();
+        // A crafted `..` escape must never reach the filesystem — the error
+        // is the traversal rejection, not the "not found" sentinel.
+        for bad in ["assets/../../etc/passwd", "../secret"] {
+            let err = read_asset_data_url(&host, bad.to_string())
+                .expect_err("traversal / non-asset link must be rejected");
+            assert!(
+                err.contains("invalid asset path"),
+                "expected traversal rejection for {bad:?}, got: {err}"
+            );
+            assert_ne!(
+                err, "asset not found on this device yet",
+                "traversal must not be reported as a plain missing file"
+            );
+        }
+    }
+
+    // ---- read_asset_data_url: not synced yet -----------------------------
+
+    #[test]
+    fn well_formed_but_absent_asset_is_not_found() {
+        let (_dir, host) = setup();
+        // Well-formed link, no traversal, but the file was never written —
+        // `resolve_asset_path` returns `Ok(None)`, the distinct sentinel.
+        let err = read_asset_data_url(&host, "assets/deadbeef.png".to_string())
+            .expect_err("a missing asset resolves to an error");
+        assert_eq!(err, "asset not found on this device yet");
+    }
+
+    // ---- read_asset_data_url: oversize cap -------------------------------
+
+    #[test]
+    fn oversize_asset_is_rejected() {
+        let (_dir, host) = setup();
+        // Exactly one byte past the cap: the structural `Take` bound reads
+        // `MAX + 1`, sees it exceeded the limit, and refuses to inline it.
+        let over = vec![0u8; (MAX_DATA_URL_BYTES + 1) as usize];
+        write_asset(&host, "huge.png", &over);
+
+        let err = read_asset_data_url(&host, "assets/huge.png".to_string())
+            .expect_err("a file over the cap must be rejected");
+        assert!(
+            err.contains("too large"),
+            "expected the oversize error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn asset_exactly_at_cap_is_served() {
+        let (_dir, host) = setup();
+        // The boundary itself is allowed: `len > MAX` is the reject test, so
+        // a file of exactly `MAX` bytes still inlines.
+        let at_cap = vec![0u8; MAX_DATA_URL_BYTES as usize];
+        write_asset(&host, "atcap.png", &at_cap);
+
+        let url = read_asset_data_url(&host, "assets/atcap.png".to_string())
+            .expect("a file at exactly the cap must still be served");
+        assert!(url.starts_with("data:image/png;base64,"));
+    }
+
+    // ---- read_asset_data_url: non-regular file ---------------------------
+
+    #[test]
+    fn directory_under_assets_is_not_a_regular_file() {
+        let (_dir, host) = setup();
+        // A directory resolves (it exists) but is not a regular file, so the
+        // `is_file()` guard rejects it before any read.
+        std::fs::create_dir_all(host.root.join("assets").join("subdir"))
+            .expect("create asset subdir");
+        let err = read_asset_data_url(&host, "assets/subdir".to_string())
+            .expect_err("a directory is not a regular file");
+        assert_eq!(err, "asset is not a regular file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fifo_under_assets_is_rejected_without_hanging() {
+        let (_dir, host) = setup();
+        let fifo = host.root.join("assets").join("pipe.png");
+        // No `libc`/`nix` dependency in this crate, so the FIFO is created
+        // via `mkfifo(1)` (present on macOS + Linux). `metadata()` stats the
+        // node without opening it, so the `is_file()` guard rejects it
+        // immediately instead of blocking on an `open()` that never returns.
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("spawn mkfifo");
+        assert!(status.success(), "mkfifo should create the FIFO");
+
+        let err = read_asset_data_url(&host, "assets/pipe.png".to_string())
+            .expect_err("a FIFO is not a regular file");
+        assert_eq!(err, "asset is not a regular file");
     }
 }

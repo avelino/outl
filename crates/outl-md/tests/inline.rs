@@ -3,7 +3,8 @@
 //! file-size-guard. Every test here exercises only the public API.
 
 use outl_md::inline::{
-    byte_index_for_char, link_at_cursor, ref_at_cursor, tokenize, InlineTok, RefTarget,
+    byte_index_for_char, inline_to_source, link_at_cursor, ref_at_cursor, tokenize, InlineTok,
+    RefTarget,
 };
 
 #[test]
@@ -160,6 +161,17 @@ fn obsidian_wiki_embed_is_not_a_markdown_image() {
     // not the inline image matcher.
     let toks = tokenize("![[img.png]]");
     assert!(!toks.iter().any(|t| matches!(t, InlineTok::Image { .. })));
+}
+
+#[test]
+fn image_round_trips_through_inline_to_source() {
+    // The "markdown stays clean" invariant: an image token renders back to
+    // the exact `![alt](url)` source and re-tokenizes to the same token.
+    let src = "![cover](assets/ab12.png)";
+    let toks = tokenize(src);
+    let rendered = inline_to_source(&toks);
+    assert_eq!(rendered, src);
+    assert_eq!(tokenize(&rendered), toks);
 }
 
 #[test]

@@ -172,6 +172,50 @@ describe("MarkdownInline — image / asset rendering (issue #203)", () => {
     expect(opened).toEqual(["assets/spec.pdf"]);
     m.dispose();
   });
+
+  it("refuses a non-http(s) remote image scheme and shows a chip", () => {
+    // A `file:`/`data:`/`javascript:` href from synced or imported
+    // markdown must never be hit as an <img src>. It degrades to a chip.
+    readAssetDataUrlMock.mockClear();
+    const tokens: InlineToken[] = [
+      { kind: "image", alt: "trap", href: "file:///etc/passwd.png" },
+    ];
+    const m = mount(tokens);
+    expect(m.host.querySelector("img")).toBeNull();
+    expect(readAssetDataUrlMock).not.toHaveBeenCalled();
+    expect(m.host.textContent).toContain("trap");
+    m.dispose();
+  });
+
+  it("renders an inline-variant image as a compact chip, not a block <img>", () => {
+    // The compact `inline` variant can't hold a block image, so even a
+    // valid local asset renders as a chip and skips the byte fetch.
+    readAssetDataUrlMock.mockClear();
+    const tokens: InlineToken[] = [
+      { kind: "image", alt: "diagram", href: "assets/abc.png" },
+    ];
+    const m = mount(tokens, "inline");
+    expect(m.host.querySelector("img")).toBeNull();
+    expect(readAssetDataUrlMock).not.toHaveBeenCalled();
+    expect(m.host.textContent).toContain("diagram");
+    m.dispose();
+  });
+
+  it("falls back to a file chip when a local asset fails to load", async () => {
+    readAssetDataUrlMock.mockClear();
+    readAssetDataUrlMock.mockRejectedValueOnce(new Error("not synced"));
+    const opened: string[] = [];
+    const tokens: InlineToken[] = [
+      { kind: "image", alt: "diagram", href: "assets/abc.png" },
+    ];
+    const m = mount(tokens, undefined, (href) => opened.push(href));
+    await tick();
+    expect(m.host.querySelector("img")).toBeNull();
+    const chip = m.host.querySelector('[role="button"]') as HTMLElement;
+    expect(chip).not.toBeNull();
+    expect(chip.textContent).toContain("diagram");
+    m.dispose();
+  });
 });
 
 describe("MarkdownInline — block-ref rendering (issue #147)", () => {

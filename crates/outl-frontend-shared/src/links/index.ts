@@ -67,10 +67,24 @@ export function isImagePath(href: string): boolean {
 
 /**
  * Best-effort file name from a link target, for the file-chip label.
- * Strips a query/fragment and returns the last path segment.
+ * Strips a query/fragment and returns the last non-empty path segment
+ * (so a trailing slash doesn't yield an empty label).
  */
 export function assetFileName(href: string): string {
   const clean = href.split(/[?#]/)[0];
-  const segments = clean.split("/");
+  const segments = clean.split("/").filter(Boolean);
   return segments[segments.length - 1] || href;
+}
+
+/**
+ * Whether a URL is safe to load directly as a remote `<img src>` —
+ * `http`/`https` only. A remote image `href` comes from markdown that is
+ * synced between peers and bulk-imported from foreign graphs, so it is
+ * attacker-influenced; loading an arbitrary scheme (`file:`, `data:`,
+ * `javascript:`) as an image src can probe the local filesystem or dodge
+ * the asset path. Fails closed: a non-http(s) remote image renders as a
+ * file chip instead of hitting the origin.
+ */
+export function isSafeHttpUrl(href: string): boolean {
+  return /^https?:\/\//i.test(href.trim());
 }
