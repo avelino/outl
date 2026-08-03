@@ -61,13 +61,20 @@ export function BlockProperties(props: BlockPropertiesProps): JSX.Element {
     // gone by the time an async `onCommit` resolves.
     const value = draft();
     setEditing(null);
-    // A rejected commit has to reach the host. Swallowing it left the
+    // A failed commit has to reach the host. Swallowing it left the
     // chip showing the new value while the backend still held the old
     // one, and the only trace was an unhandled rejection in a console
     // the user never opens.
-    void Promise.resolve(props.onCommit?.(key, value)).catch((e) => {
-      props.onError?.(e instanceof Error ? e.message : String(e));
-    });
+    //
+    // The callback runs *inside* the chain, not as an argument to
+    // `Promise.resolve`: an argument is evaluated before the promise
+    // exists, so a synchronous throw escapes past the `.catch` and out
+    // of the blur handler. Both failure modes have to land here.
+    void Promise.resolve()
+      .then(() => props.onCommit?.(key, value))
+      .catch((e) => {
+        props.onError?.(e instanceof Error ? e.message : String(e));
+      });
   }
 
   return (
