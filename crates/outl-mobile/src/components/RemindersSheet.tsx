@@ -11,7 +11,7 @@ import {
   setReminderSettings,
   snoozePresets,
   snoozeReminder,
-  toggleTodo,
+  markBlockDone,
 } from "@outl/shared/api/commands";
 
 import { createSheetDrag } from "../lib/sheet-drag";
@@ -97,14 +97,17 @@ export function RemindersSheet(props: RemindersSheetProps): JSX.Element {
    *
    * Resolves the block's **own** page id first: this sheet lists the
    * whole workspace, so the open page is usually a different one, and
-   * `toggle_todo` uses the page id to render the reply and queue the
+   * the command uses the page id to render the reply and queue the
    * projection. The refreshed view is only applied when the user is
    * actually looking at that page, so ticking a row never teleports
    * them somewhere else.
+   *
+   * `markBlockDone`, not `toggleTodo`: a rule can sit on a block with
+   * no marker, and toggling that lands on `TODO` and keeps nagging.
    */
   async function markDone(r: Reminder) {
     const target = await openPageBySlug(r.page_slug);
-    const after = await toggleTodo(target.page.id, r.block_id);
+    const after = await markBlockDone(target.page.id, r.block_id);
     if (props.currentSlug === r.page_slug) props.onView(after);
   }
 

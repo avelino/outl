@@ -84,9 +84,63 @@ pub fn cycle_todo(raw: &str) -> String {
     out
 }
 
+/// Set the TODO state of `raw` outright, rather than stepping to the
+/// next one. Returns the new text, ready to store as block content.
+///
+/// Same quote handling as [`cycle_todo`], for the same reason.
+///
+/// Exists because "mark this done" and "advance one state" are not the
+/// same request, and a caller that only had `cycle_todo` had to guess.
+/// The reminders panel's ✓ button guessed wrong: on a block carrying a
+/// rule but no marker (`g r` attaches to any block, `remind:: 3pm`
+/// needs no task), one cycle produced `TODO`, so the button labelled
+/// "mark done, cancels the reminder" armed the nag instead.
+pub fn set_todo(raw: &str, state: Option<TodoState>) -> String {
+    let (quoted, after_quote) = crate::quote::split_quote(raw);
+    let (_, body) = split_todo(after_quote);
+    let mut out = String::new();
+    if let Some(s) = state {
+        out.push_str(s.prefix());
+    }
+    if quoted {
+        out.push_str(crate::quote::QUOTE_PREFIX);
+    }
+    out.push_str(body);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_todo_reaches_done_from_every_starting_state() {
+        // The reminders ✓ has to mean DONE from a plain block, not
+        // "one step towards it".
+        for start in ["ship it", "TODO ship it", "DONE ship it"] {
+            assert_eq!(set_todo(start, Some(TodoState::Done)), "DONE ship it");
+        }
+    }
+
+    #[test]
+    fn set_todo_clears_a_marker_and_keeps_the_quote() {
+        assert_eq!(set_todo("TODO > ship it", None), "> ship it");
+        assert_eq!(
+            set_todo("> ship it", Some(TodoState::Done)),
+            "DONE > ship it"
+        );
+        // Legacy shape (marker after the quote) normalises too.
+        assert_eq!(
+            set_todo("> TODO ship it", Some(TodoState::Done)),
+            "DONE > ship it"
+        );
+    }
+
+    #[test]
+    fn set_todo_is_idempotent() {
+        let once = set_todo("ship it", Some(TodoState::Done));
+        assert_eq!(set_todo(&once, Some(TodoState::Done)), once);
+    }
 
     #[test]
     fn split_recognises_both_markers() {

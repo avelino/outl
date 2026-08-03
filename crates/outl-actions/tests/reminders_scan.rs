@@ -297,10 +297,26 @@ fn a_workspace_with_no_rules_never_touches_the_fired_log() {
     let tmp = TempDir::new().expect("tempdir");
     let root = tmp.path();
     let (w, _hlc, _ids) = workspace_with(root, &[("TODO no reminder here", None)]);
+    let log = outl_actions::reminders::fired_log_path(root);
 
     assert!(take_due(&w, root, None, at(2026, 12, 12, 10, 0)).is_empty());
     assert!(
-        !outl_actions::reminders::fired_log_path(root).exists(),
+        !log.exists(),
         "a sweep that found nothing must not have written a fired log"
+    );
+
+    // The other half: a device that HAS fired before carries a log,
+    // and a no-rule poll must leave it byte-identical. Rewriting it
+    // every tick would be the same disk traffic the early return
+    // exists to remove, only harder to notice.
+    std::fs::create_dir_all(log.parent().expect("log parent")).expect("mkdir");
+    let seeded = br#"{"blk-existing":1765533600000}"#;
+    std::fs::write(&log, seeded).expect("seed fired log");
+
+    assert!(take_due(&w, root, None, at(2026, 12, 12, 11, 0)).is_empty());
+    assert_eq!(
+        std::fs::read(&log).expect("read fired log"),
+        seeded,
+        "a no-rule poll rewrote the device-local fired log"
     );
 }

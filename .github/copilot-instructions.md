@@ -235,6 +235,7 @@ Recently added — check these before writing a parallel reminder helper (catalo
 | Silence a reminder across every device | `outl_actions::snooze` / `snooze_until` (`Op::SnoozeRemind`) | `crates/outl-actions/src/reminders/mod.rs` |
 | Deliver what came due + the device-local fired log. In `outl-actions` because every client delivers, the TUI included | `outl_actions::take_due` | `crates/outl-actions/src/reminders/fired.rs` |
 | Format "in 3h" / bucket a reminder list for a GUI | `@outl/shared` `formatNextFire` / `groupReminders` | `crates/outl-frontend-shared/src/api/commands.ts` |
+| **Mark a block DONE outright** (cancels its rule). Not `cycle_todo` — on a block with no marker, one cycle lands on `TODO` and arms the nag | `outl_actions::todo::set_todo` | `crates/outl-actions/src/todo.rs` |
 
 Recently added — check these before writing a parallel template helper (catalog § 16 "Templates"):
 

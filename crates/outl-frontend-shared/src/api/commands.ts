@@ -984,6 +984,22 @@ export function setBlockRemind(
 }
 
 /**
+ * Mark a block DONE, cancelling every pending fire of its rule.
+ *
+ * Not `toggleTodo`. A rule can sit on a block with no TODO marker at
+ * all, and toggling that advances it to `TODO` — so the reminders
+ * list's "mark done" button used to arm the nag instead of cancelling
+ * it. Setting the state outright is also idempotent, which matters
+ * for a button that can be double-tapped.
+ */
+export function markBlockDone(
+  pageId: string,
+  blockId: string,
+): Promise<PageView> {
+  return invoke<PageView>("mark_block_done", { pageId, blockId });
+}
+
+/**
  * Deliver every reminder that came due as an OS notification, and
  * return what was delivered so an open Reminders panel can refresh
  * without a second round trip.

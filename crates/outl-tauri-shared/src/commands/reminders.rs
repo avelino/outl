@@ -14,7 +14,8 @@
 use outl_actions::reminders::{
     scan_reminders, snooze, snooze_until, FiredLog, Reminder, SnoozePreset, Urgency,
 };
-use outl_actions::{clock, set_property};
+use outl_actions::todo::{set_todo, TodoState};
+use outl_actions::{clock, edit_text, set_property};
 use outl_core::property::PropValue;
 use serde::{Deserialize, Serialize};
 
@@ -223,6 +224,30 @@ pub fn set_block_property<S: AppHost>(
     };
     let hlc = state.hlc().clone();
     finish_in_page(state, page, |ws| set_property(ws, &hlc, node, key, value))
+}
+
+/// Mark a block DONE, which cancels every pending fire of its rule.
+///
+/// Deliberately **not** `toggle_todo`. The reminders list offers this
+/// as "mark done (cancels the reminder)", and a rule can sit on a
+/// block with no marker at all (`g r` attaches to whatever is
+/// selected, and `remind:: 3pm` needs no task). Toggling that block
+/// advanced it to `TODO` and the nag kept going — the button did the
+/// opposite of its label. Setting the state outright is idempotent
+/// and says what it means.
+pub fn mark_block_done<S: AppHost>(
+    state: &S,
+    page_id: &str,
+    block_id: &str,
+) -> Result<PageView, String> {
+    let page = parse_node_id(page_id)?;
+    let node = parse_node_id(block_id)?;
+    let hlc = state.hlc().clone();
+    finish_in_page(state, page, |ws| {
+        let current = ws.block_text(node).unwrap_or_default();
+        let next = set_todo(&current, Some(TodoState::Done));
+        edit_text(ws, &hlc, node, &next)
+    })
 }
 
 /// Set (or clear) a block's `remind::` rule. Thin alias over
