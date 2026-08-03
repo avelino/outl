@@ -83,6 +83,17 @@ pub fn today() -> NaiveDate {
     now_local().date_naive()
 }
 
+/// The zone this process resolves wall-clock times in, or `None` when
+/// no `[calendar] timezone` was configured (OS local applies).
+///
+/// Exposed so a caller converting an instant **other than now** can
+/// resolve the offset *at that instant*: applying `now_local()`'s
+/// offset to a target across a DST boundary shifts it by the
+/// transition. See `outl_actions::reminders::local_naive_to_epoch_ms`.
+pub fn timezone() -> Option<Tz> {
+    configured()
+}
+
 /// The resolved zone, if a client initialized the clock with one.
 fn configured() -> Option<Tz> {
     CONFIGURED_TZ.get().copied().flatten()

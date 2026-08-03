@@ -220,7 +220,8 @@ Long-press in the page switcher remains the only trigger on touch devices.
 ## Reminders (`remind::`)
 
 Authoring a reminder and inspecting the schedule are chorded on every client; **delivering** it is per-OS and never a chord.
-The TUI deliberately delivers nothing (a terminal session has no background presence) but still authors and lists — see [reminders.md](reminders.md).
+Every client delivers, the TUI included (an OSC 9 notification plus a toast, on its event-loop tick).
+What the TUI can't do is deliver while it's closed, since a terminal session has no background presence — see [reminders.md](reminders.md).
 
 | Action | TUI | Desktop | Mobile |
 |---|---|---|---|
