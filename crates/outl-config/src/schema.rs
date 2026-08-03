@@ -43,14 +43,22 @@ pub struct Config {
 /// through the op log, and so does a snooze
 /// (`outl_core::op::Op::SnoozeRemind`). Putting quiet hours in the
 /// op log would silence a laptop because a phone was asleep.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RemindersCfg {
-    /// Master switch. `false` (the default) means this device
-    /// registers no OS notifications at all — the `remind::` rules
-    /// still parse and still show up in the Reminders list, they just
-    /// don't interrupt. Turning it on is what triggers the OS
-    /// permission prompt on macOS / iOS.
+    /// Master switch, **on by default**.
+    ///
+    /// Writing `remind:: 3pm` on a block is already the explicit
+    /// opt-in — a bare `[[date]]` schedules nothing. Defaulting this
+    /// to `false` meant the user wrote the rule, waited, got nothing,
+    /// and had to go find a toggle: the feature silently broken out of
+    /// the box. A device that never gets a `remind::` never fires, so
+    /// the default costs someone who doesn't use reminders nothing,
+    /// not even the OS permission prompt (which only appears on the
+    /// first actual notification).
+    ///
+    /// Set it to `false` to keep the rules tracked and listed on this
+    /// device while never being interrupted by them.
     pub enabled: bool,
 
     /// `"22:00-07:00"` — a fire that would land inside this window is
@@ -62,6 +70,15 @@ pub struct RemindersCfg {
     /// failing the whole config load — a typo here must never keep the
     /// app from opening.
     pub quiet_hours: Option<String>,
+}
+
+impl Default for RemindersCfg {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            quiet_hours: None,
+        }
+    }
 }
 
 impl RemindersCfg {
@@ -495,10 +512,19 @@ relay_url = "https://relay.example"
     }
 
     #[test]
-    fn reminders_default_to_silent() {
+    fn reminders_deliver_by_default() {
+        // `remind::` on a block IS the opt-in. A device that never
+        // gets a rule never fires, so defaulting off only bought the
+        // user a rule that silently did nothing.
         let c: Config = toml::from_str("").unwrap();
-        assert!(!c.reminders.enabled, "opt-in, never on by surprise");
+        assert!(c.reminders.enabled);
         assert_eq!(c.reminders.quiet_window(), None);
+    }
+
+    #[test]
+    fn reminders_can_still_be_switched_off() {
+        let c: Config = toml::from_str("[reminders]\nenabled = false\n").unwrap();
+        assert!(!c.reminders.enabled);
     }
 
     #[test]

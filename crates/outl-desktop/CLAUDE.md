@@ -331,7 +331,7 @@ Grouping labels and the "in 3h" column come from `@outl/shared` (`groupReminders
 
 Delivery is a 30s `setInterval` in `<AppShell />` calling `deliver_due_reminders`, which turns the shared "what's due" answer into an OS banner via `tauri-plugin-notification`.
 The Rust side keeps the device-local fired log, so polling twice never double-buzzes and a laptop that was asleep owes one banner, not a backlog.
-`[reminders] enabled` (Settings modal) defaults to `false` — switching it on is what triggers the macOS permission prompt.
+`[reminders] enabled` (Settings modal) defaults to **on**: `remind::` on a block is already the opt-in, and a device with no rules never fires, so defaulting off only bought the user a rule that silently did nothing. macOS asks for permission on the first actual fire.
 
 **App-closed delivery is not covered yet**: a launch agent on a `StartCalendarInterval` is the follow-up (see [`docs/reminders.md`](../../docs/reminders.md) → Background delivery).
 

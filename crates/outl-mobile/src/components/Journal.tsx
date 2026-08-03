@@ -50,6 +50,7 @@ import {
   searchPersons,
   setBacklinksOrder,
   setBlockCollapsed,
+  setBlockProperty,
   setBlockRemind,
   splitBlock,
   syncNow,
@@ -1817,6 +1818,15 @@ export function Journal() {
                   onToggleCollapse={handleToggleCollapse}
                   onFocusBlock={handleFocusBlock}
                   onContextMenu={(id) => setContextMenuBlockId(id)}
+                  onSetProperty={(blockId, key, value) => {
+                    const pid = pageId();
+                    if (!pid) return;
+                    void setBlockProperty(pid, blockId, key, value)
+                      .then(applyView)
+                      .catch((e) =>
+                        setError(e instanceof Error ? e.message : String(e)),
+                      );
+                  }}
                   onRefClick={handleRefClick}
                   onTagClick={handleTagClick}
                   onLinkClick={handleLinkClick}
@@ -1948,6 +1958,7 @@ export function Journal() {
         onClose={() => setRemindersOpen(false)}
         onMessage={(text) => setError(text)}
         onView={(v) => applyView(v)}
+        currentSlug={view()?.page.slug ?? null}
       />
 
       <PluginSheet

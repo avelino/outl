@@ -20,11 +20,16 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
   Two behaviours worth knowing: a device that was asleep owes you **one** banner, not a backlog (close the laptop at 10:00 on an hourly rule, open it at 18:00, get one reminder), and a block with two `[[date]]`s schedules on **both**, because you wrote both on purpose.
   **Snooze converges** via the new `Op::SnoozeRemind` — silencing a nag on the phone silences the same block on the laptop.
   The device-local half ("this device already buzzed you") deliberately does *not*: it lives in `<root>/.outl/reminders-fired.json`, a dotfile iCloud drops and iroh never ships, pruned at 7 days.
-  **Quiet hours** (`[reminders] quiet_hours = "22:00-07:00"`, device-local, off by default) push a fire to the window's end rather than dropping it — you asked for it, you get it, just not at 3am.
+  **Quiet hours** (`[reminders] quiet_hours = "22:00-07:00"`, device-local, unset by default) push a fire to the window's end rather than dropping it — you asked for it, you get it, just not at 3am.
+  Delivery itself (`[reminders] enabled`) is **on** by default: writing `remind::` is already the opt-in, and a device that never gets a rule never fires, so defaulting off only bought you a rule that silently did nothing.
   A fire pushed past its own `until` is genuinely over.
   Surfaces: **TUI** `g r` / `g R` to author and `g n` for the overlay (`Ctrl+R` was the obvious chord and is already Redo — a terminal can't tell it from `Ctrl+Shift+R`); **desktop** `Cmd+R` to author, `Cmd/Ctrl+Shift+R` for the panel; **mobile** long-press → *Remind me…*, bell icon for the list.
-  The TUI authors and inspects but deliberately delivers nothing — a terminal session has no background presence.
-  **Scope, stated plainly:** notifications fire whenever the app is running, foreground or backgrounded, on macOS / Linux / Windows / iOS.
+  **All three deliver**, including the TUI, which fires an OSC 9 desktop notification plus a toast on its event-loop tick (OSC 9 is the sibling of the OSC 52 the yank path already uses, honoured by iTerm2 / kitty / WezTerm / ghostty, and the toast covers the emulators that ignore it).
+  That is why `take_due` and the fired log sit in `outl-actions` rather than behind the Tauri layer, which the TUI can't reach.
+  `g s` snoozes the block under the cursor an hour without opening the list, on both keyboard clients.
+  On **mobile** the Reminders sheet carries the two device-local settings itself (a delivery switch and quiet hours as native time pickers), because the app has no settings screen and `config.toml` lives inside the iOS sandbox — without them the sheet could say "notifications are off" and offer nothing to do about it.
+  Its rows also mark a task DONE, matching the desktop panel.
+  **Scope, stated plainly:** notifications fire whenever the app is running, foreground or backgrounded, on macOS / Linux / Windows / iOS, and while the TUI is open.
   **Delivery with the app fully closed does not ship in this change** — the iOS `UNCalendarNotificationTrigger` pre-registration (64-request cap, `BGAppRefreshTask` refill), the macOS launch agent, the Windows scheduled toast and the systemd user timer are tracked as follow-ups on issue #63.
   A reminder for a day you never open outl will not reach you yet; worth knowing before relying on it for something that matters.
   Full spec: [`docs/reminders.md`](docs/reminders.md).

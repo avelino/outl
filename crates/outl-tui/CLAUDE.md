@@ -111,7 +111,7 @@ This section captures only the **architectural / TUI-specific behaviour** a cont
 
 The issue's original sketch put the overlay on `Ctrl+R`; that is already Redo in Normal mode, and a terminal can't distinguish `Ctrl+R` from `Ctrl+Shift+R` — hence the `g` family here and `Cmd/Ctrl+Shift+R` on the desktop only.
 
-**The TUI delivers no notifications.** A terminal session has no background presence, so there is nothing to fire into once the pane closes. It authors and inspects; the desktop and mobile clients deliver.
+**The TUI delivers too, while it's open.** `deliver_due_reminders` runs on the event-loop tick (after the peer-ops and orphan polls, so a rule or snooze that just synced is honoured on the same tick) and fires an OSC 9 desktop notification plus a 10s toast. OSC 9 is the sibling of the OSC 52 in `actions/yank.rs`: emitted only when stdout is a terminal, best-effort, and the toast covers the emulators that ignore it. Delivery is skipped in Insert mode (a repaint mid-keystroke is how you get the feature turned off) and the fire isn't lost, the fired log only records what actually went out. A reminder due with the TUI closed *is* lost to this client, which is the real limit of a terminal session.
 Every schedule question routes to `outl_actions::reminders` (`actions/reminders.rs` is pure wiring) — see [`docs/reminders.md`](../../docs/reminders.md).
 
 ## Insert mode

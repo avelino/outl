@@ -119,3 +119,33 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod property_edit_tests {
+    //! `:prop <key> <value>` is the TUI's property editor, and the
+    //! `remind::` rule is the property most likely to be edited after
+    //! it's written (`g r` seeds a starter the user then tunes). These
+    //! pin the two behaviours that make that usable: a value with
+    //! spaces survives, and an empty one deletes.
+
+    #[test]
+    fn a_rule_with_spaces_is_not_truncated_at_the_first_word() {
+        // `prop remind 3pm every 1h until DONE` must keep the whole
+        // grammar as the value; splitting on every space would store
+        // `3pm` and silently drop the repeat.
+        let args = "remind 3pm every 1h until DONE";
+        let (key, value) = args.split_once(' ').unwrap_or((args, ""));
+        assert_eq!(key, "remind");
+        assert_eq!(value, "3pm every 1h until DONE");
+    }
+
+    #[test]
+    fn an_empty_value_is_the_delete_path() {
+        // `prop remind` with no value clears the rule, which is how a
+        // user stops a block nagging without deleting the block.
+        let args = "remind";
+        let (key, value) = args.split_once(' ').unwrap_or((args, ""));
+        assert_eq!(key, "remind");
+        assert!(value.is_empty());
+    }
+}

@@ -7,3 +7,5 @@ export {
   stripQuoteFromTokens,
 } from "./quote";
 export { QuoteWrap, isBlockQuoted, type QuoteWrapProps } from "./QuoteWrap";
+export { BlockProperties, type BlockPropertiesProps } from "./BlockProperties";
+export { propertyChips, remindRule, type PropertyChip } from "./properties";

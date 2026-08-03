@@ -100,12 +100,12 @@ Presets are 1 hour, tomorrow, and next week; the desktop panel and the mobile sh
 
 ### Quiet hours
 
-Device-local, off by default:
+Device-local. Delivery is on by default, quiet hours are not set:
 
 ```toml
 [reminders]
-enabled = true
-quiet_hours = "22:00-07:00"
+enabled = true              # default
+quiet_hours = "22:00-07:00" # unset by default
 ```
 
 A fire landing inside the window is **pushed to the window's end**, never dropped — you asked for it, you get it, just not at 3am.
@@ -114,17 +114,24 @@ A window that wraps midnight is the normal case and is handled; so is a same-day
 One exception: a fire pushed past its own `until` is genuinely over.
 `remind:: 9pm every 1h until 11pm` with quiet hours starting at 22:00 stops at 21:00 — waking you at 07:00 for an 11pm deadline is not what the rule said.
 
-`enabled = false` (the default) means this device delivers nothing.
-The rules still parse and still show up in the reminders list; they just don't interrupt.
-Turning it on is what triggers the OS notification-permission prompt, so it has to be an explicit act.
+`enabled = false` turns this device silent: the rules still parse and still show up in the reminders list, they just never interrupt.
+It defaults to `true` because writing `remind::` on a block is already the opt-in, and a device that never gets a rule never fires.
+The OS asks for notification permission on the first actual fire, not when you flip a switch.
 
 ## Where you see them
 
 | client | list | author | delivery |
 |---|---|---|---|
-| **TUI** | `g n` overlay | `g r`, `g R` | **none** — a terminal session has no background presence |
+| **TUI** | `g n` overlay | `g r`, `g R` | OSC 9 notification + a toast, while the TUI is open |
 | **Desktop** | `Cmd/Ctrl+Shift+R` panel | `Cmd+R`, `g r` / `g R` in Normal | OS notification while the app runs |
 | **Mobile** | bell icon in the header | long-press a block → *Remind me…* | iOS notification while the app runs |
+
+Editing a rule after you write it: click (desktop) or tap (mobile) the `⏰` chip under the block, or `:prop remind <rule>` in the TUI.
+An empty value clears the rule, which is how you stop a block nagging without deleting it.
+Every `key:: value` a block carries renders as a chip and edits the same way — `remind::` isn't special-cased.
+
+Turning delivery on lives in Settings on the desktop, and in the Reminders sheet itself on mobile.
+Mobile has no settings screen, and `config.toml` sits inside the iOS sandbox, so a switch anywhere else would be unreachable.
 
 Chords are in the shared catalog, so they can't drift — see [Shortcuts](shortcuts.md).
 
@@ -134,8 +141,10 @@ Chords are in the shared catalog, so they can't drift — see [Shortcuts](shortc
 
 ## Background delivery — what ships today
 
-**Today: reminders fire whenever the app is running**, foreground or backgrounded, on macOS / Linux / Windows / iOS.
-The app polls every 30 seconds; the backend keeps a device-local "already fired" log (`<root>/.outl/reminders-fired.json`, 7-day TTL) so polling twice never double-buzzes and losing the file costs you at most one duplicate.
+**Today: reminders fire whenever the app is running**, foreground or backgrounded, on macOS / Linux / Windows / iOS — and in the TUI, which fires an OSC 9 desktop notification plus a toast on its event loop.
+(OSC 9 is honoured by iTerm2, kitty, WezTerm and ghostty; terminals that ignore it still show the toast. Same best-effort contract as the OSC 52 the yank path uses.)
+The GUI clients poll every 30 seconds, the TUI every tick; the backend keeps a device-local "already fired" log (`<root>/.outl/reminders-fired.json`, 7-day TTL) so polling twice never double-buzzes and losing the file costs you at most one duplicate.
+A reminder that comes due with the TUI **closed** is lost to that client, which is the honest limit of a terminal session.
 
 **Not yet: delivery with the app fully closed.**
 That needs per-OS scheduling registered ahead of time, and each platform wants something different:
@@ -174,6 +183,6 @@ The pieces:
 |---|---|
 | `outl-md` | `remind::` syntax → `RemindRule`, plus the `ParseWarningKind` variants |
 | `outl-core` | `Op::SnoozeRemind` and the tree's snooze table |
-| `outl-actions` | `next_fire_at` (pure) + `scan_reminders` (workspace + disk) + `snooze` |
+| `outl-actions` | `next_fire_at` (pure) + `scan_reminders` + `snooze` + `take_due` / the fired log. Every client delivers, so none of this sits behind a client layer |
 | `outl-config` | `[reminders]`, device-local |
 | `outl-tauri-shared` | the DTOs, the commands, and the fired-log runtime both GUI clients share |

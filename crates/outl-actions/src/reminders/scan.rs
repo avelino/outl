@@ -30,6 +30,28 @@ use crate::page::page_meta;
 use crate::todo::{split_todo, TodoState};
 use crate::tree::enclosing_page_id;
 
+/// How late a reminder is, for surfaces that colour the row.
+///
+/// Computed in Rust so the TUI, the desktop panel and the mobile sheet
+/// paint the same thing. Resolved against the `now` the scan was given,
+/// so it goes stale as the clock moves — bounded by the caller's poll
+/// interval, which is fine for a colour and wrong for a decision (that
+/// is [`super::schedule::next_fire_at`]'s job).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Urgency {
+    /// Came due and is still not done. Every task app paints this red,
+    /// and a reminder that already nagged you reads very differently
+    /// from one that hasn't.
+    Overdue,
+    /// Fires within the hour.
+    Soon,
+    /// Fires later.
+    Later,
+    /// Never fires again (done, expired, out of `max`).
+    Finished,
+}
+
 /// One scheduled reminder: a block, an anchor date, and when it next
 /// interrupts the user.
 ///
@@ -44,9 +66,16 @@ pub struct Reminder {
     pub page_slug: String,
     /// Display title of that page.
     pub page_title: String,
-    /// Block body with the `TODO `/`DONE ` prefix already stripped —
-    /// what a notification banner shows.
+    /// Block body with the `TODO `/`DONE ` prefix already stripped,
+    /// markup intact — what a list renders through the inline
+    /// tokenizer.
     pub text: String,
+    /// The same body with the inline syntax flattened away
+    /// ([`outl_md::plain_text`]) — what a notification banner shows.
+    /// A lock screen reading `ship it [[2026-12-12]] #fup` with the
+    /// brackets intact looks like a bug, so the delivery paths take
+    /// this instead of `text`.
+    pub plain_text: String,
     /// The `remind::` value verbatim — what every surface echoes back
     /// to the user (the TUI overlay, the desktop panel, the DTO).
     /// The parsed rule isn't carried: `next_fire` already answers the
@@ -62,6 +91,26 @@ pub struct Reminder {
     /// Next fire in local wall clock, or `None` when the rule is done
     /// firing (completed, expired, out of `max`).
     pub next_fire: Option<NaiveDateTime>,
+    /// How late this is, for row styling.
+    pub urgency: Urgency,
+}
+
+/// Classify a next-fire instant against `now`.
+///
+/// `<= now` is overdue rather than "due right now": by the time a
+/// surface renders, an instant that already passed is something the
+/// user was supposed to have seen.
+fn urgency_of(next_fire: Option<NaiveDateTime>, now: NaiveDateTime) -> Urgency {
+    let Some(at) = next_fire else {
+        return Urgency::Finished;
+    };
+    if at <= now {
+        Urgency::Overdue
+    } else if at <= now + chrono::Duration::hours(1) {
+        Urgency::Soon
+    } else {
+        Urgency::Later
+    }
 }
 
 /// Device-local record of what this device already delivered.
@@ -134,16 +183,19 @@ pub fn scan_reminders(
                 last_fired: seen.map(|f| f.last),
                 snoozed_until: snoozed_until_ms.and_then(super::epoch_ms_to_local_naive),
             };
+            let next_fire = next_fire_at(&rule, anchor_date, &state, quiet, now);
             out.push(Reminder {
                 block_id,
                 page_slug: meta.slug.clone(),
                 page_title: meta.title.clone(),
                 text: body.to_string(),
+                plain_text: outl_md::plain_text(body),
                 rule_text: rule_text.clone(),
                 anchor_date,
                 done,
                 snoozed_until_ms,
-                next_fire: next_fire_at(&rule, anchor_date, &state, quiet, now),
+                next_fire,
+                urgency: urgency_of(next_fire, now),
             });
         }
     }

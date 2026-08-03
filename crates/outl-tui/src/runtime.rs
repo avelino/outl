@@ -423,6 +423,11 @@ fn event_loop(
         // up in the background; we emit Create/Move/Edit ops here on
         // the main thread.
         app.poll_orphan_md_updates();
+        // Fire any `remind::` that came due. Runs after the peer-ops
+        // and orphan polls on purpose: a rule (or a snooze) that just
+        // arrived from another device should be honoured on this tick,
+        // not the next one.
+        app.deliver_due_reminders();
         // Sweep expired toasts so they don't linger on screen past
         // their lifetime. Cheap O(n) over the small toast stack.
         app.prune_toasts();

@@ -249,6 +249,10 @@ Grouping + the "in 3h" column come from `@outl/shared` (`groupReminders` / `form
 Delivery is a 30s `setInterval` in `Journal.tsx` calling `deliver_due_reminders` (`tauri-plugin-notification` → `UNUserNotificationCenter`).
 It fires whenever the app is running, foreground or backgrounded.
 
+**Both device-local settings live in the sheet, not in a settings screen** — mobile has none, and `config.toml` sits inside the iOS sandbox, so they'd otherwise be unreachable from the device. Delivery is a switch; quiet hours are two native `<input type="time">` pickers rather than the desktop's text field, because typing `22:00-07:00` on a phone means switching keyboard layouts twice. Both write through `set_reminder_settings`, which replaces the pair — so every call sends **both** values, or flipping the switch would wipe a configured window. The UI only moves after the write returns, so a failed save can't leave it lying. Split / join for the wire string is `lib/quiet-hours.ts` (unit-tested: a half-filled window saves as empty, since `"22:00-"` is just something the backend drops).
+
+Rows carry a **Done** button, matching the desktop panel: it resolves the block's own page id first (the sheet lists the whole workspace, so the open page is usually a different one) and only applies the refreshed view when the user is looking at that page.
+
 **App-closed delivery is not covered yet.** That needs `UNCalendarNotificationTrigger` requests registered ahead of time (the system caps pending requests at 64) and re-filled from a `BGAppRefreshTask` — the same shape as the existing `bg_sync.rs` work.
 See [`docs/reminders.md`](../../docs/reminders.md) → Background delivery.
 

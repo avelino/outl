@@ -80,11 +80,12 @@ max_bytes = 104857600
 
 [reminders]
 # Whether this device turns `remind::` rules into OS notifications.
-# Off by default: switching it on is what triggers the notification
-# permission prompt, so it has to be an explicit act. Device-local —
-# the rule itself and a snooze converge through the op log, this does
-# not. See reminders.md.
-enabled = false
+# On by default: writing `remind::` on a block is already the opt-in,
+# and a device that never gets a rule never fires. Set false to keep
+# the rules tracked and listed without ever being interrupted.
+# Device-local — the rule itself and a snooze converge through the op
+# log, this does not. See reminders.md.
+enabled = true
 # A fire landing inside this window is pushed to the window's end,
 # never dropped. Omit (or leave empty) for no quiet hours. A window
 # that wraps midnight is the normal case.
@@ -157,7 +158,7 @@ See [theming.md](theming.md) for the look of each.
 
 | Field | Type | Default | Read by | Effect |
 |---|---|---|---|---|
-| `enabled` | boolean | `false` | desktop + mobile delivery loops | Whether this device turns `remind::` rules into OS notifications. `false` means the rules still parse and still appear in the reminders list, they just never interrupt. Turning it on is what prompts for notification permission on macOS / iOS. The TUI ignores it — a terminal session has no background presence and never delivers. |
+| `enabled` | boolean | `true` | every client's delivery loop | Whether this device turns `remind::` rules into OS notifications. Defaults on because `remind::` on a block is already the explicit opt-in, and a device with no rules never fires (so it never prompts for permission either). Set `false` to keep the rules parsed and listed while never being interrupted by them. Read by the desktop and mobile poll loops and by the TUI's event-loop tick. |
 | `quiet_hours` | string `"HH:MM-HH:MM"` | unset | desktop + mobile schedulers | A fire landing inside this window is **pushed to the window's end**, never dropped. Wraps midnight (`"22:00-07:00"`) and same-day windows (`"13:00-14:00"`) both work. An unparseable value is ignored rather than failing the config load — a typo here must never keep the app from opening. A fire pushed past its rule's own `until` is over, not deferred to the morning. |
 
 Both are **device-local on purpose**: quiet hours are a property of *this* phone or laptop, not of the workspace.

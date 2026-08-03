@@ -65,9 +65,15 @@ backlinks_order = "newest"        # "newest" (default) | "oldest" — direction 
 
 [assets]
 max_bytes = 104857600             # 100 MiB default; 0 = unbounded. Cap on a single uploaded file
+
+[reminders]
+enabled = true                    # default on; `remind::` on a block is itself the opt-in
+quiet_hours = "22:00-07:00"       # optional; a fire landing inside is pushed to the window's end
 ```
 
-Eight sections, each modelled as its own struct ([`WorkspaceCfg`], [`ThemeCfg`], [`EditorCfg`], [`CalendarCfg`], [`SyncConfig`], [`TuiCfg`], [`DisplayCfg`], [`AssetsCfg`]).
+Nine sections, each modelled as its own struct ([`WorkspaceCfg`], [`ThemeCfg`], [`EditorCfg`], [`CalendarCfg`], [`SyncConfig`], [`TuiCfg`], [`DisplayCfg`], [`AssetsCfg`], [`RemindersCfg`]).
+`RemindersCfg::enabled` defaults to **`true`**, the one non-`Default::default()` bool in the schema: `remind::` on a block is itself the opt-in, so defaulting off just made a written rule silently do nothing.
+`RemindersCfg::quiet_window()` parses `"22:00-07:00"` into `(start, end)` minutes past midnight and returns `None` on anything unparseable, so a typo degrades to "no quiet hours" instead of failing the load.
 `CalendarCfg::timezone` is an optional IANA name resolved at boot by `outl_actions::clock::init`; missing/empty/unknown falls back to the OS local timezone (the previous behaviour).
 It exists for environments where the OS clock lies about the zone — containers and Chrome OS **Crostini** run in UTC regardless of the user's real timezone (issue #107).
 `SyncConfig::transport` is a [`SyncTransportKind`] enum (`File` | `Iroh`, serde `lowercase`); missing `[sync]` falls back to `Iroh` (P2P is outl's primary sync), and `transport = "file"` is the explicit iCloud/filesystem opt-out.

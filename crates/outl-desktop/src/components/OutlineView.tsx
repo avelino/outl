@@ -26,6 +26,7 @@ import {
   setBlockCollapsed,
   splitBlock,
   toggleTodo,
+  setBlockProperty,
 } from "@outl/shared/api/commands";
 
 import type { PageView } from "@outl/shared/api/types";
@@ -515,6 +516,15 @@ export function OutlineView() {
       if (reply.error) {
         setAppState("lastError", `${reply.language}: ${reply.error}`);
       }
+    },
+    onSetProperty: (blockId: string, key: string, value: string) => {
+      const page = appState.page?.id;
+      if (!page) return;
+      void setBlockProperty(page, blockId, key, value)
+        .then(applyView)
+        .catch((e) =>
+          setAppState("lastError", e instanceof Error ? e.message : String(e)),
+        );
     },
     onRefClick: handleRefClick,
     onTagClick: handleTagClick,

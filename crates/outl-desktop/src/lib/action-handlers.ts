@@ -329,7 +329,9 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
     SnoozeReminder: async () => {
       const block = appState.selectedBlockId;
       if (!block) return;
-      await safeCall(snoozeReminder(block, 60));
+      // The preset id, not a duration — the backend resolves it, so
+      // `g s` lands on the same instant as the panel's first button.
+      await safeCall(snoozeReminder(block, "1h"));
     },
     Quit: async () => {
       // `qq` chord in Normal + `Ctrl+C` Global. Close the active

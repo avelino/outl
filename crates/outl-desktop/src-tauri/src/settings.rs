@@ -76,9 +76,10 @@ pub struct Settings {
     /// it from disk so a settings-modal write can't clobber it.
     pub backlinks_order: String,
     /// Whether this device registers OS notifications for `remind::`
-    /// rules. Default `false` — turning it on is what triggers the
-    /// macOS notification-permission prompt, so it must be an explicit
-    /// user act, never a side effect of opening the app.
+    /// rules. Defaults **on**: writing `remind::` on a block is
+    /// already the opt-in, and a device with no rules never fires (so
+    /// it never prompts for permission either). Off keeps the rules
+    /// tracked and listed without ever interrupting.
     pub reminders_enabled: bool,
     /// Quiet-hours window as `"22:00-07:00"`, or `""` for none. A fire
     /// landing inside it is pushed to the window's end.
@@ -216,8 +217,8 @@ mod tests {
         assert_eq!(s.sync_transport, "iroh", "P2P is the default transport");
         assert_eq!(s.backlinks_order, "newest", "newest-first is the default");
         assert!(
-            !s.reminders_enabled,
-            "reminders are opt-in — turning them on is what prompts the OS"
+            s.reminders_enabled,
+            "`remind::` on a block is the opt-in; the switch defaults on"
         );
         assert_eq!(s.reminders_quiet_hours, "");
     }

@@ -228,6 +228,7 @@ The TUI deliberately delivers nothing (a terminal session has no background pres
 | "Nag me" preset (`remind:: now every 1h until DONE`) | `g R` (overwrites — escalating is explicit) | `g R` in Normal | — |
 | Open the reminders list | `g n` | `Cmd+Shift+R` / `Ctrl+Shift+R` | bell icon in the header |
 | In the list: open the reminder's page | `Enter` | `Enter` / click the row | tap the row |
+| Snooze the selected block 1h, without opening the list | `g s` | `g s` in Normal | the chips in the sheet (no chord surface) |
 | In the list: snooze 1h | `s` | the `1h` / `tomorrow` / `next week` buttons | the `1h` / `Tomorrow` / `Next week` chips |
 | In the list: close | `Esc` / `q` | `Esc` | drag down / tap outside |
 

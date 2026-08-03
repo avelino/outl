@@ -11,8 +11,9 @@
 //! should fire and when", which both clients read from
 //! [`list_reminders`].
 
-use chrono::Duration;
-use outl_actions::reminders::{scan_reminders, snooze, FiredLog, Reminder};
+use outl_actions::reminders::{
+    scan_reminders, snooze, snooze_until, FiredLog, Reminder, SnoozePreset, Urgency,
+};
 use outl_actions::{clock, set_property};
 use outl_core::property::PropValue;
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,10 @@ pub struct ReminderDto {
     pub page_slug: String,
     pub page_title: String,
     pub text: String,
+    /// The same body with inline syntax flattened — what a
+    /// notification banner shows, so no `[[brackets]]` reach a lock
+    /// screen.
+    pub plain_text: String,
     /// The `remind::` value verbatim, e.g. `"3pm every 1h until DONE"`.
     pub rule: String,
     /// `YYYY-MM-DD` the rule is anchored to.
@@ -42,6 +47,9 @@ pub struct ReminderDto {
     pub next_fire: Option<String>,
     /// Local ISO datetime the snooze runs until, or `null`.
     pub snoozed_until: Option<String>,
+    /// `"overdue"` / `"soon"` / `"later"` / `"finished"` — computed in
+    /// Rust so every client paints the same row the same colour.
+    pub urgency: Urgency,
 }
 
 impl From<Reminder> for ReminderDto {
@@ -51,12 +59,14 @@ impl From<Reminder> for ReminderDto {
             page_slug: r.page_slug,
             page_title: r.page_title,
             text: r.text,
+            plain_text: r.plain_text,
             rule: r.rule_text,
             anchor_date: r.anchor_date.format("%Y-%m-%d").to_string(),
             done: r.done,
             next_fire: r
                 .next_fire
                 .map(|t| t.format("%Y-%m-%dT%H:%M:%S").to_string()),
+            urgency: r.urgency,
             snoozed_until: r
                 .snoozed_until_ms
                 .and_then(outl_actions::reminders::epoch_ms_to_local_naive)
@@ -102,22 +112,76 @@ pub fn reminder_settings() -> ReminderSettingsDto {
     }
 }
 
-/// Silence a block's reminder for `minutes` from now.
+/// Write this device's reminder settings back to `config.toml`.
+///
+/// Exists because **mobile has no settings screen at all**. Without it
+/// the sheet could tell the user "notifications are off on this
+/// device" and offer no way to change that, with `config.toml` sitting
+/// inside the iOS sandbox where they can't reach it. The desktop
+/// writes the same two keys through its settings modal; this is the
+/// narrow path for a client that has nowhere else to put them.
+///
+/// Reads the file first and writes back only these two fields, so it
+/// can't clobber a hand-set timezone or relay URL (the same
+/// restore-on-save policy the desktop's `Settings` adapter follows).
+pub fn set_reminder_settings(
+    enabled: bool,
+    quiet_hours: &str,
+) -> Result<ReminderSettingsDto, String> {
+    let mut cfg = outl_config::load();
+    cfg.reminders.enabled = enabled;
+    cfg.reminders.quiet_hours = Some(quiet_hours.trim().to_string()).filter(|q| !q.is_empty());
+    outl_config::save(&cfg).map_err(|e| e.to_string())?;
+    Ok(reminder_settings())
+}
+
+/// The snooze options, in render order, straight off
+/// [`outl_actions::reminders::SnoozePreset`].
+///
+/// The clients render `label` and send `id` back to [`snooze_reminder`]
+/// — they never compute the instant. "Tomorrow 9am" is a wall time,
+/// not an offset, and a client doing its own arithmetic gets it wrong
+/// the moment you tap it at 3am.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnoozePresetDto {
+    pub id: String,
+    pub label: String,
+}
+
+/// Every snooze preset, same list on every client.
+pub fn snooze_presets() -> Vec<SnoozePresetDto> {
+    SnoozePreset::all()
+        .into_iter()
+        .map(|p| SnoozePresetDto {
+            id: p.id().to_string(),
+            label: p.label().to_string(),
+        })
+        .collect()
+}
+
+/// Silence a block's reminder until the instant `preset` resolves to.
 ///
 /// Goes through `Op::SnoozeRemind`, so the same block goes quiet on
 /// every paired device — snoozing on the phone must not leave the
 /// laptop buzzing.
 ///
+/// Takes a preset **id**, not a duration: resolution lives in
+/// `outl_actions::reminders::SnoozePreset` so every client snoozes to
+/// the same instant. An unknown id errors rather than falling back —
+/// snoozing for a different span than the button said is worse than
+/// doing nothing.
+///
 /// Takes no page id because it touches no `.md`: the snooze lives only
 /// in the op log, by design (writing it into the markdown would put a
 /// device-local *time* into the user's clean notes).
-pub fn snooze_reminder<S: AppHost>(state: &S, block_id: &str, minutes: i64) -> Result<(), String> {
+pub fn snooze_reminder<S: AppHost>(state: &S, block_id: &str, preset: &str) -> Result<(), String> {
     let node = parse_node_id(block_id)?;
-    let until = clock::now_local().naive_local() + Duration::minutes(minutes.max(1));
-    let until_ms = outl_actions::reminders::local_naive_to_epoch_ms(until);
+    let preset =
+        SnoozePreset::from_id(preset).ok_or_else(|| format!("unknown snooze preset: {preset}"))?;
+    let until = preset.resolve(clock::now_local().naive_local());
     let hlc = state.hlc().clone();
     with_ws_mut(state, |ws| {
-        snooze(ws, &hlc, node, until_ms).map_err(|e| e.to_string())
+        snooze_until(ws, &hlc, node, until).map_err(|e| e.to_string())
     })
 }
 
@@ -130,26 +194,45 @@ pub fn clear_reminder_snooze<S: AppHost>(state: &S, block_id: &str) -> Result<()
     })
 }
 
-/// Set (or clear, with an empty `rule`) a block's `remind::` property
-/// and return the refreshed page.
+/// Set (or clear, with an empty `value`) any `key:: value` property on
+/// a block, and return the refreshed page.
 ///
-/// Editing the rule resets the schedule from scratch — which falls out
-/// for free, since the schedule is derived from the rule on every scan
-/// rather than cached anywhere.
+/// Generic on purpose. This started as a `remind::`-only command,
+/// which meant the property chips every client now renders had nothing
+/// to write through — you could *see* `priority:: high` and not change
+/// it. A property is a property; the key is an argument.
+///
+/// Editing a `remind::` rule reschedules from scratch, which falls out
+/// for free: the schedule is derived on every scan, never cached.
+pub fn set_block_property<S: AppHost>(
+    state: &S,
+    page_id: &str,
+    block_id: &str,
+    key: &str,
+    value: &str,
+) -> Result<PageView, String> {
+    let page = parse_node_id(page_id)?;
+    let node = parse_node_id(block_id)?;
+    let key = key.trim();
+    if key.is_empty() {
+        return Err("property key cannot be empty".to_string());
+    }
+    let value = {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| PropValue::Text(trimmed.to_string()))
+    };
+    let hlc = state.hlc().clone();
+    finish_in_page(state, page, |ws| set_property(ws, &hlc, node, key, value))
+}
+
+/// Set (or clear) a block's `remind::` rule. Thin alias over
+/// [`set_block_property`] kept because the authoring chords name the
+/// reminder specifically and shouldn't have to know the key string.
 pub fn set_block_remind<S: AppHost>(
     state: &S,
     page_id: &str,
     block_id: &str,
     rule: &str,
 ) -> Result<PageView, String> {
-    let page = parse_node_id(page_id)?;
-    let node = parse_node_id(block_id)?;
-    let value = {
-        let trimmed = rule.trim();
-        (!trimmed.is_empty()).then(|| PropValue::Text(trimmed.to_string()))
-    };
-    let hlc = state.hlc().clone();
-    finish_in_page(state, page, |ws| {
-        set_property(ws, &hlc, node, outl_md::remind::REMIND_KEY, value)
-    })
+    set_block_property(state, page_id, block_id, outl_md::remind::REMIND_KEY, rule)
 }

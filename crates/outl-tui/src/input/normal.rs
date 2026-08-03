@@ -240,6 +240,13 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                 app.insert_remind_nag();
                 return Ok(false);
             }
+            ('g', KeyCode::Char('s')) => {
+                // `g s` = snooze the selected block's reminder 1h,
+                // without opening the overlay. Converges via
+                // `Op::SnoozeRemind`, so the phone goes quiet too.
+                app.snooze_selected_block();
+                return Ok(false);
+            }
             ('g', KeyCode::Char('n')) => {
                 // `g n` = open the reminders overlay. "go
                 // notifications". The issue's sketch put this on
@@ -537,4 +544,75 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         _ => {}
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod reminder_chord_tests {
+    //! Drift guard between the shared chord catalog and this file.
+    //!
+    //! The TUI dispatches Normal-mode keys through its own `match` here
+    //! rather than `outl_shortcuts::lookup`, so the catalog and the
+    //! match arms can disagree without anything failing to compile.
+    //! These tests pin the reminder chords on the catalog side; if
+    //! someone re-spells one there, this fails and points at the arm
+    //! that needs the same edit.
+    //!
+    //! They do not prove the arm *runs* (that needs a live `App` with a
+    //! workspace). They prove the two halves still agree on the
+    //! spelling, which is the half that silently rots.
+
+    use outl_shortcuts::{lookup, Action, Chord, ChordSequence, Key, Mode, Modifiers};
+
+    fn pair(a: char, b: char) -> ChordSequence {
+        ChordSequence::pair(Chord::ch(a), Chord::ch(b))
+    }
+
+    #[test]
+    fn g_r_still_means_insert_remind() {
+        assert_eq!(
+            lookup(Mode::Normal, &pair('g', 'r')),
+            Some(Action::InsertRemind),
+            "the `('g', Char('r'))` arm in handle_normal_key must match this"
+        );
+    }
+
+    #[test]
+    fn g_shift_r_still_means_the_nag_preset() {
+        let seq = ChordSequence::pair(Chord::ch('g'), Chord::new(Modifiers::SHIFT, Key::char('r')));
+        assert_eq!(
+            lookup(Mode::Normal, &seq),
+            Some(Action::InsertRemindNag),
+            "the `('g', Char('R'))` arm in handle_normal_key must match this"
+        );
+    }
+
+    #[test]
+    fn g_n_still_opens_the_reminders_overlay() {
+        assert_eq!(
+            lookup(Mode::Normal, &pair('g', 'n')),
+            Some(Action::OpenReminders),
+            "the `('g', Char('n'))` arm in handle_normal_key must match this"
+        );
+    }
+
+    #[test]
+    fn g_s_still_snoozes_the_selected_block() {
+        assert_eq!(
+            lookup(Mode::Normal, &pair('g', 's')),
+            Some(Action::SnoozeReminder),
+            "the `('g', Char('s'))` arm in handle_normal_key must match this"
+        );
+    }
+
+    #[test]
+    fn ctrl_r_is_still_redo_not_reminders() {
+        // The issue sketched `Ctrl+R` for the reminders overlay. It is
+        // Redo, and a terminal can't tell it from `Ctrl+Shift+R`, which
+        // is why the TUI took `g n` instead. If this ever flips, the
+        // user loses undo/redo to a list nobody asked to open.
+        assert_eq!(
+            lookup(Mode::Normal, &ChordSequence::chord(Chord::ctrl('r'))),
+            Some(Action::Redo)
+        );
+    }
 }

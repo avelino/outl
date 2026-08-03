@@ -130,7 +130,7 @@ pub use paste::{
 pub use person::{search_persons, PERSON_TYPE, TYPE_KEY};
 pub use reminders::{
     epoch_ms_to_local_naive, local_naive_to_epoch_ms, next_fire_at, scan_reminders, snooze,
-    snooze_until, FiredLog, FiredRecord, Reminder, ReminderState,
+    snooze_until, take_due, FiredLog, FiredRecord, Reminder, ReminderState, SnoozePreset, Urgency,
 };
 pub use resolve::{open_or_create_by_name, open_or_create_by_ref};
 pub use sync::{

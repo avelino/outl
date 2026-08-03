@@ -35,6 +35,7 @@ import type {
   RegistryItem,
   Reminder,
   ReminderSettings,
+  SnoozePreset,
   ResolvedBlock,
   RunCodeBlockReply,
   TemplateDto,
@@ -948,8 +949,19 @@ export function reminderSettings(): Promise<ReminderSettings> {
  * paired device — snoozing on the phone must not leave the laptop
  * buzzing.
  */
-export function snoozeReminder(blockId: string, minutes: number): Promise<void> {
-  return invoke<void>("snooze_reminder", { blockId, minutes });
+export function snoozeReminder(blockId: string, preset: string): Promise<void> {
+  return invoke<void>("snooze_reminder", { blockId, preset });
+}
+
+/**
+ * The snooze options, in render order.
+ *
+ * Fetched rather than hardcoded because two of the three aren't fixed
+ * offsets — "tomorrow 9am" is a wall time — so a client doing its own
+ * arithmetic gets them wrong. Render `label`, send back `id`.
+ */
+export function snoozePresets(): Promise<SnoozePreset[]> {
+  return invoke<SnoozePreset[]>("snooze_presets");
 }
 
 /** Clear a snooze so the block resumes its normal schedule. */
@@ -1049,4 +1061,40 @@ export function groupReminders(
   return Object.entries(buckets)
     .filter(([, items]) => items.length > 0)
     .map(([label, items]) => ({ label, items }));
+}
+
+/**
+ * Write this device's reminder settings.
+ *
+ * Mobile has no settings screen, so the Reminders sheet is the only
+ * place that can turn delivery on. Without this the sheet could say
+ * "notifications are off on this device" and leave the user with no
+ * way to change it, since `config.toml` sits inside the iOS sandbox.
+ */
+export function setReminderSettings(
+  enabled: boolean,
+  quietHours: string,
+): Promise<ReminderSettings> {
+  return invoke<ReminderSettings>("set_reminder_settings", {
+    enabled,
+    quietHours,
+  });
+}
+
+/**
+ * Set — or clear, with an empty `value` — any `key:: value` property
+ * on a block. Returns the refreshed page.
+ *
+ * Generic rather than one command per key: the property chips render
+ * whatever the block carries, so the writer has to accept whatever the
+ * user edits. {@link setBlockRemind} is the named shortcut for the
+ * authoring chords.
+ */
+export function setBlockProperty(
+  pageId: string,
+  blockId: string,
+  key: string,
+  value: string,
+): Promise<PageView> {
+  return invoke<PageView>("set_block_property", { pageId, blockId, key, value });
 }

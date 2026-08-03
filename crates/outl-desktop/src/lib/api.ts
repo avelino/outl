@@ -109,9 +109,9 @@ export interface Settings {
   backlinks_order: string;
   /**
    * Whether this device turns `remind::` rules into OS notifications.
-   * Default `false`: switching it on is what triggers the macOS
-   * notification-permission prompt, so it has to be an explicit act.
-   * Device-local — it never travels through the op log.
+   * Defaults **on** — writing `remind::` on a block is already the
+   * opt-in, and a device with no rules never fires. Device-local, it
+   * never travels through the op log.
    */
   reminders_enabled: boolean;
   /**
