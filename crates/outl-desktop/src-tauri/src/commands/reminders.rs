@@ -10,7 +10,9 @@ use tauri::{AppHandle, State};
 use tauri_plugin_notification::NotificationExt;
 
 use crate::state::AppState;
-use outl_tauri_shared::commands::reminders::{self as shared, ReminderDto, ReminderSettingsDto};
+use outl_tauri_shared::commands::reminders::{
+    self as shared, ReminderDto, ReminderSettingsDto, SnoozePresetDto,
+};
 use outl_tauri_shared::reminder_runtime;
 use outl_tauri_shared::state::PageView;
 
@@ -25,12 +27,25 @@ pub(crate) fn reminder_settings() -> ReminderSettingsDto {
 }
 
 #[tauri::command]
+pub(crate) fn set_reminder_settings(
+    enabled: bool,
+    quiet_hours: String,
+) -> Result<ReminderSettingsDto, String> {
+    shared::set_reminder_settings(enabled, &quiet_hours)
+}
+
+#[tauri::command]
 pub(crate) fn snooze_reminder(
     block_id: String,
-    minutes: i64,
+    preset: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    shared::snooze_reminder(state.inner(), &block_id, minutes)
+    shared::snooze_reminder(state.inner(), &block_id, &preset)
+}
+
+#[tauri::command]
+pub(crate) fn snooze_presets() -> Vec<SnoozePresetDto> {
+    shared::snooze_presets()
 }
 
 #[tauri::command]
@@ -39,6 +54,17 @@ pub(crate) fn clear_reminder_snooze(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     shared::clear_reminder_snooze(state.inner(), &block_id)
+}
+
+#[tauri::command]
+pub(crate) fn set_block_property(
+    page_id: String,
+    block_id: String,
+    key: String,
+    value: String,
+    state: State<'_, AppState>,
+) -> Result<PageView, String> {
+    shared::set_block_property(state.inner(), &page_id, &block_id, &key, &value)
 }
 
 #[tauri::command]
@@ -73,7 +99,7 @@ pub(crate) fn deliver_due_reminders(
             .notification()
             .builder()
             .title(reminder_title(r))
-            .body(&r.text)
+            .body(&r.plain_text)
             .show()
         {
             tracing::warn!("could not show a reminder notification: {e}");

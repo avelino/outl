@@ -67,9 +67,9 @@ use crate::commands::{
     plugin_transformers, plugin_uninstall, previous_day, read_asset_data_url, redo_page,
     reload_workspace, reminder_settings, resolve_embeds, resolve_page_labels, resolve_ref,
     run_auto_run_blocks, run_code_block, search_blocks, search_pages, search_persons,
-    set_backlinks_order, set_block_collapsed, set_block_remind, set_workspace, snooze_reminder,
-    split_block, today_slug_cmd, toggle_quote, toggle_todo, undo_page, update_settings,
-    workspace_stats,
+    set_backlinks_order, set_block_collapsed, set_block_property, set_block_remind,
+    set_reminder_settings, set_workspace, snooze_presets, snooze_reminder, split_block,
+    today_slug_cmd, toggle_quote, toggle_todo, undo_page, update_settings, workspace_stats,
 };
 use crate::plugin_service::spawn_plugin_service;
 use crate::state::AppState;
@@ -340,9 +340,12 @@ pub fn run() {
             // Reminders (`remind::`)
             list_reminders,
             reminder_settings,
+            set_reminder_settings,
             snooze_reminder,
+            snooze_presets,
             clear_reminder_snooze,
             set_block_remind,
+            set_block_property,
             deliver_due_reminders,
             // Page / journal navigation
             list_all_pages,

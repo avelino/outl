@@ -70,7 +70,7 @@ use crate::commands::{
 };
 use crate::commands::{
     clear_reminder_snooze, deliver_due_reminders, list_reminders, reminder_settings,
-    set_block_remind, snooze_reminder,
+    set_block_property, set_block_remind, set_reminder_settings, snooze_presets, snooze_reminder,
 };
 use crate::plugin_service::spawn_plugin_service;
 use crate::state::AppState;
@@ -309,9 +309,12 @@ pub fn run() {
             // Reminders (`remind::`)
             list_reminders,
             reminder_settings,
+            set_reminder_settings,
             snooze_reminder,
+            snooze_presets,
             clear_reminder_snooze,
             set_block_remind,
+            set_block_property,
             deliver_due_reminders,
             // Page / journal navigation
             list_all_pages,

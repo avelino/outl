@@ -697,7 +697,7 @@ pub(crate) fn render_reminders(
                 .borders(Borders::ALL)
                 .border_style(app.theme.border)
                 .title(Span::styled(
-                    " Reminders — Enter open · s snooze 1h · Esc close ",
+                    " Reminders — Enter open · s 1h · t tomorrow · w next week · Esc close ",
                     app.theme.help_title,
                 ))
                 .style(app.theme.popup_style()),

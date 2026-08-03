@@ -1,6 +1,7 @@
 import { For, JSX, Show, onCleanup, onMount } from "solid-js";
 import type { BlockNode } from "@outl/shared/api/types";
 import {
+  BlockProperties,
   MarkdownInline,
   QuoteWrap,
   isBlockQuoted,
@@ -68,6 +69,8 @@ interface BlockRowProps {
   onTagClick?: (tag: string) => void;
   /** External `[label](url)` link tap — opens in the system browser. */
   onLinkClick?: (href: string) => void;
+  /** Commit a `key:: value` property edit; empty value clears it. */
+  onSetProperty?: (blockId: string, key: string, value: string) => void;
   onTextareaMount?: (el: HTMLTextAreaElement) => void;
   /**
    * Called when the user pastes outline-shaped markdown into this
@@ -210,6 +213,8 @@ function BlockBody(props: {
   onTagClick?: (tag: string) => void;
   /** External `[label](url)` link tap — opens in the system browser. */
   onLinkClick?: (href: string) => void;
+  /** Commit a `key:: value` property edit; empty value clears it. */
+  onSetProperty?: (blockId: string, key: string, value: string) => void;
   onTextareaMount?: (el: HTMLTextAreaElement) => void;
   /** See `BlockRowProps.onPasteMarkdown`. The parent has already
    *  injected `blockId`; this variant gets the caret + text. */
@@ -385,6 +390,17 @@ function BlockBody(props: {
                         onLinkClick={props.onLinkClick}
                       />
                     </Show>
+                    {/* `remind::` was invisible here: the long-press
+                        menu wrote the rule and the block looked
+                        untouched. Tapping a chip reopens it. */}
+                    <BlockProperties
+                      properties={props.block.properties}
+                      onCommit={(key, value) =>
+                        props.onSetProperty?.(props.block.id, key, value)
+                      }
+                      chipClass="rounded-full bg-(--color-ios-divider)/40 px-2 py-0.5 text-[11px] text-(--color-ios-text-secondary) dark:bg-(--color-iosd-divider)/40 dark:text-(--color-iosd-text-secondary)"
+                      inputClass="rounded-full border border-(--color-ios-accent)/50 bg-(--color-ios-card) px-2 py-0.5 text-[11px] text-(--color-ios-text) outline-none dark:bg-(--color-iosd-card) dark:text-(--color-iosd-text)"
+                    />
                   </p>
                 );
               })()}

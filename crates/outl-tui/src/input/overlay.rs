@@ -214,7 +214,11 @@ fn handle_reminders_key(app: &mut App, key: KeyEvent) -> Result<bool> {
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => app.overlay = None,
         KeyCode::Enter => app.open_selected_reminder(),
-        KeyCode::Char('s') => app.snooze_selected_reminder(),
+        // The same three options the GUI clients render, in the same
+        // order, resolved by the same `SnoozePreset`.
+        KeyCode::Char('s') => app.snooze_selected_reminder(0),
+        KeyCode::Char('t') => app.snooze_selected_reminder(1),
+        KeyCode::Char('w') => app.snooze_selected_reminder(2),
         KeyCode::Up | KeyCode::Char('k') => app.move_reminders_cursor(-1),
         KeyCode::Down | KeyCode::Char('j') => app.move_reminders_cursor(1),
         _ => {}

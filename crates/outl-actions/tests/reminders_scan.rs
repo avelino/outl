@@ -9,7 +9,7 @@
 use std::path::Path;
 
 use chrono::{NaiveDate, NaiveDateTime};
-use outl_actions::reminders::{scan_reminders, snooze_until, FiredLog};
+use outl_actions::reminders::{load_fired_log, scan_reminders, snooze_until, take_due, FiredLog};
 use outl_actions::{
     append_block, apply_page_md_with_sidecar, open_or_create_page, set_property, PageKind,
 };
@@ -239,4 +239,51 @@ fn a_deleted_block_stops_nagging() {
     outl_actions::delete(&mut w, &hlc, ids[0]).expect("delete");
 
     assert!(scan_reminders(&w, &FiredLog::new(), None, at(2026, 12, 12, 9, 0)).is_empty());
+}
+
+#[test]
+fn take_due_fires_once_then_stays_quiet() {
+    // The delivery contract: a due reminder comes out once, and the
+    // device-local fired log keeps the next poll from re-buzzing. The
+    // TUI ticks this every event-loop pass and the GUI clients every
+    // 30s, so a second call returning the same row would be a storm.
+    let tmp = TempDir::new().expect("tempdir");
+    let root = tmp.path();
+    let (w, _hlc, _ids) = workspace_with(root, &[("TODO ship it [[2026-12-12]]", Some("10am"))]);
+
+    let first = take_due(&w, root, None, at(2026, 12, 12, 10, 0));
+    assert_eq!(first.len(), 1, "the 10am fire is due at 10:00");
+
+    let second = take_due(&w, root, None, at(2026, 12, 12, 10, 0));
+    assert!(second.is_empty(), "a single-shot rule must not fire twice");
+
+    // And the memory of it is on disk, so a restart doesn't re-buzz.
+    assert_eq!(load_fired_log(root).len(), 1);
+}
+
+#[test]
+fn take_due_stays_quiet_before_the_anchor() {
+    let tmp = TempDir::new().expect("tempdir");
+    let root = tmp.path();
+    let (w, _hlc, _ids) = workspace_with(root, &[("TODO ship it [[2026-12-12]]", Some("10am"))]);
+
+    assert!(take_due(&w, root, None, at(2026, 12, 12, 9, 59)).is_empty());
+    assert_eq!(take_due(&w, root, None, at(2026, 12, 12, 10, 0)).len(), 1);
+}
+
+#[test]
+fn a_repeating_rule_fires_again_after_its_interval() {
+    let tmp = TempDir::new().expect("tempdir");
+    let root = tmp.path();
+    let (w, _hlc, _ids) = workspace_with(
+        root,
+        &[(
+            "TODO nag me [[2026-12-12]]",
+            Some("10am every 1h until DONE"),
+        )],
+    );
+
+    assert_eq!(take_due(&w, root, None, at(2026, 12, 12, 10, 0)).len(), 1);
+    assert!(take_due(&w, root, None, at(2026, 12, 12, 10, 30)).is_empty());
+    assert_eq!(take_due(&w, root, None, at(2026, 12, 12, 11, 0)).len(), 1);
 }

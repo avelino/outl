@@ -29,6 +29,7 @@
 //! fired log is not: snoozing on the phone must silence the laptop,
 //! but the phone having buzzed must not stop the laptop from buzzing.
 
+pub mod fired;
 pub mod scan;
 pub mod schedule;
 
@@ -38,8 +39,10 @@ use outl_core::id::NodeId;
 use outl_core::op::{LogOp, Op};
 use outl_core::workspace::Workspace;
 
-pub use scan::{scan_reminders, FiredLog, FiredRecord, Reminder};
+pub use fired::{fired_log_path, load_fired_log, save_fired_log, take_due, FIRED_TTL_DAYS};
+pub use scan::{scan_reminders, FiredLog, FiredRecord, Reminder, Urgency};
 pub use schedule::{next_fire_at, ReminderState};
+pub use SnoozePreset as Preset;
 
 use crate::clock;
 use crate::error::ActionError;
@@ -68,6 +71,81 @@ pub fn snooze(
         },
     })?;
     Ok(())
+}
+
+/// The snooze options every client offers, in the order they render.
+///
+/// **One owner, in Rust.** Two of the three aren't fixed offsets —
+/// "tomorrow morning" is a wall time, not `now + 24h` — so a client
+/// holding its own list of minute offsets gets them subtly wrong (the
+/// first version of this shipped `+1440min`, which snoozes to 3am if
+/// you tapped it at 3am). The GUIs read the labels off
+/// [`SnoozePreset::all`] through a command and send back the `id`; the
+/// TUI matches on the enum directly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SnoozePreset {
+    /// An hour from now.
+    OneHour,
+    /// 09:00 tomorrow, the "deal with it in the morning" option.
+    TomorrowMorning,
+    /// 09:00 seven days out.
+    NextWeek,
+}
+
+impl SnoozePreset {
+    /// Every preset, in render order.
+    pub fn all() -> [SnoozePreset; 3] {
+        [
+            SnoozePreset::OneHour,
+            SnoozePreset::TomorrowMorning,
+            SnoozePreset::NextWeek,
+        ]
+    }
+
+    /// Stable wire id. The GUIs round-trip this, so renaming one is a
+    /// breaking change to the command surface, not a copy edit.
+    pub fn id(self) -> &'static str {
+        match self {
+            SnoozePreset::OneHour => "1h",
+            SnoozePreset::TomorrowMorning => "tomorrow",
+            SnoozePreset::NextWeek => "next-week",
+        }
+    }
+
+    /// Parse a wire id back. Unknown ids yield `None` rather than
+    /// falling back to a default — silently snoozing for a different
+    /// duration than the button said is worse than doing nothing.
+    pub fn from_id(id: &str) -> Option<SnoozePreset> {
+        SnoozePreset::all().into_iter().find(|p| p.id() == id)
+    }
+
+    /// Label as the user reads it on the button.
+    pub fn label(self) -> &'static str {
+        match self {
+            SnoozePreset::OneHour => "1 hour",
+            SnoozePreset::TomorrowMorning => "Tomorrow 9am",
+            SnoozePreset::NextWeek => "Next week",
+        }
+    }
+
+    /// Resolve to a wall-clock instant relative to `now`.
+    ///
+    /// The morning presets land on 09:00 rather than the current time
+    /// of day, which is the whole point of picking them: a reminder
+    /// snoozed at 23:40 should come back after breakfast, not at 23:40
+    /// tomorrow.
+    pub fn resolve(self, now: NaiveDateTime) -> NaiveDateTime {
+        let morning = |days: i64| {
+            (now.date() + chrono::Duration::days(days))
+                .and_hms_opt(9, 0, 0)
+                .unwrap_or(now)
+        };
+        match self {
+            SnoozePreset::OneHour => now + chrono::Duration::hours(1),
+            SnoozePreset::TomorrowMorning => morning(1),
+            SnoozePreset::NextWeek => morning(7),
+        }
+    }
 }
 
 /// Snooze `node` until `at` in local wall clock — the shape every

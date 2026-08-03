@@ -161,8 +161,9 @@ export function SettingsModal() {
                   <div class="text-sm font-medium">Reminder notifications</div>
                   <div class="text-xs opacity-60">
                     Deliver <code class="font-mono">remind::</code> rules as OS
-                    notifications on this device. Off by default; the system
-                    asks for permission the first time one fires.
+                    notifications on this device. The system asks for permission
+                    the first time one fires. Turn it off to keep the rules
+                    tracked without being interrupted.
                   </div>
                 </div>
                 <input

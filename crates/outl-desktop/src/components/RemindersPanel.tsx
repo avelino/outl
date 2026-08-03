@@ -25,19 +25,13 @@ import {
   listReminders,
   openPageBySlug,
   reminderSettings,
+  snoozePresets,
   snoozeReminder,
   toggleTodo,
 } from "@outl/shared/api/commands";
 import type { PageView, Reminder } from "@outl/shared/api/types";
 
 import { appState, setAppState } from "../lib/store";
-
-/** Snooze presets, in minutes from now. Mirrors the OS banner actions. */
-const SNOOZE_PRESETS: Array<{ label: string; minutes: number }> = [
-  { label: "1h", minutes: 60 },
-  { label: "tomorrow", minutes: 60 * 24 },
-  { label: "next week", minutes: 60 * 24 * 7 },
-];
 
 export interface RemindersPanelDeps {
   applyView: (view: PageView) => void;
@@ -57,6 +51,9 @@ export function RemindersPanel(props: RemindersPanelDeps) {
     }
   });
   const [settings] = createResource(reminderSettings);
+  // Fetched, not hardcoded: "tomorrow 9am" is a wall time, so the
+  // backend owns resolution and we only render its labels.
+  const [presets] = createResource(snoozePresets);
   const [busy, setBusy] = createSignal<string | null>(null);
 
   async function withRow(id: string, run: () => Promise<unknown>) {
@@ -157,12 +154,20 @@ export function RemindersPanel(props: RemindersPanelDeps) {
                               </Show>
                             </div>
                           </div>
-                          <span class="shrink-0 pt-0.5 text-xs opacity-70">
+                          {/* Overdue reads very differently from
+                              upcoming; every task app paints it. */}
+                          <span
+                            class="shrink-0 pt-0.5 text-xs"
+                            classList={{
+                              "text-red-500 font-medium": r.urgency === "overdue",
+                              "opacity-70": r.urgency !== "overdue",
+                            }}
+                          >
                             {formatNextFire(r.next_fire)}
                           </span>
                           <div class="flex shrink-0 gap-1">
                             <Show when={!r.done}>
-                              <For each={SNOOZE_PRESETS}>
+                              <For each={presets() ?? []}>
                                 {(p) => (
                                   <button
                                     type="button"
@@ -171,7 +176,7 @@ export function RemindersPanel(props: RemindersPanelDeps) {
                                     title={`Snooze ${p.label} (every device)`}
                                     onClick={() =>
                                       void withRow(r.block_id, () =>
-                                        snoozeReminder(r.block_id, p.minutes),
+                                        snoozeReminder(r.block_id, p.id),
                                       )
                                     }
                                   >

@@ -269,9 +269,10 @@ That split is the whole design.
 `outl_tauri_shared::reminder_runtime::take_due` answers *what* came due and updates the device-local fired log; each client wraps it with its own OS call (`tauri-plugin-notification` on both GUI clients today).
 A 30s poll drives it — the schedule has minute granularity, so a tighter tick only adds IPC, and the fired log makes a double poll harmless.
 
-**The TUI delivers nothing, on purpose.**
-A terminal session has no background presence.
-It authors (`g r` / `g R`) and inspects (`g n`); it never schedules an OS notification.
+**Every client delivers, including the TUI.**
+That is why `take_due` and the fired log live in `outl-actions` and not behind the Tauri layer: the TUI can't depend on `outl-tauri-shared`, and putting them there would have made "the client that shipped first" the owner.
+The GUI clients wrap `take_due` with `tauri-plugin-notification`; the TUI wraps it with an OSC 9 escape plus a toast on its event-loop tick.
+A terminal session still has no background presence, so a reminder due with the TUI closed is lost to that client.
 
 **Presentation is shared.**
 `@outl/shared`'s `formatNextFire` ("in 3h", "tomorrow 09:00") and `groupReminders` (Today / Tomorrow / This week / Later / Done) are used by both GUI clients — two implementations drift on the edge cases (exactly 60 minutes, midnight rollover) long before anyone notices.

@@ -26,6 +26,7 @@ function reminder(nextFire: string | null, text = "task"): Reminder {
     done: nextFire === null,
     next_fire: nextFire,
     snoozed_until: null,
+    urgency: nextFire === null ? "finished" : "later",
   };
 }
 

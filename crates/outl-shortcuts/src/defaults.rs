@@ -279,6 +279,15 @@ pub fn default_bindings() -> Vec<Binding> {
             Action::OpenReminders,
             "Open reminders (chord)",
         ),
+        // `g s` snoozes the selected block's reminder an hour without
+        // opening the list. The action had a desktop handler and no
+        // chord at all, so it was unreachable everywhere.
+        Binding::new(
+            pair('g', 's'),
+            Normal,
+            Action::SnoozeReminder,
+            "Snooze this block's reminder 1h",
+        ),
         Binding::new(
             shift_meta_ch('r'),
             Global,

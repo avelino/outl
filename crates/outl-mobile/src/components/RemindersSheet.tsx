@@ -8,10 +8,14 @@ import {
   listReminders,
   openPageBySlug,
   reminderSettings,
+  setReminderSettings,
+  snoozePresets,
   snoozeReminder,
+  toggleTodo,
 } from "@outl/shared/api/commands";
 
 import { createSheetDrag } from "../lib/sheet-drag";
+import { splitQuietHours, withQuietEnd } from "../lib/quiet-hours";
 import { haptic } from "../lib/haptics";
 
 interface RemindersSheetProps {
@@ -21,15 +25,10 @@ interface RemindersSheetProps {
   onMessage: (text: string) => void;
   /** Refreshed page view after navigating to a reminder's block. */
   onView: (view: PageView) => void;
+  /** Slug of the page currently on screen, so marking a row DONE only
+   *  re-renders when the user is actually looking at it. */
+  currentSlug: string | null;
 }
-
-/** Snooze presets, in minutes. Same set as the desktop panel and the
- *  OS banner actions, so the choice doesn't change per surface. */
-const SNOOZE_PRESETS: Array<{ label: string; minutes: number }> = [
-  { label: "1h", minutes: 60 },
-  { label: "Tomorrow", minutes: 60 * 24 },
-  { label: "Next week", minutes: 60 * 24 * 7 },
-];
 
 /**
  * Bottom sheet listing every block with a `remind::`, grouped Today /
@@ -49,17 +48,78 @@ export function RemindersSheet(props: RemindersSheetProps): JSX.Element {
   const [reminders, setReminders] = createSignal<Reminder[]>([]);
   const [loading, setLoading] = createSignal(false);
   const [enabled, setEnabled] = createSignal(true);
+  const [quietHours, setQuietHours] = createSignal("");
   const [busy, setBusy] = createSignal<string | null>(null);
+  const [savingSettings, setSavingSettings] = createSignal(false);
+  // Fetched, not hardcoded: "tomorrow 9am" is a wall time, so the
+  // backend owns resolution and we only render its labels.
+  const [presets, setPresets] = createSignal<{ id: string; label: string }[]>([]);
+
+  /**
+   * Write both device-local settings at once.
+   *
+   * Both go on every call because the backend command replaces the
+   * pair; sending one and defaulting the other is how flipping the
+   * switch would silently wipe a configured quiet window. The UI only
+   * moves after the write returns, so a failed save can't leave it
+   * claiming a state the config doesn't have.
+   */
+  async function saveSettings(nextEnabled: boolean, nextQuiet: string) {
+    if (savingSettings()) return;
+    setSavingSettings(true);
+    haptic("light");
+    try {
+      const saved = await setReminderSettings(nextEnabled, nextQuiet);
+      setEnabled(saved.enabled);
+      setQuietHours(saved.quiet_hours);
+    } catch (e) {
+      props.onMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSavingSettings(false);
+    }
+  }
+
+  /**
+   * Update one end of the quiet window from a native time picker.
+   *
+   * The split / join rules (and why a half-filled window saves as
+   * empty) live in `lib/quiet-hours`, where they're unit-tested — a
+   * silent bug there means the user's quiet hours quietly don't stick.
+   */
+  function setQuietEnd(which: 0 | 1, value: string) {
+    const next = withQuietEnd(quietHours(), which, value);
+    setQuietHours(next);
+    void saveSettings(enabled(), next);
+  }
+
+  /**
+   * Mark a reminder's block DONE, which cancels every pending fire.
+   *
+   * Resolves the block's **own** page id first: this sheet lists the
+   * whole workspace, so the open page is usually a different one, and
+   * `toggle_todo` uses the page id to render the reply and queue the
+   * projection. The refreshed view is only applied when the user is
+   * actually looking at that page, so ticking a row never teleports
+   * them somewhere else.
+   */
+  async function markDone(r: Reminder) {
+    const target = await openPageBySlug(r.page_slug);
+    const after = await toggleTodo(target.page.id, r.block_id);
+    if (props.currentSlug === r.page_slug) props.onView(after);
+  }
 
   async function refresh() {
     setLoading(true);
     try {
-      const [list, settings] = await Promise.all([
+      const [list, settings, options] = await Promise.all([
         listReminders(),
         reminderSettings(),
+        snoozePresets(),
       ]);
+      setPresets(options);
       setReminders(list);
       setEnabled(settings.enabled);
+      setQuietHours(settings.quiet_hours);
     } catch (e) {
       props.onMessage(e instanceof Error ? e.message : String(e));
       setReminders([]);
@@ -143,12 +203,72 @@ export function RemindersSheet(props: RemindersSheetProps): JSX.Element {
             </span>
           </div>
 
-          {/* An empty list means two different things — "nothing
-              scheduled" and "this device never delivers". Say which. */}
-          <Show when={!enabled()}>
-            <div class="border-t border-(--color-ios-divider)/30 px-4 py-2 text-[12px] text-(--color-ios-text-secondary) dark:border-(--color-iosd-divider)/30 dark:text-(--color-iosd-text-secondary)">
-              Notifications are off on this device. The rules below are still
-              tracked.
+          {/* This sheet is the only place mobile can turn delivery on
+              (there is no settings screen, and config.toml lives inside
+              the iOS sandbox). Saying "it's off" without a switch right
+              here would be a dead end. */}
+          <div class="flex items-center justify-between gap-3 border-t border-(--color-ios-divider)/30 px-4 py-2.5 dark:border-(--color-iosd-divider)/30">
+            <span class="text-[13px] text-(--color-ios-text) dark:text-(--color-iosd-text)">
+              Notify me on this device
+              <Show when={!enabled()}>
+                <span class="block text-[11px] text-(--color-ios-text-secondary) dark:text-(--color-iosd-text-secondary)">
+                  Rules below are tracked either way.
+                </span>
+              </Show>
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={enabled()}
+              aria-label="Notify me on this device"
+              disabled={savingSettings()}
+              onClick={() => void saveSettings(!enabled(), quietHours())}
+              class="relative h-[31px] w-[51px] shrink-0 rounded-full transition-colors disabled:opacity-50"
+              classList={{
+                "bg-(--color-ios-accent) dark:bg-(--color-iosd-accent)": enabled(),
+                "bg-(--color-ios-divider) dark:bg-(--color-iosd-divider)": !enabled(),
+              }}
+            >
+              <span
+                class="absolute top-[2px] h-[27px] w-[27px] rounded-full bg-white shadow transition-all"
+                style={{ left: enabled() ? "22px" : "2px" }}
+              />
+            </button>
+          </div>
+
+          {/* Native time pickers rather than the desktop's text field:
+              typing "22:00-07:00" on a phone means switching keyboard
+              layouts twice, and iOS renders these as a wheel. Clearing
+              either end turns quiet hours off. */}
+          <Show when={enabled()}>
+            <div class="flex items-center justify-between gap-3 border-t border-(--color-ios-divider)/30 px-4 py-2.5 dark:border-(--color-iosd-divider)/30">
+              <span class="text-[13px] text-(--color-ios-text) dark:text-(--color-iosd-text)">
+                Quiet hours
+                <span class="block text-[11px] text-(--color-ios-text-secondary) dark:text-(--color-iosd-text-secondary)">
+                  A fire lands after the window, never dropped.
+                </span>
+              </span>
+              <div class="flex shrink-0 items-center gap-1">
+                <input
+                  type="time"
+                  aria-label="Quiet hours start"
+                  disabled={savingSettings()}
+                  value={splitQuietHours(quietHours())[0]}
+                  onChange={(e) => setQuietEnd(0, e.currentTarget.value)}
+                  class="rounded-lg bg-(--color-ios-divider)/40 px-2 py-1 text-[13px] text-(--color-ios-text) disabled:opacity-50 dark:bg-(--color-iosd-divider)/40 dark:text-(--color-iosd-text)"
+                />
+                <span class="text-[13px] text-(--color-ios-text-secondary) dark:text-(--color-iosd-text-secondary)">
+                  to
+                </span>
+                <input
+                  type="time"
+                  aria-label="Quiet hours end"
+                  disabled={savingSettings()}
+                  value={splitQuietHours(quietHours())[1]}
+                  onChange={(e) => setQuietEnd(1, e.currentTarget.value)}
+                  class="rounded-lg bg-(--color-ios-divider)/40 px-2 py-1 text-[13px] text-(--color-ios-text) disabled:opacity-50 dark:bg-(--color-iosd-divider)/40 dark:text-(--color-iosd-text)"
+                />
+              </div>
             </div>
           </Show>
 
@@ -173,7 +293,16 @@ export function RemindersSheet(props: RemindersSheetProps): JSX.Element {
                           <span class="min-w-0 flex-1 truncate text-[16px] text-(--color-ios-text) dark:text-(--color-iosd-text)">
                             {r.text || "(empty block)"}
                           </span>
-                          <span class="shrink-0 text-[12px] text-(--color-ios-text-secondary) dark:text-(--color-iosd-text-secondary)">
+                          {/* Overdue reads very differently from
+                              upcoming; every task app paints it. */}
+                          <span
+                            class="shrink-0 text-[12px]"
+                            classList={{
+                              "text-red-500 font-medium": r.urgency === "overdue",
+                              "text-(--color-ios-text-secondary) dark:text-(--color-iosd-text-secondary)":
+                                r.urgency !== "overdue",
+                            }}
+                          >
                             {formatNextFire(r.next_fire)}
                           </span>
                         </button>
@@ -183,7 +312,7 @@ export function RemindersSheet(props: RemindersSheetProps): JSX.Element {
                         </div>
                         <Show when={!r.done}>
                           <div class="mt-2 flex flex-wrap gap-1.5">
-                            <For each={SNOOZE_PRESETS}>
+                            <For each={presets()}>
                               {(p) => (
                                 <button
                                   type="button"
@@ -191,7 +320,7 @@ export function RemindersSheet(props: RemindersSheetProps): JSX.Element {
                                   class="rounded-full bg-(--color-ios-divider)/40 px-2.5 py-1 text-[12px] text-(--color-ios-text) active:opacity-60 disabled:opacity-40 dark:bg-(--color-iosd-divider)/40 dark:text-(--color-iosd-text)"
                                   onClick={() =>
                                     void withRow(r.block_id, () =>
-                                      snoozeReminder(r.block_id, p.minutes),
+                                      snoozeReminder(r.block_id, p.id),
                                     )
                                   }
                                 >
@@ -213,6 +342,19 @@ export function RemindersSheet(props: RemindersSheetProps): JSX.Element {
                                 Resume
                               </button>
                             </Show>
+                            {/* Completing the task is the real "stop
+                                nagging me", and the desktop panel has
+                                had it since day one. */}
+                            <button
+                              type="button"
+                              disabled={busy() === r.block_id}
+                              class="rounded-full bg-(--color-ios-divider)/40 px-2.5 py-1 text-[12px] text-(--color-ios-text) active:opacity-60 disabled:opacity-40 dark:bg-(--color-iosd-divider)/40 dark:text-(--color-iosd-text)"
+                              onClick={() =>
+                                void withRow(r.block_id, () => markDone(r))
+                              }
+                            >
+                              Done
+                            </button>
                           </div>
                         </Show>
                       </div>

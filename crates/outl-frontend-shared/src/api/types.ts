@@ -538,6 +538,21 @@ export interface TemplateDto {
  * Render them as-is, or parse with `new Date(iso)` which treats a
  * suffix-less string as local.
  */
+/**
+ * How late a reminder is. Mirrors `outl_actions::reminders::Urgency`
+ * and is computed in Rust, so the TUI, the desktop panel and the
+ * mobile sheet paint the same row the same way.
+ */
+export type ReminderUrgency = "overdue" | "soon" | "later" | "finished";
+
+/** One snooze option. Mirrors `SnoozePresetDto`. */
+export interface SnoozePreset {
+  /** Wire id sent back to `snoozeReminder`. */
+  id: string;
+  /** What the button reads. */
+  label: string;
+}
+
 export interface Reminder {
   block_id: string;
   page_slug: string;
@@ -554,6 +569,8 @@ export interface Reminder {
   next_fire: string | null;
   /** Local ISO datetime the snooze runs until, `null` when not snoozed. */
   snoozed_until: string | null;
+  /** Row styling class, decided by the backend. */
+  urgency: ReminderUrgency;
 }
 
 /**
@@ -569,3 +586,9 @@ export interface ReminderSettings {
   /** `"22:00-07:00"`, or `""` when the user set no quiet hours. */
   quiet_hours: string;
 }
+
+/**
+ * Property key carrying a reminder rule on a block. Mirrors
+ * `outl_md::REMIND_KEY` — don't hardcode `"remind"` at a call site.
+ */
+export const REMIND_KEY = "remind";
