@@ -12,6 +12,7 @@
  *   **ids only** — the selection-navigation walks (vim `j`/`k`,
  *   `zR`/`zM`, Visual ranges) operate on id lists.
  */
+import { QUOTE_PREFIX } from "../markdown/quote";
 import type { BlockNode, InlineToken } from "../api/types";
 
 /**
@@ -374,4 +375,40 @@ export function isInVisualRange(
 ): boolean {
   const set = visualRangeSet(anchor, cursor, blocks);
   return set !== null && set.has(id);
+}
+
+/** Keep in sync with `outl_actions::TODO_PREFIX` / `DONE_PREFIX`. */
+const TODO_PREFIX = "TODO ";
+const DONE_PREFIX = "DONE ";
+
+/**
+ * Cycle a block's TODO prefix: none → `TODO ` → `DONE ` → none.
+ *
+ * Mirrors `outl_actions::todo::cycle_todo`, quote handling included:
+ * both prefixes are peeled and re-emitted in canonical order
+ * (`TODO > body`), so cycling a quoted block can't produce
+ * `TODO > TODO body`.
+ *
+ * Exists because a GUI client editing a block holds the text in a
+ * textarea draft, and round-tripping the toggle through the backend
+ * leaves that draft stale: the block only showed its new state after
+ * leaving Insert. The clients splice this into the draft instead, the
+ * same way the TUI mutates its `EditBuffer` on `Ctrl+T`.
+ */
+export function cycleTodo(raw: string): string {
+  const quoted = raw.startsWith(QUOTE_PREFIX);
+  const afterQuote = quoted ? raw.slice(QUOTE_PREFIX.length) : raw;
+
+  let body = afterQuote;
+  let next = "";
+  if (afterQuote.startsWith(TODO_PREFIX)) {
+    body = afterQuote.slice(TODO_PREFIX.length);
+    next = DONE_PREFIX;
+  } else if (afterQuote.startsWith(DONE_PREFIX)) {
+    body = afterQuote.slice(DONE_PREFIX.length);
+    next = "";
+  } else {
+    next = TODO_PREFIX;
+  }
+  return `${next}${quoted ? QUOTE_PREFIX : ""}${body}`;
 }

@@ -19,6 +19,7 @@ import {
   sameCrumbTrail,
   visualRangeIds,
   visualRangeSet,
+  cycleTodo,
 } from "./index";
 
 function block(
@@ -477,5 +478,40 @@ describe("collectBlockRefHandles", () => {
   it("returns an empty array when no handles are present", () => {
     const outline = [node("a", [{ kind: "plain", value: "just text" }])];
     expect(collectBlockRefHandles(outline)).toEqual([]);
+  });
+});
+
+describe("cycleTodo", () => {
+  it("walks none to TODO to DONE and back", () => {
+    const s0 = "deploy frontend";
+    const s1 = cycleTodo(s0);
+    const s2 = cycleTodo(s1);
+    const s3 = cycleTodo(s2);
+    expect(s1).toBe("TODO deploy frontend");
+    expect(s2).toBe("DONE deploy frontend");
+    expect(s3).toBe("deploy frontend");
+  });
+
+  it("keeps a quote marker in canonical order", () => {
+    // Same order `outl_actions::cycle_todo` emits: state, then quote.
+    expect(cycleTodo("> deploy")).toBe("TODO > deploy");
+    expect(cycleTodo("TODO > deploy")).toBe("DONE > deploy");
+    expect(cycleTodo("DONE > deploy")).toBe("> deploy");
+  });
+
+  it("normalises a legacy TODO written after the quote", () => {
+    // Naive concatenation would yield "TODO > TODO foo", which
+    // `split_todo` then misreads.
+    expect(cycleTodo("> TODO foo")).toBe("DONE > foo");
+    expect(cycleTodo("> DONE foo")).toBe("> foo");
+  });
+
+  it("handles an empty block", () => {
+    expect(cycleTodo("")).toBe("TODO ");
+  });
+
+  it("does not treat a word starting with TODO as a marker", () => {
+    // The marker is `TODO ` with its trailing space; `TODOs` is prose.
+    expect(cycleTodo("TODOs are piling up")).toBe("TODO TODOs are piling up");
   });
 });

@@ -287,3 +287,20 @@ fn a_repeating_rule_fires_again_after_its_interval() {
     assert!(take_due(&w, root, None, at(2026, 12, 12, 10, 30)).is_empty());
     assert_eq!(take_due(&w, root, None, at(2026, 12, 12, 11, 0)).len(), 1);
 }
+
+#[test]
+fn a_workspace_with_no_rules_never_touches_the_fired_log() {
+    // Delivery defaults on and every client polls on a timer, so the
+    // zero-reminder workspace is the common case. It used to pay for a
+    // full scan plus a file read on every tick, under the same
+    // workspace lock a block edit needs.
+    let tmp = TempDir::new().expect("tempdir");
+    let root = tmp.path();
+    let (w, _hlc, _ids) = workspace_with(root, &[("TODO no reminder here", None)]);
+
+    assert!(take_due(&w, root, None, at(2026, 12, 12, 10, 0)).is_empty());
+    assert!(
+        !outl_actions::reminders::fired_log_path(root).exists(),
+        "a sweep that found nothing must not have written a fired log"
+    );
+}

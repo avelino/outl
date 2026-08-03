@@ -39,10 +39,18 @@ export interface RemindersPanelDeps {
 }
 
 export function RemindersPanel(props: RemindersPanelDeps) {
+  // Every resource is gated on the panel being open. The component is
+  // mounted for the app's whole life (the `<Show>` below hides the
+  // chrome, not the component), so an ungated `createResource` fetches
+  // at **boot** — and `listReminders` scans the workspace under the
+  // same lock the first page load needs. The mobile sheet gates the
+  // same way.
+  const open = () => (appState.remindersOpen ? true : undefined);
+
   // `refetch` is the only refresh path: every mutation below awaits its
   // command and then re-reads, so the list can never show a snooze the
   // op log didn't take.
-  const [reminders, { refetch }] = createResource(async () => {
+  const [reminders, { refetch }] = createResource(open, async () => {
     try {
       return await listReminders();
     } catch (e) {
@@ -50,10 +58,10 @@ export function RemindersPanel(props: RemindersPanelDeps) {
       return [] as Reminder[];
     }
   });
-  const [settings] = createResource(reminderSettings);
+  const [settings] = createResource(open, reminderSettings);
   // Fetched, not hardcoded: "tomorrow 9am" is a wall time, so the
   // backend owns resolution and we only render its labels.
-  const [presets] = createResource(snoozePresets);
+  const [presets] = createResource(open, snoozePresets);
   const [busy, setBusy] = createSignal<string | null>(null);
 
   async function withRow(id: string, run: () => Promise<unknown>) {

@@ -94,6 +94,7 @@ impl App {
             pending_sidebar_delete: None,
             recent_paths: Vec::new(),
             toasts: Vec::new(),
+            last_reminder_sweep: None,
             focus: Focus::Outline,
             zoom_stack: Vec::new(),
             scroll_y: 0,

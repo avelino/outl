@@ -57,7 +57,7 @@ import {
 
 import { redoPage, undoPage } from "./api";
 import { playPluginViews } from "./plugin-views";
-import { insertLink, wrapSelection } from "./markdown-wrap";
+import { cycleTodoInDraft, insertLink, wrapSelection } from "./markdown-wrap";
 import { type ActionHandlers } from "./shortcuts";
 import { appState, setAppState } from "./store";
 
@@ -677,6 +677,11 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
     // Targets the focused textarea (Insert) or the selected block
     // (Normal) — same fallback chain as IndentBlock/etc.
     ToggleTodo: async () => {
+      // Editing: splice the draft. Going through the backend here
+      // updated the outline behind a textarea whose draft is seeded
+      // once and never re-syncs, so the new state only appeared after
+      // leaving Insert. The commit on blur persists it.
+      if (cycleTodoInDraft()) return;
       const pageId = appState.page?.id;
       if (!pageId) return;
       const id = targetBlockId();
