@@ -27,7 +27,7 @@ import {
   reminderSettings,
   snoozePresets,
   snoozeReminder,
-  toggleTodo,
+  markBlockDone,
 } from "@outl/shared/api/commands";
 import type { PageView, Reminder } from "@outl/shared/api/types";
 
@@ -77,10 +77,17 @@ export function RemindersPanel(props: RemindersPanelDeps) {
   }
 
   async function jumpTo(r: Reminder) {
-    const view = await openPageBySlug(r.page_slug);
-    props.applyView(view);
-    setAppState("selectedBlockId", r.block_id);
-    setAppState("remindersOpen", false);
+    try {
+      const view = await openPageBySlug(r.page_slug);
+      props.applyView(view);
+      setAppState("selectedBlockId", r.block_id);
+      setAppState("remindersOpen", false);
+    } catch (e) {
+      // A row can outlive its page (deleted on another device between
+      // the list load and the click). Closing the panel on a failed
+      // open would hide the reason along with the row.
+      props.setError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   /**
@@ -88,14 +95,17 @@ export function RemindersPanel(props: RemindersPanelDeps) {
    *
    * Resolves the block's **own** page id first: the panel lists the
    * whole workspace, so `appState.page` is usually a different page,
-   * and `toggle_todo` uses the page id to render the reply + queue the
+   * and the command uses the page id to render the reply + queue the
    * projection. Passing the wrong one re-projects the wrong page.
    * The view is only applied when the user is actually looking at that
    * page — ticking a row shouldn't teleport them.
+   *
+   * `markBlockDone`, not `toggleTodo`: a rule can sit on a block with
+   * no marker, and toggling that lands on `TODO` and keeps nagging.
    */
   async function markDone(r: Reminder) {
     const target = await openPageBySlug(r.page_slug);
-    const after = await toggleTodo(target.page.id, r.block_id);
+    const after = await markBlockDone(target.page.id, r.block_id);
     if (appState.page?.slug === r.page_slug) props.applyView(after);
   }
 

@@ -69,8 +69,9 @@ use crate::commands::{
     today_slug_cmd, toggle_quote, toggle_todo, workspace_stats,
 };
 use crate::commands::{
-    clear_reminder_snooze, deliver_due_reminders, list_reminders, reminder_settings,
-    set_block_property, set_block_remind, set_reminder_settings, snooze_presets, snooze_reminder,
+    clear_reminder_snooze, deliver_due_reminders, list_reminders, mark_block_done,
+    reminder_settings, set_block_property, set_block_remind, set_reminder_settings, snooze_presets,
+    snooze_reminder,
 };
 use crate::plugin_service::spawn_plugin_service;
 use crate::state::AppState;
@@ -314,6 +315,7 @@ pub fn run() {
             snooze_presets,
             clear_reminder_snooze,
             set_block_remind,
+            mark_block_done,
             set_block_property,
             deliver_due_reminders,
             // Page / journal navigation

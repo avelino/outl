@@ -77,6 +77,15 @@ pub(crate) fn set_block_remind(
     shared::set_block_remind(state.inner(), &page_id, &block_id, &rule)
 }
 
+#[tauri::command]
+pub(crate) fn mark_block_done(
+    page_id: String,
+    block_id: String,
+    state: State<'_, AppState>,
+) -> Result<PageView, String> {
+    shared::mark_block_done(state.inner(), &page_id, &block_id)
+}
+
 /// Deliver every reminder that came due, as an OS notification.
 ///
 /// Returns what it delivered so the frontend can also refresh an open

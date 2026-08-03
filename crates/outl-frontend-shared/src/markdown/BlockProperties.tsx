@@ -14,6 +14,12 @@ export interface BlockPropertiesProps {
    * iOS one.
    */
   onCommit?: (key: string, value: string) => void | Promise<void>;
+  /**
+   * Surface a failed commit. Omit and a rejection is dropped, which is
+   * why this exists: the chip repaints with the new value either way,
+   * so a silent failure reads as a successful edit.
+   */
+  onError?: (message: string) => void;
   /** Theme tokens for a chip. Tailwind literals so JIT sees them. */
   chipClass?: string;
   /** Theme tokens for the editing input. */
@@ -55,7 +61,13 @@ export function BlockProperties(props: BlockPropertiesProps): JSX.Element {
     // gone by the time an async `onCommit` resolves.
     const value = draft();
     setEditing(null);
-    void props.onCommit?.(key, value);
+    // A rejected commit has to reach the host. Swallowing it left the
+    // chip showing the new value while the backend still held the old
+    // one, and the only trace was an unhandled rejection in a console
+    // the user never opens.
+    void Promise.resolve(props.onCommit?.(key, value)).catch((e) => {
+      props.onError?.(e instanceof Error ? e.message : String(e));
+    });
   }
 
   return (
