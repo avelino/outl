@@ -138,6 +138,20 @@ pub fn take_due(
     quiet: Option<(u32, u32)>,
     now: NaiveDateTime,
 ) -> Vec<Reminder> {
+    // Nothing carries a rule: skip the fired-log read and the whole
+    // scan. Every client polls this on a timer, and delivery defaults
+    // on, so the workspace with zero reminders is the common case and
+    // it was paying for a full walk plus a file read every tick. The
+    // check short-circuits on the first carrier, so a workspace that
+    // does have reminders pays almost nothing for it.
+    if workspace
+        .tree()
+        .nodes_with_property(outl_md::remind::REMIND_KEY)
+        .next()
+        .is_none()
+    {
+        return Vec::new();
+    }
     let mut fired = load_fired_log(root);
     let due: Vec<Reminder> = scan_reminders(workspace, &fired, quiet, now)
         .into_iter()

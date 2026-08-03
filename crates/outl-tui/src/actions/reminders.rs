@@ -14,10 +14,8 @@
 
 use std::io::{IsTerminal, Write};
 
-use outl_actions::reminders::{scan_reminders, snooze_until, take_due, FiredLog, SnoozePreset};
-use outl_core::property::PropValue;
-
 use crate::state::{App, Focus, Mode, Overlay, RemindersState, ToastKind};
+use outl_actions::reminders::{scan_reminders, snooze_until, take_due, FiredLog, SnoozePreset};
 
 /// The "nag me" preset behind `g R`, spelled in the `remind::`
 /// grammar. The desktop hardcodes the same string in
@@ -53,50 +51,26 @@ impl App {
         if !matches!(self.focus, Focus::Outline) || !matches!(self.mode, Mode::Normal) {
             return;
         }
-        let Some(&node) = self.id_by_flat.get(self.selected) else {
-            // Same guard the collapse chord uses: a brand-new bullet
-            // has no sidecar entry until the next save, and a property
-            // needs a node id to hang on.
-            self.toast(
-                ToastKind::Info,
-                "block has no sidecar entry yet; save first",
-            );
-            return;
-        };
         if !overwrite {
-            if let Some(PropValue::Text(existing)) = self
-                .workspace
-                .tree()
-                .property(node, outl_md::remind::REMIND_KEY)
-                .cloned()
-            {
+            if let Some(existing) = self.property_on_current_block(outl_md::remind::REMIND_KEY) {
                 self.toast(ToastKind::Info, format!("already reminding: {existing}"));
                 return;
             }
         }
-        let hlc = self.hlc.clone();
-        match outl_actions::set_property(
-            &mut self.workspace,
-            &hlc,
-            node,
-            outl_md::remind::REMIND_KEY,
-            Some(PropValue::Text(rule.to_string())),
-        ) {
-            Ok(()) => {
-                // The property lives in the op log now; re-read the page
-                // so the `.md` projection (and the rendered property
-                // line) reflects it in this frame.
-                self.load_current_no_autorun();
-                // Point at the editor, because `g r` writes a starter
-                // rule the user almost always wants to change and the
-                // property line alone doesn't say how.
-                self.toast(
-                    ToastKind::Info,
-                    format!("remind:: {rule} — edit with :prop remind <rule>"),
-                );
-            }
-            Err(e) => self.toast(ToastKind::Error, format!("could not set remind:: — {e}")),
-        }
+        // Route through the same AST-first path `:prop` uses. Writing
+        // straight to the op log left the `.md` (and therefore the
+        // outline) without the property until some later save happened
+        // to project it: the chord "worked" and rendered nothing. The
+        // crate's rule is explicit about this — see the CLAUDE.md
+        // "never mutate the op log directly" entry.
+        self.set_property_on_current_block(outl_md::remind::REMIND_KEY, rule);
+        // Point at the editor, because `g r` writes a starter rule the
+        // user almost always wants to change and the property line
+        // alone doesn't say how.
+        self.toast(
+            ToastKind::Info,
+            format!("remind:: {rule} — edit with :prop remind <rule>"),
+        );
     }
 
     /// Deliver anything that came due, on the event loop's tick.
@@ -115,6 +89,20 @@ impl App {
         if matches!(self.mode, Mode::Insert { .. }) {
             return;
         }
+        // Throttle before touching disk. The event loop ticks every
+        // 750ms normally, every 16ms while an index rebuild is pending,
+        // and once per keystroke; the sweep below reads `config.toml`,
+        // reads the fired log, and scans the property map, so running
+        // it per tick put two file reads in the keystroke path. A rule
+        // resolves to the minute, so this cadence loses nothing.
+        let now_instant = std::time::Instant::now();
+        if let Some(last) = self.last_reminder_sweep {
+            if now_instant.duration_since(last) < REMINDER_SWEEP_INTERVAL {
+                return;
+            }
+        }
+        self.last_reminder_sweep = Some(now_instant);
+
         let cfg = outl_config::load();
         if !cfg.reminders.enabled {
             return;
@@ -172,10 +160,12 @@ impl App {
         let Some(&node) = self.id_by_flat.get(self.selected) else {
             return;
         };
+        // Ask the AST, same as `g r`: a rule written moments ago lives
+        // there until the next save reconciles it into the op log, and
+        // "this block has no rule" about a rule the user can see on
+        // screen is the worst answer available.
         if self
-            .workspace
-            .tree()
-            .property(node, outl_md::remind::REMIND_KEY)
+            .property_on_current_block(outl_md::remind::REMIND_KEY)
             .is_none()
         {
             self.toast(ToastKind::Info, "this block has no remind:: rule");
@@ -259,6 +249,13 @@ impl App {
         }
     }
 }
+
+/// How often the event loop sweeps for due reminders.
+///
+/// `remind::` resolves to the minute, so anything under a minute is
+/// already finer than the schedule. 20s keeps a fire visibly prompt
+/// while keeping the sweep's two file reads out of the keystroke path.
+const REMINDER_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// How long a reminder toast stays up. Longer than the default 2.5s
 /// because a reminder is the one toast the user must not miss while

@@ -1,4 +1,4 @@
-import { For, Show, createSignal, type JSX } from "solid-js";
+import { For, Show, createMemo, createSignal, type JSX } from "solid-js";
 
 import { propertyChips } from "./properties";
 
@@ -40,7 +40,9 @@ export function BlockProperties(props: BlockPropertiesProps): JSX.Element {
   const [editing, setEditing] = createSignal<string | null>(null);
   const [draft, setDraft] = createSignal("");
 
-  const chips = () => propertyChips(props.properties);
+  // Memoised: `<Show>` and `<For>` below both read it, so a plain
+  // function allocated the projection twice per render of every block.
+  const chips = createMemo(() => propertyChips(props.properties));
 
   function open(key: string, value: string) {
     if (!props.onCommit) return;

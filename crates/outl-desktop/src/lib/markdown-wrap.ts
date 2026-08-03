@@ -19,6 +19,8 @@
  * the wrapped value as the new draft.
  */
 
+import { cycleTodo } from "@outl/shared/outline";
+
 function activeTextarea(): HTMLTextAreaElement | null {
   const el = document.activeElement;
   return el instanceof HTMLTextAreaElement ? el : null;
@@ -109,4 +111,33 @@ export function insertLink() {
     const labelStart = start + 1; // after "["
     ta.setSelectionRange(labelStart, labelStart + placeholder.length);
   }
+}
+
+/**
+ * Cycle the focused textarea's TODO prefix in place.
+ *
+ * Returns `false` when no textarea has focus, so the caller can fall
+ * back to the backend round-trip for the not-editing case.
+ *
+ * Editing needs its own path: the textarea's draft signal is seeded
+ * once when editing starts and never re-syncs from `props.block`, so a
+ * toggle that went through the backend updated the outline behind a
+ * stale draft and the new state only appeared on leaving Insert. The
+ * TUI has always done it this way (`cycle_todo_inline` on the
+ * `EditBuffer`); the commit on blur persists whatever the draft holds.
+ */
+export function cycleTodoInDraft(): boolean {
+  const ta = activeTextarea();
+  if (!ta) return false;
+  const caret = ta.selectionStart ?? 0;
+  const before = ta.value;
+  const after = cycleTodo(before);
+  ta.value = after;
+  // Keep the caret over the same character of the user's own text:
+  // the prefix grew or shrank in front of it.
+  const shift = after.length - before.length;
+  const next = Math.max(0, caret + shift);
+  ta.setSelectionRange(next, next);
+  fireInputEvent(ta);
+  return true;
 }

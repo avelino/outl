@@ -682,6 +682,15 @@ pub(crate) struct App {
     /// from `status`, which still drives the single-line footer
     /// message (e.g. chord prompts).
     pub(crate) toasts: Vec<Toast>,
+    /// When the reminder sweep last ran.
+    ///
+    /// The sweep reads `config.toml`, reads the fired log, and scans
+    /// the property map. The event loop ticks every 750ms normally and
+    /// every **16ms** while an index rebuild is pending, plus once per
+    /// keystroke, so running it unthrottled meant two disk reads per
+    /// keypress. `remind::` resolves to the minute, so a sweep every
+    /// `REMINDER_SWEEP_INTERVAL` is as timely as the schedule can be.
+    pub(crate) last_reminder_sweep: Option<std::time::Instant>,
 
     /// Block ids currently rendered collapsed (children hidden) in
     /// the outline. Hydrated from `workspace.tree().is_collapsed(_)`

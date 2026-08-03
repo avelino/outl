@@ -10,6 +10,7 @@ use crate::state::{
     App, AutocompleteKind, AutocompleteState, CommandState, ErrorState, PluginSettingsState,
     QuickSwitchState, RemindersState, SearchState, SlashState, SwitchKind, TemplatePickerState,
 };
+use crate::theme::Theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -929,7 +930,7 @@ pub(crate) fn render_help_popup(f: &mut ratatui::Frame<'_>, full: Rect, app: &Ap
     .divider(Span::styled("│", app.theme.dim));
     f.render_widget(tabs, chunks[0]);
 
-    let body = help_tab_body(tab, app);
+    let body = help_tab_body(tab, &app.theme);
     let body_len = body.len() as u16;
     // Inner height = block area minus the 2 border rows.
     let inner_h = chunks[1].height.saturating_sub(2);
@@ -961,10 +962,19 @@ pub(crate) fn render_help_popup(f: &mut ratatui::Frame<'_>, full: Rect, app: &Ap
     f.render_widget(popup, chunks[1]);
 }
 
-fn help_tab_body(tab: usize, app: &App) -> Vec<Line<'static>> {
+/// The help popup's rows for one tab.
+///
+/// Takes the `Theme` rather than the whole `App`: styling was all it
+/// ever needed, and a bare theme lets a test assert the text without
+/// constructing a workspace. The rows are hand-curated (grouped and
+/// worded for the terminal) rather than generated from
+/// `outl-shortcuts`, so a chord added to the catalog does NOT appear
+/// here on its own. The guard test at the bottom of this file is what
+/// keeps the reminder chords from silently dropping out again.
+fn help_tab_body(tab: usize, theme: &Theme) -> Vec<Line<'static>> {
     match HELP_TABS.get(tab).copied().unwrap_or("Normal") {
         "Normal" => vec![
-            Line::from(Span::styled("Editing", app.theme.help_title)),
+            Line::from(Span::styled("Editing", theme.help_title)),
             Line::from("  i           edit current block"),
             Line::from("  I           edit, cursor at start of block"),
             Line::from("  o / O       new block below / above"),
@@ -978,7 +988,7 @@ fn help_tab_body(tab: usize, app: &App) -> Vec<Line<'static>> {
             Line::from("  u / Ctrl+R  undo / redo"),
             Line::from("  g p         toggle pinned:: on this page (chord)"),
             Line::from(""),
-            Line::from(Span::styled("Navigation", app.theme.help_title)),
+            Line::from(Span::styled("Navigation", theme.help_title)),
             Line::from("  j/k ↑↓      move between blocks"),
             Line::from("  PgDn/PgUp   one viewport"),
             Line::from("  Ctrl+D / U  half-page"),
@@ -988,7 +998,7 @@ fn help_tab_body(tab: usize, app: &App) -> Vec<Line<'static>> {
             Line::from("  0 / $       start / end of block"),
             Line::from("  Enter       open [[ref]] / #tag / journal under cursor"),
             Line::from(""),
-            Line::from(Span::styled("Journal & workspace", app.theme.help_title)),
+            Line::from(Span::styled("Journal & workspace", theme.help_title)),
             Line::from("  t           today's journal"),
             Line::from("  [ / ]       previous / next journal"),
             Line::from("  g j         jump to today"),
@@ -998,78 +1008,79 @@ fn help_tab_body(tab: usize, app: &App) -> Vec<Line<'static>> {
             Line::from("  B           toggle inline backlinks"),
             Line::from("  \\           toggle left sidebar (opens with focus on Pinned)"),
             Line::from("  q q         quit (chord)"),
+            Line::from(""),
+            Line::from(Span::styled("Reminders", theme.help_title)),
+            Line::from("  g r         add remind:: to this block"),
+            Line::from("  g R         nag me (now every 1h until DONE)"),
+            Line::from("  g n         open the reminders list"),
+            Line::from("  g s         snooze this block 1h (every device)"),
+            Line::from("  :prop remind <rule>   edit or clear the rule"),
         ],
         "Insert" => vec![
-            Line::from(Span::styled("Commit / cancel", app.theme.help_title)),
+            Line::from(Span::styled("Commit / cancel", theme.help_title)),
             Line::from("  Esc         commit (write buffer → AST → disk)"),
             Line::from("  Enter       commit + new block below"),
             Line::from(""),
-            Line::from(Span::styled(
-                "Block ops (stay in Insert)",
-                app.theme.help_title,
-            )),
+            Line::from(Span::styled("Block ops (stay in Insert)", theme.help_title)),
             Line::from("  Tab / S-Tab indent / outdent"),
             Line::from("  Ctrl+T      cycle TODO / DONE / none"),
             Line::from(""),
-            Line::from(Span::styled("Text editing", app.theme.help_title)),
+            Line::from(Span::styled("Text editing", theme.help_title)),
             Line::from("  chars       insert at cursor"),
             Line::from("  Backspace   delete previous (deletes block if empty)"),
             Line::from("  arrows/home/end   move cursor"),
             Line::from("  ( [ {       auto-pair with matching close"),
             Line::from(""),
-            Line::from(Span::styled("Autocomplete", app.theme.help_title)),
+            Line::from(Span::styled("Autocomplete", theme.help_title)),
             Line::from("  [[          page-ref picker"),
             Line::from("  #           tag picker"),
             Line::from("  /           slash command picker"),
         ],
         "Visual" => vec![
-            Line::from(Span::styled("Selection", app.theme.help_title)),
+            Line::from(Span::styled("Selection", theme.help_title)),
             Line::from("  V           enter Visual (Normal mode)"),
             Line::from("  j / k       extend selection"),
             Line::from("  Esc         cancel"),
             Line::from(""),
-            Line::from(Span::styled("Batch ops on the range", app.theme.help_title)),
+            Line::from(Span::styled("Batch ops on the range", theme.help_title)),
             Line::from("  d / x       delete selected blocks"),
             Line::from("  y           yank selected blocks"),
             Line::from("  Tab / S-Tab indent / outdent the range"),
         ],
         "Sidebar" => vec![
-            Line::from(Span::styled("Open / close", app.theme.help_title)),
+            Line::from(Span::styled("Open / close", theme.help_title)),
             Line::from("  \\           toggle sidebar (opens with focus on Pinned)"),
             Line::from("  Esc         return focus to the outline (sidebar stays open)"),
             Line::from(""),
-            Line::from(Span::styled("Inside the sidebar", app.theme.help_title)),
+            Line::from(Span::styled("Inside the sidebar", theme.help_title)),
             Line::from("  j / k ↑↓    move between items in the focused section"),
             Line::from("  g / G       first / last item"),
             Line::from("  Tab / S-Tab cycle sections (Pinned → Recent → Calendar)"),
             Line::from("  Enter       open the highlighted page or journal"),
             Line::from(""),
-            Line::from(Span::styled("Sections", app.theme.help_title)),
+            Line::from(Span::styled("Sections", theme.help_title)),
             Line::from("  📅 Calendar  current month — journals marked with ●"),
             Line::from("  ⭐ Pinned    pages with `pinned:: true` property"),
             Line::from("              (toggle with `gp` chord in Normal, or `/pin`)"),
             Line::from("  🕘 Recent    pages opened this session (LRU, cap 20)"),
         ],
         "Overlays" => vec![
-            Line::from(Span::styled("Open", app.theme.help_title)),
+            Line::from(Span::styled("Open", theme.help_title)),
             Line::from("  Ctrl+P      quick switcher (pages + journals, with preview)"),
             Line::from("  /           slash command menu (Notion-style)"),
             Line::from("  :           vim-style palette (same registry as /)"),
             Line::from("  ?           toggle this help"),
             Line::from(""),
-            Line::from(Span::styled("Inside an overlay", app.theme.help_title)),
+            Line::from(Span::styled("Inside an overlay", theme.help_title)),
             Line::from("  ↑↓ j k      navigate candidates"),
             Line::from("  Enter       accept / run / open"),
             Line::from("  Esc         dismiss"),
             Line::from(""),
-            Line::from(Span::styled("Search hits", app.theme.help_title)),
+            Line::from(Span::styled("Search hits", theme.help_title)),
             Line::from("  n / N       next / previous hit (after `/` is closed)"),
         ],
         "Dates" => vec![
-            Line::from(Span::styled(
-                "Insert-mode slash commands",
-                app.theme.help_title,
-            )),
+            Line::from(Span::styled("Insert-mode slash commands", theme.help_title)),
             Line::from("  /date-today          [[YYYY-MM-DD]]  (also /dt, /dtm, /dy)"),
             Line::from("  /date-next-monday    next Monday's journal ref"),
             Line::from("                       (one alias per weekday)"),
@@ -1079,11 +1090,65 @@ fn help_tab_body(tab: usize, app: &App) -> Vec<Line<'static>> {
             Line::from("  /iso-date-today      YYYY-MM-DD, no brackets (for `due::` etc)"),
             Line::from("  /week-num            #YYYY-Www  (ISO week as a tag)"),
             Line::from(""),
-            Line::from(Span::styled(
-                format!("theme: {}", app.theme.name),
-                app.theme.dim,
-            )),
+            Line::from(Span::styled(format!("theme: {}", theme.name), theme.dim)),
         ],
         _ => vec![Line::from("  (no content for this tab)")],
+    }
+}
+
+#[cfg(test)]
+mod help_coverage_tests {
+    //! The help popup is a hand-curated list, not generated from
+    //! `outl-shortcuts`. That buys a layout worded for the terminal
+    //! and costs the guarantee that a new chord shows up on its own:
+    //! `g r` / `g R` / `g n` / `g s` shipped working and undiscoverable
+    //! because nobody edited this file.
+    //!
+    //! These pin the reminder rows. The chord *spelling* is guarded
+    //! separately against the catalog in `input/normal.rs`, so between
+    //! the two a re-spelled or a dropped chord fails a test.
+
+    use super::help_tab_body;
+    use crate::theme::default_theme;
+
+    fn normal_help() -> String {
+        let theme = default_theme();
+        help_tab_body(0, &theme)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn every_reminder_chord_is_listed() {
+        let help = normal_help();
+        for chord in ["g r", "g R", "g n", "g s"] {
+            assert!(
+                help.contains(chord),
+                "`{chord}` works but isn't in the help; the popup is \
+                 hand-written, so adding a chord means editing it too"
+            );
+        }
+    }
+
+    #[test]
+    fn the_help_says_how_to_edit_a_rule() {
+        // `g r` writes a starter rule the user almost always tunes.
+        // Without this line the only way to find `:prop` is the toast
+        // that scrolls away.
+        assert!(normal_help().contains(":prop remind"));
+    }
+
+    #[test]
+    fn the_first_tab_is_the_one_these_chords_live_on() {
+        // `normal_help()` hardcodes tab 0; if the tab order ever
+        // changes these assertions would silently test the wrong list.
+        assert_eq!(super::HELP_TABS.first().copied(), Some("Normal"));
     }
 }

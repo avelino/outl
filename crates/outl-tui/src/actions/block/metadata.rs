@@ -6,7 +6,7 @@
 //! invoked from slash commands, chord shortcuts, or the command
 //! palette.
 
-use crate::outline_ops::{node_at_path_mut, path_for_index};
+use crate::outline_ops::{node_at_path, node_at_path_mut, path_for_index};
 use crate::state::{App, Focus, ToastKind, View};
 
 impl App {
@@ -34,6 +34,23 @@ impl App {
             }
         }
         self.save();
+    }
+
+    /// Read a property off the currently selected block, or `None`.
+    ///
+    /// The counterpart to [`Self::set_property_on_current_block`], and
+    /// it reads the same place that writes: the parsed AST, not the
+    /// workspace tree. The two only meet at a save boundary, so asking
+    /// the op log reports a value the user cannot see on screen yet.
+    ///
+    /// Key match is case-insensitive, matching the parser.
+    pub(crate) fn property_on_current_block(&self, key: &str) -> Option<String> {
+        let path = path_for_index(&self.page.blocks, self.selected)?;
+        node_at_path(&self.page.blocks, &path)?
+            .properties
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.clone())
     }
 
     /// Set (or replace) a *page-level* property — the ones at the
