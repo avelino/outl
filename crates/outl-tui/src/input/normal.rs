@@ -225,6 +225,31 @@ pub(crate) fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                 app.delete_page_from_chord();
                 return Ok(false);
             }
+            ('g', KeyCode::Char('r')) => {
+                // `g r` = attach a starter `remind::` to this block.
+                // "go remind". Non-destructive: a block that already
+                // has a rule reports it instead of overwriting.
+                app.insert_remind();
+                return Ok(false);
+            }
+            ('g', KeyCode::Char('R')) => {
+                // `g R` = the "nag me" preset in one chord
+                // (`remind:: now every 1h until DONE`). Shifted because
+                // it DOES overwrite an existing rule — escalating is an
+                // explicit act, not a fat-fingered `g r`.
+                app.insert_remind_nag();
+                return Ok(false);
+            }
+            ('g', KeyCode::Char('n')) => {
+                // `g n` = open the reminders overlay. "go
+                // notifications". The issue's sketch put this on
+                // `Ctrl+R`, but that is already Redo — and a terminal
+                // can't tell `Ctrl+R` from `Ctrl+Shift+R`, so the `g`
+                // family is the honest home for it here. The desktop
+                // still takes `Cmd/Ctrl+Shift+R`.
+                app.open_reminders();
+                return Ok(false);
+            }
             ('y', KeyCode::Char('y')) => {
                 app.yank_current();
                 return Ok(false);

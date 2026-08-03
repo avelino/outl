@@ -283,6 +283,183 @@ fn set_collapsed_round_trip() {
 }
 
 #[test]
+fn nodes_with_property_is_the_transpose_of_properties_of() {
+    // The `remind::` scan finds its carriers this way instead of
+    // walking the tree, so it must return every node holding the key
+    // and nothing else — a miss is a reminder that silently never
+    // fires.
+    let actor = ActorId::new();
+    let g = HlcGenerator::new(actor);
+    let mut tree = Tree::new();
+    let mut log = OpLog::new();
+    let (a, b, c) = (NodeId::new(), NodeId::new(), NodeId::new());
+
+    for (node, key, value) in [
+        (a, "remind", "10am"),
+        (b, "remind", "3pm every 1h"),
+        (c, "priority", "high"),
+    ] {
+        tree.apply_op(
+            &mut log,
+            make_op(
+                &g,
+                Op::SetProp {
+                    node,
+                    key: key.to_string(),
+                    value: Some(PropValue::Text(value.to_string())),
+                    old_value: None,
+                },
+            ),
+        );
+    }
+
+    let mut found: Vec<(NodeId, String)> = tree
+        .nodes_with_property("remind")
+        .map(|(n, v)| match v {
+            PropValue::Text(t) => (n, t.clone()),
+            other => (n, format!("{other:?}")),
+        })
+        .collect();
+    found.sort_by_key(|(n, _)| n.to_string());
+    let mut want = vec![(a, "10am".to_string()), (b, "3pm every 1h".to_string())];
+    want.sort_by_key(|(n, _)| n.to_string());
+    assert_eq!(found, want, "a node with a different key must not match");
+
+    // Clearing the property drops the node from the transpose, so a
+    // removed rule stops being scheduled.
+    tree.apply_op(
+        &mut log,
+        make_op(
+            &g,
+            Op::SetProp {
+                node: a,
+                key: "remind".to_string(),
+                value: None,
+                old_value: None,
+            },
+        ),
+    );
+    assert_eq!(tree.nodes_with_property("remind").count(), 1);
+    assert_eq!(tree.nodes_with_property("nothing-has-this").count(), 0);
+}
+
+#[test]
+fn snooze_remind_round_trip() {
+    // Forward apply: a snooze sets the resume instant, `None` clears
+    // it. `snoozed_until` is the canonical accessor and defaults to
+    // `None` for a node the log never touched.
+    let actor = ActorId::new();
+    let g = HlcGenerator::new(actor);
+    let mut tree = Tree::new();
+    let mut log = OpLog::new();
+    let n = NodeId::new();
+
+    assert_eq!(tree.snoozed_until(n), None, "default is not snoozed");
+    tree.apply_op(
+        &mut log,
+        make_op(
+            &g,
+            Op::SnoozeRemind {
+                node: n,
+                until_ms: Some(1_700_000_000_000),
+                old_until_ms: None,
+            },
+        ),
+    );
+    assert_eq!(tree.snoozed_until(n), Some(1_700_000_000_000));
+    tree.apply_op(
+        &mut log,
+        make_op(
+            &g,
+            Op::SnoozeRemind {
+                node: n,
+                until_ms: None,
+                old_until_ms: None,
+            },
+        ),
+    );
+    assert_eq!(tree.snoozed_until(n), None);
+    assert_eq!(log.len(), 2, "every op stays in the log");
+}
+
+#[test]
+fn snooze_remind_undo_restores_previous_instant() {
+    // `undo_op` must restore the exact previous instant, not just
+    // "unsnoozed" — a reorder that clobbered an earlier snooze with
+    // `None` would silently un-silence a block on one device only.
+    let actor = ActorId::new();
+    let g = HlcGenerator::new(actor);
+    let mut tree = Tree::new();
+    let mut log = OpLog::new();
+    let n = NodeId::new();
+
+    let mut first = make_op(
+        &g,
+        Op::SnoozeRemind {
+            node: n,
+            until_ms: Some(1_000),
+            old_until_ms: None,
+        },
+    );
+    tree.do_op(&mut first);
+    log.append(first.clone());
+
+    let mut second = make_op(
+        &g,
+        Op::SnoozeRemind {
+            node: n,
+            until_ms: Some(2_000),
+            old_until_ms: None,
+        },
+    );
+    tree.do_op(&mut second);
+    log.append(second.clone());
+    assert_eq!(tree.snoozed_until(n), Some(2_000));
+
+    tree.undo_op(&second);
+    assert_eq!(
+        tree.snoozed_until(n),
+        Some(1_000),
+        "undo restores the instant captured by do_op"
+    );
+}
+
+#[test]
+fn snooze_remind_late_op_loses_to_the_larger_hlc() {
+    // Two devices snooze the same block concurrently. The op with the
+    // larger HLC wins on every replica, regardless of arrival order.
+    let actor = ActorId::new();
+    let g = HlcGenerator::new(actor);
+    let mut tree = Tree::new();
+    let mut log = OpLog::new();
+    let n = NodeId::new();
+
+    let winner = make_op(
+        &g,
+        Op::SnoozeRemind {
+            node: n,
+            until_ms: Some(9_000),
+            old_until_ms: None,
+        },
+    );
+    let mut loser = winner.clone();
+    loser.ts = Hlc::new(winner.ts.physical_ms - 1, 0, actor);
+    if let Op::SnoozeRemind { until_ms, .. } = &mut loser.op {
+        *until_ms = Some(1_000);
+    }
+
+    tree.apply_op(&mut log, winner);
+    tree.apply_op(&mut log, loser);
+
+    assert_eq!(
+        tree.snoozed_until(n),
+        Some(9_000),
+        "the larger-ts op wins after the undo/redo reorder"
+    );
+    assert_eq!(log.len(), 2, "the late op still lands in the log");
+}
+
+#[test]
 fn set_collapsed_late_op_replays_correctly() {
     // Concurrent flip on the same node: a late op with smaller ts
     // forces undo+replay. Final state must match the op with the

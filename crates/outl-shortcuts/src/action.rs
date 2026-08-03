@@ -150,6 +150,27 @@ pub enum Action {
     /// `outl_actions::page::delete`.
     DeletePage,
 
+    // ── reminders (`remind::`) ───────────────────────────────────
+    //
+    // Authoring the rule and inspecting the schedule are chorded on
+    // every client; *delivering* the notification is per-OS and never
+    // a chord. The TUI deliberately delivers nothing (a terminal
+    // session has no background presence) but still authors and lists,
+    // so a user can set up a reminder wherever they happen to be.
+    /// Insert a `remind:: ` skeleton as a property of the selected
+    /// block and put the cursor after it, ready to type a time.
+    InsertRemind,
+    /// Insert the "nag me" preset — `remind:: now every 1h until DONE`
+    /// — in one chord, for the TODO you must not drop today.
+    InsertRemindNag,
+    /// Open the Reminders surface: every block in the workspace with a
+    /// `remind::`, grouped by next fire. TUI overlay, desktop modal,
+    /// mobile tab.
+    OpenReminders,
+    /// Snooze the selected reminder by one hour
+    /// (`Op::SnoozeRemind`, so it silences every device).
+    SnoozeReminder,
+
     // ── block clipboard (view-mode cut / copy / paste of a block) ─
     //
     // These act on a whole block + its subtree while the user is in

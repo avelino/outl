@@ -52,6 +52,16 @@ pub struct Tree {
     /// distinguish "we know it's expanded" from "we never heard about
     /// this node".
     pub(super) collapsed: HashSet<NodeId>,
+    /// Nodes whose reminder is snoozed, mapped to the Unix-epoch
+    /// millisecond at which firing resumes
+    /// ([`crate::op::Op::SnoozeRemind`]).
+    ///
+    /// Absence means "not snoozed" — the default for every node,
+    /// including ones the op log has never touched. A snooze whose
+    /// instant is already in the past stays in the map (it converges
+    /// like any other value); the scheduler is what compares it
+    /// against "now", not this table.
+    pub(super) snoozed: HashMap<NodeId, u64>,
 }
 
 /// Borrowed view of the three interior maps, returned by
@@ -62,6 +72,7 @@ pub(crate) type TreeParts<'a> = (
     &'a HashMap<NodeId, (NodeId, Fractional)>,
     &'a HashMap<(NodeId, String), PropValue>,
     &'a HashSet<NodeId>,
+    &'a HashMap<NodeId, u64>,
 );
 
 impl Tree {
@@ -108,6 +119,26 @@ impl Tree {
             .map(|((_, k), v)| (k.as_str(), v))
     }
 
+    /// Every node carrying `key`, with that property's value.
+    ///
+    /// The transpose of [`Self::properties_of`]: that answers "what
+    /// does this node have", this answers "who has this". Used by
+    /// index-like readers that need every block with a given marker
+    /// (the `remind::` scan) without walking the tree and
+    /// materializing each block's text to find out.
+    ///
+    /// `O(total properties)` — cheap next to a tree walk, since it
+    /// touches no block text. Order is unspecified (`HashMap`).
+    pub fn nodes_with_property<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> impl Iterator<Item = (NodeId, &'a PropValue)> + 'a {
+        self.properties
+            .iter()
+            .filter(move |((_, k), _)| k == key)
+            .map(|((n, _), v)| (*n, v))
+    }
+
     /// Whether `node` is currently rendered collapsed (children
     /// hidden in the outline view). Defaults to `false` for any node
     /// the op log has never explicitly set.
@@ -120,6 +151,21 @@ impl Tree {
     /// snapshot the fold state in one pass.
     pub fn collapsed_ids(&self) -> impl Iterator<Item = NodeId> + '_ {
         self.collapsed.iter().copied()
+    }
+
+    /// Unix-epoch millisecond at which `node`'s reminder resumes
+    /// firing, or `None` when it was never snoozed (or the snooze was
+    /// cleared). The value may be in the past — comparing it to "now"
+    /// is the scheduler's job, not the tree's.
+    pub fn snoozed_until(&self, node: NodeId) -> Option<u64> {
+        self.snoozed.get(&node).copied()
+    }
+
+    /// Iterator over every `(node, until_ms)` snooze currently set.
+    /// Used by the reminder scan so one pass covers the whole
+    /// workspace instead of a lookup per block.
+    pub fn snoozed_ids(&self) -> impl Iterator<Item = (NodeId, u64)> + '_ {
+        self.snoozed.iter().map(|(n, ms)| (*n, *ms))
     }
 
     /// Iterate every (node, parent, position) triple. Useful for tests.
@@ -137,27 +183,34 @@ impl Tree {
         self.properties.len()
     }
 
-    /// Borrow the three interior maps as a tuple, in the order
-    /// `(nodes, properties, collapsed)`. Used by the snapshot path to
-    /// serialize the materialized tree without exposing the private
-    /// field names beyond this crate.
+    /// Borrow the interior maps as a tuple, in the order
+    /// `(nodes, properties, collapsed, snoozed)`. Used by the snapshot
+    /// path to serialize the materialized tree without exposing the
+    /// private field names beyond this crate.
     pub(crate) fn snapshot_parts(&self) -> TreeParts<'_> {
-        (&self.nodes, &self.properties, &self.collapsed)
+        (
+            &self.nodes,
+            &self.properties,
+            &self.collapsed,
+            &self.snoozed,
+        )
     }
 
-    /// Rebuild a `Tree` directly from its three interior maps. Used by
-    /// the snapshot path to hydrate the materialized state without
+    /// Rebuild a `Tree` directly from its interior maps. Used by the
+    /// snapshot path to hydrate the materialized state without
     /// replaying the op log. The maps are trusted: callers must ensure
     /// they came from a valid (validated-content-hash) snapshot.
     pub(crate) fn from_parts(
         nodes: HashMap<NodeId, (NodeId, Fractional)>,
         properties: HashMap<(NodeId, String), PropValue>,
         collapsed: HashSet<NodeId>,
+        snoozed: HashMap<NodeId, u64>,
     ) -> Self {
         Self {
             nodes,
             properties,
             collapsed,
+            snoozed,
         }
     }
 }

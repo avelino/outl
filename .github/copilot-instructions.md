@@ -224,6 +224,17 @@ If the diff adds a primitive that overlaps with a catalog entry, it is a duplica
 - Does the PR add a new `pub fn|struct|enum|const` in `crates/outl-{core,md,actions}/src/`?
   The new symbol **must** appear in the Shared primitives catalog (the local `doc-sync-guard.sh` + `catalog-sync-guard.sh` hooks enforce this pre-merge; the same rule applies in review).
 
+Recently added — check these before writing a parallel reminder helper (catalog § 19 "Reminders"):
+
+| Intent | Use this | File |
+|---|---|---|
+| **When does a `remind::` rule next fire?** — pure, clock-free, THE single owner. Never re-derive it in TS / Swift / an OS bridge | `outl_actions::next_fire_at` | `crates/outl-actions/src/reminders/schedule.rs` |
+| Every reminder in the workspace with its next fire resolved (tree-driven — the `.md` is projected asynchronously, so disk is stale right after authoring) | `outl_actions::scan_reminders` | `crates/outl-actions/src/reminders/scan.rs` |
+| Every node carrying a property key, without walking the tree | `outl_core::tree::Tree::nodes_with_property` | `crates/outl-core/src/tree/mod.rs` |
+| Parse a `remind::` value (permissive — a bad rule warns, never drops the block) | `outl_md::parse_remind` | `crates/outl-md/src/remind.rs` |
+| Silence a reminder across every device | `outl_actions::snooze` / `snooze_until` (`Op::SnoozeRemind`) | `crates/outl-actions/src/reminders/mod.rs` |
+| Format "in 3h" / bucket a reminder list for a GUI | `@outl/shared` `formatNextFire` / `groupReminders` | `crates/outl-frontend-shared/src/api/commands.ts` |
+
 Recently added — check these before writing a parallel template helper (catalog § 16 "Templates"):
 
 | Intent | Use this | File |

@@ -23,6 +23,7 @@ pub(crate) fn handle_overlay_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         Some(Overlay::Command(_)) => handle_command_overlay_key(app, key),
         Some(Overlay::Slash(_)) => handle_slash_overlay_key(app, key),
         Some(Overlay::TemplatePicker(_)) => handle_template_picker_key(app, key),
+        Some(Overlay::Reminders(_)) => handle_reminders_key(app, key),
         Some(Overlay::PluginSettings(_)) => handle_plugin_settings_key(app, key),
         Some(Overlay::Error(_)) => {
             // Modal error popup: any key dismisses. Special-case Ctrl+C
@@ -197,6 +198,25 @@ fn handle_template_picker_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             }
             app.refresh_template_picker();
         }
+        _ => {}
+    }
+    Ok(false)
+}
+
+/// Reminders overlay keys. Read-only navigation plus the two actions
+/// that make sense without leaving the list: snooze and jump.
+///
+/// `d` (mark DONE) from the issue's sketch is deliberately absent for
+/// now — completing a task rewrites the block's text, and doing that
+/// from a list the user can't see the full block in is how you check
+/// off the wrong row.
+fn handle_reminders_key(app: &mut App, key: KeyEvent) -> Result<bool> {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => app.overlay = None,
+        KeyCode::Enter => app.open_selected_reminder(),
+        KeyCode::Char('s') => app.snooze_selected_reminder(),
+        KeyCode::Up | KeyCode::Char('k') => app.move_reminders_cursor(-1),
+        KeyCode::Down | KeyCode::Char('j') => app.move_reminders_cursor(1),
         _ => {}
     }
     Ok(false)

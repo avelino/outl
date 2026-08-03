@@ -19,6 +19,7 @@
 * [Theming](theming.md)
 * [Configuration](config.md)
 * [Shortcuts](shortcuts.md)
+* [Reminders](reminders.md)
 
 ## Integrations
 

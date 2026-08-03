@@ -8,7 +8,7 @@
 use crate::actions::plugins::value_to_input;
 use crate::state::{
     App, AutocompleteKind, AutocompleteState, CommandState, ErrorState, PluginSettingsState,
-    QuickSwitchState, SearchState, SlashState, SwitchKind, TemplatePickerState,
+    QuickSwitchState, RemindersState, SearchState, SlashState, SwitchKind, TemplatePickerState,
 };
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
@@ -640,6 +640,86 @@ pub(crate) fn render_template_picker(
             (0, 0)
         });
     f.render_widget(list, outer[1]);
+}
+
+/// Reminders overlay: every `remind::` in the workspace, soonest
+/// first, with the next fire in a right-hand column.
+///
+/// A finished rule (DONE, expired, out of `max`) shows `—` instead of
+/// a time and sorts to the bottom — the scan already ordered it that
+/// way, so this renderer stays a pure projection.
+pub(crate) fn render_reminders(
+    f: &mut ratatui::Frame<'_>,
+    full: Rect,
+    app: &App,
+    state: &RemindersState,
+) {
+    let area = centered_rect(full, 72, 60);
+    f.render_widget(Clear, area);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (i, r) in state.all.iter().enumerate() {
+        let when = match r.next_fire {
+            Some(t) => t.format("%a %d %b %H:%M").to_string(),
+            None => "—".to_string(),
+        };
+        let snoozed = if r.snoozed_until_ms.is_some() {
+            " 💤"
+        } else {
+            ""
+        };
+        let label = format!(
+            " {:<18} {:<34} {}{}",
+            when,
+            truncate(&r.text, 34),
+            r.rule_text,
+            snoozed
+        );
+        if i == state.selected {
+            lines.push(Line::from(vec![Span::styled(label, app.theme.help_title)]));
+        } else if r.done {
+            lines.push(Line::from(vec![Span::styled(label, app.theme.dim)]));
+        } else {
+            lines.push(Line::from(vec![Span::raw(label)]));
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            " No reminders. Press `g r` on a block to add one.",
+            app.theme.help_title,
+        )]));
+    }
+
+    let list = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(app.theme.border)
+                .title(Span::styled(
+                    " Reminders — Enter open · s snooze 1h · Esc close ",
+                    app.theme.help_title,
+                ))
+                .style(app.theme.popup_style()),
+        )
+        .scroll(if state.selected > 5 {
+            (0, (state.selected - 5) as u16)
+        } else {
+            (0, 0)
+        });
+    f.render_widget(list, area);
+}
+
+/// Clip `s` to `max` display columns, appending `…` when it had to cut.
+/// Char-based (not byte-based) so a multi-byte block title can't panic
+/// the renderer mid-frame.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('\u{2026}');
+    out
 }
 
 pub(crate) fn render_plugin_settings(

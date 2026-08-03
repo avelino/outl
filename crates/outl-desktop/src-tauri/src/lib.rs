@@ -53,21 +53,23 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
 
 use crate::commands::{
-    attach_asset, copy_block_markdown, copy_markdown, create_block, current_workspace, date_title,
-    delete_block, delete_page, edit_block, get_settings, get_theme, import_asset_file,
-    indent_block, instantiate_template_at, list_all_pages, list_shortcut_bindings,
-    list_templates_cmd, list_themes, move_block_after, move_block_down, move_block_up, next_day,
-    open_asset, open_journal_for, open_page_by_slug, open_ref, open_today_journal, outdent_block,
-    outl_emoji_search, outl_peer_list, outl_peer_pair_host, outl_peer_pair_join, outl_peer_remove,
-    outl_peer_status, outl_sync_now, page_backlinks, paste_block_after, paste_markdown_at,
-    paste_plain_at, plugin_config_set, plugin_install_official, plugin_keybindings, plugin_list,
+    attach_asset, clear_reminder_snooze, copy_block_markdown, copy_markdown, create_block,
+    current_workspace, date_title, delete_block, delete_page, deliver_due_reminders, edit_block,
+    get_settings, get_theme, import_asset_file, indent_block, instantiate_template_at,
+    list_all_pages, list_reminders, list_shortcut_bindings, list_templates_cmd, list_themes,
+    move_block_after, move_block_down, move_block_up, next_day, open_asset, open_journal_for,
+    open_page_by_slug, open_ref, open_today_journal, outdent_block, outl_emoji_search,
+    outl_peer_list, outl_peer_pair_host, outl_peer_pair_join, outl_peer_remove, outl_peer_status,
+    outl_sync_now, page_backlinks, paste_block_after, paste_markdown_at, paste_plain_at,
+    plugin_config_set, plugin_install_official, plugin_keybindings, plugin_list,
     plugin_registry_list, plugin_run, plugin_secret_remove, plugin_secret_set, plugin_set_enabled,
     plugin_settings_describe, plugin_sync_hooks, plugin_toolbar, plugin_transform,
     plugin_transformers, plugin_uninstall, previous_day, read_asset_data_url, redo_page,
-    reload_workspace, resolve_embeds, resolve_page_labels, resolve_ref, run_auto_run_blocks,
-    run_code_block, search_blocks, search_pages, search_persons, set_backlinks_order,
-    set_block_collapsed, set_workspace, split_block, today_slug_cmd, toggle_quote, toggle_todo,
-    undo_page, update_settings, workspace_stats,
+    reload_workspace, reminder_settings, resolve_embeds, resolve_page_labels, resolve_ref,
+    run_auto_run_blocks, run_code_block, search_blocks, search_pages, search_persons,
+    set_backlinks_order, set_block_collapsed, set_block_remind, set_workspace, snooze_reminder,
+    split_block, today_slug_cmd, toggle_quote, toggle_todo, undo_page, update_settings,
+    workspace_stats,
 };
 use crate::plugin_service::spawn_plugin_service;
 use crate::state::AppState;
@@ -200,6 +202,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_deep_link::init())
+        // OS banners for `remind::` rules. Registering the plugin does
+        // not prompt for permission — the frontend asks only when the
+        // user turns reminders on in Settings.
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| -> Result<(), Box<dyn std::error::Error>> {
             // Local-only state (the per-device `actor` ULID and the
             // `config.toml`) lives at `~/.config/outl/` — the XDG
@@ -331,6 +337,13 @@ pub fn run() {
             get_theme,
             // Shortcuts
             list_shortcut_bindings,
+            // Reminders (`remind::`)
+            list_reminders,
+            reminder_settings,
+            snooze_reminder,
+            clear_reminder_snooze,
+            set_block_remind,
+            deliver_due_reminders,
             // Page / journal navigation
             list_all_pages,
             search_pages,

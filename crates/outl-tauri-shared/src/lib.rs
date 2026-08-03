@@ -40,6 +40,7 @@ pub mod plugin_dto;
 pub mod plugin_service;
 mod plugin_thread;
 pub mod projection;
+pub mod reminder_runtime;
 pub mod state;
 pub mod workspace_open;
 

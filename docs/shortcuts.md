@@ -217,6 +217,29 @@ Long-press in the page switcher remains the only trigger on touch devices.
 
 ---
 
+## Reminders (`remind::`)
+
+Authoring a reminder and inspecting the schedule are chorded on every client; **delivering** it is per-OS and never a chord.
+The TUI deliberately delivers nothing (a terminal session has no background presence) but still authors and lists — see [reminders.md](reminders.md).
+
+| Action | TUI | Desktop | Mobile |
+|---|---|---|---|
+| Add a reminder to the selected block | `g r` (writes `remind:: 9am`; reports the existing rule instead of overwriting) | `Cmd+R`, or `g r` in Normal | long-press the block → **Remind me…** |
+| "Nag me" preset (`remind:: now every 1h until DONE`) | `g R` (overwrites — escalating is explicit) | `g R` in Normal | — |
+| Open the reminders list | `g n` | `Cmd+Shift+R` / `Ctrl+Shift+R` | bell icon in the header |
+| In the list: open the reminder's page | `Enter` | `Enter` / click the row | tap the row |
+| In the list: snooze 1h | `s` | the `1h` / `tomorrow` / `next week` buttons | the `1h` / `Tomorrow` / `Next week` chips |
+| In the list: close | `Esc` / `q` | `Esc` | drag down / tap outside |
+
+> **Why `g n` in the TUI and not `Ctrl+R`?**
+> `Ctrl+R` is already Redo in Normal mode, and a terminal cannot distinguish `Ctrl+R` from `Ctrl+Shift+R`.
+> The `g` family (`g j`, `g x`, `g d`) is the honest home for it there; only the desktop takes the `Cmd/Ctrl+Shift+R` spelling.
+> `Ctrl+R` on the desktop likewise stays Redo on Linux / Windows, which is why authoring is `Cmd+R` only.
+
+Snoozing writes `Op::SnoozeRemind`, so it converges: silencing a nag on the phone silences the same block on the laptop.
+
+---
+
 ## Overlays (picker, palette, settings, help)
 
 | Action | TUI | Desktop |

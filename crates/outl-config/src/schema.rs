@@ -32,6 +32,60 @@ pub struct Config {
     pub storage: StorageCfg,
     pub display: DisplayCfg,
     pub assets: AssetsCfg,
+    pub reminders: RemindersCfg,
+}
+
+/// Reminder delivery preferences.
+///
+/// **Device-local on purpose.** Quiet hours are a property of *this*
+/// phone / *this* laptop, not of the workspace — the rule itself
+/// (`remind:: 3pm every 1h`) lives in the markdown and converges
+/// through the op log, and so does a snooze
+/// (`outl_core::op::Op::SnoozeRemind`). Putting quiet hours in the
+/// op log would silence a laptop because a phone was asleep.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RemindersCfg {
+    /// Master switch. `false` (the default) means this device
+    /// registers no OS notifications at all — the `remind::` rules
+    /// still parse and still show up in the Reminders list, they just
+    /// don't interrupt. Turning it on is what triggers the OS
+    /// permission prompt on macOS / iOS.
+    pub enabled: bool,
+
+    /// `"22:00-07:00"` — a fire that would land inside this window is
+    /// pushed to the window's end instead of dropped. `None` (the
+    /// default) means no quiet hours. A window that wraps midnight is
+    /// the normal case and is handled.
+    ///
+    /// An unparseable value is ignored (treated as `None`) rather than
+    /// failing the whole config load — a typo here must never keep the
+    /// app from opening.
+    pub quiet_hours: Option<String>,
+}
+
+impl RemindersCfg {
+    /// Parse [`Self::quiet_hours`] into `(start_minutes, end_minutes)`
+    /// past midnight, or `None` when unset / unparseable.
+    ///
+    /// `start == end` is rejected: a zero-width window is a typo, and
+    /// reading it as "quiet all day" would silence every reminder the
+    /// user asked for.
+    pub fn quiet_window(&self) -> Option<(u32, u32)> {
+        let raw = self.quiet_hours.as_deref()?.trim();
+        let (start, end) = raw.split_once('-')?;
+        let start = parse_hhmm(start.trim())?;
+        let end = parse_hhmm(end.trim())?;
+        (start != end).then_some((start, end))
+    }
+}
+
+/// `"22:00"` -> minutes past midnight.
+fn parse_hhmm(s: &str) -> Option<u32> {
+    let (h, m) = s.split_once(':')?;
+    let hour: u32 = h.parse().ok()?;
+    let minute: u32 = m.parse().ok()?;
+    (hour < 24 && minute < 60).then_some(hour * 60 + minute)
 }
 
 /// Direction of the backlinks ("Linked from") list.
@@ -438,5 +492,30 @@ relay_url = "https://relay.example"
         assert_eq!(c.snapshot.op_threshold, 1000);
         // enabled keeps its default.
         assert!(c.snapshot.enabled);
+    }
+
+    #[test]
+    fn reminders_default_to_silent() {
+        let c: Config = toml::from_str("").unwrap();
+        assert!(!c.reminders.enabled, "opt-in, never on by surprise");
+        assert_eq!(c.reminders.quiet_window(), None);
+    }
+
+    #[test]
+    fn quiet_hours_parses_a_wrapping_window() {
+        let c: Config =
+            toml::from_str("[reminders]\nenabled = true\nquiet_hours = \"22:00-07:00\"\n").unwrap();
+        assert!(c.reminders.enabled);
+        assert_eq!(c.reminders.quiet_window(), Some((22 * 60, 7 * 60)));
+    }
+
+    #[test]
+    fn unparseable_quiet_hours_is_ignored_not_fatal() {
+        // A typo here must never keep the app from opening.
+        for bad in ["22:00", "banana", "25:00-07:00", "22:00-22:00", ""] {
+            let c: Config =
+                toml::from_str(&format!("[reminders]\nquiet_hours = \"{bad}\"\n")).unwrap();
+            assert_eq!(c.reminders.quiet_window(), None, "{bad} should not parse");
+        }
     }
 }

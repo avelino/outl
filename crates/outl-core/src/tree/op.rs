@@ -113,6 +113,24 @@ impl Tree {
                     self.collapsed.remove(node);
                 }
             }
+            Op::SnoozeRemind {
+                node,
+                until_ms,
+                old_until_ms,
+            } => {
+                // Same shape as `SetCollapsed`: capture the previous
+                // value, then set-or-clear. Absence from `self.snoozed`
+                // is "not snoozed", so `None` is a `remove`.
+                *old_until_ms = self.snoozed.get(node).copied();
+                match until_ms {
+                    Some(ms) => {
+                        self.snoozed.insert(*node, *ms);
+                    }
+                    None => {
+                        self.snoozed.remove(node);
+                    }
+                }
+            }
         }
     }
 
@@ -175,6 +193,22 @@ impl Tree {
                     self.collapsed.insert(*node);
                 } else {
                     self.collapsed.remove(node);
+                }
+            }
+            Op::SnoozeRemind {
+                node, old_until_ms, ..
+            } => {
+                // Restore the value captured by `do_op`. On a
+                // never-applied `LogOp` (`old_until_ms` still at its
+                // `None` default) this reduces to "make sure the node
+                // is not snoozed", a no-op when state already matches.
+                match old_until_ms {
+                    Some(ms) => {
+                        self.snoozed.insert(*node, *ms);
+                    }
+                    None => {
+                        self.snoozed.remove(node);
+                    }
                 }
             }
         }

@@ -71,6 +71,7 @@ pub mod page_repair_titles;
 pub mod paste;
 pub mod person;
 pub mod quote;
+pub mod reminders;
 pub mod resolve;
 pub mod storage_scope;
 pub mod sync;
@@ -127,6 +128,10 @@ pub use paste::{
     PasteOutcome,
 };
 pub use person::{search_persons, PERSON_TYPE, TYPE_KEY};
+pub use reminders::{
+    epoch_ms_to_local_naive, local_naive_to_epoch_ms, next_fire_at, scan_reminders, snooze,
+    snooze_until, FiredLog, FiredRecord, Reminder, ReminderState,
+};
 pub use resolve::{open_or_create_by_name, open_or_create_by_ref};
 pub use sync::{
     FileSyncTransport, OpsFileSnapshot, PeerHealthSnapshot, SyncEngine, SyncProgress, SyncTransport,

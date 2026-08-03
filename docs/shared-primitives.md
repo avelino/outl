@@ -345,6 +345,33 @@ The bytes are not workspace state and never enter the op log; only the link does
 
 ---
 
+## 19. Reminders (`remind::`)
+
+Block-level notification rules.
+The **schedule math has exactly one owner** — `outl_actions::reminders::next_fire_at`.
+Every surface (TUI overlay, desktop panel, mobile sheet, each OS bridge) calls it; a second opinion in TS or Swift about when a reminder fires is drift that reaches the user before it reaches a test.
+User-facing spec: [`reminders.md`](reminders.md).
+
+| Intent | Use this | File |
+|---|---|---|
+| Property key that carries a reminder rule (don't hardcode `"remind"`) | `outl_md::REMIND_KEY` | `crates/outl-md/src/remind.rs` |
+| Parse a `remind::` value into a rule + the warnings it triggered (never fails destructively — an unreadable rule just doesn't schedule) | `outl_md::parse_remind` → `RemindParse { rule: Option<RemindRule>, warnings }` | `crates/outl-md/src/remind.rs` |
+| Pull the rule off a block's property list | `outl_md::rule_from_properties` | `crates/outl-md/src/remind.rs` |
+| The parsed rule + its parts (`RemindAnchor::Now` / `At`, `RemindStop::Done` / `Time` / `Date`) | `outl_md::RemindRule` / `RemindAnchor` / `RemindStop` | `crates/outl-md/src/remind.rs` |
+| Hard caps the parser enforces (1-minute interval floor, 10-fire ceiling) | `outl_md::MIN_INTERVAL_MINUTES` / `outl_md::MAX_FIRES_CAP` | `crates/outl-md/src/remind.rs` |
+| **When does this rule next fire?** — pure, clock-free, takes `now` as a parameter. THE single owner | `outl_actions::next_fire_at` (+ `ReminderState`) | `crates/outl-actions/src/reminders/schedule.rs` |
+| Every reminder in the workspace with its next fire resolved (reads pages from disk, consults the workspace only for the snooze table) | `outl_actions::scan_reminders` → `Vec<Reminder>` | `crates/outl-actions/src/reminders/scan.rs` |
+| Device-local "already delivered" record the scan takes as input | `outl_actions::FiredLog` / `FiredRecord` | `crates/outl-actions/src/reminders/scan.rs` |
+| Silence a block's reminder until an instant (writes `Op::SnoozeRemind`, so it converges to every device) | `outl_actions::snooze` / `snooze_until` | `crates/outl-actions/src/reminders/mod.rs` |
+| Local wall clock ↔ epoch ms, resolved through the configured timezone (never `chrono::Local` directly) | `outl_actions::local_naive_to_epoch_ms` / `epoch_ms_to_local_naive` | `crates/outl-actions/src/reminders/mod.rs` |
+| Read a block's converged snooze instant | `outl_core::tree::Tree::snoozed_until` / `snoozed_ids` | `crates/outl-core/src/tree/mod.rs` |
+| Every node carrying a given property key, without a tree walk (the transpose of `properties_of`; `O(total properties)`, materializes no block text) | `outl_core::tree::Tree::nodes_with_property` | `crates/outl-core/src/tree/mod.rs` |
+| Device-local delivery preferences (`enabled`, quiet hours as `(start, end)` minutes) | `outl_config::RemindersCfg` / `RemindersCfg::quiet_window` | `crates/outl-config/src/schema.rs` |
+| Deliver what came due + update the device-local fired log (7-day TTL, `<root>/.outl/reminders-fired.json` — a dotfile so it never rides the sync surface) | `outl_tauri_shared::reminder_runtime::take_due` | `crates/outl-tauri-shared/src/reminder_runtime.rs` |
+| Format "in 3h" / "tomorrow 09:00" and bucket a list Today / Tomorrow / This week / Later / Done (shared by both GUI clients) | `@outl/shared` `formatNextFire` / `groupReminders` | `crates/outl-frontend-shared/src/api/commands.ts` |
+
+---
+
 ## When your need isn't in this catalog
 
 If you've grepped honestly and the primitive doesn't exist, that's a fair sign — add it in the upstream crate that owns the concept:

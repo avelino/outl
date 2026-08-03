@@ -260,6 +260,7 @@ enum LiteOp {
     SetProp { node: NodeId },
     Create { node: NodeId },
     SetCollapsed { node: NodeId },
+    SnoozeRemind { node: NodeId },
 }
 
 impl LiteOp {
@@ -270,7 +271,8 @@ impl LiteOp {
             | LiteOp::Edit { node }
             | LiteOp::SetProp { node }
             | LiteOp::Create { node }
-            | LiteOp::SetCollapsed { node } => *node,
+            | LiteOp::SetCollapsed { node }
+            | LiteOp::SnoozeRemind { node } => *node,
         }
     }
 }
@@ -370,7 +372,8 @@ pub(super) fn op_node(op: &Op) -> Option<NodeId> {
         | Op::Move { node, .. }
         | Op::Edit { node, .. }
         | Op::SetProp { node, .. }
-        | Op::SetCollapsed { node, .. } => Some(*node),
+        | Op::SetCollapsed { node, .. }
+        | Op::SnoozeRemind { node, .. } => Some(*node),
     }
 }
 

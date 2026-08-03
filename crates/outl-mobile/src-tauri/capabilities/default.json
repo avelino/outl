@@ -9,6 +9,7 @@
     "deep-link:default",
     "dialog:default",
     "dialog:allow-open",
+    "notification:default",
     {
       "identifier": "opener:allow-open-url",
       "allow": [

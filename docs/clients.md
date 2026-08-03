@@ -238,6 +238,47 @@ Children of a quoted block are **not** implicitly quoted — the marker lives on
 GUI clients render the outline bullet outside the quote chrome, so the quote is visually the body's content rather than a nested list item.
 Inline tokens (`**bold**`, `[[ref]]`, `#tag`, `((blk-…))`) continue to tokenize **inside** the body — the wrapper is transparent.
 
+## Reminders (`remind::`)
+
+A block can carry a notification rule as a property — `remind:: 3pm every 1h until DONE`.
+The user-facing spec is [reminders.md](reminders.md); this section is the **client contract**.
+
+**One owner for the schedule.**
+`outl_actions::reminders::next_fire_at(rule, anchor_date, state, quiet, now)` decides when a rule fires.
+It is pure and clock-free — `now` is a parameter — and every surface calls it: the TUI overlay, the desktop panel, the mobile sheet, and each OS notification bridge.
+**Never re-derive a schedule in TypeScript or Swift.**
+A second opinion about "in 3 hours" is drift that reaches the user at 3am, on one device, before it reaches a test.
+
+**The scan reads the tree, not the `.md`.**
+`scan_reminders` finds carriers through `Tree::nodes_with_property(REMIND_KEY)`.
+Reading the projection instead would have been stale by construction: the GUI clients write `.md` asynchronously (see [Async projection writes](#async-projection-writes-performance)), so a rule authored a moment ago isn't on disk, and the user who just pressed "remind me" would open the list to find nothing.
+
+**What converges and what doesn't.**
+
+| state | converges? | lives in |
+|---|---|---|
+| the rule, the block's `[[date]]`, TODO/DONE | ✅ | op log |
+| snooze | ✅ | `Op::SnoozeRemind` |
+| "this device already fired it" | ❌ | `<root>/.outl/reminders-fired.json` — a dotfile, so iCloud drops it and iroh never ships it |
+| quiet hours, the enabled flag | ❌ | `~/.config/outl/config.toml` |
+
+Snoozing on the phone must silence the laptop; the phone having buzzed must not stop the laptop from buzzing.
+That split is the whole design.
+
+**Delivery is per-client, not shared.**
+`outl_tauri_shared::reminder_runtime::take_due` answers *what* came due and updates the device-local fired log; each client wraps it with its own OS call (`tauri-plugin-notification` on both GUI clients today).
+A 30s poll drives it — the schedule has minute granularity, so a tighter tick only adds IPC, and the fired log makes a double poll harmless.
+
+**The TUI delivers nothing, on purpose.**
+A terminal session has no background presence.
+It authors (`g r` / `g R`) and inspects (`g n`); it never schedules an OS notification.
+
+**Presentation is shared.**
+`@outl/shared`'s `formatNextFire` ("in 3h", "tomorrow 09:00") and `groupReminders` (Today / Tomorrow / This week / Later / Done) are used by both GUI clients — two implementations drift on the edge cases (exactly 60 minutes, midnight rollover) long before anyone notices.
+
+**App-closed delivery is not covered yet.**
+See [reminders.md → Background delivery](reminders.md#background-delivery--what-ships-today) for what each OS still needs.
+
 ## Zoom / focus on a block (Roam/Workflowy)
 
 Zooming makes one block the outline root so only its subtree renders — the Roam/Workflowy "focus" gesture.

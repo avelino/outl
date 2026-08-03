@@ -16,6 +16,9 @@
 //! - [`plugin`] — the run / sync-hooks replies that combine the
 //!   [`crate::PluginService`] with a refreshed page view.
 //! - [`exec`] — `run_code_block` over `outl_actions::exec`.
+//! - [`reminders`] — list / snooze / author `remind::` rules. The
+//!   *delivery* of the notification stays per-client (each OS has its
+//!   own scheduler); only the "what and when" is shared.
 
 pub mod asset;
 pub mod block;
@@ -23,4 +26,5 @@ pub mod exec;
 pub mod page;
 pub mod peers;
 pub mod plugin;
+pub mod reminders;
 pub mod template;
