@@ -67,3 +67,4 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 yrs = { workspace = true }
 anyhow = { workspace = true }
+tauri-plugin-notification = "2"

@@ -799,6 +799,7 @@ fn project_op(workspace: &Workspace, lo: &LogOp) -> Option<LogOpView> {
         Op::Move { node, .. } => mk("Move", *node),
         Op::SetProp { node, .. } => mk("SetProp", *node),
         Op::SetCollapsed { node, .. } => mk("SetCollapsed", *node),
+        Op::SnoozeRemind { node, .. } => mk("SnoozeRemind", *node),
         Op::Edit { node, .. } => {
             let raw = workspace.block_text(*node).unwrap_or_default();
             let (todo, body) = split_todo(&raw);

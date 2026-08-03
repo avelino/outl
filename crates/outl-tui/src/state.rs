@@ -208,6 +208,25 @@ pub(crate) enum Overlay {
     TemplatePicker(TemplatePickerState),
     /// Plugin settings: edit config + secret fields of installed plugins.
     PluginSettings(PluginSettingsState),
+    /// Reminders: every block in the workspace carrying a `remind::`,
+    /// grouped by next fire. Read-only inspection plus snooze / done —
+    /// the TUI deliberately **delivers** nothing (a terminal session
+    /// has no background presence), but it must still let the user see
+    /// and author what the GUI clients will deliver.
+    Reminders(RemindersState),
+}
+
+/// State of the reminders overlay: the scanned list plus a cursor.
+///
+/// The list is a snapshot taken when the overlay opens — a reminder is
+/// a wall-clock thing and re-scanning per keystroke would walk every
+/// page's `.md` for nothing.
+#[derive(Debug)]
+pub(crate) struct RemindersState {
+    /// Every reminder in the workspace, soonest first.
+    pub(crate) all: Vec<outl_actions::reminders::Reminder>,
+    /// Index into `all` of the highlighted row.
+    pub(crate) selected: usize,
 }
 
 /// One installed plugin's editable fields, for [`Overlay::PluginSettings`].

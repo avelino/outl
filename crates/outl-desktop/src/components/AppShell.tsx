@@ -29,6 +29,15 @@ import { PluginMarketplace } from "./PluginMarketplace";
 import { PluginEffectLayer } from "./PluginEffectLayer";
 import { SettingsModal } from "./SettingsModal";
 import { HelpOverlay } from "./HelpOverlay";
+import { RemindersPanel } from "./RemindersPanel";
+import { deliverDueReminders } from "@outl/shared/api/commands";
+
+/**
+ * How often the shell asks the backend to deliver anything that came
+ * due. 30s bounds how late a fire can be; the schedule itself has
+ * minute granularity, so a tighter tick would only add IPC.
+ */
+const REMINDER_POLL_MS = 30_000;
 import { ChromeToggleBar } from "./ChromeToggleBar";
 import { ErrorToast } from "./ErrorToast";
 
@@ -231,6 +240,20 @@ export function AppShell() {
       void handleDeepLink(payload);
     });
     onCleanup(() => unlistenDeepLink());
+
+    // Reminder delivery. The backend decides what is due and remembers
+    // what this device already delivered, so polling twice is harmless
+    // and a device that was asleep owes exactly one banner, not a
+    // backlog. It short-circuits when reminders are off, so the tick
+    // runs unconditionally rather than re-subscribing on a settings
+    // change.
+    const remindersTimer = setInterval(() => {
+      void deliverDueReminders().catch(() => {
+        // A missing notification daemon is not worth a status-line
+        // error every 30 seconds; the Rust side already logged it.
+      });
+    }, REMINDER_POLL_MS);
+    onCleanup(() => clearInterval(remindersTimer));
   });
 
   function gridTemplate(): string {
@@ -275,6 +298,7 @@ export function AppShell() {
       <PluginMarketplace />
       <SettingsModal />
       <HelpOverlay />
+      <RemindersPanel applyView={applyView} setError={setError} />
       <PluginEffectLayer />
       {/* Mounted last so the notification toast sits above every chrome
        *  element (ChromeToggleBar, overlays) in the stacking order. */}

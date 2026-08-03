@@ -107,6 +107,18 @@ export interface Settings {
    * toggle writes it via `set_backlinks_order`.
    */
   backlinks_order: string;
+  /**
+   * Whether this device turns `remind::` rules into OS notifications.
+   * Default `false`: switching it on is what triggers the macOS
+   * notification-permission prompt, so it has to be an explicit act.
+   * Device-local — it never travels through the op log.
+   */
+  reminders_enabled: boolean;
+  /**
+   * Quiet-hours window as `"22:00-07:00"`, or `""` for none. A fire
+   * landing inside it is pushed to the window's end, never dropped.
+   */
+  reminders_quiet_hours: string;
 }
 
 /**
@@ -217,6 +229,12 @@ export type Action =
   | { kind: "ToggleHelp" }
   | { kind: "ToggleSidebar" }
   | { kind: "ToggleBacklinks" }
+  // Reminders (`remind::`) — authoring + the panel. Delivery is
+  // per-OS and never a chord.
+  | { kind: "InsertRemind" }
+  | { kind: "InsertRemindNag" }
+  | { kind: "OpenReminders" }
+  | { kind: "SnoozeReminder" }
   | { kind: "OpenSettings" }
   | { kind: "Quit" }
   | { kind: "OpenToday" }

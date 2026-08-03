@@ -525,3 +525,47 @@ export interface TemplateDto {
    */
   duplicate?: boolean;
 }
+
+/**
+ * One scheduled `remind::` rule. Mirrors
+ * `outl_tauri_shared::commands::reminders::ReminderDto`.
+ *
+ * `nextFire` / `snoozedUntil` are ISO-8601 **local** strings
+ * (`2026-12-12T15:00:00`) with no zone suffix — deliberately. The
+ * backend already resolved them in the user's configured timezone
+ * (`outl_actions::clock`); re-deriving a local time from an epoch in
+ * JS would reintroduce the timezone bug that module exists to fix.
+ * Render them as-is, or parse with `new Date(iso)` which treats a
+ * suffix-less string as local.
+ */
+export interface Reminder {
+  block_id: string;
+  page_slug: string;
+  page_title: string;
+  /** Block body, TODO/DONE prefix already stripped. */
+  text: string;
+  /** The rule verbatim, e.g. `"3pm every 1h until DONE"`. */
+  rule: string;
+  /** `YYYY-MM-DD` the rule is anchored to. */
+  anchor_date: string;
+  /** The block is DONE — listed for context, never fires again. */
+  done: boolean;
+  /** Local ISO datetime of the next fire, `null` when finished. */
+  next_fire: string | null;
+  /** Local ISO datetime the snooze runs until, `null` when not snoozed. */
+  snoozed_until: string | null;
+}
+
+/**
+ * This device's reminder delivery preferences. Mirrors
+ * `outl_tauri_shared::commands::reminders::ReminderSettingsDto`.
+ *
+ * Device-local by design: quiet hours are a property of *this* phone
+ * or laptop, not of the workspace, so they never travel through the op
+ * log (unlike the rule itself and a snooze, which do).
+ */
+export interface ReminderSettings {
+  enabled: boolean;
+  /** `"22:00-07:00"`, or `""` when the user set no quiet hours. */
+  quiet_hours: string;
+}

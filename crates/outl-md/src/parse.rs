@@ -91,6 +91,24 @@ pub enum ParseWarningKind {
     /// HTML snippet, or a table. The parser preserves it as a block
     /// with the raw text so a later edit + save doesn't drop content.
     UnrecognizedBlockMarker,
+
+    /// `remind:: every 1h` — a repeat with nothing to repeat from.
+    /// The rule needs an explicit anchor (`10am`, `15:00`, `now`).
+    RemindMissingAnchor,
+    /// `remind:: 25:00` — the anchor (or a `until` time) isn't a
+    /// wall-clock time this dialect recognises.
+    RemindInvalidTime,
+    /// `remind:: 10am every 30s` — interval below the 1min floor, or
+    /// a unit outside `min` / `h` / `d`.
+    RemindInvalidInterval,
+    /// `remind:: 10am until yesterday` — the stop clause is neither
+    /// `DONE`, a time, nor an ISO date. Also emitted when a `until
+    /// TIME` lands at-or-before the anchor: the clause is dropped and
+    /// the rest of the rule still schedules.
+    RemindInvalidStop,
+    /// `remind:: 10am max 50` — clamped down to the 10-fire ceiling.
+    /// The rule still schedules; only the count changed.
+    RemindMaxClamped,
 }
 
 /// Parse a `.md` string into a [`ParsedPage`].
@@ -268,6 +286,19 @@ fn parse_block_list(
                     consume_fence(lines, i, indent + 1, &mut node.text);
                 } else if let Some(kv) = parse_property_line(next_stripped) {
                     accepting_continuation = false;
+                    // A `remind::` whose value the grammar can't schedule
+                    // stays on disk verbatim (never rewritten, never
+                    // dropped) — it only loses its scheduling and shows
+                    // up in the parse banner so the user can fix the typo.
+                    if kv.0.eq_ignore_ascii_case(crate::remind::REMIND_KEY) {
+                        for kind in crate::remind::parse_remind(&kv.1).warnings {
+                            warnings.push(ParseWarning {
+                                line: *i + 1,
+                                raw: next_raw.to_string(),
+                                kind,
+                            });
+                        }
+                    }
                     node.properties.push(kv);
                     *i += 1;
                 } else if accepting_continuation {
@@ -446,6 +477,29 @@ fn is_valid_key(k: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `remind::` the scheduler can't read never costs the user the
+    /// property or the block — only the scheduling. The recovery is
+    /// reported with the exact source line so a banner can point at it.
+    #[test]
+    fn invalid_remind_warns_but_keeps_the_property() {
+        let md = "- TODO ship it\n  remind:: every 1h\n";
+        let p = parse(md);
+        assert_eq!(p.blocks.len(), 1);
+        assert_eq!(
+            p.blocks[0].properties,
+            vec![("remind".to_string(), "every 1h".to_string())]
+        );
+        assert_eq!(p.warnings.len(), 1);
+        assert_eq!(p.warnings[0].line, 2);
+        assert_eq!(p.warnings[0].kind, ParseWarningKind::RemindMissingAnchor);
+    }
+
+    #[test]
+    fn valid_remind_produces_no_warning() {
+        let p = parse("- TODO ship it\n  remind:: 3pm every 1h until DONE\n");
+        assert!(p.warnings.is_empty());
+    }
 
     #[test]
     fn page_properties_only() {

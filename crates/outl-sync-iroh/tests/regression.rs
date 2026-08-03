@@ -905,6 +905,7 @@ fn write_test_snapshot(snapshots_dir: &Path, actor: ActorId) {
         nodes,
         BTreeMap::new(),
         BTreeSet::new(),
+        BTreeMap::new(),
         block_text,
     );
     outl_core::snapshot::write_to_disk(snapshots_dir, &body).expect("write test snapshot");

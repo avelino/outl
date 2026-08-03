@@ -77,6 +77,18 @@ backlinks_order = "newest"
 # 100 MiB. The `assets/` directory itself is fixed at
 # `<workspace>/assets/` and is not configurable.
 max_bytes = 104857600
+
+[reminders]
+# Whether this device turns `remind::` rules into OS notifications.
+# Off by default: switching it on is what triggers the notification
+# permission prompt, so it has to be an explicit act. Device-local —
+# the rule itself and a snooze converge through the op log, this does
+# not. See reminders.md.
+enabled = false
+# A fire landing inside this window is pushed to the window's end,
+# never dropped. Omit (or leave empty) for no quiet hours. A window
+# that wraps midnight is the normal case.
+quiet_hours = "22:00-07:00"
 ```
 
 ### Field reference
@@ -140,6 +152,16 @@ See [theming.md](theming.md) for the look of each.
 | Field | Type | Default | Read by | Effect |
 |---|---|---|---|---|
 | `max_bytes` | integer (bytes) | `104857600` (100 MiB) | every client that imports a file (CLI `outl asset add`, MCP `outl_asset_add`, desktop/mobile "Attach file") | Upper bound on a single uploaded file. A file over the cap is rejected before it is copied into `<workspace>/assets/`. `0` means unbounded. The `assets/` directory location itself is fixed, not configurable. |
+
+#### `[reminders]`
+
+| Field | Type | Default | Read by | Effect |
+|---|---|---|---|---|
+| `enabled` | boolean | `false` | desktop + mobile delivery loops | Whether this device turns `remind::` rules into OS notifications. `false` means the rules still parse and still appear in the reminders list, they just never interrupt. Turning it on is what prompts for notification permission on macOS / iOS. The TUI ignores it — a terminal session has no background presence and never delivers. |
+| `quiet_hours` | string `"HH:MM-HH:MM"` | unset | desktop + mobile schedulers | A fire landing inside this window is **pushed to the window's end**, never dropped. Wraps midnight (`"22:00-07:00"`) and same-day windows (`"13:00-14:00"`) both work. An unparseable value is ignored rather than failing the config load — a typo here must never keep the app from opening. A fire pushed past its rule's own `until` is over, not deferred to the morning. |
+
+Both are **device-local on purpose**: quiet hours are a property of *this* phone or laptop, not of the workspace.
+The rule itself and a snooze converge through the op log; see [reminders.md](reminders.md).
 
 > The iroh transport also reads `~/.outl/identity.key` (this device's ed25519 keypair, per-machine) and `<workspace>/.outl/peers.json` (the paired-device list, per-graph).
 > Those are managed by `outl peer …`, not by this config file — see [sync.md → iroh transport](sync.md#transport-2-iroh-p2p).

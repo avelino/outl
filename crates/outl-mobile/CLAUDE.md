@@ -238,6 +238,20 @@ Flow + runtime-catalog rationale: [`docs/clients.md` → Running code blocks](..
 The block long-press menu's "Insert template" action opens `TemplateSheet` (bottom sheet listing `listTemplates()`); picking one calls `instantiateTemplateAt(name, blockId)` and applies the returned `PageView`.
 Wire commands are the shared `list_templates_cmd` / `instantiate_template_at` bodies — no mobile logic; contract in [`docs/clients.md` → Structural templates](../../docs/clients.md#structural-templates).
 
+## Reminders (`remind::`)
+
+The header bell opens `<RemindersSheet />` — every block with a `remind::`, grouped Today / Tomorrow / This week / Later / Done, with 1h / Tomorrow / Next week snooze chips per row.
+Long-pressing a block offers **Remind me…**, which prompts for the rule in its own syntax and writes it via `set_block_remind`.
+A prompt rather than a native time picker on purpose: the rule language is richer than a clock (`3pm every 1h until DONE`), and a picker that can only express the anchor would quietly hide the repeat. The picker is a follow-up, not a substitute.
+
+Grouping + the "in 3h" column come from `@outl/shared` (`groupReminders` / `formatNextFire`), shared byte-for-byte with the desktop panel; the instants come from `outl_actions::reminders` in Rust.
+
+Delivery is a 30s `setInterval` in `Journal.tsx` calling `deliver_due_reminders` (`tauri-plugin-notification` → `UNUserNotificationCenter`).
+It fires whenever the app is running, foreground or backgrounded.
+
+**App-closed delivery is not covered yet.** That needs `UNCalendarNotificationTrigger` requests registered ahead of time (the system caps pending requests at 64) and re-filled from a `BGAppRefreshTask` — the same shape as the existing `bg_sync.rs` work.
+See [`docs/reminders.md`](../../docs/reminders.md) → Background delivery.
+
 ## Plugins
 
 JS plugins (`outl_plugins::PluginHost`) run on mobile; the design is the desktop's.

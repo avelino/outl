@@ -39,6 +39,8 @@ import {
   previousDay,
   runCodeBlock,
   setBlockCollapsed,
+  setBlockRemind,
+  snoozeReminder,
   todaySlug,
   toggleTodo as toggleTodoCmd,
 } from "@outl/shared/api/commands";
@@ -294,6 +296,40 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
     },
     ToggleHelp: () => {
       setAppState("helpOpen", !appState.helpOpen);
+    },
+
+    // ── reminders (`remind::`) ────────────────────────────────────
+    //
+    // Authoring writes a block property; the schedule is derived from
+    // it on every scan in Rust, so editing the rule reschedules for
+    // free and there is nothing to invalidate here.
+    OpenReminders: () => {
+      setAppState("remindersOpen", !appState.remindersOpen);
+    },
+    InsertRemind: async () => {
+      const page = appState.page?.id;
+      const block = appState.selectedBlockId;
+      if (!page || !block) return;
+      // A bare anchor is the smallest rule that does something: one
+      // fire, today, at the time the user is about to type over.
+      const view = await safeCall(setBlockRemind(page, block, "9am"));
+      if (view) deps.applyView(view);
+    },
+    InsertRemindNag: async () => {
+      const page = appState.page?.id;
+      const block = appState.selectedBlockId;
+      if (!page || !block) return;
+      // Same preset as the TUI's `NAG_PRESET`
+      // (`outl-tui/src/actions/reminders.rs`).
+      const view = await safeCall(
+        setBlockRemind(page, block, "now every 1h until DONE"),
+      );
+      if (view) deps.applyView(view);
+    },
+    SnoozeReminder: async () => {
+      const block = appState.selectedBlockId;
+      if (!block) return;
+      await safeCall(snoozeReminder(block, 60));
     },
     Quit: async () => {
       // `qq` chord in Normal + `Ctrl+C` Global. Close the active
@@ -668,6 +704,10 @@ export function buildHandlers(deps: DesktopHandlerDeps): ActionHandlers {
     // handler (which commits + flips `editingBlockId` to null), so
     // the user is back in Normal mode without a second key.
     ExitInsert: () => {
+      if (appState.remindersOpen) {
+        setAppState("remindersOpen", false);
+        return;
+      }
       if (appState.helpOpen) {
         setAppState("helpOpen", false);
         return;

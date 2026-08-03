@@ -64,6 +64,8 @@ Treat every change as production-bound.
     A stale/missing/corrupt index is always safe: it triggers a full rebuild from the `.jsonl`.
     See `ActorIndex::sidecar_path` and `docs/storage.md` → "Boot reads an index, not the whole log".
 - Domain models: `Workspace`, `Page`, `Journal`, `Block`, `Property`, `Tag`
+- `Tree::nodes_with_property(key)` — the transpose of `properties_of`: every node carrying a key, without a tree walk.
+  `O(total properties)` and touches no block text, so an index-like reader (the `remind::` scan) can find its handful of carriers without forcing a lazy-boot vault to materialize.
 - Materialized-state **snapshot** boot cache (`snapshot.rs`): a projection of the tree + block text that short-circuits full op-log replay on boot (#109/#128).
   It is **not** a `Storage` responsibility — the snapshot is a *local* cache and is written straight to `<root>/.outl/snapshots/snap-<actor>.bin` (never on the file-sync surface, never through the op log).
   `Workspace` is the single owner: it reads via `snapshot::read_from_disk` on boot and writes via `snapshot::write_to_disk` (both the synchronous `save_snapshot` and the background threshold writer).
@@ -142,7 +144,8 @@ Any per-block (or per-page) state that must converge between devices — fold fl
 Never as a field of `SidecarBlock`, a key in a shared JSON file, or anything else that depends on iCloud / Syncthing to merge file contents.
 Those transports are last-write-wins per file and lose concurrent writes silently.
 
-`Op::SetCollapsed` is the canonical example.
+`Op::SetCollapsed` is the canonical example; `Op::SnoozeRemind` (silence a block's `remind::` rule until a wall-clock instant) is the second, and follows the same anatomy with a `HashMap<NodeId, u64>` side table instead of a `HashSet`.
+Its `until_ms` is Unix epoch **milliseconds**, deliberately not an `Hlc`: the envelope's `ts` already carries the ordering, and conflating the two would make a clock-skewed device's snooze resolve to the wrong wall time.
 Anatomy of a new "per-block UI state that needs to sync" Op:
 
 - A variant with `node`, the desired value, and an `old_*` field.

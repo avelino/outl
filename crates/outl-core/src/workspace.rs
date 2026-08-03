@@ -251,6 +251,7 @@ impl Workspace {
             body.nodes.into_iter().collect(),
             body.properties.into_iter().collect(),
             body.collapsed.into_iter().collect(),
+            body.snoozed.into_iter().collect(),
         );
         self.content = ContentStore::from_text_map(body.block_text.into_iter().collect());
 
@@ -530,7 +531,7 @@ impl Workspace {
         // Resolve deferred text through the index first (cheap), so the
         // `materialized_text` call below is a pure cache read.
         self.force_materialize_pending();
-        let (nodes, properties, collapsed) = self.tree.snapshot_parts();
+        let (nodes, properties, collapsed, snoozed) = self.tree.snapshot_parts();
         // Convert to BTreeMap/BTreeSet for canonical (order-stable)
         // serialization — see `snapshot::SnapshotBody` for why.
         Ok(Some(SnapshotBody::from_parts(
@@ -542,6 +543,7 @@ impl Workspace {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
             collapsed.iter().copied().collect(),
+            snoozed.iter().map(|(k, v)| (*k, *v)).collect(),
             // Force-materialize any block whose text the lazy read path
             // deferred at boot (#179) so the snapshot carries every
             // block's string — an incomplete map would silently drop text

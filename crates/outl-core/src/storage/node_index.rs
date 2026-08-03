@@ -302,7 +302,8 @@ mod tests {
             | Op::Move { node, .. }
             | Op::Edit { node, .. }
             | Op::SetProp { node, .. }
-            | Op::SetCollapsed { node, .. } => Some(*node),
+            | Op::SetCollapsed { node, .. }
+            | Op::SnoozeRemind { node, .. } => Some(*node),
         }
     }
 

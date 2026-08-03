@@ -45,7 +45,7 @@ use std::path::Path;
 /// Current snapshot wire format. Bumped on any breaking change to
 /// [`SnapshotBody`]; `decode` rejects mismatched versions instead of
 /// guessing at backward compatibility.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Errors that can occur while encoding or decoding a snapshot.
 ///
@@ -124,6 +124,9 @@ pub struct SnapshotBody {
     pub properties: BTreeMap<(NodeId, String), PropValue>,
     /// Nodes currently flagged collapsed. Absence = expanded (default).
     pub collapsed: BTreeSet<NodeId>,
+    /// Snoozed reminders: `node -> resume-at`, Unix-epoch milliseconds
+    /// (`Op::SnoozeRemind`). Absence = not snoozed (default).
+    pub snoozed: BTreeMap<NodeId, u64>,
     /// Materialized text of every block that has text. Blocks without
     /// text are simply absent; `ContentStore` treats missing keys as
     /// empty.
@@ -147,6 +150,7 @@ impl SnapshotBody {
         nodes: BTreeMap<NodeId, (NodeId, Fractional)>,
         properties: BTreeMap<(NodeId, String), PropValue>,
         collapsed: BTreeSet<NodeId>,
+        snoozed: BTreeMap<NodeId, u64>,
         block_text: BTreeMap<NodeId, String>,
     ) -> Self {
         let mut body = Self {
@@ -156,6 +160,7 @@ impl SnapshotBody {
             nodes,
             properties,
             collapsed,
+            snoozed,
             block_text,
             content_hash: [0u8; 32],
         };
@@ -364,6 +369,7 @@ mod tests {
             BTreeMap::new(),
             BTreeMap::new(),
             BTreeSet::new(),
+            BTreeMap::new(),
             BTreeMap::new(),
         )
     }

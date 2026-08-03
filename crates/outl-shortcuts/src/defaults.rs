@@ -51,6 +51,11 @@ fn shift_ctrl_key(k: Key) -> ChordSequence {
 fn pair(a: char, b: char) -> ChordSequence {
     ChordSequence::pair(Chord::ch(a), Chord::ch(b))
 }
+/// `g` then `Shift+r` — a lead-in char followed by a shifted one.
+/// Distinct from [`shift_pair`], which shifts **both** (that's `ZZ`).
+fn pair_shift_second(a: char, b: char) -> ChordSequence {
+    ChordSequence::pair(Chord::ch(a), Chord::new(Modifiers::SHIFT, Key::char(b)))
+}
 fn shift_pair(a: char, b: char) -> ChordSequence {
     ChordSequence::pair(
         Chord::new(Modifiers::SHIFT, Key::char(a)),
@@ -247,6 +252,51 @@ pub fn default_bindings() -> Vec<Binding> {
             Normal,
             Action::DeletePage,
             "Delete page (chord)",
+        ),
+        // ── Reminders ──────────────────────────────────────────
+        //
+        // `g r` / `g R` follow the `g<action>` family (`g j`, `g x`,
+        // `g d`). The issue's original sketch put the overlay on
+        // `Ctrl+R`, but that is **already Redo** in Normal mode — and
+        // a terminal cannot tell `Ctrl+R` from `Ctrl+Shift+R`, so the
+        // TUI gets `g n` ("go notifications") and only the desktop
+        // takes the `Cmd/Ctrl+Shift+R` spelling.
+        Binding::new(
+            pair('g', 'r'),
+            Normal,
+            Action::InsertRemind,
+            "Add a reminder to this block (chord)",
+        ),
+        Binding::new(
+            pair_shift_second('g', 'r'),
+            Normal,
+            Action::InsertRemindNag,
+            "Nag me: remind:: now every 1h until DONE",
+        ),
+        Binding::new(
+            pair('g', 'n'),
+            Normal,
+            Action::OpenReminders,
+            "Open reminders (chord)",
+        ),
+        Binding::new(
+            shift_meta_ch('r'),
+            Global,
+            Action::OpenReminders,
+            "Open reminders (Cmd+Shift+R)",
+        ),
+        Binding::new(
+            shift_ctrl_ch('r'),
+            Global,
+            Action::OpenReminders,
+            "Open reminders (Ctrl+Shift+R)",
+        ),
+        // `Cmd+R` only — `Ctrl+R` stays Redo on Linux / Windows.
+        Binding::new(
+            meta('r'),
+            Global,
+            Action::InsertRemind,
+            "Add a reminder (Cmd+R)",
         ),
         Binding::new(
             ctrl('p'),

@@ -48,7 +48,8 @@ fn op_touches_node(op: &Op, id: NodeId) -> bool {
         | Op::Edit { node, .. }
         | Op::SetProp { node, .. }
         | Op::Create { node, .. }
-        | Op::SetCollapsed { node, .. } => *node == id,
+        | Op::SetCollapsed { node, .. }
+        | Op::SnoozeRemind { node, .. } => *node == id,
     }
 }
 

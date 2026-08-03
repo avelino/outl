@@ -75,6 +75,14 @@ pub struct Settings {
     /// the dedicated `set_backlinks_order` command, and `save` restores
     /// it from disk so a settings-modal write can't clobber it.
     pub backlinks_order: String,
+    /// Whether this device registers OS notifications for `remind::`
+    /// rules. Default `false` — turning it on is what triggers the
+    /// macOS notification-permission prompt, so it must be an explicit
+    /// user act, never a side effect of opening the app.
+    pub reminders_enabled: bool,
+    /// Quiet-hours window as `"22:00-07:00"`, or `""` for none. A fire
+    /// landing inside it is pushed to the window's end.
+    pub reminders_quiet_hours: String,
 }
 
 impl Settings {
@@ -94,6 +102,8 @@ impl From<Config> for Settings {
             font_size: c.editor.font_size,
             sync_transport: transport_str(c.sync.transport),
             backlinks_order: backlinks_order_str(c.display.backlinks_order),
+            reminders_enabled: c.reminders.enabled,
+            reminders_quiet_hours: c.reminders.quiet_hours.unwrap_or_default(),
         }
     }
 }
@@ -142,6 +152,14 @@ impl From<Settings> for Config {
             // hand-set `max_bytes` survives a settings write (same
             // restore-on-save pattern as `[calendar]` / `[tui]`).
             assets: outl_config::AssetsCfg::default(),
+            // `[reminders]` IS modelled here — the feature is opt-in and
+            // the settings modal is where the user turns it on, so
+            // unlike `[calendar]` / `[tui]` it must not be restored
+            // from disk on save (that would make the toggle inert).
+            reminders: outl_config::RemindersCfg {
+                enabled: s.reminders_enabled,
+                quiet_hours: Some(s.reminders_quiet_hours).filter(|q| !q.trim().is_empty()),
+            },
         }
     }
 }
@@ -197,6 +215,11 @@ mod tests {
         assert_eq!(s.font_size, 15);
         assert_eq!(s.sync_transport, "iroh", "P2P is the default transport");
         assert_eq!(s.backlinks_order, "newest", "newest-first is the default");
+        assert!(
+            !s.reminders_enabled,
+            "reminders are opt-in — turning them on is what prompts the OS"
+        );
+        assert_eq!(s.reminders_quiet_hours, "");
     }
 
     #[test]
@@ -208,6 +231,8 @@ mod tests {
             font_size: 18,
             sync_transport: "file".into(),
             backlinks_order: "oldest".into(),
+            reminders_enabled: true,
+            reminders_quiet_hours: "22:00-07:00".into(),
         };
         let cfg: Config = s.clone().into();
         let back: Settings = cfg.into();
@@ -217,5 +242,7 @@ mod tests {
         assert_eq!(back.font_size, s.font_size);
         assert_eq!(back.sync_transport, s.sync_transport);
         assert_eq!(back.backlinks_order, s.backlinks_order);
+        assert_eq!(back.reminders_enabled, s.reminders_enabled);
+        assert_eq!(back.reminders_quiet_hours, s.reminders_quiet_hours);
     }
 }

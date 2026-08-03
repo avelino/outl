@@ -22,8 +22,10 @@ import {
   dateTitle,
   deleteBlock,
   editBlock,
+  deliverDueReminders,
   importAssetFile,
   indentBlock,
+  listReminders,
   moveBlockDown,
   moveBlockUp,
   nextDay,
@@ -48,6 +50,7 @@ import {
   searchPersons,
   setBacklinksOrder,
   setBlockCollapsed,
+  setBlockRemind,
   splitBlock,
   syncNow,
   todaySlug,
@@ -106,6 +109,7 @@ import type { ToolbarAction } from "@outl/shared/toolbar";
 import { Calendar } from "./Calendar";
 import { KeyboardAccessory } from "./KeyboardAccessory";
 import { DevicesSheet } from "./DevicesSheet";
+import { RemindersSheet } from "./RemindersSheet";
 import { PluginSheet } from "./PluginSheet";
 import { PluginViewOverlay } from "./PluginViewOverlay";
 import { PageSwitcher } from "./PageSwitcher";
@@ -168,6 +172,7 @@ export function Journal() {
   const [switcherOpen, setSwitcherOpen] = createSignal(false);
   const [calendarOpen, setCalendarOpen] = createSignal(false);
   const [devicesOpen, setDevicesOpen] = createSignal(false);
+  const [remindersOpen, setRemindersOpen] = createSignal(false);
   const [pluginsOpen, setPluginsOpen] = createSignal(false);
   // Plugin-contributed toolbar buttons — one inline glyph each in the
   // header. Loaded after the workspace opens (plugins load lazily on the
@@ -337,10 +342,23 @@ export function Journal() {
       // actually changed, so a quiet poll never re-renders under the user.
       if (!editingId()) void pullAndReload({ background: true });
     }, 3000);
+    // Reminder delivery. The backend decides what is due and remembers
+    // what this device already delivered, so a poll that fires twice
+    // never double-buzzes and a phone that was asleep owes one banner,
+    // not a backlog. It short-circuits when reminders are off, so this
+    // ticks unconditionally rather than re-subscribing on a settings
+    // change. 30s, not 3s: the schedule has minute granularity.
+    const reminderPoll = window.setInterval(() => {
+      void deliverDueReminders().catch(() => {
+        // Permission not granted yet — the Rust side logged it, and a
+        // toast every 30 seconds would be worse than silence.
+      });
+    }, 30_000);
     onCleanup(() => {
       window.removeEventListener("online", upOnline);
       window.removeEventListener("offline", upOffline);
       window.clearInterval(peerPoll);
+      window.clearInterval(reminderPoll);
     });
   }
 
@@ -1041,6 +1059,36 @@ export function Journal() {
    * `<root>/assets/` and returns the refreshed view; outl never renders
    * the file — tapping the link opens it in the OS default viewer.
    */
+  /**
+   * "Remind me…" — ask for a `remind::` rule in the block's own
+   * syntax and write it as a block property.
+   *
+   * A native time picker would be nicer, but the rule language is
+   * richer than a clock (`3pm every 1h until DONE`), and a picker
+   * that can only express the anchor would quietly hide the repeat.
+   * A prompt seeded with a sane default keeps the whole grammar
+   * reachable; the picker is the follow-up, not a substitute.
+   *
+   * An empty answer clears the rule — the "stop reminding me" path.
+   */
+  async function handleRemindMe(id: string) {
+    const pid = pageId();
+    if (!pid) return;
+    const current =
+      (await listReminders().catch(() => []))
+        .find((r) => r.block_id === id)?.rule ?? "";
+    const rule = window.prompt(
+      "Remind me — e.g. 3pm, 10am every 1h, now every 30min until DONE",
+      current || "9am",
+    );
+    if (rule === null) return;
+    try {
+      applyView(await setBlockRemind(pid, id, rule.trim()));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   async function handleAttachFile(id: string) {
     const pid = pageId();
     if (!pid) return;
@@ -1546,6 +1594,31 @@ export function Journal() {
             </For>
             <button
               type="button"
+              aria-label="Reminders"
+              onClick={() => {
+                haptic("light");
+                setRemindersOpen(true);
+              }}
+              class="flex h-9 w-9 items-center justify-center rounded-full active:bg-(--color-ios-divider)/40 dark:active:bg-(--color-iosd-divider)/40"
+            >
+              {/* Bell glyph — the reminders surface. */}
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="var(--color-ios-accent)"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+              </svg>
+            </button>
+            <button
+              type="button"
               aria-label="Plugin commands"
               onClick={() => {
                 haptic("light");
@@ -1870,6 +1943,13 @@ export function Journal() {
         onClose={() => setDevicesOpen(false)}
       />
 
+      <RemindersSheet
+        open={remindersOpen()}
+        onClose={() => setRemindersOpen(false)}
+        onMessage={(text) => setError(text)}
+        onView={(v) => applyView(v)}
+      />
+
       <PluginSheet
         open={pluginsOpen()}
         pageId={pageId()}
@@ -1917,6 +1997,7 @@ export function Journal() {
             delete: handleDelete,
             runCode: handleRunCodeBlock,
             insertTemplate: (id) => setTemplateBlockId(id),
+            remindMe: (id) => void handleRemindMe(id),
             attachFile: handleAttachFile,
             copy: async (id) => {
               // Copy the block as clean outl markdown (its subtree
@@ -2074,6 +2155,7 @@ function buildContextActions(
     delete: (id: string) => void;
     runCode: (id: string) => void;
     insertTemplate: (id: string) => void;
+    remindMe: (id: string) => void;
     copy: (id: string) => void;
     attachFile: (id: string) => void;
   },
@@ -2135,6 +2217,15 @@ function buildContextActions(
       iconPath:
         "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2 M9 2h6a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z",
       onSelect: () => handlers.copy(blockId),
+    },
+    {
+      id: "remindMe",
+      label: "Remind me…",
+      // "bell" — the reminders affordance, same glyph family as the
+      // header button that opens the list.
+      iconPath:
+        "M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9 M13.73 21a2 2 0 0 1-3.46 0",
+      onSelect: () => handlers.remindMe(blockId),
     },
     {
       id: "insertTemplate",

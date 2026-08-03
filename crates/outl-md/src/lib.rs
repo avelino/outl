@@ -24,6 +24,7 @@ pub mod matching;
 pub mod outline_ops;
 pub mod parse;
 pub mod reconcile;
+pub mod remind;
 pub mod render;
 pub mod sidecar;
 pub mod slug;
@@ -44,6 +45,10 @@ pub use inline::{
 pub use matching::{match_blocks, Match, MatchLevel};
 pub use parse::{parse, OutlineNode, ParseWarning, ParseWarningKind, ParsedPage};
 pub use reconcile::{reconcile_dir, reconcile_md, ReconcileError, ReconcileReport};
+pub use remind::{
+    parse_remind, rule_from_properties, RemindAnchor, RemindParse, RemindRule, RemindStop,
+    MAX_FIRES_CAP, MIN_INTERVAL_MINUTES, REMIND_KEY,
+};
 pub use render::render;
 pub use sidecar::{
     content_hash, file_hash, resolve_sidecar_path, sidecar_path_for, Sidecar, SidecarBlock,

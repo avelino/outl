@@ -7,6 +7,28 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Added
 
+- **`remind::` — a block-level reminder rule that turns a TODO into an OS notification, on desktop and mobile (issue #63).**
+  A `[[2026-12-12]]` was only ever good for **recall**: it put a backlink on that day's journal and then waited for you to open the app.
+  If you didn't, the reminder was silent.
+  Now a block can carry a rule that reads as English — `remind:: 3pm every 1h until DONE` — and the OS tells you.
+  **Opt-in on purpose:** a `[[date]]` alone still schedules nothing, because plenty of people use dates purely for backlinking, and the moment a link becomes a buzz the linking stops.
+  The grammar is `TIME ("every" INTERVAL)? ("until" STOP)? ("max" N)?` — `10am`, `15:00`, `now`, `every 30min`/`1h`/`2d`, `until DONE`/`until 6pm`/`until 2026-12-20`, `max 5`.
+  Caps are a 1-minute interval floor (a sub-minute nag is never what you meant, so it's rejected rather than silently rewritten) and a 10-fire ceiling (clamped, with a warning).
+  A rule the parser can't read **never costs you the property or the block** — it stays on disk verbatim and just doesn't schedule, surfacing in the parse banner and `outl doctor` like every other dialect recovery.
+  **The schedule math has exactly one owner**, `outl_actions::reminders::next_fire_at` — pure, clock-free, `now` passed in.
+  The TUI overlay, the desktop panel, the mobile sheet and every OS bridge call it; a second opinion in TS or Swift about when a reminder fires is drift that reaches the user at 3am on one device before it reaches a test.
+  Two behaviours worth knowing: a device that was asleep owes you **one** banner, not a backlog (close the laptop at 10:00 on an hourly rule, open it at 18:00, get one reminder), and a block with two `[[date]]`s schedules on **both**, because you wrote both on purpose.
+  **Snooze converges** via the new `Op::SnoozeRemind` — silencing a nag on the phone silences the same block on the laptop.
+  The device-local half ("this device already buzzed you") deliberately does *not*: it lives in `<root>/.outl/reminders-fired.json`, a dotfile iCloud drops and iroh never ships, pruned at 7 days.
+  **Quiet hours** (`[reminders] quiet_hours = "22:00-07:00"`, device-local, off by default) push a fire to the window's end rather than dropping it — you asked for it, you get it, just not at 3am.
+  A fire pushed past its own `until` is genuinely over.
+  Surfaces: **TUI** `g r` / `g R` to author and `g n` for the overlay (`Ctrl+R` was the obvious chord and is already Redo — a terminal can't tell it from `Ctrl+Shift+R`); **desktop** `Cmd+R` to author, `Cmd/Ctrl+Shift+R` for the panel; **mobile** long-press → *Remind me…*, bell icon for the list.
+  The TUI authors and inspects but deliberately delivers nothing — a terminal session has no background presence.
+  **Scope, stated plainly:** notifications fire whenever the app is running, foreground or backgrounded, on macOS / Linux / Windows / iOS.
+  **Delivery with the app fully closed does not ship in this change** — the iOS `UNCalendarNotificationTrigger` pre-registration (64-request cap, `BGAppRefreshTask` refill), the macOS launch agent, the Windows scheduled toast and the systemd user timer are tracked as follow-ups on issue #63.
+  A reminder for a day you never open outl will not reach you yet; worth knowing before relying on it for something that matters.
+  Full spec: [`docs/reminders.md`](docs/reminders.md).
+
 - **Embedded assets now render: `![alt](url)` shows an inline image on desktop/mobile and a placeholder in the TUI, and imported images stop being dead links (issue #203).**
   Uploading or importing a file already copied it into `assets/<hash>.<ext>`, but nothing rendered it — every asset, images included, landed as a plain `[name](assets/…)` link, so an imported graph showed clickable text where you expected to *see* the picture.
   `![alt](url)` is now a first-class inline token (`InlineTok::Image` / owned `InlineToken::Image { alt, href }`), parsed by `try_image` right after the embed matcher so the leading `!` is never stranded before the bare-`[` link — one parser in `outl-md`, consumed by every client (no parallel TS/Swift tokenizer).
@@ -23,6 +45,11 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
   The matcher rejects a space next to either marker, so a spaced comparison (`a == b`) stays plain text — unlike `~~strike~~`.
 
 ### Fixed
+
+- **`outl doctor` no longer claims every `.md` parses cleanly right after listing the ones that don't.**
+  The parse-warning check ran once per directory and printed its all-clear from inside that loop, so a dirty `pages/` followed by a clean `journals/` produced "2 line(s) outside outl dialect" and "every `.md` parses cleanly in the outl dialect" three lines apart.
+  The tally is now accumulated across every scanned directory and the verdict printed once — a workspace-wide claim needs a workspace-wide count.
+  Pre-existing, but the new `remind::` validation makes it far easier to hit.
 
 - **The Roam importer now carries `key:: value` attributes over as real properties instead of dropping them into bullet text.**
   A Roam page's attribute blocks (`icon::`, `page-type::`, `work::`, `related::`, `oura-date::`, and every `key:: value` a graph accumulates) used to import as plain text bullets — the adapter set `props: Vec::new()` unconditionally, so a contact page's `page-type:: contact` never reached outl's index and the sidebar icon, the `page-type` filter, and the `@` mention autocomplete all came up empty on imported graphs.

@@ -177,7 +177,8 @@ fn collect_internal(path: &Path, probe_lock: bool) -> Result<DoctorReport, ApiEr
                             | outl_core::op::Op::Edit { node, .. }
                             | outl_core::op::Op::SetProp { node, .. }
                             | outl_core::op::Op::Create { node, .. }
-                            | outl_core::op::Op::SetCollapsed { node, .. } => *node,
+                            | outl_core::op::Op::SetCollapsed { node, .. }
+                            | outl_core::op::Op::SnoozeRemind { node, .. } => *node,
                         };
                         ids.insert(node);
                     }
@@ -198,6 +199,14 @@ fn collect_internal(path: &Path, probe_lock: bool) -> Result<DoctorReport, ApiEr
         };
 
     // 3. Pages and journals: `.md` ↔ sidecar pairing.
+    //
+    // The parse-warning tally is accumulated **across** both
+    // directories and reported once at the end. Emitting the
+    // all-clear per directory printed "every `.md` parses cleanly"
+    // right after listing a page's bad lines, because the journals
+    // pass happened to be clean — a flatly wrong statement to show a
+    // user who was just told otherwise.
+    let mut parse_warning_total = 0usize;
     for dir in [&paths.pages, &paths.journals] {
         if !dir.is_dir() {
             continue;
@@ -226,7 +235,10 @@ fn collect_internal(path: &Path, probe_lock: bool) -> Result<DoctorReport, ApiEr
         }
         check_md_files(&mut b, &md_files, &known_node_ids);
         check_orphan_sidecars(&mut b, &sidecar_files, &md_files);
-        check_parse_warnings(&mut b, &md_files, &paths.orphans);
+        parse_warning_total += check_parse_warnings(&mut b, &md_files, &paths.orphans);
+    }
+    if parse_warning_total == 0 {
+        b.ok("no parser warnings — every `.md` parses cleanly in the outl dialect");
     }
 
     // 4. Block ref integrity — every `((blk-XXXXXX))` mentioned must
@@ -415,7 +427,16 @@ fn check_orphan_block_refs(b: &mut Builder, idx: &WorkspaceIndex) {
 /// runs (the file is the same `.outl/orphans.log` used by reconcile;
 /// the rows are tagged `parse-warning` to keep them distinguishable
 /// from level-3 matching orphans).
-fn check_parse_warnings(b: &mut Builder, md_files: &[std::path::PathBuf], orphans_log: &Path) {
+///
+/// Returns how many warnings it found. The caller sums across every
+/// scanned directory and prints the all-clear once — this function
+/// only ever sees one directory, so it cannot know whether the
+/// workspace as a whole is clean.
+fn check_parse_warnings(
+    b: &mut Builder,
+    md_files: &[std::path::PathBuf],
+    orphans_log: &Path,
+) -> usize {
     use std::fmt::Write as _;
     use std::io::Write as _;
 
@@ -463,6 +484,11 @@ fn check_parse_warnings(b: &mut Builder, md_files: &[std::path::PathBuf], orphan
             }
             let kind = match w.kind {
                 outl_md::ParseWarningKind::UnrecognizedBlockMarker => "unrecognized_block_marker",
+                outl_md::ParseWarningKind::RemindMissingAnchor => "remind_missing_anchor",
+                outl_md::ParseWarningKind::RemindInvalidTime => "remind_invalid_time",
+                outl_md::ParseWarningKind::RemindInvalidInterval => "remind_invalid_interval",
+                outl_md::ParseWarningKind::RemindInvalidStop => "remind_invalid_stop",
+                outl_md::ParseWarningKind::RemindMaxClamped => "remind_max_clamped",
             };
             let _ = writeln!(
                 log_buf,
@@ -477,8 +503,7 @@ fn check_parse_warnings(b: &mut Builder, md_files: &[std::path::PathBuf], orphan
     }
 
     if total == 0 {
-        b.ok("no parser warnings — every `.md` parses cleanly in the outl dialect");
-        return;
+        return 0;
     }
 
     // Append best-effort. Failure here is non-fatal — the warnings
@@ -494,6 +519,7 @@ fn check_parse_warnings(b: &mut Builder, md_files: &[std::path::PathBuf], orphan
     {
         let _ = f.write_all(log_buf.as_bytes());
     }
+    total
 }
 
 fn check_orphan_sidecars(
@@ -568,6 +594,74 @@ mod tests {
         assert!(
             log.contains("unrecognized_block_marker"),
             "kind tag missing in orphans.log: {log:?}"
+        );
+    }
+
+    /// A dirty **page** and a clean **journal** must not produce a
+    /// contradiction. `check_parse_warnings` runs once per directory,
+    /// so emitting the all-clear from inside it printed "every `.md`
+    /// parses cleanly" three lines after listing a page's bad ones.
+    /// The tally is workspace-wide; so is the verdict.
+    #[test]
+    fn a_dirty_page_suppresses_the_all_clear_even_when_journals_are_clean() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("notes");
+        let paths = Paths::at(&root);
+        init(&paths).unwrap();
+
+        // Journals stay clean; the page carries an unreadable rule.
+        std::fs::write(
+            paths.pages.join("tasks.md"),
+            "- TODO ship it\n  remind:: every 1h\n",
+        )
+        .unwrap();
+
+        let report = collect(&root).expect("doctor must run");
+        let all_clear = report
+            .findings
+            .iter()
+            .filter(|f| f.message.contains("parses cleanly"))
+            .count();
+        let dirty = report
+            .findings
+            .iter()
+            .filter(|f| f.message.contains("outside outl dialect"))
+            .count();
+
+        assert_eq!(dirty, 1, "the page's bad rule must be reported");
+        assert_eq!(
+            all_clear, 0,
+            "the all-clear must not appear alongside a reported warning: {:#?}",
+            report.findings
+        );
+    }
+
+    /// The `remind::` grammar is the one property the parser
+    /// validates, so its recoveries must reach the report and the log
+    /// with their own kind tags — not fold into
+    /// `unrecognized_block_marker`.
+    #[test]
+    fn doctor_tags_remind_warnings_by_kind() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("notes");
+        let paths = Paths::at(&root);
+        init(&paths).unwrap();
+
+        std::fs::write(
+            paths.pages.join("tasks.md"),
+            "- TODO a\n  remind:: every 1h\n- TODO b\n  remind:: 10am max 50\n",
+        )
+        .unwrap();
+
+        collect(&root).expect("doctor must run");
+        let log = std::fs::read_to_string(&paths.orphans).unwrap_or_default();
+        assert!(
+            log.contains("remind_missing_anchor"),
+            "missing-anchor tag absent: {log:?}"
+        );
+        assert!(
+            log.contains("remind_max_clamped"),
+            "clamped tag absent: {log:?}"
         );
     }
 

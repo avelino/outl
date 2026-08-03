@@ -68,6 +68,10 @@ use crate::commands::{
     search_pages, search_persons, set_backlinks_order, set_block_collapsed, split_block,
     today_slug_cmd, toggle_quote, toggle_todo, workspace_stats,
 };
+use crate::commands::{
+    clear_reminder_snooze, deliver_due_reminders, list_reminders, reminder_settings,
+    set_block_remind, snooze_reminder,
+};
 use crate::plugin_service::spawn_plugin_service;
 use crate::state::AppState;
 use crate::workspace_open::{load_or_create_actor, resolve_storage_root, spawn_workspace_opener};
@@ -183,7 +187,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_deep_link::init());
+        .plugin(tauri_plugin_deep_link::init())
+        // OS banners for `remind::` rules. Registering the plugin does
+        // not prompt for permission — the frontend asks only when the
+        // user turns reminders on.
+        .plugin(tauri_plugin_notification::init());
 
     // Camera/QR scanning is the device-pairing entry point and only
     // compiles on the mobile targets (Android + iOS). Gate it behind
@@ -298,6 +306,13 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // Reminders (`remind::`)
+            list_reminders,
+            reminder_settings,
+            snooze_reminder,
+            clear_reminder_snooze,
+            set_block_remind,
+            deliver_due_reminders,
             // Page / journal navigation
             list_all_pages,
             search_pages,

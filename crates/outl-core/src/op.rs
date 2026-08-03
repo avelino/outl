@@ -97,6 +97,32 @@ pub enum Op {
         /// Filled by `do_op` for `undo_op`.
         old_value: bool,
     },
+
+    /// Silence a block's `remind::` rule until a wall-clock instant.
+    ///
+    /// Snooze is per-block user intent that **must** converge: snoozing
+    /// a nagging TODO on the phone has to silence the same block on the
+    /// desktop, so it goes through the op log like every other shared
+    /// state (root `CLAUDE.md` invariant #7). The device-local half —
+    /// "did I already fire this one here" — deliberately does not; it's
+    /// a local cache each device rebuilds.
+    ///
+    /// `until_ms` is Unix epoch **milliseconds**, not an [`Hlc`]. The
+    /// envelope's `ts` already carries the ordering; this field is a
+    /// point on the user's calendar, and conflating the two would make
+    /// a clock-skewed device's snooze resolve to the wrong wall time.
+    /// `None` clears the snooze (the "un-snooze" / reschedule path).
+    ///
+    /// `old_until_ms` is populated by `do_op` for `undo_op`.
+    SnoozeRemind {
+        /// The block whose reminder is being silenced.
+        node: NodeId,
+        /// Resume firing at-or-after this Unix-epoch millisecond.
+        /// `None` clears any existing snooze.
+        until_ms: Option<u64>,
+        /// Filled by `do_op` for `undo_op`.
+        old_until_ms: Option<u64>,
+    },
 }
 
 /// Extract the `NodeId` an op targets, if any. Every `Op` variant
@@ -109,7 +135,8 @@ pub fn op_node(op: &Op) -> Option<NodeId> {
         | Op::Move { node, .. }
         | Op::Edit { node, .. }
         | Op::SetProp { node, .. }
-        | Op::SetCollapsed { node, .. } => Some(*node),
+        | Op::SetCollapsed { node, .. }
+        | Op::SnoozeRemind { node, .. } => Some(*node),
     }
 }
 

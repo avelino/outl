@@ -12,7 +12,7 @@
 //! forward-vs-reversed pair, and `common::assert_trees_equal` ignores
 //! property and collapsed state. This file widens the generator to the full
 //! op-variant mix (`Create` / `Move` / delete=`Move`→trash / `SetProp` /
-//! `SetCollapsed`), asserts across *N* random permutations all-pairs-equal,
+//! `SetCollapsed`, `SnoozeRemind`), asserts across *N* random permutations all-pairs-equal,
 //! exercises idempotent re-delivery, builds concurrent moves that *would*
 //! cycle, and compares the **full** materialized state.
 //!
@@ -45,18 +45,20 @@ use std::collections::{BTreeMap, BTreeSet};
 // --------------------------------------------------------------------------
 // Full-state canonical key (stronger than common::assert_trees_equal, which
 // compares only node parent+position). We need properties + collapsed too,
-// because this suite generates SetProp / SetCollapsed ops.
+// because this suite generates SetProp / SetCollapsed / SnoozeRemind ops.
 // --------------------------------------------------------------------------
 
 /// A deterministic, total-ordered snapshot of *everything* the tree
 /// materializes: node→(parent, position), every property binding, and the
-/// collapsed set. `BTree*` give a canonical order so two snapshots are
-/// directly comparable with `==` (byte-identical materialization).
+/// collapsed set, and the snooze table. `BTree*` give a canonical order
+/// so two snapshots are directly comparable with `==` (byte-identical
+/// materialization).
 #[derive(Debug, PartialEq, Eq)]
 struct TreeSnapshot {
     nodes: BTreeMap<String, (String, String)>,
     properties: BTreeMap<(String, String), String>,
     collapsed: BTreeSet<String>,
+    snoozed: BTreeMap<String, u64>,
 }
 
 fn snapshot(tree: &Tree) -> TreeSnapshot {
@@ -80,11 +82,16 @@ fn snapshot(tree: &Tree) -> TreeSnapshot {
     // node (trash is its parent), so the loop above covers them.
 
     let collapsed = tree.collapsed_ids().map(|n| n.to_string()).collect();
+    let snoozed = tree
+        .snoozed_ids()
+        .map(|(n, ms)| (n.to_string(), ms))
+        .collect();
 
     TreeSnapshot {
         nodes,
         properties,
         collapsed,
+        snoozed,
     }
 }
 
@@ -156,6 +163,8 @@ enum Step {
     },
     /// Set the collapsed flag of node[n].
     SetCollapsed { actor: usize, n: usize, value: bool },
+    /// Snooze node[n]'s reminder until an epoch-ms instant (or clear it).
+    SnoozeRemind { actor: usize, n: usize, set: bool },
 }
 
 prop_compose! {
@@ -163,7 +172,7 @@ prop_compose! {
     /// `parent == n` to root, and concurrent self/ancestor moves are exactly
     /// the cycle cases we want to stress.
     fn step_strategy()(
-        kind in 0u8..5,
+        kind in 0u8..6,
         actor in 0usize..N_ACTORS,
         n in 0usize..N_NODES,
         parent in 0usize..N_NODES,
@@ -175,6 +184,7 @@ prop_compose! {
             1 => Step::Move { actor, n, parent },
             2 => Step::Delete { actor, n },
             3 => Step::SetProp { actor, n, key, set: flag },
+            4 => Step::SnoozeRemind { actor, n, set: flag },
             _ => Step::SetCollapsed { actor, n, value: flag },
         }
     }
@@ -315,6 +325,18 @@ fn lower(program: &[Step], pools: &Pools) -> Vec<LogOp> {
                     node: pools.nodes[*n],
                     value: *value,
                     old_value: false,
+                },
+            ),
+            Step::SnoozeRemind { actor, n, set } => (
+                pools.actors[*actor],
+                Op::SnoozeRemind {
+                    node: pools.nodes[*n],
+                    // The instant is derived from the step index so two
+                    // snoozes of the same node carry different values —
+                    // an always-equal value would make a reordering bug
+                    // invisible.
+                    until_ms: set.then(|| 1_700_000_000_000 + physical),
+                    old_until_ms: None,
                 },
             ),
         };

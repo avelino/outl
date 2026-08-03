@@ -103,6 +103,17 @@ This section captures only the **architectural / TUI-specific behaviour** a cont
   `move_{up,down}_visual_range` drag the whole selection among its siblings — mirror of the single-block `Alt`+arrows in Normal (the plain arrows extend the range, so `Alt` is what separates reorder from grow).
   They loop `move_{up,down}_at_path` (`lo→hi` for up, `hi→lo` for down) and follow the selection one row; if the leading block can't move (already first/last sibling) the op aborts before the rest of the range scrambles against itself.
 
+### Reminders (`remind::`)
+
+`g r` attaches a starter rule (`remind:: 9am`) to the selected block; it **reports** an existing rule instead of overwriting, so the chord can't discard a carefully typed schedule.
+`g R` writes the "nag me" preset (`now every 1h until DONE`) and **does** overwrite — escalating is an explicit act.
+`g n` opens the reminders overlay (`Enter` opens the page, `s` snoozes 1h, `Esc` / `q` closes).
+
+The issue's original sketch put the overlay on `Ctrl+R`; that is already Redo in Normal mode, and a terminal can't distinguish `Ctrl+R` from `Ctrl+Shift+R` — hence the `g` family here and `Cmd/Ctrl+Shift+R` on the desktop only.
+
+**The TUI delivers no notifications.** A terminal session has no background presence, so there is nothing to fire into once the pane closes. It authors and inspects; the desktop and mobile clients deliver.
+Every schedule question routes to `outl_actions::reminders` (`actions/reminders.rs` is pure wiring) — see [`docs/reminders.md`](../../docs/reminders.md).
+
 ## Insert mode
 
 Full Insert key list is in [`docs/shortcuts.md`](../../docs/shortcuts.md).

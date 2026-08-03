@@ -320,6 +320,21 @@ Contract: [`docs/clients.md` → Structural templates](../../docs/clients.md#str
 
 In a `call:<name>` fence, `CodeFenceView`'s `CALL:<NAME>` chip links to the template page — `onOpenPage`→`openPageBySlug` (exact, not `openRef`), slug via `listTemplates()`; unknown name = inert chip.
 
+## Reminders (`remind::`)
+
+`<RemindersPanel />` (`Cmd/Ctrl+Shift+R`, or `g n` in Normal) lists every block carrying a `remind::`, grouped Today / Tomorrow / This week / Later / Done.
+`Cmd+R` (and `g r` / `g R` in Normal) authors a rule on the selected block via `set_block_remind`.
+`Ctrl+R` deliberately stays **Redo** on Linux / Windows, which is why authoring is `Cmd+R` only.
+
+Grouping labels and the "in 3h" column come from `@outl/shared` (`groupReminders` / `formatNextFire`) — the same functions the mobile sheet uses — and the instants behind them come from `outl_actions::reminders` in Rust.
+**Nothing about when a reminder fires is computed in the frontend.**
+
+Delivery is a 30s `setInterval` in `<AppShell />` calling `deliver_due_reminders`, which turns the shared "what's due" answer into an OS banner via `tauri-plugin-notification`.
+The Rust side keeps the device-local fired log, so polling twice never double-buzzes and a laptop that was asleep owes one banner, not a backlog.
+`[reminders] enabled` (Settings modal) defaults to `false` — switching it on is what triggers the macOS permission prompt.
+
+**App-closed delivery is not covered yet**: a launch agent on a `StartCalendarInterval` is the follow-up (see [`docs/reminders.md`](../../docs/reminders.md) → Background delivery).
+
 ## Plugins
 
 JS plugins (`outl_plugins::PluginHost`) run on the desktop, but the host embeds a Boa `Context` that is **`!Send`**, so it can never live in the `Send + Sync` `AppState`.

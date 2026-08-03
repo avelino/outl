@@ -197,6 +197,12 @@ export interface AppStateShape {
   /** Help overlay open state. `?` in Normal mode toggles. */
   helpOpen: boolean;
   /**
+   * Reminders panel open state. `Cmd/Ctrl+Shift+R` (or `g n` in
+   * Normal) toggles. Lists every block with a `remind::` grouped by
+   * next fire — read-only apart from snooze / mark-done.
+   */
+  remindersOpen: boolean;
+  /**
    * Zoom / focus root (Roam/Workflowy style). When non-null, the
    * outline renders only this block's subtree with a clickable
    * ancestor breadcrumb above it. Pure **view state, local per
@@ -243,6 +249,7 @@ const [state, setState] = createStore<AppStateShape>({
   settingsOpen: false,
   marketplaceOpen: false,
   helpOpen: false,
+  remindersOpen: false,
   focusBlockId: null,
   dropTargetBlockId: null,
   lastError: null,

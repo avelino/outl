@@ -204,6 +204,20 @@ A line in the form `key:: value` *as a child of an outline item* is a block prop
 `priority::` and `owner::` are properties of `objective`, not children.
 The third line (`- this is a regular child block`) is a real child.
 
+#### `remind::` — the one property the parser validates
+
+Every other `key:: value` is opaque to the parser. `remind::` is not: it carries a notification rule with its own grammar, so the parser checks it as it reads.
+
+```
+- TODO #fup [[@joão]] about project abc [[2026-12-12]]
+  remind:: 3pm every 1h until DONE
+```
+
+A rule the grammar can't read **never** costs you the property or the block — the line stays on disk verbatim, and the only consequence is that it doesn't schedule.
+The recovery is reported as a `ParseWarning` carrying the exact source line (`remind_missing_anchor`, `remind_invalid_time`, `remind_invalid_interval`, `remind_invalid_stop`, `remind_max_clamped`), so the parse banner and `outl doctor` can point at it.
+
+Full syntax, defaults, quiet hours, and which clients deliver: [Reminders](reminders.md).
+
 ### Inline syntax
 
 | Syntax | Meaning |

@@ -156,6 +156,48 @@ export function SettingsModal() {
                 </div>
               </div>
 
+              <label class="flex items-center justify-between gap-4">
+                <div>
+                  <div class="text-sm font-medium">Reminder notifications</div>
+                  <div class="text-xs opacity-60">
+                    Deliver <code class="font-mono">remind::</code> rules as OS
+                    notifications on this device. Off by default; the system
+                    asks for permission the first time one fires.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={draft()!.reminders_enabled}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft()!,
+                      reminders_enabled: e.currentTarget.checked,
+                    })
+                  }
+                  class="h-4 w-4"
+                />
+              </label>
+
+              <label class="block">
+                <div class="mb-1 text-sm font-medium">Quiet hours</div>
+                <input
+                  type="text"
+                  placeholder="22:00-07:00"
+                  value={draft()!.reminders_quiet_hours}
+                  onInput={(e) =>
+                    setDraft({
+                      ...draft()!,
+                      reminders_quiet_hours: e.currentTarget.value,
+                    })
+                  }
+                  class="w-40 rounded border border-(--color-outl-fg)/15 bg-(--color-outl-fg)/5 px-2 py-1 font-mono text-sm outline-none focus:border-(--color-outl-fg)/30"
+                />
+                <div class="mt-1 text-xs opacity-50">
+                  A reminder landing inside this window waits for the window to
+                  end — it is never dropped. Leave empty for none.
+                </div>
+              </label>
+
               <label class="block">
                 <div class="mb-1 text-sm font-medium">Sync transport</div>
                 <select

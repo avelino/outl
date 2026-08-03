@@ -98,6 +98,9 @@ The contract is short:
 - They route every mutation through `Workspace::apply` (op log stays source of truth).
 - They never hold UI state and never touch storage backends directly.
 
+`outl_actions::reminders::next_fire_at` is the sharpest current example of the rule: it is the **single owner** of "when does this `remind::` fire next", called by the TUI overlay, the desktop panel, the mobile sheet, and every OS notification bridge.
+A second opinion in TypeScript or Swift about a schedule is drift that reaches the user at 3am, on one device, before it reaches a test.
+
 See `crates/outl-actions/CLAUDE.md` for the full surface and the "what this crate does NOT own" list.
 **If you find yourself writing tree-walking or op-building helpers inside `outl-tui/`, `outl-mobile/`, or any future client, stop and put them in `outl-actions` first.**
 The TUI's `outline_ops.rs` is the one deliberate exception (it manipulates an in-flight AST that hasn't been parsed back to a workspace yet — see that file's module doc).
@@ -171,6 +174,7 @@ Don't add code for these unless explicitly asked:
 - Plugin system (`rhai`)
 - `ChronDbStorage` backend (issue #1, tracked publicly)
 - Android mobile build (only iOS today; Android needs an `NSMetadataQuery` equivalent)
+- App-closed reminder delivery (`remind::` fires today only while the app runs — the iOS `UNCalendarNotificationTrigger` pre-registration, the macOS launch agent, the Windows scheduled toast and the systemd user timer are all follow-ups to issue #63; see [`docs/reminders.md`](docs/reminders.md) → Background delivery)
 - Per-page op log shards ([`docs/sync.md` Part 2 — Per-page op log shards](docs/sync.md#per-page-op-log-shards-for-10k-pages); only land it when the single-jsonl-per-device layout hits the 10k-page wall)
 - Character cursor inside the selected block in desktop Normal mode.
   TUI-only today.
