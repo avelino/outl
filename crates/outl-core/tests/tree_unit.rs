@@ -344,6 +344,39 @@ fn nodes_with_property_is_the_transpose_of_properties_of() {
 }
 
 #[test]
+fn nodes_with_property_matches_the_key_case_insensitively() {
+    // A user typing `Remind:: 3pm` stores the key with their casing.
+    // The parser accepts it and `rule_from_properties` finds it, so an
+    // exact match here produced a rule that parsed, rendered, warned
+    // correctly, and then silently never fired.
+    let actor = ActorId::new();
+    let g = HlcGenerator::new(actor);
+    let mut tree = Tree::new();
+    let mut log = OpLog::new();
+    let node = NodeId::new();
+
+    tree.apply_op(
+        &mut log,
+        make_op(
+            &g,
+            Op::SetProp {
+                node,
+                key: "Remind".to_string(),
+                value: Some(PropValue::Text("3pm every 1h".to_string())),
+                old_value: None,
+            },
+        ),
+    );
+
+    assert_eq!(
+        tree.nodes_with_property("remind").count(),
+        1,
+        "the scan looks up the lowercase key; the user typed `Remind`"
+    );
+    assert_eq!(tree.nodes_with_property("REMIND").count(), 1);
+}
+
+#[test]
 fn snooze_remind_round_trip() {
     // Forward apply: a snooze sets the resume instant, `None` clears
     // it. `snoozed_until` is the canonical accessor and defaults to

@@ -127,6 +127,15 @@ impl Tree {
     /// (the `remind::` scan) without walking the tree and
     /// materializing each block's text to find out.
     ///
+    /// **Matches the key case-insensitively**, because that is what
+    /// the markdown dialect already promises: `parse` accepts
+    /// `Remind:: 3pm` and `outl_md::rule_from_properties` finds it
+    /// with `eq_ignore_ascii_case`, while the stored key keeps
+    /// whatever casing the user typed. An exact match here meant a
+    /// user who capitalised the key got a rule that parsed, rendered,
+    /// warned correctly, and then silently never fired — the worst
+    /// possible failure for a reminder.
+    ///
     /// `O(total properties)` — cheap next to a tree walk, since it
     /// touches no block text. Order is unspecified (`HashMap`).
     pub fn nodes_with_property<'a>(
@@ -135,7 +144,7 @@ impl Tree {
     ) -> impl Iterator<Item = (NodeId, &'a PropValue)> + 'a {
         self.properties
             .iter()
-            .filter(move |((_, k), _)| k == key)
+            .filter(move |((_, k), _)| k.eq_ignore_ascii_case(key))
             .map(|((n, _), v)| (*n, v))
     }
 

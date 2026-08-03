@@ -154,9 +154,9 @@ pub enum Action {
     //
     // Authoring the rule and inspecting the schedule are chorded on
     // every client; *delivering* the notification is per-OS and never
-    // a chord. The TUI deliberately delivers nothing (a terminal
-    // session has no background presence) but still authors and lists,
-    // so a user can set up a reminder wherever they happen to be.
+    // a chord. Every client delivers, the TUI included (OSC 9 plus a
+    // toast on its event-loop tick). What a terminal session can't do
+    // is deliver while it's closed, having no background presence.
     /// Insert a `remind:: ` skeleton as a property of the selected
     /// block and put the cursor after it, ready to type a time.
     InsertRemind,
