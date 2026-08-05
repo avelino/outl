@@ -9,7 +9,8 @@ Read [Architecture](architecture.md) first if you want the why behind the layeri
 
 ## The crates
 
-Five crates are published to [crates.io](https://crates.io) on every release, at the same version the binaries report:
+**What embedding opens is the core and its ops** — the tree, the log, and the actions that mutate them.
+Four crates carry that contract, published to [crates.io](https://crates.io) on every release at the same version the binaries report:
 
 | crate | what it gives an embedder |
 |---|---|
@@ -17,7 +18,11 @@ Five crates are published to [crates.io](https://crates.io) on every release, at
 | `outl-actions` | every mutation as a high-level action (`append_block`, `edit_text`, `open_or_create`, …) plus the `.md` projection helpers |
 | `outl-core` | the tree CRDT, op log, `Storage` trait — you rarely call it directly, but the types (`NodeId`, `Workspace`, `HlcGenerator`) come from here |
 | `outl-md` | markdown parse/render, sidecar, block-ref handles |
-| `outl-exec` | code-block runtimes, only if your embedder runs fences |
+
+A fifth crate, `outl-exec`, is also on crates.io — **not as embedding surface**, but because `outl-actions` references it and cargo won't publish a crate whose dependencies aren't in the registry.
+It ships the code-block language runtimes, and the workspace pins it at `default-features = false` (`Cargo.toml`) precisely so those runtimes stay out of everything except the binaries that want them.
+**Don't depend on it directly.**
+Running fences is an app concern, not a storage-layer one; if you think you need it, that's a conversation for an issue.
 
 Everything else in the workspace (`outl-cli`, `outl-tui`, the Tauri clients) is `publish = false` on purpose.
 
@@ -145,6 +150,28 @@ Practical consequences:
 
 The whole workspace shares `[workspace.package].version`, and the published crates follow semver with the project: GA versions from tags, betas from `main`.
 The `Storage` trait, the `Op` enum, and the sidecar format carry compatibility guarantees documented in [Storage](storage.md); anything not documented there is internal surface that may move between minor versions.
+
+## Dependency policy
+
+An embedder with a `cargo deny` / `cargo audit` gate in CI is the case these crates are published for, so the dependency graph is treated as part of the public surface.
+A crate that trips a policy gate blocks adoption just as hard as a missing feature.
+
+Concretely, `outl-core` carries no advisory-flagged dependency.
+The snapshot encoder moved from bincode to [`postcard`](https://crates.io/crates/postcard) in schema 4, because every bincode version is unmaintained under [RUSTSEC-2025-0141](https://rustsec.org/advisories/RUSTSEC-2025-0141) (issue #207).
+See [Storage → Wire format](storage.md#wire-format-postcard-schema-4).
+
+What the last sweep leaves in the four-crate contract graph: **one flagged crate, `smallstr 0.3.1`** ([RUSTSEC-2026-0215](https://rustsec.org/advisories/RUSTSEC-2026-0215), unmaintained), and **no non-permissive licenses**.
+
+`smallstr` is transitive through `yrs`, the block-text CRDT, and `yrs` 0.27.3 still depends on it — that one needs an upstream fix, not a bump here.
+It has no patched release, so a gate that fails on `informational = "unmaintained"` will still flag it.
+
+This is also why `outl-exec` isn't embedding surface.
+Its language runtimes are where the rest of the noise lives: unmaintained crates plus **LGPL-3.0-only** (`malachite*`, via RustPython) and **MPL-2.0** (`im-rc`, `sized-chunks`, `bitmaps`).
+The `default-features = false` pin keeps every one of them out of the graph you actually get.
+Depend on it directly and you opt back into all of it.
+
+If a policy gate rejects one of these crates, open an issue with the gate's output.
+That's how #207 was found.
 
 ## A complete example
 

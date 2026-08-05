@@ -243,8 +243,8 @@ pub(crate) async fn pull_snapshot_from_peer(
 
     // Atomic write (tmp + fsync + rename) via the format's owner in `outl-core`.
     // Re-encoding the validated body is byte-identical to the received bytes
-    // (bincode is deterministic — the whole `content_hash` integrity design
-    // relies on it) and names the file `snap-<body.actor>.bin`. Runs on a
+    // (the encoding is deterministic — the whole `content_hash` integrity
+    // design relies on it) and names the file `snap-<body.actor>.bin`. Runs on a
     // blocking thread — it fsyncs a multi-MB file.
     let dir = snapshots_dir(workspace_root);
     let written = tokio::task::spawn_blocking(move || snapshot::write_to_disk(&dir, &body)).await;

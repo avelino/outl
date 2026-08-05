@@ -13,7 +13,7 @@
 //! {"ts": {…Hlc…}, "offset": 1234}
 //! ```
 //!
-//! JSONL (not bincode) on purpose:
+//! JSONL (not a binary encoding) on purpose:
 //!
 //! - Same recovery path as the op log itself — `StreamDeserializer`
 //!   catches glued writes.

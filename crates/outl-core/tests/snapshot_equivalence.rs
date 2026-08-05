@@ -17,6 +17,8 @@ use outl_core::workspace::Workspace;
 use std::collections::HashSet;
 use tempfile::TempDir;
 
+mod common;
+
 fn logop(g: &HlcGenerator, op: Op) -> LogOp {
     let ts = g.next();
     LogOp {
@@ -277,6 +279,72 @@ fn corrupt_snapshot_falls_back_to_full_replay() {
     )
     .unwrap();
     assert_eq!(ws.block_text(n).as_deref(), Some("before snapshot"));
+    assert_eq!(ws.tree().node_count(), 1);
+}
+
+/// The upgrade path for issue #207: a device whose `snap-<actor>.bin`
+/// was written by a pre-postcard build (schema 3, bincode) must boot
+/// correctly off a full op-log replay, with nothing surfaced to the user.
+///
+/// The bytes below are a real schema-3 snapshot captured from the old
+/// encoder — not a synthetic corruption — so this pins the actual
+/// upgrade a user will live through exactly once.
+#[test]
+fn legacy_bincode_snapshot_falls_back_to_full_replay() {
+    let tmp = TempDir::new().unwrap();
+    let dotl = tmp.path().join(".outl");
+    let ops_dir = dotl.join("ops");
+    let snapshots_dir = dotl.join("snapshots");
+    let actor = ActorId::new();
+    let g = HlcGenerator::new(actor);
+
+    // Build real history first, so a wrongly-adopted snapshot would show
+    // up as *missing* state rather than as an error.
+    let mut ws = Workspace::open_with_storage(
+        actor,
+        Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
+        Some(tmp.path().to_path_buf()),
+    )
+    .unwrap();
+    let n = NodeId::new();
+    ws.apply(logop(
+        &g,
+        Op::Create {
+            node: n,
+            parent: NodeId::root(),
+            position: Fractional::first(),
+        },
+    ))
+    .unwrap();
+    let edit = ws.build_text_replace_update(n, "written before the upgrade");
+    ws.apply(logop(
+        &g,
+        Op::Edit {
+            node: n,
+            text_op: edit,
+        },
+    ))
+    .unwrap();
+    drop(ws);
+
+    // Drop the old-format snapshot in where this device's own would live.
+    std::fs::create_dir_all(&snapshots_dir).unwrap();
+    std::fs::write(
+        snapshots_dir.join(format!("snap-{actor}.bin")),
+        common::LEGACY_BINCODE_SCHEMA_3_SNAPSHOT,
+    )
+    .unwrap();
+
+    let ws = Workspace::open_with_storage(
+        actor,
+        Box::new(JsonlStorage::open(ops_dir.clone(), actor).unwrap()),
+        Some(tmp.path().to_path_buf()),
+    )
+    .unwrap();
+    assert_eq!(
+        ws.block_text(n).as_deref(),
+        Some("written before the upgrade")
+    );
     assert_eq!(ws.tree().node_count(), 1);
 }
 

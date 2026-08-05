@@ -222,6 +222,26 @@ Per-actor, each op is compared against its own actor's mark, and because an acto
 Writing is driven by `Workspace::set_snapshot_policy(enabled, op_threshold)` (in-band background writer, off the calling thread) and `Workspace::save_snapshot` (synchronous, on graceful shutdown).
 Snapshots are optional: a workspace with none replays the full log.
 
+### Wire format: postcard, schema 4
+
+The body is encoded with [`postcard`](https://crates.io/crates/postcard) — serde-native, varint, deterministic given a fixed in-memory layout (which is why every map in `SnapshotBody` is a `BTreeMap`, never a `HashMap`).
+
+It was bincode through schema 3.
+Every published version of bincode — 1.x and 2.x alike — is flagged unmaintained by [RUSTSEC-2025-0141](https://rustsec.org/advisories/RUSTSEC-2025-0141), with `patched = []` and no successor release.
+Because `outl-core` is [published for embedding](embedding.md), that advisory failed any downstream `cargo deny` / `cargo audit` gate the moment a project added the crate.
+A version bump inside bincode would not have fixed that (issue #207).
+postcard is actively maintained, `MIT OR Apache-2.0`, and smaller on the wire, which also matters because snapshots ship between peers over iroh.
+
+The change is deliberately not backwards compatible, and that costs nothing:
+
+- `SCHEMA_VERSION` went `3` → `4`.
+- A pre-#207 snapshot fails `SnapshotBody::decode` — either a parse error or a `content_hash` mismatch if it happens to parse.
+- Both land on the path a corrupt snapshot always took: full op-log replay, nothing surfaced to the user.
+- A peer still on the old build ships a snapshot this build skips (`read_best_from_disk` drops undecodable candidates and keeps scanning), so cross-version pairing degrades to a replay rather than an error.
+
+The cost is one slower boot per device, once.
+The op log is the source of truth; no snapshot format change can lose data.
+
 ---
 
 ## Failure modes

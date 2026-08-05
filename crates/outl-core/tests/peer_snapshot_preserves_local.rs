@@ -15,6 +15,8 @@ use outl_core::storage::{JsonlStorage, Storage};
 use outl_core::workspace::Workspace;
 use tempfile::TempDir;
 
+mod common;
+
 fn create(g: &HlcGenerator, actor: ActorId, node: NodeId, parent: NodeId) -> LogOp {
     LogOp {
         ts: g.next(),
@@ -81,6 +83,70 @@ fn adopting_peer_snapshot_preserves_local_ops() {
         ws.tree().parent(my_block),
         Some(page),
         "LOCAL block preserved via the per-actor delta replay — NOT lost"
+    );
+}
+
+/// Cross-version pairing (issue #207): a peer still on the pre-postcard
+/// build ships a schema-3 snapshot that this build cannot read. It must be
+/// **skipped**, never fatal — and never allowed to shadow a peer snapshot
+/// that IS readable.
+///
+/// `read_best_from_disk` scans the whole directory, so both files are
+/// candidates; the old one has to drop out on decode while the new one is
+/// adopted, and the local ops replay on top either way.
+#[test]
+fn legacy_peer_snapshot_is_skipped_not_fatal() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_path_buf();
+    let ops_dir = root.join("ops");
+    std::fs::create_dir_all(&ops_dir).unwrap();
+
+    let old_peer = ActorId::new(); // still on the bincode build
+    let new_peer = ActorId::new(); // upgraded
+    let me = ActorId::new();
+    let gn = HlcGenerator::new(new_peer);
+    let gm = HlcGenerator::new(me);
+
+    let page = NodeId::from_slug("home");
+    let peer_block = NodeId::new();
+    let my_block = NodeId::new();
+
+    {
+        let storage = JsonlStorage::open(ops_dir.clone(), new_peer).unwrap();
+        let mut ws =
+            Workspace::open_with_storage(new_peer, Box::new(storage), Some(root.clone())).unwrap();
+        ws.apply(create(&gn, new_peer, page, NodeId::root()))
+            .unwrap();
+        ws.apply(create(&gn, new_peer, peer_block, page)).unwrap();
+        ws.save_snapshot().unwrap();
+    }
+
+    // The stale peer's file lands in the same directory.
+    std::fs::write(
+        root.join(".outl")
+            .join("snapshots")
+            .join(format!("snap-{old_peer}.bin")),
+        common::LEGACY_BINCODE_SCHEMA_3_SNAPSHOT,
+    )
+    .unwrap();
+
+    {
+        let mut storage = JsonlStorage::open(ops_dir.clone(), me).unwrap();
+        storage.append_op(&create(&gm, me, my_block, page)).unwrap();
+    }
+
+    let storage = JsonlStorage::open(ops_dir.clone(), me).unwrap();
+    let ws = Workspace::open_with_storage(me, Box::new(storage), Some(root.clone())).unwrap();
+
+    assert_eq!(
+        ws.tree().parent(peer_block),
+        Some(page),
+        "the readable peer snapshot was adopted despite the undecodable sibling"
+    );
+    assert_eq!(
+        ws.tree().parent(my_block),
+        Some(page),
+        "local ops replayed on top"
     );
 }
 
