@@ -259,14 +259,14 @@ CLI exit code is `1` in that case; MCP returns the payload via the normal envelo
 |----------------------------------------------|-------------------------|
 | `outl init <path>`                           | —                       |
 | `outl serve [--workspace=…]`                 | —                       |
-| `outl doctor [--json]`                       | `outl_workspace_doctor` |
+| `outl doctor [--json] [--repair]`            | `outl_workspace_doctor` |
 | `outl reconcile`                             | —                       |
 | `outl mcp serve [--workspace=…]`             | —                       |
 | `outl peer pair\|list\|remove\|status`        | —                       |
 | `outl plugin init\|search\|list\|install\|run\|config\|secret\|enable\|disable\|remove` | — |
 | `outl sync`                                  | —                       |
 | `outl workspace info [--json]`               | `outl_workspace_info`   |
-| `outl import roam\|logseq\|obsidian\|auto <src> <dst> [--dry-run] [--json] [--preserve-timestamps] [--no-assets]` | — |
+| `outl import roam\|logseq\|obsidian\|auto <src> <dst> [--dry-run] [--json] [--preserve-timestamps] [--no-assets] [--force]` | — |
 
 `init`, `serve`, `reconcile`, `import`, `mcp serve`, `peer`, `plugin`, and `sync` are CLI-only on purpose — they're either interactive, long-running, or bootstrap commands that don't fit a tool-call shape.
 
@@ -285,6 +285,58 @@ A real (non-dry) import paints a live progress line on stderr — phase, page co
 `--dry-run` parses and reports without writing a byte — run it against a real backup to measure fidelity before migrating.
 `--json` prints the full report (per-feature counts, warnings with location) as JSON.
 `--preserve-timestamps` keeps source create/edit times as `created::`/`edited::` block properties (dropped and counted by default).
+
+**Importing twice is destructive, so it's opt-in.**
+An import overwrites every `.md` it emits and reconciles the result through the op log, so a second run against a workspace you've been using erases whatever you wrote there since the first import — there is no undo.
+`outl import` therefore refuses a destination that already holds content, naming what it found and pointing at the escape hatch.
+Pass `--force` when overwriting is exactly what you want; import into a fresh directory otherwise.
+`--dry-run` writes nothing and is never blocked.
+
+What counts as "already holds content" is read from the **op log's materialized tree**, not from the `.md` files on disk.
+A device paired over iroh receives every op through sync, but only projects a page's `.md` when that page is opened.
+A freshly-paired laptop therefore holds your whole graph with an empty `pages/` directory, and a file-counting guard would wave the import straight into it.
+Two extra signals round it out: markdown dropped into `pages/` by hand (no sidecar beside it, so the tree cannot see it) also blocks, and so does any `.md` in a destination that isn't an outl workspace at all.
+
+The output of `outl init` is **not** content.
+`init` seeds a journal-template page and today's (empty) journal, so `outl init ./notes && outl import roam backup.json ./notes` — the documented migration flow — runs with no flags.
+A page only counts once it holds a block with real text.
+That distinction matters: `--force` is the flag that destroys, and a guard that fires on the normal flow just teaches you to type it by reflex.
+
+**A failed import is resumable, without `--force`.**
+The pipeline writes page by page, so a failure at page 40k of 66k leaves the destination half-populated.
+For the duration of a real import, `outl import` keeps a marker at `<workspace>/.outl/import-in-progress.json` (adapter, source path, start time) and deletes it on success.
+If a run dies, the marker survives and the error message says exactly how to recover.
+Re-running the same command then imports again **without** `--force`: everything in that destination came from the run that never finished, so there is nothing of yours to protect.
+Delete the destination instead if you'd rather start clean.
+A marker that is missing or unparseable is treated as "no unfinished import", so a corrupt file is never a free pass.
+
+**Reconciliation: what the source held vs. what landed.**
+The per-feature counts only describe what the pipeline knows it produced — a block lost in the parse would show up in neither the numerator nor the denominator.
+So the report also carries a `reconciliation` block (Roam today; other adapters as they start reporting source counts) whose denominators are counted straight off the parsed source:
+
+```text
+  reconciliation:
+    pages:             3/4 emitted (1 merged, 0 skipped)
+    blocks:            12/15 emitted (2 lifted to page props, 1 in skipped pages)
+    in the op log:     12/12 emitted blocks confirmed on disk after reconcile
+```
+
+Every legitimate reducer is subtracted by name — pages merged onto the same journal date, pages skipped (each listed under `skipped:` with the blocks that went down with it), and blocks promoted into page properties (`blocks_lifted_to_props`).
+Whatever is left over is unexplained loss, and the human output says so in a block you can't miss (`UNACCOUNTED CONTENT — the import does not add up`), with the same numbers available under `reconciliation` in `--json`.
+
+The `in the op log` line closes the other half of the contract.
+Every other counter in the report is incremented in memory during rendering, before a byte reaches disk — they prove the parser and the renderer agree about your graph, not that your graph is in a workspace.
+A page that fails to write, fails to reconcile, or loses blocks in the matcher is invisible to all of them.
+So a real import also sums the block entries in each page's sidecar (written by `reconcile_md` straight off the materialized tree) and reports that as `landed_blocks`.
+A gap prints as `CONTENT NEVER REACHED THE OP LOG` and makes `balanced` false.
+`--dry-run` writes nothing, so it reports the landing as *not measured* rather than as zero-loss: there, `balanced: true` means only that parse and render agree.
+
+Warnings are listed in full under `--json`.
+The human output prints the first 20 and states how many it hid.
+
+One counted loss worth knowing about on Roam graphs: a `{{[[TODO]]}}` / `{{[[DONE]]}}` marker in the *middle* of a block keeps its literal `TODO`/`DONE` word but not its task state.
+outl models one task per block, driven by the marker at the block's head, so such a block won't answer `outl query --kind=task`.
+It's reported as `mid-block tasks` plus a single aggregate warning — one per import, not one per marker.
 
 `outl plugin` manages the workspace's JS plugins (under `<workspace>/.outl/plugins/`), wrapping `outl-plugins`.
 `init <NAME> [--id <ID>] [--dir <PATH>]` scaffolds a buildable starter project (manifest + `package.json` + `tsconfig` + `src/index.ts` + README); run `bun install && bun run build` inside it for an installable bundle.
@@ -309,9 +361,104 @@ It defaults to the machine hostname; the GUI clients default it to "desktop" / "
 It's for scripts that mutate via the CLI and must flush to peers before the process dies — a normal short-lived CLI mutation can't keep a connection alive long enough.
 The long-lived surfaces (`outl mcp serve`, the desktop/TUI apps) sync continuously and don't need it.
 
-`outl doctor` also reports **parser warnings** — every `.md` whose content stepped outside the outl dialect and got recovered by the permissive parser (typical case: a leading `# heading`, a free paragraph, imported markdown).
-A warning row goes into the doctor report (one per affected file), and one entry per warning is appended to `.outl/orphans.log` tagged `parse-warning <iso> <path>:<line> <kind> <raw>` so the breadcrumb persists across runs.
-Cleaning the offending lines (or saving the file from outl, which normalises to `- <raw>` on render) makes the warning disappear on the next `outl doctor`.
+### `outl doctor`
+
+The integrity check you run before trusting a migration, and after any sync weirdness.
+**Read-only by default** — it reports, it never fixes, unless you pass `--repair`.
+Exit code is `1` when the report carries any error, so it drops straight into a script or CI step.
+
+"Read-only" is literal, and it is asserted per directory, not per file:
+a run without `--repair` leaves `ops/` **byte-identical** (including the `.ops-<actor>.idx` boot caches, which the storage layer would otherwise rebuild and persist just by being opened) and appends nothing to `.outl/orphans.log`.
+The only thing a default run writes is its own stdout.
+
+#### What it checks
+
+**Op log — the source of truth.**
+
+- Every `ops-*.jsonl` is swept **line by line**, and each defective record is named with its **line number, byte offset, and reason**.
+  Three reasons exist: invalid JSON, non-UTF8 bytes (a partial file sync can leave them mid-file), or two ops glued onto one line by an unsynchronized concurrent append.
+  This matters because the boot path deliberately *skips* malformed records — one torn tail line must never lock you out of your workspace — and logs them only at `warn` level, where they scroll past.
+  A glued line is a warning (every op is recovered); a line carrying no usable op is an **error**, because those mutations are gone.
+- `.outl/snapshots/snap-<actor>.bin` is decoded and its content hash verified.
+  A bad snapshot is a warning, not an error: it is a pure boot cache, so the only cost is that the next boot pays a full op-log replay.
+  A snapshot that could not be **read** (permissions, a busy file, a half-arrived sync, a flaky disk) is reported separately and left exactly where it is — an unreadable file is not a proven-bad one, and `--repair` deletes for real.
+- Each `.ops-<actor>.idx` offset index is cross-checked against its `.jsonl` — every offset must land on the first byte of a real record, and the index must not claim more ops than the file yields.
+
+**Materialized tree — what the op log actually built.**
+
+- **Trash contents.**
+  Deletion is `Move(node, TRASH_ROOT)`, never a physical removal, so deleted blocks are still in the graph — invisible to every view.
+  Doctor reports the total block count in the trash, how many top-level deletions produced it, and a text preview of each one.
+- **Unmaterialized ops** — node ids the op log touches that never landed in the tree, i.e. `Edit` / `SetProp` / `SetCollapsed` whose effect you will never see.
+- **Projection drift** — every page in the op log compared against its `.md` on disk: missing files, stale projections, missing sidecars.
+
+**Files on disk.**
+
+- `.md` ↔ `.outl` sidecar pairing, sidecar version, and sidecar block ids that are absent from the op log.
+- Orphaned sidecars (a `.outl` with no `.md` next to it).
+- Orphan `((blk-XXXXXX))` / `!((blk-XXXXXX))` references.
+- **Sync-conflict copies** — `foo 2.md` (iCloud), `foo (conflicted copy).md` (iCloud/Dropbox), `foo.sync-conflict-….md` (Syncthing), across `pages/`, `journals/`, `ops/`, and `assets/`.
+  Reported as **errors**: they are your content sitting outside the op log, and nothing in outl ever reads them.
+  A `sprint 2.md` with no `sprint.md` next to it is a normal note and is not flagged.
+- **Parser warnings** — every `.md` whose content stepped outside the outl dialect and got recovered by the permissive parser (typical case: a leading `# heading`, a free paragraph, imported markdown).
+  A warning row goes into the doctor report, one per affected file.
+  Under `--repair` only, one entry per warning is also appended to `.outl/orphans.log`, tagged `parse-warning <iso> <path>:<line> <kind> <raw>`, so the breadcrumb persists across runs.
+  Rows are deduplicated on `<path>:<line> <kind>`: re-running never stacks a second copy of the same finding.
+  That gate matters because `.outl/orphans.log` is also where **level-3 matching orphans** live: the record of blocks that could not be matched back into the op log.
+  On a freshly imported graph the parse warnings outnumber them by orders of magnitude.
+  Cleaning the offending lines (or saving the file from outl, which normalises to `- <raw>` on render) makes the warning disappear on the next run.
+
+#### `--repair`
+
+Applies **only** the fixes that cannot lose data, and prints exactly what it will do before doing it (the same list a read-only run shows under `N repairable item(s)`).
+
+| Fix | Why it is safe |
+|-----|----------------|
+| Re-project a page's `.md` + sidecar from the op log | The op log is the source of truth; a `.md` that disagrees with it is the wrong side. Requires a **healthy** op log (see below). Skipped when the file carries an unreconciled external edit — that is `outl reconcile`'s job. |
+| Rebuild a missing sidecar | Only when the `.md` bytes already equal what the tree renders. Requires a healthy op log, same as above. Diverged content is never touched. |
+| Delete a corrupt snapshot | Pure boot cache; rebuilt on the next boot. Only for a snapshot that was read end-to-end and then failed to decode — never one that could not be read. |
+| Prune stale backup generations | Only `.outl/repair-backup/` directories that are **both** older than 14 days **and** outside the 10 most recent. |
+
+What it will **never** do: delete a `.md`, write a single byte into `ops/`, move a block to the trash, or pick a winner between two sync-conflict copies.
+
+##### A damaged op log suspends every page repair
+
+Both of the page-level fixes above write a file **rendered from the materialized tree**, and the tree is only ever as complete as the op log it replayed.
+
+That matters more than it sounds, because the boot path is deliberately forgiving: `JsonlStorage` skips records it cannot parse, so one torn line never locks you out of your workspace.
+The cost is that a damaged log replays a **truncated** tree that looks perfectly healthy from the inside — nothing in it remembers what was skipped.
+A `.md` that is still a faithful, complete projection of its page then compares as "stale" against that shorter render, and re-projecting it would overwrite your content with an incomplete one.
+
+So when the doctor finds the log damaged, it **withholds** the page repairs instead of offering them, in `--repair` and in the read-only list alike, and says why.
+Three things count as damaged:
+
+- one or more `ops-*.jsonl` lines carrying no usable op,
+- an `ops-*.jsonl` that could not be opened, or that hit an I/O error mid-scan,
+- a sync-conflict copy under `ops/` (a forked op log — the ops in the fork never reached the tree).
+
+Recover the log first — restore `ops/` from a backup, or let a healthy paired device sync it back — then re-run.
+Corrupt-snapshot deletion is not withheld: it is a pure cache, and dropping it only forces the full replay a damaged log wants anyway.
+
+##### Backups
+
+Every file `--repair` touches is copied to `.outl/repair-backup/<timestamp>/<relative path>` **before** the write, so undoing a repair is a plain `cp` back.
+
+Those generations are pruned at the end of each `--repair` run, because they are otherwise permanent.
+`.outl/` is dot-prefixed, so iCloud drops it and iroh never ships it — but Syncthing, Dropbox and a shared volume all replicate it, and every generation is a full copy of every `.md` that run touched.
+A generation has to fail **both** guards before it goes — older than 14 days *and* outside the 10 newest — and each prune is reported as its own action.
+A directory whose age can't be read is always kept.
+
+##### Scope
+
+`--repair` is CLI-only.
+The `outl_workspace_doctor` MCP tool always runs read-only — a tool call is not the place to start rewriting files on your disk.
+That includes the `.outl/orphans.log` rows described above, which is why they are gated behind `--repair` rather than written on every check.
+
+#### `--json`
+
+Emits the standard envelope.
+`data` carries `workspace`, `actor`, `op_count`, `error_count`, `warn_count`, plus `findings[]` (each `{severity, message}`, severity being `ok` / `info` / `warn` / `error`) and `repairable[]` (what `--repair` would do).
+Only after an actual `--repair` run, `data.repair` is present with `backup_dir`, `actions[]`, `repaired`, and `failed`.
 
 ## MCP
 

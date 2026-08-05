@@ -5,9 +5,7 @@ use std::path::{Path, PathBuf};
 
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
-use outl_md::sidecar::{
-    content_hash, derive_ref_handle, file_hash, sidecar_path_for, Sidecar, SidecarBlock,
-};
+use outl_md::sidecar::{content_hash, file_hash, sidecar_path_for, Sidecar, SidecarBlock};
 
 use super::paths::{page_md_path, write_md_atomic};
 use super::render::render_page_md;
@@ -189,7 +187,11 @@ fn build_sidecar(workspace: &Workspace, page_root: NodeId, md: &str) -> Sidecar 
     let mut line = 1usize;
     walk_sidecar(workspace, page_root, 0, &mut line, &mut blocks);
     Sidecar {
-        version: 2,
+        // Never a literal: this builder writes whatever fields the
+        // current `SidecarBlock` carries, so a hardcoded number labels a
+        // v3 payload as v2 the moment the schema moves — and the reader
+        // trusts the label.
+        version: outl_md::sidecar::SIDECAR_VERSION,
         page_id: page_root,
         last_synced_hash: file_hash(md),
         last_synced_at: chrono::Local::now().fixed_offset(),
@@ -212,13 +214,10 @@ fn walk_sidecar(
 ) {
     for (id, _) in children_of(workspace, parent) {
         let text = workspace.block_text(id).unwrap_or_default();
-        out.push(SidecarBlock {
-            id,
-            line: *line,
-            indent,
-            content_hash: content_hash(&text),
-            ref_handle: derive_ref_handle(id),
-        });
+        // `from_text` keeps hash, handle and stored text derived from
+        // one revision — level-2 matching diffs against that text, so a
+        // hand-built literal that drifts would mis-assign ids.
+        out.push(SidecarBlock::from_text(id, *line, indent, &text));
         *line += 1;
         walk_sidecar(workspace, id, indent + 1, line, out);
     }
@@ -249,11 +248,41 @@ where
     use std::collections::HashMap;
 
     let md_path = page_md_path(root, meta);
-    let md_text = std::fs::read_to_string(&md_path).unwrap_or_default();
-    let mut parsed = outl_md::parse::parse(&md_text);
+    // NOT `unwrap_or_default()`: this function renders the parsed AST
+    // straight back over `md_path`, so a read that fails for any reason
+    // other than "the page doesn't exist yet" would replace the page
+    // with an empty one — and rebuild the sidecar to agree, hiding it
+    // from every later consistency scan. See `read_for_rewrite`.
+    let md_text = outl_md::read_for_rewrite(&md_path)?;
 
     let sidecar_path = outl_md::resolve_sidecar_path(&md_path);
-    let old_sidecar = outl_md::sidecar::read(&sidecar_path).ok();
+    // `read_for_rewrite` answers "absent" with `Ok("")`, which is only
+    // legitimate for a page that does not exist yet. Everything else
+    // that presents as absent is checked here, before the empty parse
+    // becomes a write.
+    if md_text.is_empty() {
+        guard_absent_markdown(&md_path, &sidecar_path)?;
+    }
+
+    let mut parsed = outl_md::parse::parse(&md_text);
+
+    // NOT `.ok()`: the same "unreadable reads as empty" bug the `.md`
+    // was fixed for, one line down and worse. With `old_sidecar = None`
+    // every block content-hash lookup misses, `build_sidecar_from_ast`
+    // mints a **fresh ULID per block**, and the rewritten sidecar
+    // replaces the id ↔ text mapping wholesale: every `((blk-…))`
+    // pointing into this page stops resolving, and the next
+    // `reconcile_md` sees N unknown ids and trashes the tree's blocks.
+    // A `.md` is recoverable from the op log; that mapping is not.
+    let old_sidecar = match outl_md::sidecar::read(&sidecar_path) {
+        Ok(sidecar) => Some(sidecar),
+        // Genuinely absent — a page this device has never projected.
+        // The only case where minting ids is correct.
+        Err(outl_md::sidecar::SidecarError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            None
+        }
+        Err(e) => return Err(e.into()),
+    };
 
     // Build NodeId -> block_path map from the AST + sidecar (DFS
     // preorder lines up between the two).
@@ -275,6 +304,55 @@ where
     outl_md::sidecar::write(&sidecar_path, &new_sidecar)?;
 
     Ok(md_path)
+}
+
+/// Decide whether an absent `.md` really means "this page does not
+/// exist yet".
+///
+/// Two ways it does not, both of which used to end in the page being
+/// recreated as a single block and its real blocks trashed by the next
+/// `reconcile_md`:
+///
+/// - **A sidecar is present.** The sidecar is only ever written next to
+///   a `.md` this device projected, so its existence is proof the page
+///   existed. A missing `.md` beside it is a lost file — a half-finished
+///   sync, an editor that deleted-and-recreated, a user emptying a
+///   folder — never a new page. Rewriting over it converts a recoverable
+///   loss (the `.md` is a projection; the op log still has the content)
+///   into an unrecoverable one, because the rewrite rebuilds the sidecar
+///   from one block and the next reconcile emits `Move`→`TRASH_ROOT` for
+///   every id it can no longer find.
+/// - **An iCloud placeholder sibling is present.** On iOS and on legacy
+///   iCloud Drive, a file whose bytes have not been downloaded is
+///   `.foo.md.icloud` and *the real name does not exist* — so the read
+///   is `NotFound`, not the permission/IO error the `read_for_rewrite`
+///   contract assumes. Same outcome, on a file that is not lost at all
+///   and will materialise on its own.
+fn guard_absent_markdown(md_path: &Path, sidecar_path: &Path) -> Result<(), ActionError> {
+    // Re-check existence rather than trusting the empty read: a page
+    // that legitimately renders to an empty string is not absent.
+    if md_path.exists() {
+        return Ok(());
+    }
+    if icloud_placeholder(md_path).is_some() {
+        return Err(ActionError::PageMarkdownNotDownloaded(
+            md_path.display().to_string(),
+        ));
+    }
+    if sidecar_path.exists() {
+        return Err(ActionError::PageMarkdownVanished(
+            md_path.display().to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// The iCloud placeholder that stands in for `md_path` while its bytes
+/// are still in the cloud: `pages/foo.md` → `pages/.foo.md.icloud`.
+fn icloud_placeholder(md_path: &Path) -> Option<PathBuf> {
+    let name = md_path.file_name()?.to_str()?;
+    let placeholder = md_path.with_file_name(format!(".{name}.icloud"));
+    placeholder.exists().then_some(placeholder)
 }
 
 fn build_id_path_map<'a>(
@@ -347,13 +425,7 @@ fn walk_ast_for_sidecar(
                 NodeId::new()
             });
         used.insert(id);
-        out.push(SidecarBlock {
-            id,
-            line: *line,
-            indent,
-            content_hash: hash,
-            ref_handle: derive_ref_handle(id),
-        });
+        out.push(SidecarBlock::from_text(id, *line, indent, &block.text));
         *line += 1;
         walk_ast_for_sidecar(&block.children, indent + 1, old_sidecar, used, line, out);
     }

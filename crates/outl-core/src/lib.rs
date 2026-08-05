@@ -14,6 +14,7 @@
 
 pub mod block;
 mod content;
+pub mod device;
 pub mod fractional;
 pub mod hlc;
 pub mod id;
@@ -31,6 +32,7 @@ pub mod workspace;
 pub mod workspace_id;
 
 pub use block::Block;
+pub use device::{device_dir, DeviceError, DeviceStore, MachineId};
 pub use fractional::Fractional;
 pub use hlc::Hlc;
 pub use id::{ActorId, NodeId};

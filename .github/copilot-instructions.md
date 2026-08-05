@@ -82,7 +82,7 @@ Quote the invariant by name in your comment.
 
 7. **Convergent state goes through the op log, never a shared file.**
    If two actors can disagree about a value and you want them to reconcile, model it as an `Op`.
-   The sidecar is for structural matching metadata only (id, position, content hash, ref handle).
+   The sidecar is for structural matching metadata only (id, position, content hash, ref handle, last-synced text).
 
 8. **Layering.** `outl-core` never depends on UI or CLI crates.
    `outl-actions` is the shared workspace-mutation surface every client (`outl-tui`, `outl-mobile`, `outl-desktop`, `outl-cli`) must call.
@@ -209,8 +209,9 @@ Flag:
 
 ### 5.1 Shared primitives catalog — check this before approving any helper
 
-The full catalog lives in [`docs/shared-primitives.md`](../docs/shared-primitives.md).
-Before approving a helper, open it and scan the relevant sub-table.
+The catalog is indexed at [`docs/shared-primitives.md`](../docs/shared-primitives.md).
+Its rows live in [`primitives-core.md`](../docs/primitives-core.md), [`primitives-markdown.md`](../docs/primitives-markdown.md) and [`primitives-actions.md`](../docs/primitives-actions.md); the index says which part owns what.
+Before approving a helper, grep all four (`docs/shared-primitives.md docs/primitives-*.md`) and scan the relevant sub-table.
 If the diff adds a primitive that overlaps with a catalog entry, it is a duplicate — block the PR and point at the existing function with `file:line`.
 
 **Review checklist on every PR that adds a helper:**
@@ -224,7 +225,36 @@ If the diff adds a primitive that overlaps with a catalog entry, it is a duplica
 - Does the PR add a new `pub fn|struct|enum|const` in `crates/outl-{core,md,actions}/src/`?
   The new symbol **must** appear in the Shared primitives catalog (the local `doc-sync-guard.sh` + `catalog-sync-guard.sh` hooks enforce this pre-merge; the same rule applies in review).
 
-Recently added — check these before writing a parallel reminder helper (catalog § 19 "Reminders"):
+Recently added — durability primitives.
+**Block any PR that reads a file it is about to write back with `read_to_string(..).unwrap_or_default()`.**
+That is the silent-page-wipe bug: a failed read parses as an empty AST, gets rendered, and atomically replaces a full page with nothing.
+
+| Intent | Use this | File |
+|---|---|---|
+| Read a `.md` you are about to mutate and write back — missing file → empty, **every other I/O error propagates** | `outl_md::atomic::read_for_rewrite` | `crates/outl-md/src/atomic.rs` |
+| Build one sidecar block entry — **the only way to build one** unless you're preserving an expanded `ref_handle`; keeps `content_hash`, `ref_handle` and the level-2 `text` derived from the same revision. A hand-rolled literal is how they end up describing different revisions | `outl_md::sidecar::SidecarBlock::from_text(id, line, indent, text)` | `crates/outl-md/src/sidecar.rs` |
+| Sidecar format version — currently `2`. **Block any PR that bumps it for an additive field.** Feature detection is by field *presence*, never by version number; an already-shipped binary rejects a higher version, rebuilds the sidecar from scratch, and duplicates every block. Bump only when an existing field changes meaning or encoding. Never hardcode the integer in a `Sidecar` literal | `outl_md::sidecar::SIDECAR_VERSION` / `MIN_READABLE_SIDECAR_VERSION` | `crates/outl-md/src/sidecar.rs` |
+| Low-level crash-safe write (prefer the `journal::write_md_atomic` wrapper) | `outl_md::atomic::write_atomic` | `crates/outl-md/src/atomic.rs` |
+| Path of a workspace's orphan log — **every `reconcile_md` call must pass this**, never `None` | `outl_actions::orphans_log_path` / `SyncEngine::orphans_log` | `crates/outl-actions/src/sync.rs` |
+
+Recently added — device identity.
+**Block any PR that reads the write actor from `<workspace>/.outl/config.toml`.**
+That file rides the file-sync surface (Syncthing / Dropbox / NFS / git all replicate `.outl/`), `flock(2)` is machine-local, so two devices reading one `actor_id` both append to one `ops-<actor>.jsonl` and lose ops with no error.
+
+| Intent | Use this | File |
+|---|---|---|
+| Resolve which actor this **device** writes as for a workspace (migration-safe; the only supported entry point for CLI / TUI / MCP / embedders) | `outl_ws::actor::resolve_device_actor` | `crates/outl-ws/src/actor.rs` |
+| Device-local actor store — per **workspace instance** (`actor_for_instance`, keyed by `WorkspaceId` **plus the canonical root path**, so a copied directory forks instead of sharing an op log, while a moved one keeps its actor) and device-wide (`device_actor`, the Tauri clients' `<dir>/actor`) | `outl_core::DeviceStore` (errors: `outl_core::DeviceError`) | `crates/outl-core/src/device/mod.rs` |
+| Stable fingerprint of one physical device — the claim marker that lets exactly one device adopt a legacy `config.toml` actor | `outl_core::MachineId` (via `DeviceStore::machine_id`) | `crates/outl-core/src/device/mod.rs` |
+| Directory holding this device's identity files (`$OUTL_DEVICE_DIR`, else `$XDG_CONFIG_HOME/outl`, else `~/.config/outl`) — **never** inside a workspace | `outl_core::device_dir` | `crates/outl-core/src/device/mod.rs` |
+
+| Snapshot / restore a workspace locally (git-backed; the git dir lives **outside** the workspace, so no file transport replicates it and the user's own repo in that folder is never touched) | `outl_actions::backup::{init, snapshot, snapshot_best_effort, list, restore, repo_dir, BackupRepo, BackupError}` | `crates/outl-actions/src/backup/` |
+| Wire a client up to periodic backups — one call, detached thread, interval floor read back out of git, never on the edit or quit path | `outl_actions::backup::{spawn_auto_pass, maybe_snapshot, STARTUP_DELAY}` | `crates/outl-actions/src/backup/auto.rs` |
+
+Also block any `reconcile_md(.., None)` outside a test.
+Matching level 3 trashes the blocks it can't place, and `outl-md`'s hard rule is that they are recorded in `orphans.log` first — passing `None` is how the desktop and mobile boot paths deleted silently.
+
+Recently added — check these before writing a parallel reminder helper (catalog: `docs/primitives-actions.md` → "Reminders"):
 
 | Intent | Use this | File |
 |---|---|---|
@@ -237,7 +267,7 @@ Recently added — check these before writing a parallel reminder helper (catalo
 | Format "in 3h" / bucket a reminder list for a GUI | `@outl/shared` `formatNextFire` / `groupReminders` | `crates/outl-frontend-shared/src/api/commands.ts` |
 | **Mark a block DONE outright** (cancels its rule). Not `cycle_todo` — on a block with no marker, one cycle lands on `TODO` and arms the nag | `outl_actions::todo::set_todo` | `crates/outl-actions/src/todo.rs` |
 
-Recently added — check these before writing a parallel template helper (catalog § 16 "Templates"):
+Recently added — check these before writing a parallel template helper (catalog: `docs/primitives-actions.md` → "Templates"):
 
 | Intent | Use this | File |
 |---|---|---|
@@ -355,7 +385,7 @@ If you see a diff in the left column and no matching update in the right column,
 | Conventional Commits enforcement or release-notes pipeline | `docs/development.md` § 10 + root `CLAUDE.md` "Coding conventions" |
 | Storage trait surface, `JsonlStorage` / `MemoryStorage` test contract | `docs/development.md` § 5 + `docs/storage.md` + `outl-core/CLAUDE.md` |
 | New `Action` variant in `outl-shortcuts` / new keybinding / chord rebound | `docs/shortcuts.md` (the row that ships to users) + `outl-shortcuts/src/{action.rs,defaults.rs}` + every client's dispatcher (`outl-tui/src/input/*.rs`, `outl-desktop/src/lib/{shortcuts.ts,action-handlers.ts}`) + `outl-desktop/src/lib/api.ts` (TS mirror of the `Action` union — no codegen, drift here is silent until runtime) |
-| Public API of a shared primitive listed in `docs/shared-primitives.md` | The matching catalog row in `docs/shared-primitives.md` |
+| Public API of a shared primitive listed in the catalog (`docs/primitives-*.md`) | The matching catalog row in the part that owns it |
 
 Phrase the comment so the author knows exactly which file and section to move.
 "Doc looks stale" is noise; "section 9 of `docs/development.md` still says `ci.yml` runs on the workspace including `outl-mobile` — this PR removes that exclusion" is review.

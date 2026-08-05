@@ -15,8 +15,14 @@
 #
 #   1. CATALOG. A new top-level `pub fn|struct|enum|const` in any
 #      shared crate (outl-core / outl-md / outl-actions) must appear
-#      by name in docs/shared-primitives.md. The symbol is the
+#      by name in the Shared primitives catalog. The symbol is the
 #      canonical reuse handle for the workspace.
+#      The catalog is one logical document split across four files:
+#      docs/shared-primitives.md is the hub/index and carries no rows;
+#      the rows live in docs/primitives-core.md,
+#      docs/primitives-markdown.md and docs/primitives-actions.md.
+#      This rule greps ALL of them (glob: docs/primitives-*.md), so a
+#      future part lands without touching this hook.
 #
 #   2. PER-CRATE. Any non-test edit in `crates/<crate>/src/` should
 #      reflect in `crates/<crate>/CLAUDE.md` when it touches the
@@ -135,19 +141,31 @@ case "$crate_dir" in
   crates/outl-core|crates/outl-md|crates/outl-actions)
     new_syms=$(new_symbols_of "$file_path")
     if [ -n "$new_syms" ]; then
-      catalog="$repo_root/docs/shared-primitives.md"
+      # The catalog is split across a hub + N parts. Grep every part
+      # that exists; a symbol documented in any of them counts.
+      catalog_files=()
+      for c in "$repo_root"/docs/shared-primitives.md "$repo_root"/docs/primitives-*.md; do
+        [ -f "$c" ] && catalog_files+=("$c")
+      done
       missing=()
-      while IFS= read -r sym; do
-        [ -z "$sym" ] && continue
-        grep -qE "\b${sym}\b" "$catalog" 2>/dev/null || missing+=("$sym")
-      done <<< "$new_syms"
+      if [ ${#catalog_files[@]} -gt 0 ]; then
+        while IFS= read -r sym; do
+          [ -z "$sym" ] && continue
+          grep -qE "\b${sym}\b" "${catalog_files[@]}" 2>/dev/null || missing+=("$sym")
+        done <<< "$new_syms"
+      fi
       if [ ${#missing[@]} -gt 0 ]; then
-        msg="rule 1 — Shared primitives catalog: %s added new public symbol(s) missing from docs/shared-primitives.md:\n"
+        msg="rule 1 — Shared primitives catalog: %s added new public symbol(s) missing from the catalog:\n"
         for sym in "${missing[@]}"; do
           msg+="    - pub ${sym}\n"
         done
-        msg+="  fix: add an entry under the matching sub-table in docs/shared-primitives.md AND .github/copilot-instructions.md §5.1.\n"
-        msg+="       (catalog-sync-guard.sh verifies the two stay in sync.)"
+        msg+="  fix: add an entry under the matching sub-table in the part that owns the concept —\n"
+        msg+="       docs/primitives-core.md (op log / tree / sync / storage / backups),\n"
+        msg+="       docs/primitives-markdown.md (parse / render / sidecar / index / inline / assets),\n"
+        msg+="       docs/primitives-actions.md (block + page mutations, backlinks, exec, templates, reminders)\n"
+        msg+="       AND .github/copilot-instructions.md §5.1.\n"
+        msg+="       (docs/shared-primitives.md is the index — it carries links, not rows.)\n"
+        msg+="       (catalog-sync-guard.sh verifies the catalog and its mirror stay in sync.)"
         warnings+=("$(printf "$msg" "$rel")")
       fi
     fi

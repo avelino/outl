@@ -5,8 +5,9 @@ The boundary between **what the user sees** (clean markdown) and **what the core
 If this crate misroutes a block during matching, the user perceives "outl deleted my work" — even if the op log still has it.
 Treat matching with the same paranoia as the CRDT.
 
-> The **canonical reuse index** for the whole workspace is the ["Shared primitives catalog" in the root `CLAUDE.md`](../../CLAUDE.md#shared-primitives-catalog) (mirrored at [`.github/copilot-instructions.md`](../../.github/copilot-instructions.md) §5.1).
-> The detailed list below describes this crate's responsibilities; the root catalog is the "intent → use this" cross-crate index you should grep first when adding any helper.
+> The **canonical reuse index** for the whole workspace is the [Shared primitives catalog](../../docs/shared-primitives.md) — index plus three parts ([core](../../docs/primitives-core.md), [markdown](../../docs/primitives-markdown.md), [actions](../../docs/primitives-actions.md)), mirrored in condensed form at [`.github/copilot-instructions.md`](../../.github/copilot-instructions.md) §5.1.
+> This crate's rows live mostly in the [markdown pipeline](../../docs/primitives-markdown.md) part.
+> The detailed list below describes this crate's responsibilities; the catalog is the "intent → use this" cross-crate index you should grep first when adding any helper.
 
 ## What this crate owns
 
@@ -19,8 +20,9 @@ Treat matching with the same paranoia as the CRDT.
 - Render outline AST → `.md` (clean, no IDs).
   Each line in `OutlineNode.text` after the first is emitted at `indent + 1`; the renderer **does not invent** prefixes on continuation lines — whatever the user (or the parser) put in `text` round-trips as-is.
   Block-kind markers (`TODO `, `DONE `, `> `) are owned by `outl-actions` (`todo.rs`, `quote.rs`); this crate only preserves them verbatim.
-- Read/write `.outl` sidecar (JSON, dotfile) — current version `2`, reads v1 transparently (handles backfilled on load).
-  The sidecar is **structural metadata only** (id, line, indent, content hash, ref handle).
+- Read/write `.outl` sidecar (JSON, sibling file) — current version `2`, reads v1 transparently (handles backfilled on load; missing `text` stays empty and level 2 skips that block).
+  **Additive fields ride at the same version — see [Sidecar versioning](#sidecar-versioning-both-directions) before touching `SIDECAR_VERSION`.**
+  The sidecar is **structural metadata only** (id, line, indent, content hash, ref handle, last-synced text).
   State that must converge between devices (fold flags, pinned, etc.) goes through the op log in `outl-core`, never here.
 - The 3-level matching algorithm (external edit → reconstruct IDs)
 - Diff (old AST + new AST + old sidecar blocks) → minimal sequence of `Op`s, preserving `ref_handle` verbatim on level-1/2 matches.
@@ -114,6 +116,13 @@ Treat matching with the same paranoia as the CRDT.
   Re-exported at the crate root as `outl_md::{asset_rel_path, hash_bytes, is_asset_link, ASSETS_DIR}`.
   This module never touches the filesystem — the copy-into-workspace step lives in `outl_actions::asset` (`import_asset`, `resolve_asset_path`), and cross-device transfer lives in `outl-sync-iroh`.
 
+- **Crash-safe file I/O** (`atomic.rs`) — `write_atomic` (tmp + fsync + rename, then fsync of the parent directory so the rename itself survives a power loss) and its read counterpart **`read_for_rewrite`**.
+  `read_for_rewrite` treats a missing file as empty (a page that doesn't exist yet is legitimately an empty AST) and **propagates every other I/O error**.
+  Any read-parse-mutate-render-write path must use it.
+  `fs::read_to_string(p).unwrap_or_default()` turns a transient `EIO` — or an iCloud placeholder whose bytes haven't been downloaded — into an empty AST that is then rendered over the real page.
+  The sidecar is rebuilt to match, so the hashes agree and no later scan can detect the loss.
+  That was a P0 (`outl-actions::journal::apply::mutate_page_md`, `outl-actions::outline`, the TUI's page load).
+
 ## What this crate does NOT own
 
 - The op log → `outl-core`
@@ -132,11 +141,30 @@ When an external save lands on `pages/foo.md`:
 | Level | Confidence | Criteria | Action |
 |-------|-----------|----------|--------|
 | 1 | High | `content_hash` exact match, same parent (by hash) or identical structure | Preserve ID, emit `Move` if position changed |
-| 2 | Medium | Normalized Levenshtein similarity > 80%, same parent OR position within ±2 lines | Preserve ID, emit `Edit` (+ `Move` if needed), log warning |
+| 1.5 | High | Equal block counts + same DFS index + same indent + **same parent** | Preserve ID, emit `Edit` (+ `Move` if needed) |
+| 2 | Medium | Normalized Levenshtein similarity > 80% against `SidecarBlock::text`, same parent OR DFS index within ±2 | Preserve ID, emit `Edit` (+ `Move` if needed), log warning |
 | 3 | Low / no match | Falls through | New ULID for new block; old block becomes `Delete` (`Move` to `TRASH_ROOT`); record in `.outl/orphans.log` |
 
 **Hard rule:** a block that drops to level 3 must appear in `orphans.log` before being deleted.
 **Silent deletion is a P0 bug.**
+
+**Level 1.5 compares parents, not just indents.**
+Indent is depth, not identity: two blocks at the same depth can live in different subtrees, and matching on indent alone handed one subtree's id — plus its `((blk-…))` handle — to a block in another.
+Parents are compared through the ids matching already resolved (DFS preorder guarantees a parent is resolved before its children), so an unresolved parent counts as disagreement — the conservative answer.
+A rejection here isn't fatal: level 2 can still recover the id on similarity, and it warns when it does so across parents.
+
+**Level 2 exists for one specific save**: the user edits the `.md` outside outl and, in a single write, rewords one block *and* adds or removes another.
+The counts disagree, level 1.5 is out of play, and before level 2 every reworded block minted a fresh ULID while the old id went to the trash with every reference to it dangling.
+That is the *common* external edit, not an exotic one.
+Implementation notes:
+
+- Similarity runs against `SidecarBlock::text` via `strsim::normalized_levenshtein`.
+  An entry with no recorded text — written before the field existed, or by a peer binary that doesn't know it — doesn't fire level 2, so behaviour degrades to exactly what shipped before, never worse.
+  **The gate is the empty string, never the version number** (see below).
+- A length-ratio pre-filter (`min_len / max_len <= 0.8` ⇒ reject) skips the O(n·m) DP for pairs that could not have cleared the threshold anyway.
+  It's exact, so it can never discard a real match.
+- Blocks over 4096 chars are skipped: at that size it's a pasted document, not a reworded sentence.
+- The match is `MatchLevel::Medium`, which `diff_to_ops` already treats like level 1 for id **and** `ref_handle` preservation (invariant 6).
 
 ## Sidecar format
 
@@ -155,16 +183,53 @@ Full spec in [`docs/markdown-format.md`](../../docs/markdown-format.md#the-outl-
       "line": 1,
       "indent": 0,
       "content_hash": "sha256:...",
-      "ref_handle": "blk-r6s4a1"
+      "ref_handle": "blk-r6s4a1",
+      "text": "decide the storage backend"
     }
   ]
 }
 ```
 
+Build entries through **`SidecarBlock::from_text(id, line, indent, text)`** so hash, handle, and stored text always describe the same revision.
+Only a caller preserving a previous (expanded) handle should build the literal and override `ref_handle`.
+
 - `content_hash` = SHA-256 of the **block's textual content** (not children).
 - `ref_handle` = short user-typeable handle for `((blk-XXXXXX))`. v1 sidecars (no field) load fine — the handle is backfilled in memory via `derive_ref_handle`.
-  The next write persists v2.
+  The next write persists the current version.
   On collision, expansion may produce a 7+ char form (see `derive_ref_handle` above).
+- `text` = the block's content **as of the last sync**, verbatim and untruncated — the "before" side of level-2 matching.
+  Optional and additive: a payload without the field loads fine with an empty string and level 2 skips those blocks.
+  There is nothing to backfill it from, since the whole value of the field is holding the text as it was *before* the `.md` changed.
+  **Trade-off, decided deliberately:** this duplicates the `.md` body inside the sidecar.
+  A truncated prefix (or prefix + length) would be smaller, but it makes two blocks sharing a long opening look identical.
+  A level-2 false positive then hands one block's id *and its `ref_handle`* to a different block — the exact corruption matching exists to prevent.
+  The sidecar is a rebuildable cache sitting next to the file it describes, so the cost is disk, and the alternative's cost is user trust.
+
+### Sidecar versioning (both directions)
+
+`version` answers one question for a reader that did not write the file: *can I still trust the fields I know?*
+Canonical spec: [`docs/markdown-format.md` → Sidecar versioning](../../docs/markdown-format.md#sidecar-versioning).
+The short version, because getting it wrong is a P0:
+
+- **Backward** (new binary, old payload) — always supported down to `MIN_READABLE_SIDECAR_VERSION`.
+  Never drop a read path.
+- **Forward** (already-shipped binary, new payload) — every released binary rejects `version > its own SIDECAR_VERSION`, and you cannot patch the copies already on users' machines.
+  An unreadable sidecar used to look exactly like a missing one downstream: no old blocks → every block at level 3 → fresh ULID each while the old ids stayed in the tree.
+  One boot of a stale device on a shared iCloud folder duplicated the page and rotated every `((blk-…))` handle, and the newer binary did the same in reverse next boot.
+  TestFlight lag and closed laptops mean the fleet is *always* mixed.
+
+Therefore:
+
+1. **Adding an optional field does NOT bump `SIDECAR_VERSION`.**
+   `#[serde(default)]`, and detect the feature by **field presence, never by version number**.
+   `pipeline_version` and `text` are both additive and both live at version `2`.
+2. **Bump only when an older reader would _misread_ the file** — an existing field changes meaning, changes encoding, or disappears.
+   Then `UnsupportedVersion` on the old side is the *desired* outcome.
+3. A bump is a coordinated release with a migration note and an `outl doctor` path, not a patch.
+
+`reconcile_md` **propagates** `UnsupportedVersion` rather than treating the page as sidecar-less — a newer peer's file is not corruption, and rebuilding over it is what turns a version mismatch into duplicated blocks.
+Unparseable JSON still rebuilds (never block on a corrupt sidecar).
+Pinned by `tests/mixed_version_sidecar.rs`, which models the shipped v2 binary explicitly and runs it against the current one over the same files.
 
 **Sidecar is not a sync surface.**
 UI state that must converge between devices — fold flags, pinned, selection, anything user-meaningful — goes through the op log (`outl-core`), not here.
@@ -228,14 +293,16 @@ src/
 ├── tag.rs          # text_contains_tag — boundary-correct #tag predicate over the tokenizer
 ├── view.rs         # render helpers consumed by UIs
 ├── asset.rs        # ASSETS_DIR, hash_bytes, asset_rel_path, is_asset_link (pure; no filesystem)
-└── atomic.rs       # crash-safe write_atomic
+└── atomic.rs       # crash-safe write_atomic + its read counterpart read_for_rewrite
 
 tests/
 ├── roundtrip.rs              # render(parse(md)) == md (property test)
 ├── external_edit.rs          # light external edit preserves IDs
+├── edit_and_delete.rs        # end-to-end: one save rewords a block AND adds/removes another (level 2)
 ├── duplicate_block.rs        # Ctrl+D in vscode → first keeps ID, second gets new
 ├── identical_blocks_swap.rs  # two identical blocks change parents
-└── heavy_edit.rs             # >20% content change → level 2 warning
+├── heavy_edit.rs             # >20% content change → level 2 warning
+└── mixed_version_sidecar.rs  # shipped v2 binary + current one over one folder: no dup, no handle rotation
 
 benches/
 └── block_index.rs            # resolve / search_block_text on 100k blocks
@@ -276,7 +343,12 @@ Today's numbers (M-series laptop):
 - ❌ Match on similarity > 80% across **different parents** without warning
 - ❌ Skip the property test in `roundtrip.rs`
 - ❌ Use a different hash function in sidecar read vs write
-- ❌ Drop sidecar version 1 support when adding version 2 (always backward read)
+- ❌ Drop an older sidecar version's read path when adding a new one (always backward read)
+- ❌ Bump `SIDECAR_VERSION` for a field that is merely **additive**.
+  Every already-shipped binary refuses the file, and downstream a refused sidecar reads as a missing one: fresh ULID per block, every ref handle rotated, duplicates on both sides of the sync.
+  Use `#[serde(default)]` + presence-based detection instead
+- ❌ Gate a feature on the sidecar version number when the field's presence already answers the question
+- ❌ Build a `SidecarBlock` literal when `SidecarBlock::from_text` would do — that's how `content_hash` and `text` end up describing different revisions
 - ❌ Block on a corrupt sidecar — fall back to "regenerate from op log" via `outl doctor`
 
 ## Reuse-first
@@ -290,7 +362,7 @@ the recent `line_col_to_char` addition made the pair complete so `outl-tui::Edit
 **Inverses, encoders/decoders, and parser/renderer pairs always ship together** so the next consumer doesn't have to re-derive half of one.
 
 If you find a client (`outl-tui`, `outl-mobile`, `outl-actions`) hand-rolling something that's already here, move the call to your API and delete the duplicate.
-The root [`CLAUDE.md`](../../CLAUDE.md#reuse-first-no-parallel-implementations) documents this at the workspace level.
+The root [`CLAUDE.md`](../../CLAUDE.md#reuse-first) documents this at the workspace level, in full at [`docs/contributing.md`](../../docs/contributing.md#reuse-first-no-parallel-implementations).
 
 ## When you're done
 

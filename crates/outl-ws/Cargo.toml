@@ -17,6 +17,7 @@ path = "src/lib.rs"
 [dependencies]
 outl-core.workspace = true
 outl-actions.workspace = true
+outl-md.workspace = true
 
 anyhow.workspace = true
 chrono.workspace = true

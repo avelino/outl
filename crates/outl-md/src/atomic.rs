@@ -11,6 +11,10 @@
 //!
 //! On Windows the same `std::fs::rename` works on the same volume
 //! (which `.outl/` always is).
+//!
+//! The read counterpart is [`read_for_rewrite`] — see its docs for why
+//! `read_to_string(..).unwrap_or_default()` is never acceptable on a
+//! path you are about to write back.
 
 use std::fs;
 use std::io;
@@ -62,7 +66,47 @@ pub fn write_atomic<P: AsRef<Path>>(path: P, contents: &[u8]) -> io::Result<()> 
         let _ = fs::remove_file(&tmp);
         return Err(e);
     }
+
+    // `rename` is atomic with respect to readers, but the *directory
+    // entry* it creates is itself only durable once the directory is
+    // fsynced. Without this, a power loss right after the rename can
+    // leave the old file (or, on some filesystems, an empty one) even
+    // though `sync_all` on the temp succeeded. APFS and ext4's default
+    // `data=ordered` usually paper over it; other filesystems don't.
+    //
+    // Best-effort on purpose: some platforms (notably Windows) refuse
+    // to open a directory as a file, and failing the whole write there
+    // would be worse than the durability gap we're closing.
+    if let Ok(dir) = fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
     Ok(())
+}
+
+/// Read a file that is about to be **parsed, mutated, and written back**.
+///
+/// A missing file is the one legitimate "empty" case — a page that does
+/// not exist yet renders from an empty AST. Every other error
+/// (`PermissionDenied`, `Interrupted`, a raw `EIO`, an iCloud placeholder
+/// whose contents have not been materialised locally yet) is propagated.
+///
+/// This exists because `fs::read_to_string(p).unwrap_or_default()` on a
+/// rewrite path is a silent-data-loss bug: the read fails, the caller
+/// parses `""` into an empty AST, renders it, and [`write_atomic`]
+/// faithfully replaces a full page with nothing. The sidecar is then
+/// rebuilt to match, so the hashes agree and no later scan can tell that
+/// the page was ever populated. Under iCloud — where a not-yet-downloaded
+/// file is exactly this kind of read failure — it is not a rare edge case.
+///
+/// Callers that genuinely want "absent or unreadable both mean empty"
+/// must say so explicitly at the call site, and must not be on a path
+/// that writes the result back.
+pub fn read_for_rewrite<P: AsRef<Path>>(path: P) -> io::Result<String> {
+    match fs::read_to_string(path.as_ref()) {
+        Ok(s) => Ok(s),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e),
+    }
 }
 
 /// `path` plus a `.tmp` suffix on the filename.
@@ -110,5 +154,42 @@ mod tests {
         let path = dir.path().join("deep").join("nested").join("x.md");
         write_atomic(&path, b"hi").unwrap();
         assert!(path.exists());
+    }
+
+    #[test]
+    fn read_for_rewrite_returns_contents() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("foo.md");
+        fs::write(&path, "- a\n").unwrap();
+        assert_eq!(read_for_rewrite(&path).unwrap(), "- a\n");
+    }
+
+    #[test]
+    fn read_for_rewrite_missing_file_is_empty() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("nope.md");
+        assert_eq!(read_for_rewrite(&path).unwrap(), "");
+    }
+
+    /// The whole point: a read that fails for any reason *other* than
+    /// "file isn't there" must not be reported as an empty page, because
+    /// the caller is about to render that emptiness back over the file.
+    #[test]
+    fn read_for_rewrite_propagates_non_notfound_errors() {
+        let dir = TempDir::new().unwrap();
+        // A directory is readable metadata-wise but `read_to_string`
+        // fails on it — a stand-in for any non-NotFound I/O failure
+        // that doesn't need root or a fault-injection layer to trigger.
+        let err = read_for_rewrite(dir.path()).expect_err("reading a directory must fail");
+        assert_ne!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn read_for_rewrite_rejects_invalid_utf8() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("bad.md");
+        fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
+        let err = read_for_rewrite(&path).expect_err("invalid UTF-8 must not read as empty");
+        assert_ne!(err.kind(), io::ErrorKind::NotFound);
     }
 }

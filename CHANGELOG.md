@@ -5,7 +5,97 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ## [Unreleased]
 
+## [0.11.0]
+
+### Changed
+
+- **BREAKING — `DeviceStore::actor_for_workspace` / `set_actor_for_workspace` become `actor_for_instance`.**
+  The write actor is now keyed by `WorkspaceId` **plus the canonical root path**, so a copied workspace directory forks its own actor instead of sharing an op log, while a moved or renamed one keeps the actor it had.
+
+- **BREAKING — a workspace created before the claim marker forks a new actor on every device, once.**
+  One extra `ops-<actor>.jsonl` per device; the legacy log stays on disk and is still merged on read, so nothing is lost.
+  This is the cost of closing the shared-actor hole below, and it is paid once.
+
+- **BREAKING — reads that used to return a short or empty result now return an error.**
+  `read_page_outline`, `Storage::ops_since`, `ops_for_actor` and `ops_since_per_actor`.
+  A short read is indistinguishable from a healthy one, which is exactly how ops went missing without anything surfacing.
+
+- **BREAKING — `SidecarBlock` gains a `text` field and `ActionError` gains two variants.**
+  Both are `pub` and neither type is `#[non_exhaustive]`, so a literal `SidecarBlock { .. }` or an exhaustive `match` on `ActionError` downstream needs updating.
+  Build sidecar entries through `SidecarBlock::from_text`, which keeps hash, handle and stored text derived from one revision.
+
+### Fixed
+
+- **Four paths that could lose your content without saying so.**
+  All four were silent by construction: nothing errored, nothing appeared in a log, and the state left on disk looked healthy to every consistency check outl had.
+  That is the specific thing that makes a notes app untrustworthy — you find out weeks later, from a page that is now blank.
+  1. **A failed read could overwrite a page with nothing.**
+     Every read-parse-mutate-write path opened the `.md` with `read_to_string(..).unwrap_or_default()`.
+     A read that failed for any reason other than "the file isn't there" — a permissions change, a raw `EIO`, invalid UTF-8, or an **iCloud placeholder whose bytes hadn't downloaded to this device yet** — parsed as an empty document, rendered, and atomically replaced the page with nothing.
+     The sidecar was then rebuilt from that same empty parse, so its hashes agreed with the file and no later scan could tell the page had ever had content.
+     Reads on a rewrite path now go through `outl_md::read_for_rewrite`, where a missing file is empty and **every other I/O error propagates**.
+     The TUI additionally refuses to save a page it could not read, and says so.
+  2. **The desktop, mobile and undo paths reconciled with the orphan log switched off.**
+     `outl-md`'s hard rule is that a block dropping to matching level 3 is recorded in `orphans.log` *before* it is moved to the trash.
+     Four call sites passed `None` for that log, so on those clients the deletion happened with no record anywhere — the exact case a half-synced `.md` from iCloud produces at boot.
+     `outl_actions::orphans_log_path` is now the one owner of that path and every caller passes it.
+  3. **One unreadable line truncated the whole op log.**
+     The sequential replay hit an I/O error and `break`, discarding every op *after* it.
+     A transient failure on line 5,000 of 200,000 booted a workspace containing the first 5,000 ops and carried on as if that were everything.
+     It now skips the damaged line and continues (with a cap on consecutive failures), matching how a corrupt or non-UTF8 line was already handled two lines below.
+  4. **A snapshot could record an op it never applied.**
+     The index-driven reads dropped an op the offset index listed but disk wouldn't return.
+     Because the next snapshot's cutoff is derived from that same index, the omission was written down as "already folded in" — and no later boot would ever replay it again.
+     Permanent loss, with the bytes still on disk.
+     Those reads now fail with `MissingOp` and snapshot boot degrades to a full replay, which re-reads the file and recovers everything around the damage.
+
+  Pinned by regression tests, including fault injection — there were previously **no** tests that forced an I/O read to fail, so all four passed a green `/check`.
+
+- **`.md` and sidecar writes now fsync the parent directory after the rename.**
+  `rename` is atomic for readers, but the directory entry it creates is only durable once the directory itself is synced.
+  APFS and ext4's default `data=ordered` usually paper over this; other filesystems don't.
+
+- **External edits no longer break block references in the common case.**
+  Editing a `.md` outside outl in a way that both **rewords one block and adds or removes another** made the block counts disagree, which disabled the positional fallback and sent every reworded block to matching level 3: fresh ULID, old id trashed, and every `((blk-…))` pointing at it dangling.
+  That is the *ordinary* external edit, not an exotic one.
+  Level 2 of the documented matching algorithm is now implemented (normalized Levenshtein > 0.8 against the previous text, which the sidecar stores as of v3), so the id **and** its ref handle survive.
+  The positional fallback also compares real parents instead of indent depth — same depth in a different subtree used to hand one subtree's id to another block.
+
+- **The actor id no longer lives inside the workspace.**
+  "One `ops-<actor>.jsonl` per device, never shared" is what makes last-write-wins-per-file harmless, and it was only true by accident: the id sat in `<root>/.outl/config.toml`, and the only transport that didn't replicate it is iCloud (which drops dot-prefixed paths).
+  On Syncthing, Dropbox, NFS, a shared volume or a `git clone`, both devices read the same actor and appended to one file — `flock(2)` is advisory and machine-local, so each acquired its lock successfully and ops vanished with nothing raised.
+  The write actor is now resolved from a device-local store outside the workspace, keyed by `WorkspaceId`, with a migration that keeps an existing device on its existing op file.
+
 ### Added
+
+- **Local backups (`outl backup init` / `now` / `list` / `restore` / `status`).**
+  The op log is append-only and every write is atomic, but that only covers the failures outl was *designed* for.
+  It had no answer for a bug in a projection path, an `outl import` aimed at a workspace that already had pages, a sync tool resolving a conflict the wrong way, or a page deleted with the app then closed (undo is in-memory and dies with the process).
+  For all of those, the recovery story was "reconstruct it by hand from `ops-*.jsonl`".
+  Git-backed — the `git` binary, not `libgit2`, so nothing new reaches a dependent's `cargo deny`.
+  Captures `ops/`, `pages/`, `journals/`, `templates/`, `assets/` and `.outl/config.toml`; excludes the caches the next boot rebuilds.
+  **`restore` never writes in place.**
+  It extracts to a directory you name — and refuses one inside the workspace — so you diff and choose what to bring back; a recovery tool that overwrites the live op log is the last thing you want when something has already gone wrong.
+  `[backup] enabled` defaults **on**, for the same reason reminders do: the failures it catches are ones you discover *after* the moment you could have turned it on.
+
+  **The repository is device-local and lives outside the workspace**, at `<device-dir>/backups/<slug>-<hash>.git` with the workspace passed as `--work-tree`, so **nothing is written inside the workspace** — no `.git/`, no pointer file.
+  That single decision closes two problems at once: a `.git` inside the workspace would ride Syncthing / Dropbox / NFS (object store, `index`, `HEAD`, `index.lock` over eventual sync — the same class of bug the actor-id move exists to fix), and a workspace you already keep in *your own* git repo would have had outl staging over your index, committing to your branch, running your hooks, and tripping your `commit.gpgsign` into a Touch ID prompt per snapshot.
+  Now outl's snapshots use their own git dir, own branch, own identity (`outl backup <backup@outl.app>`), hooks disabled, signing off.
+  Your repo is never touched, and backups keep working for the people who version their notes — the ones with the most to lose.
+  **A `.gitignore` cannot silently drop your data**: `ops/`, `pages/`, `journals/`, `templates/`, `assets/` and `.outl/config.toml` are force-staged, and every snapshot is **verified** afterwards — an op log missing from the commit is an error, not a green checkmark.
+  **The automatic pass is real**, not just a config key: a background thread snapshots on the `[backup] interval_minutes` floor (derived from git itself, no state file), wired into the TUI today.
+  `docs/config.md` names exactly which clients run it, rather than implying all of them do.
+
+
+- **`outl doctor` now checks what it couldn't, and `--repair` fixes what is safe to fix.**
+  New checks: corrupt `.jsonl` lines (named by line number, byte offset and reason — previously the one gap the code itself admitted to), snapshot integrity, offset-index coherence, blocks sitting in the trash (previously invisible to the user entirely), sync-conflict copies from iCloud / Syncthing / Dropbox, and ops the materialized tree never applied.
+  `--repair` re-projects a stale `.md` from the op log, rebuilds a missing sidecar, and drops a corrupt snapshot — nothing else.
+  It never deletes a `.md`, never writes into `ops/`, never trashes a block, and copies every file it touches to `.outl/repair-backup/<timestamp>/` first.
+
+- **The Roam importer now tells you what it didn't bring over.**
+  It reports `pages: N/M` and `blocks: N/M` against counts taken from the source JSON, subtracting only the reductions it can name (blocks lifted into page properties, journals merged, pages skipped) and shouting when the books don't balance.
+  Four silent losses are now counted or refused: a `{{[[TODO]]}}` in the middle of a block (which becomes literal text and loses its task state — it is *counted*, aggregated into one warning rather than thousands), a page with an empty title (which used to be dropped along with its entire subtree, with no record), and re-importing into a populated workspace, which **overwrote the `.md` files and reconciled the result — destroying anything written in outl since the last import**.
+  That now aborts and asks for `--force`.
 
 - **`remind::` — a block-level reminder rule that turns a TODO into an OS notification, on desktop and mobile (issue #63).**
   A `[[2026-12-12]]` was only ever good for **recall**: it put a backlink on that day's journal and then waited for you to open the app.

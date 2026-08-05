@@ -50,7 +50,15 @@ fn full_workspace_lifecycle() {
     assert!(sidecar_path.exists(), "sidecar must exist after serve");
     let sidecar_text = fs::read_to_string(&sidecar_path).unwrap();
     let sidecar: serde_json::Value = serde_json::from_str(&sidecar_text).unwrap();
-    assert_eq!(sidecar["version"], 2);
+    // Track the constant, not a literal: a `SIDECAR_VERSION` bump in
+    // `outl-md` should not fail this test for the wrong reason. What
+    // matters here is that `serve --once` stamps the version this build
+    // actually writes.
+    assert_eq!(
+        sidecar["version"],
+        outl_md::sidecar::SIDECAR_VERSION,
+        "serve must stamp the current sidecar version"
+    );
     let blocks = sidecar["blocks"].as_array().expect("blocks array");
     // Two top-level + one nested. `priority:: high` is a property, not a block.
     assert_eq!(blocks.len(), 3, "expected 3 blocks in sidecar");

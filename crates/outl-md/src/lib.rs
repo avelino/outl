@@ -33,7 +33,7 @@ pub mod view;
 pub mod wikilink;
 
 pub use asset::{asset_rel_path, hash_bytes, is_asset_link, is_safe_asset_name, ASSETS_DIR};
-pub use atomic::write_atomic;
+pub use atomic::{read_for_rewrite, write_atomic};
 pub use block_index::{BlockEntry, BlockIndex, BlockReference};
 pub use diff::{diff_to_ops, DiffPlan};
 pub use emoji::{is_valid_shortcode, search as search_emoji, shortcode_to_unicode, EmojiHit};

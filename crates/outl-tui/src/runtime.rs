@@ -111,6 +111,21 @@ pub fn run_with_theme_override(path: &Path, theme_override: Option<&str>) -> Res
     // before the first `clock::today()` builds the initial journal view
     // (issue #107). No `[calendar] timezone` → OS local, as before.
     outl_actions::clock::init(global_cfg.calendar.timezone.as_deref());
+    // Automatic local backups (`[backup]`, on by default). A detached
+    // background thread, never the event loop: a snapshot walks the
+    // whole workspace and forks `git`, so on a large graph it is
+    // seconds — nothing that may sit between a keystroke and its frame.
+    // It also creates the repository on first run, which is safe
+    // precisely because that repository lives outside the workspace
+    // (`outl_actions::backup`), so it can't turn the user's notes folder
+    // into a git repo behind their back. Missing a snapshot at quit is
+    // deliberate: the interval floor is read back out of git, so the
+    // next launch takes it.
+    outl_actions::backup::spawn_auto_pass(
+        workspace_root.clone(),
+        global_cfg.backup.enabled,
+        global_cfg.backup.interval_minutes,
+    );
     let theme = resolve_theme(theme_override, &cfg, &global_cfg);
     let sync_cfg = global_cfg.sync.clone();
     // Backlinks list direction (issue #142). Read once at boot; the
@@ -301,54 +316,51 @@ fn open_workspace(
     let lock = outl_core::WorkspaceLock::acquire(root)
         .with_context(|| format!("could not acquire workspace lock at {}", root.display()))?;
 
-    let dot_outl = root.join(".outl");
-    let cfg_path = dot_outl.join("config.toml");
-    let cfg = match fs::read_to_string(&cfg_path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && dot_outl.is_dir() => {
-            // The `.outl/` dir exists (real workspace) but there's no
-            // per-workspace `config.toml`. That's a workspace created by a GUI
-            // client (desktop / mobile) or by P2P sync, which only seed
-            // `.outl/workspace-id` and keep the device actor elsewhere. Seed a
-            // config with a fresh actor for this device so the TUI can open it
-            // instead of demanding `outl init`. Persisted, so it's a one-time
-            // cost and a re-open reuses the same actor.
-            let seed = format!("[workspace]\nactor_id = \"{}\"\n", ActorId::new().0);
-            fs::write(&cfg_path, &seed)
-                .with_context(|| format!("seeding config.toml at {}", cfg_path.display()))?;
-            seed
-        }
-        Err(e) => {
-            return Err(e).with_context(|| {
-                format!(
-                    "no outl workspace at {} — run `outl init` first",
-                    root.display()
-                )
-            });
-        }
-    };
-    let cfg: toml::Value = toml::from_str(&cfg).context("parsing config.toml")?;
-    let actor_str = cfg
-        .get("workspace")
-        .and_then(|w| w.get("actor_id"))
-        .and_then(|a| a.as_str())
-        .context("workspace.actor_id missing from config.toml")?;
-    let actor_ulid = ulid::Ulid::from_string(actor_str).context("actor_id is not a valid ULID")?;
-    let config_actor = ActorId(actor_ulid);
+    let paths = outl_ws::layout::Paths::at(root.to_path_buf());
+    if !paths.dot_outl.is_dir() {
+        anyhow::bail!(
+            "no outl workspace at {} — run `outl init` first",
+            root.display()
+        );
+    }
+    // `read_or_init_config` seeds a config when the `.outl/` dir exists
+    // but `config.toml` doesn't — a workspace created by a GUI client or
+    // by P2P sync, which only seed `.outl/workspace-id`. Going through
+    // `outl-ws` instead of parsing the TOML here is what keeps the TUI
+    // and the CLI on one schema (the hand-rolled seed used to omit
+    // `created_at`, which `outl-ws` then refused to deserialize).
+    let cfg = outl_ws::layout::read_or_init_config(&paths)?;
+    // Which actor this DEVICE owns. Read from the device store, never
+    // from `.outl/config.toml`: that file rides the file-sync surface,
+    // and two devices reading one actor id is silent op loss. See
+    // `outl_ws::actor`.
+    let device_actor = outl_ws::actor::resolve_device_actor(
+        &paths,
+        &cfg,
+        &outl_core::device::DeviceStore::open_default(),
+    )?;
+    // `outl_ws::layout::Config` models only the `[workspace]` section;
+    // `resolve_theme` reads the optional per-workspace `[theme]` off the
+    // raw document. A malformed file degrades to "no override" — the
+    // theme falls back to the global config, never a failed open.
+    let cfg_raw: toml::Value = fs::read_to_string(&paths.config)
+        .ok()
+        .and_then(|s| toml::from_str(&s).ok())
+        .unwrap_or_else(|| toml::Value::Table(Default::default()));
 
-    let ops_dir = root.join("ops");
+    let ops_dir = paths.ops.clone();
     fs::create_dir_all(&ops_dir)
         .with_context(|| format!("creating ops dir at {}", ops_dir.display()))?;
 
     // Exclusive per-actor write lock. Falls back to an ephemeral
-    // actor when another `outl` already owns the config-default one
-    // — that's how a TUI + MCP server share the same workspace
-    // without racing on `ops-<config_actor>.jsonl`.
-    let (actor_lock, actor) = outl_core::resolve_write_actor(&ops_dir, config_actor)
+    // actor when another `outl` on this machine already owns the device
+    // actor — that's how a TUI + MCP server share the same workspace
+    // without racing on `ops-<device_actor>.jsonl`.
+    let (actor_lock, actor) = outl_core::resolve_write_actor(&ops_dir, device_actor)
         .with_context(|| format!("acquiring per-actor write lock at {}", ops_dir.display()))?;
-    if actor != config_actor {
+    if actor != device_actor {
         tracing::info!(
-            "another outl process owns the config actor {config_actor}; this TUI writes under ephemeral actor {actor}"
+            "another outl process owns the device actor {device_actor}; this TUI writes under ephemeral actor {actor}"
         );
     }
 
@@ -377,7 +389,7 @@ fn open_workspace(
     // overrides them.
     let snap_cfg = outl_config::load().snapshot;
     ws.set_snapshot_policy(snap_cfg.enabled, snap_cfg.op_threshold);
-    Ok((ws, actor, cfg, lock, actor_lock))
+    Ok((ws, actor, cfg_raw, lock, actor_lock))
 }
 
 // Private startup orchestrator — the "too many arguments" ergonomics

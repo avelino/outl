@@ -1,0 +1,421 @@
+//! `outl doctor --repair` — the narrow set of fixes that cannot lose
+//! data.
+//!
+//! ## What repair is allowed to touch
+//!
+//! Exactly three things, all of them *projections* or *caches*:
+//!
+//! 1. Re-project a page's `.md` (+ its sidecar) from the op log, when
+//!    the file on disk is absent or is a stale-but-faithful projection.
+//!    The op log is the source of truth (root `CLAUDE.md` invariant 1);
+//!    a `.md` that disagrees with it is by definition the wrong side.
+//! 2. Rebuild a missing sidecar for a `.md` whose bytes already equal
+//!    what the tree renders.
+//! 3. Delete a snapshot we read end-to-end and then failed to decode. It
+//!    is a pure boot cache; the next boot rebuilds it from a full
+//!    replay. A snapshot that could not be *read* is not this — see
+//!    `oplog::check_snapshots`.
+//!
+//! Plus one piece of housekeeping over its own output: pruning stale
+//! `.outl/repair-backup/` generations (below).
+//!
+//! ## What gates 1 and 2
+//!
+//! Both write a projection **rendered from the materialized tree**, and
+//! the tree is only ever as complete as the op log that built it. When
+//! the doctor found the log damaged, `collect_internal` clears those two
+//! lists before this pass ever sees them, so nothing here can overwrite
+//! a good `.md` with the render of a truncated replay. See
+//! `oplog::OpLogHealth`.
+//!
+//! ## What repair will never do
+//!
+//! - Delete a `.md`. Ever. Even an orphaned one.
+//! - Touch `ops/` — not a byte, not a file, not a line. A corrupt line
+//!   in the op log is *reported*, never rewritten: we cannot know what
+//!   the lost op said, and a "repair" that drops it would silently
+//!   rewrite history on one device and diverge it from its peers.
+//! - Move anything to the trash, or out of it.
+//! - Merge or delete a sync-conflict copy. Choosing a winner between
+//!   two forks of a page is the user's call.
+//!
+//! ## Reversibility
+//!
+//! Every file repair touches is copied to
+//! `.outl/repair-backup/<timestamp>/<relative path>` **before** the
+//! write. Restoring is a plain `cp` back. The backup dir is under
+//! `.outl/` so it never becomes a page.
+//!
+//! ## Why the backups are pruned
+//!
+//! `.outl/` is dot-prefixed, so iCloud Documents drops it and iroh never
+//! ships it — but Syncthing, Dropbox and a shared network volume all
+//! replicate it happily. An unbounded pile of generations there is a
+//! full copy of every `.md` a repair ever touched, forever, on every
+//! peer. On the 66k-block graphs this command exists for, a handful of
+//! `--repair` runs is gigabytes.
+//!
+//! So the pruning follows the same shape `.outl/reminders-fired.json`
+//! already uses for its device-local state: keep it in `.outl/`, and put
+//! a TTL on it. Two guards, and a generation has to fail **both** before
+//! it goes: it must be older than [`BACKUP_MIN_AGE_DAYS`] *and* outside
+//! the newest [`BACKUP_KEEP`]. Deleting a user's only undo is worse than
+//! keeping a stale one, so recency wins over the age rule and every
+//! prune is reported as its own [`RepairAction`].
+
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
+
+use outl_core::id::NodeId;
+use outl_core::workspace::Workspace;
+use serde::Serialize;
+
+/// How many `--repair` backup generations always survive a prune,
+/// however old they are.
+const BACKUP_KEEP: usize = 10;
+
+/// Minimum age before a backup generation is even a prune candidate.
+const BACKUP_MIN_AGE_DAYS: u64 = 14;
+
+/// What the repair pass is allowed to act on, collected by the checks.
+#[derive(Debug, Default)]
+pub(super) struct Plan {
+    /// Pages whose `.md` is missing or a stale faithful projection.
+    pub reproject: Vec<(NodeId, PathBuf)>,
+    /// Pages whose `.md` already matches the tree but has no sidecar.
+    pub rebuild_sidecar: Vec<(NodeId, PathBuf)>,
+    /// Snapshot files that failed to decode.
+    pub corrupt_snapshots: Vec<PathBuf>,
+}
+
+impl Plan {
+    /// Whether there is anything at all for `--repair` to do.
+    pub fn is_empty(&self) -> bool {
+        self.reproject.is_empty()
+            && self.rebuild_sidecar.is_empty()
+            && self.corrupt_snapshots.is_empty()
+    }
+
+    /// Human-readable lines describing what a repair *would* do. Printed
+    /// both in the dry (default) mode and before acting under `--repair`,
+    /// so the two views never drift.
+    pub fn describe(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for (_, path) in &self.reproject {
+            out.push(format!(
+                "re-project {} from the op log (backup first)",
+                path.display()
+            ));
+        }
+        for (_, path) in &self.rebuild_sidecar {
+            out.push(format!(
+                "rebuild the sidecar next to {} (content unchanged)",
+                path.display()
+            ));
+        }
+        for path in &self.corrupt_snapshots {
+            out.push(format!(
+                "delete corrupt snapshot {} (pure cache, rebuilt on next boot)",
+                path.display()
+            ));
+        }
+        out
+    }
+}
+
+/// One repair attempt, as reported to the user and to `--json`.
+#[derive(Debug, Clone, Serialize)]
+pub struct RepairAction {
+    /// `reproject` | `rebuild_sidecar` | `delete_snapshot`.
+    pub kind: String,
+    /// Path the action targeted.
+    pub path: String,
+    /// Whether it succeeded.
+    pub ok: bool,
+    /// Failure reason, or the backup path on success.
+    pub detail: String,
+}
+
+/// Outcome of a `--repair` pass.
+#[derive(Debug, Clone, Serialize)]
+pub struct RepairReport {
+    /// Directory every touched file was copied into first.
+    pub backup_dir: String,
+    /// What was attempted, in execution order.
+    pub actions: Vec<RepairAction>,
+    /// How many actions succeeded.
+    pub repaired: usize,
+    /// How many actions failed.
+    pub failed: usize,
+}
+
+/// Execute `plan`.
+///
+/// Never returns `Err`: a failure on one file is recorded in its
+/// [`RepairAction`] and the pass continues, because a permission error
+/// on one page must not block re-projecting the other 200.
+pub(super) fn run(ws: &Workspace, root: &Path, plan: &Plan) -> RepairReport {
+    let stamp = chrono::Local::now().format("%Y%m%dT%H%M%S").to_string();
+    let backup_dir = root.join(".outl").join("repair-backup").join(&stamp);
+    let mut actions: Vec<RepairAction> = Vec::new();
+
+    for (page_root, path) in &plan.reproject {
+        actions.push(reproject(ws, root, &backup_dir, *page_root, path));
+    }
+    for (page_root, path) in &plan.rebuild_sidecar {
+        actions.push(rebuild_sidecar(ws, root, &backup_dir, *page_root, path));
+    }
+    for path in &plan.corrupt_snapshots {
+        actions.push(delete_snapshot(root, &backup_dir, path));
+    }
+    actions.extend(prune_backups(root));
+
+    let repaired = actions.iter().filter(|a| a.ok).count();
+    let failed = actions.len() - repaired;
+    RepairReport {
+        backup_dir: backup_dir.display().to_string(),
+        actions,
+        repaired,
+        failed,
+    }
+}
+
+/// Re-project one page, backing up the `.md` + sidecar first.
+///
+/// The write itself is `outl_actions::apply_page_md_with_sidecar_if_stale`,
+/// which re-runs the "is this a faithful projection?" test and refuses to
+/// clobber a `.md` carrying an unreconciled external edit. Reusing it
+/// means the doctor cannot develop its own opinion about when a
+/// projection is safe to overwrite.
+fn reproject(
+    ws: &Workspace,
+    root: &Path,
+    backup_dir: &Path,
+    page_root: NodeId,
+    path: &Path,
+) -> RepairAction {
+    let sidecar = outl_md::sidecar::sidecar_path_for(path);
+    let mut backed_up = Vec::new();
+    for f in [path, sidecar.as_path()] {
+        match backup(root, backup_dir, f) {
+            Ok(Some(dest)) => backed_up.push(dest.display().to_string()),
+            Ok(None) => {}
+            Err(e) => {
+                return RepairAction {
+                    kind: "reproject".to_string(),
+                    path: path.display().to_string(),
+                    ok: false,
+                    detail: format!("backup failed, nothing written: {e}"),
+                }
+            }
+        }
+    }
+
+    match outl_actions::apply_page_md_with_sidecar_if_stale(ws, root, page_root) {
+        Ok(Some(written)) => RepairAction {
+            kind: "reproject".to_string(),
+            path: written.display().to_string(),
+            ok: true,
+            detail: if backed_up.is_empty() {
+                "written (nothing on disk to back up)".to_string()
+            } else {
+                format!("backup: {}", backed_up.join(", "))
+            },
+        },
+        Ok(None) => RepairAction {
+            kind: "reproject".to_string(),
+            path: path.display().to_string(),
+            ok: false,
+            detail: "skipped — the `.md` carries an unreconciled external edit; \
+                     run `outl reconcile` first"
+                .to_string(),
+        },
+        Err(e) => RepairAction {
+            kind: "reproject".to_string(),
+            path: path.display().to_string(),
+            ok: false,
+            detail: format!("{e}"),
+        },
+    }
+}
+
+/// Rebuild the sidecar for a `.md` whose bytes already equal what the
+/// tree renders.
+///
+/// `apply_page_md_with_sidecar_if_stale` is the wrong tool here: it
+/// treats a *missing* sidecar as "not a faithful projection" and
+/// refuses to write, which is right for its own callers (they can't
+/// tell a lost sidecar from an external edit) and wrong for us. So this
+/// re-derives the one fact that makes the write safe — the on-disk
+/// bytes are exactly what the op log renders — and only then calls the
+/// unconditional writer. If the file changed between the check and now,
+/// it bails.
+fn rebuild_sidecar(
+    ws: &Workspace,
+    root: &Path,
+    backup_dir: &Path,
+    page_root: NodeId,
+    path: &Path,
+) -> RepairAction {
+    let action = |ok: bool, detail: String| RepairAction {
+        kind: "rebuild_sidecar".to_string(),
+        path: path.display().to_string(),
+        ok,
+        detail,
+    };
+
+    let disk = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) => return action(false, format!("unreadable: {e}")),
+    };
+    let rendered = outl_actions::render_page_md(ws, page_root);
+    if outl_md::sidecar::file_hash(&disk) != outl_md::sidecar::file_hash(&rendered) {
+        return action(
+            false,
+            "skipped — the `.md` no longer matches the op log; run `outl reconcile`".to_string(),
+        );
+    }
+    let backed_up = match backup(root, backup_dir, path) {
+        Ok(Some(dest)) => dest.display().to_string(),
+        Ok(None) => "nothing to back up".to_string(),
+        Err(e) => return action(false, format!("backup failed, nothing written: {e}")),
+    };
+    match outl_actions::apply_page_md_with_sidecar(ws, root, page_root) {
+        Ok(_) => action(true, format!("backup: {backed_up}")),
+        Err(e) => action(false, format!("{e}")),
+    }
+}
+
+/// Move a corrupt snapshot into the backup dir instead of unlinking it,
+/// so "delete" stays reversible even for a file we believe is garbage.
+fn delete_snapshot(root: &Path, backup_dir: &Path, path: &Path) -> RepairAction {
+    match backup(root, backup_dir, path) {
+        Ok(Some(dest)) => match std::fs::remove_file(path) {
+            Ok(()) => RepairAction {
+                kind: "delete_snapshot".to_string(),
+                path: path.display().to_string(),
+                ok: true,
+                detail: format!("backup: {}", dest.display()),
+            },
+            Err(e) => RepairAction {
+                kind: "delete_snapshot".to_string(),
+                path: path.display().to_string(),
+                ok: false,
+                detail: format!("backed up but could not delete: {e}"),
+            },
+        },
+        Ok(None) => RepairAction {
+            kind: "delete_snapshot".to_string(),
+            path: path.display().to_string(),
+            ok: false,
+            detail: "already gone".to_string(),
+        },
+        Err(e) => RepairAction {
+            kind: "delete_snapshot".to_string(),
+            path: path.display().to_string(),
+            ok: false,
+            detail: format!("backup failed, file left alone: {e}"),
+        },
+    }
+}
+
+/// Which backup generations are past **both** guards.
+///
+/// Split out from the I/O so the policy is testable without backdating a
+/// directory's mtime — which needs a crate this binary does not carry,
+/// and which would make the one test that matters here (a young backup
+/// survives) depend on the filesystem's timestamp resolution.
+///
+/// Sorting is lexicographic on the path, which is exactly chronological
+/// because the stamp is `%Y%m%dT%H%M%S`. The age check still comes off
+/// `mtime` rather than the parsed name: a directory whose name we cannot
+/// interpret must not become a deletion candidate by default, and
+/// `None` (unreadable metadata) keeps it for the same reason. Erring
+/// toward keeping costs disk; erring toward deleting costs the user
+/// their only undo.
+pub(super) fn prunable_backups(
+    generations: &mut [(PathBuf, Option<SystemTime>)],
+    now: SystemTime,
+) -> Vec<PathBuf> {
+    if generations.len() <= BACKUP_KEEP {
+        return Vec::new();
+    }
+    generations.sort();
+    let surplus = generations.len() - BACKUP_KEEP;
+    let ttl = Duration::from_secs(BACKUP_MIN_AGE_DAYS * 24 * 60 * 60);
+    generations
+        .iter()
+        .take(surplus)
+        .filter(|(_, mtime)| {
+            mtime
+                .and_then(|m| now.duration_since(m).ok())
+                .is_some_and(|age| age >= ttl)
+        })
+        .map(|(path, _)| path.clone())
+        .collect()
+}
+
+/// Delete what [`prunable_backups`] selected.
+///
+/// Runs at the tail of every `--repair`, so the pile is bounded by the
+/// same command that grows it and nothing has to be cleaned up by hand.
+/// The generation this run just wrote is the newest, so it is always
+/// inside [`BACKUP_KEEP`] and can never prune itself.
+fn prune_backups(root: &Path) -> Vec<RepairAction> {
+    let dir = root.join(".outl").join("repair-backup");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut generations: Vec<(PathBuf, Option<SystemTime>)> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .map(|p| {
+            let mtime = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
+            (p, mtime)
+        })
+        .collect();
+
+    prunable_backups(&mut generations, SystemTime::now())
+        .into_iter()
+        .map(|path| match std::fs::remove_dir_all(&path) {
+            Ok(()) => RepairAction {
+                kind: "prune_backup".to_string(),
+                path: path.display().to_string(),
+                ok: true,
+                detail: format!(
+                    "older than {BACKUP_MIN_AGE_DAYS} days and outside the newest \
+                     {BACKUP_KEEP} generations"
+                ),
+            },
+            Err(e) => RepairAction {
+                kind: "prune_backup".to_string(),
+                path: path.display().to_string(),
+                ok: false,
+                detail: format!("could not remove: {e}"),
+            },
+        })
+        .collect()
+}
+
+/// Copy `file` into `backup_dir`, preserving its path relative to the
+/// workspace root. `Ok(None)` when there was nothing to copy.
+fn backup(root: &Path, backup_dir: &Path, file: &Path) -> std::io::Result<Option<PathBuf>> {
+    if !file.exists() {
+        return Ok(None);
+    }
+    let rel = file.strip_prefix(root).unwrap_or(file);
+    // An absolute `rel` (file outside the workspace — shouldn't happen,
+    // but `strip_prefix` failing would produce one) would make `join`
+    // discard `backup_dir` entirely and overwrite the original.
+    let rel: PathBuf = rel
+        .components()
+        .filter(|c| matches!(c, std::path::Component::Normal(_)))
+        .collect();
+    let dest = backup_dir.join(rel);
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::copy(file, &dest)?;
+    Ok(Some(dest))
+}

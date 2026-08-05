@@ -52,6 +52,7 @@ pub(crate) fn spawn_background_reconcile(
 ) {
     thread::spawn(move || {
         let engine = outl_actions::SyncEngine::new(storage_root.clone(), hlc.actor());
+        let orphans_log = engine.orphans_log();
         // Filesystem walk needs no workspace lock.
         let orphans = engine.scan_for_orphans();
         let mut changed = false;
@@ -71,7 +72,10 @@ pub(crate) fn spawn_background_reconcile(
                     // the rest of the batch cleanly.
                     return;
                 };
-                if let Err(e) = outl_md::reconcile::reconcile_md(ws, &hlc, path, None) {
+                // Never `None` — level-3 fallout is a delete, and it has
+                // to be recorded before it happens (`outl-md` hard rule).
+                if let Err(e) = outl_md::reconcile::reconcile_md(ws, &hlc, path, Some(&orphans_log))
+                {
                     warn!("orphan reconcile failed for {}: {e}", path.display());
                 } else {
                     changed = true;

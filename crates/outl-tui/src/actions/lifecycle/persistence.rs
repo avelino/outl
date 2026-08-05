@@ -154,6 +154,17 @@ impl App {
     /// Not called directly by edit paths — they go through [`Self::save`]
     /// (mark dirty) and this is drained by [`Self::flush_pending_save`].
     pub(crate) fn persist(&mut self) {
+        // The page on screen came from a failed read, not from disk.
+        // Rendering this AST back would replace a file we could not
+        // even read with an empty one, and the reconcile that follows
+        // would trash every block on every device. Refuse, loudly.
+        if self.load_failed {
+            self.toast(
+                ToastKind::Error,
+                "not saving: this page could not be read from disk".to_string(),
+            );
+            return;
+        }
         // Timing instrumentation: run with `RUST_LOG=outl_tui=debug` and
         // read `<workspace>/.outl/tui.log` to see where a slow commit
         // spends its time (reconcile vs backlinks vs auto-run).

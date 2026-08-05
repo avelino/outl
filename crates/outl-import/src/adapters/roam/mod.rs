@@ -90,10 +90,28 @@ impl SourceAdapter for RoamAdapter {
         // Roam images are firebase-hosted URLs, so relative resolution
         // rarely fires; the backup file's dir is the base_dir anyway.
         let base_dir = src.parent().unwrap_or(src).to_path_buf();
+        // Denominators for the report's reconciliation, counted off the
+        // deserialized JSON — before any pipeline decision can hide a
+        // loss from both the numerator and the denominator.
+        report.source_pages += pages.len();
+        report.source_blocks += pages
+            .iter()
+            .map(|p| count_blocks(&p.children))
+            .sum::<usize>();
+
         let mut graph = ImportGraph::default();
-        for page in &pages {
+        for (idx, page) in pages.iter().enumerate() {
             if page.title.trim().is_empty() {
-                continue; // Roam can emit empty pages on edge cases.
+                // Roam can emit empty pages on edge cases. Dropping the
+                // page drops its whole subtree, so say so out loud
+                // instead of `continue`-ing in silence.
+                let dropped = count_blocks(&page.children);
+                report.skip(
+                    format!("{}#page[{idx}]", src.display()),
+                    format!("page title is empty — {dropped} block(s) dropped with it"),
+                    dropped,
+                );
+                continue;
             }
             let name = match outl_actions::parse_flexible_date(&page.title) {
                 Some(d) => PageName::Journal(d),
@@ -118,6 +136,10 @@ impl SourceAdapter for RoamAdapter {
                 // conflicting one, so drop it here.
                 b.props.retain(|(k, _)| k != "title");
                 props.append(&mut b.props);
+                // A source block that stops being a block. Counted so
+                // the reconciliation closes on it instead of reading
+                // the promotion as lost content.
+                report.blocks_lifted_to_props += 1;
             }
             graph.pages.push(ImportPage {
                 name,
@@ -126,8 +148,34 @@ impl SourceAdapter for RoamAdapter {
                 stem_override: None,
             });
         }
+        // One aggregate warning, never one per occurrence: a real graph
+        // carries tens of thousands of `{{[[DONE]]}}` markers and a
+        // per-hit warning would bury every other finding.
+        let midtext = report.tasks_midtext_literal;
+        if midtext > 0 {
+            report.warn(
+                GRAPH_SCOPE,
+                format!(
+                    "{midtext} mid-block TODO/DONE markers became literal text \
+                     (task state not preserved)"
+                ),
+            );
+        }
         Ok(graph)
     }
+}
+
+/// Warning scope for findings that belong to the whole import rather
+/// than to one page.
+const GRAPH_SCOPE: &str = "(graph)";
+
+/// Total blocks in a Roam subtree, counted recursively — the source
+/// side of the report's reconciliation.
+fn count_blocks(blocks: &[RoamBlock]) -> usize {
+    blocks
+        .iter()
+        .map(|b| 1 + count_blocks(&b.children))
+        .sum::<usize>()
 }
 
 /// One Roam block → IR block (recursive).

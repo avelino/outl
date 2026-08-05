@@ -33,7 +33,7 @@ pub mod report;
 
 pub use adapter::{ImportError, SourceAdapter};
 pub use progress::{ImportProgress, ProgressSink};
-pub use report::ImportReport;
+pub use report::{ImportReport, Reconciliation};
 
 use outl_core::hlc::HlcGenerator;
 use outl_core::workspace::Workspace;
@@ -105,6 +105,7 @@ pub fn dry_run(
     let mut report = ImportReport::new(adapter.id());
     let graph = adapter.parse(src, &mut report)?;
     emit::dry_run(&graph, opts, &mut report);
+    report.finalize();
     Ok(report)
 }
 
@@ -132,5 +133,6 @@ pub fn run_import_with_progress(
     sink(ImportProgress::Parsing);
     let graph = adapter.parse(src, &mut report)?;
     emit::run(&graph, dest, opts, &mut report, sink)?;
+    report.finalize();
     Ok(report)
 }

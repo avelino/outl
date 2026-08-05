@@ -6,17 +6,11 @@
 use outl_core::id::NodeId;
 use outl_md::block_index::BlockIndex;
 use outl_md::parse::parse;
-use outl_md::sidecar::{content_hash, derive_ref_handle, SidecarBlock};
+use outl_md::sidecar::{derive_ref_handle, SidecarBlock};
 use std::path::PathBuf;
 
 fn sb(id: NodeId, text: &str, line: usize, indent: u32) -> SidecarBlock {
-    SidecarBlock {
-        id,
-        line,
-        indent,
-        content_hash: content_hash(text),
-        ref_handle: derive_ref_handle(id),
-    }
+    SidecarBlock::from_text(id, line, indent, text)
 }
 
 #[test]

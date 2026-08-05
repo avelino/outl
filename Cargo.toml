@@ -21,7 +21,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.10.0"
+version = "0.11.0"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT"
@@ -32,24 +32,24 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Internal crates
-outl-core = { path = "crates/outl-core", version = "0.10.0" }
-outl-md = { path = "crates/outl-md", version = "0.10.0" }
-outl-actions = { path = "crates/outl-actions", version = "0.10.0" }
-outl-sync-iroh = { path = "crates/outl-sync-iroh", version = "0.10.0" }
-outl-config = { path = "crates/outl-config", version = "0.10.0" }
-outl-import = { path = "crates/outl-import", version = "0.10.0" }
+outl-core = { path = "crates/outl-core", version = "0.11.0" }
+outl-md = { path = "crates/outl-md", version = "0.11.0" }
+outl-actions = { path = "crates/outl-actions", version = "0.11.0" }
+outl-sync-iroh = { path = "crates/outl-sync-iroh", version = "0.11.0" }
+outl-config = { path = "crates/outl-config", version = "0.11.0" }
+outl-import = { path = "crates/outl-import", version = "0.11.0" }
 # Defaults OFF at the workspace level: `outl-actions` (published to crates.io)
 # and `outl-tauri-shared` must not smuggle wasmtime into the mobile IPA via
 # feature unification, and a crate manifest can't *disable* an inherited
 # default. Binaries that want the full runtime catalog (CLI / TUI / desktop)
 # set `default-features = true` on their side.
-outl-exec = { path = "crates/outl-exec", version = "0.10.0", default-features = false }
-outl-plugins = { path = "crates/outl-plugins", version = "0.10.0" }
-outl-shortcuts = { path = "crates/outl-shortcuts", version = "0.10.0" }
-outl-theme = { path = "crates/outl-theme", version = "0.10.0" }
-outl-tauri-shared = { path = "crates/outl-tauri-shared", version = "0.10.0" }
-outl-ws = { path = "crates/outl-ws", version = "0.10.0" }
-outl-tui = { path = "crates/outl-tui", version = "0.10.0" }
+outl-exec = { path = "crates/outl-exec", version = "0.11.0", default-features = false }
+outl-plugins = { path = "crates/outl-plugins", version = "0.11.0" }
+outl-shortcuts = { path = "crates/outl-shortcuts", version = "0.11.0" }
+outl-theme = { path = "crates/outl-theme", version = "0.11.0" }
+outl-tauri-shared = { path = "crates/outl-tauri-shared", version = "0.11.0" }
+outl-ws = { path = "crates/outl-ws", version = "0.11.0" }
+outl-tui = { path = "crates/outl-tui", version = "0.11.0" }
 
 # IDs and time
 ulid = { version = "1", features = ["serde"] }
@@ -138,6 +138,10 @@ lru = "0.18"
 # Misc
 sha2 = "0.11"
 hex = "0.4"
+# Normalized Levenshtein for level-2 block matching in `outl-md`
+# (`.md` edited outside outl → recover the block's id from its old
+# text). MIT, no transitive deps, and already in the lock via clap.
+strsim = "0.11"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 # IANA timezone database — resolves a configured zone name ("Europe/London")
 # to the correct UTC offset per date (DST-aware), for `outl_actions::clock`.

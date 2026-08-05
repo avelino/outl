@@ -2,6 +2,7 @@
 
 pub mod asset;
 pub mod backlinks;
+pub mod backup;
 pub mod batch;
 pub mod block;
 pub mod daily;

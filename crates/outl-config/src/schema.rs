@@ -33,6 +33,7 @@ pub struct Config {
     pub display: DisplayCfg,
     pub assets: AssetsCfg,
     pub reminders: RemindersCfg,
+    pub backup: BackupCfg,
 }
 
 /// Reminder delivery preferences.
@@ -362,6 +363,57 @@ impl Default for AssetsCfg {
     }
 }
 
+/// Automatic local backups of the workspace (`outl_actions::backup`).
+///
+/// **Device-local, like every other preference here.** A backup is a
+/// property of *this* machine's disk, not of the workspace: two paired
+/// devices each keep their own history, and neither one's git repo
+/// travels through the op log or the sync transport — the repository
+/// itself lives outside the workspace, under `outl_core::device_dir()`,
+/// precisely so no file transport can replicate it.
+///
+/// Read today by the **TUI** only (`outl_actions::backup::spawn_auto_pass`
+/// at startup); the desktop and mobile clients preserve the section
+/// verbatim but do not yet run the pass. See
+/// [`docs/config.md`](https://github.com/avelino/outl/blob/main/docs/config.md)
+/// → `[backup]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BackupCfg {
+    /// Take automatic snapshots. **On by default.**
+    ///
+    /// The failure this guards against — a projection bug, a mis-aimed
+    /// import, a page deleted and the app closed before undo could help
+    /// — is exactly the kind a user only discovers later, when the
+    /// window to enable a safety net has already closed. Defaulting off
+    /// means the feature is present for everyone who didn't need it and
+    /// absent for everyone who did.
+    ///
+    /// Costs nothing on a workspace that never changes (an unchanged
+    /// tree produces no commit) and degrades to a `warn!` when there is
+    /// no `git` on `PATH`.
+    pub enabled: bool,
+
+    /// Minimum minutes between automatic snapshots. Default 30.
+    ///
+    /// A floor, not a schedule: the background pass wakes on this
+    /// cadence and takes a snapshot only when at least this much time
+    /// has passed since the newest commit, so a burst of edits never
+    /// turns into a burst of commits. The elapsed time is read back out
+    /// of the git history, not from a state file, so it survives a
+    /// restart.
+    pub interval_minutes: u64,
+}
+
+impl Default for BackupCfg {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_minutes: 30,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,6 +432,25 @@ mod tests {
         assert_eq!(c.snapshot.op_threshold, 10_000);
         assert_eq!(c.display.backlinks_order, BacklinksOrder::Newest);
         assert!(c.display.backlinks_order.newest_first());
+        assert!(c.backup.enabled, "backups default ON — see BackupCfg docs");
+        assert_eq!(c.backup.interval_minutes, 30);
+    }
+
+    /// The partial-TOML path required when adding a section: a config
+    /// that predates `[backup]` must still get the defaults.
+    #[test]
+    fn backup_section_defaults_when_absent() {
+        let c: Config = toml::from_str("[theme]\npreset = \"outl\"\n").unwrap();
+        assert!(c.backup.enabled);
+        assert_eq!(c.backup.interval_minutes, 30);
+    }
+
+    #[test]
+    fn backup_section_parses() {
+        let c: Config =
+            toml::from_str("[backup]\nenabled = false\ninterval_minutes = 120\n").unwrap();
+        assert!(!c.backup.enabled);
+        assert_eq!(c.backup.interval_minutes, 120);
     }
 
     #[test]

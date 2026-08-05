@@ -103,6 +103,10 @@ pub fn render_graph(
         match &page.name {
             PageName::Journal(d) => match journal_groups.iter_mut().find(|(k, _)| k == d) {
                 Some((_, v)) => {
+                    // A legitimate reducer of the emitted page count —
+                    // counted so the reconciliation doesn't read the
+                    // merge as a lost page.
+                    report.pages_merged += 1;
                     report.warn(
                         &d.to_string(),
                         "two source pages map to the same journal date — merged",

@@ -528,6 +528,19 @@ pub(crate) struct App {
     /// behalf — they decide when to clean up.
     pub(crate) parse_warnings: Vec<outl_md::ParseWarning>,
 
+    /// The current page's `.md` exists on disk but could not be read
+    /// (permissions, a raw `EIO`, an iCloud placeholder whose bytes
+    /// haven't downloaded yet, invalid UTF-8).
+    ///
+    /// **A read failure must never become a write.** `parse("")` yields
+    /// an empty AST, and the ordinary commit path would happily render
+    /// that emptiness back over a page full of the user's work — then
+    /// reconcile it, sending every block to the trash on every device.
+    /// So the load path leaves this set, [`App::persist`] refuses to
+    /// write while it is, and the flag clears on the next successful
+    /// load of that page.
+    pub(crate) load_failed: bool,
+
     /// Modal overlay (quick switcher, search, command palette). `None`
     /// in regular Normal/Insert mode.
     pub(crate) overlay: Option<Overlay>,

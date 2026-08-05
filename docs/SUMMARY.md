@@ -45,6 +45,9 @@
 * [Architecture](architecture.md)
 * [Storage trait](storage.md)
 * [Shared primitives catalog](shared-primitives.md)
+  * [Core state, sync, and durability](primitives-core.md)
+  * [Markdown pipeline](primitives-markdown.md)
+  * [Editing actions and client features](primitives-actions.md)
 
 ## Project
 

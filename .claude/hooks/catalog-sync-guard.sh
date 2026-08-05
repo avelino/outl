@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
 # PostToolUse hook: warn when the "Shared primitives catalog" gets
-# edited in one place (docs/shared-primitives.md OR
+# edited on one side (the docs/ catalog OR
 # .github/copilot-instructions.md) without the other being touched in
 # the same working-tree change.
 #
 # The catalog is intentionally duplicated because it has two audiences:
-# - docs/shared-primitives.md drives Claude Code + human contributors
+# - the docs/ catalog drives Claude Code + human contributors
 # - .github/copilot-instructions.md §5.1 drives GitHub Copilot PR review
+#
+# The docs/ side is ONE logical document split across four files:
+#   docs/shared-primitives.md      — hub / index (links, no rows)
+#   docs/primitives-core.md        — op log, tree, sync, storage, backups
+#   docs/primitives-markdown.md    — parse, render, sidecar, index, assets
+#   docs/primitives-actions.md     — block/page mutations, exec, templates, …
+# Editing ANY of them counts as editing the catalog; the glob
+# docs/primitives-*.md picks up future parts without a hook change.
 #
 # Both must stay in sync or one of them goes stale and the LLM on that
 # side starts approving (or generating) duplicate helpers the other
@@ -24,9 +32,9 @@ event_json=$(cat)
 
 file_path=$(printf '%s' "$event_json" | sed -n 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
 
-# Only act on the two mirrored files.
+# Only act on the mirrored files.
 case "$file_path" in
-  */docs/shared-primitives.md|*/copilot-instructions.md) ;;
+  */docs/shared-primitives.md|*/docs/primitives-*.md|*/copilot-instructions.md) ;;
   *) exit 0 ;;
 esac
 
@@ -35,14 +43,21 @@ if [ -z "$repo_root" ] || [ ! -d "$repo_root" ]; then
   exit 0
 fi
 
-primitives="${repo_root}/docs/shared-primitives.md"
 copilot="${repo_root}/.github/copilot-instructions.md"
 
-# The thing being edited must be one of the two mirrors.
-case "$file_path" in
-  "$primitives"|"$copilot") ;;
-  *) exit 0 ;;
-esac
+# Every file that makes up the docs/ side of the catalog.
+catalog_files=()
+for c in "${repo_root}"/docs/shared-primitives.md "${repo_root}"/docs/primitives-*.md; do
+  [ -f "$c" ] && catalog_files+=("$c")
+done
+
+# The thing being edited must be one of the two sides.
+edited_side=""
+[ "$file_path" = "$copilot" ] && edited_side="copilot"
+for c in "${catalog_files[@]}"; do
+  [ "$file_path" = "$c" ] && edited_side="catalog"
+done
+[ -z "$edited_side" ] && exit 0
 
 # Marker that identifies the catalog table in either file. Pick a
 # string that lives ONLY in the catalog section so we don't trigger on
@@ -68,32 +83,37 @@ touched_catalog() {
     | grep -q .
 }
 
-# Determine which file is the mirror of what was just edited.
-case "$file_path" in
-  "$primitives") mirror="$copilot" ;;
-  "$copilot")    mirror="$primitives" ;;
-esac
+# Determine the mirror side of what was just edited. The docs/ side is
+# a set: a row added to ANY part satisfies the copilot->docs direction.
+if [ "$edited_side" = "catalog" ]; then
+  mirror_files=("$copilot")
+  rel_mirror=".github/copilot-instructions.md"
+else
+  mirror_files=("${catalog_files[@]}")
+  rel_mirror="docs/primitives-*.md (the catalog parts)"
+fi
 
 # If the edit didn't touch the catalog itself, no sync needed.
 if ! touched_catalog "$file_path"; then
   exit 0
 fi
 
-# Catalog was edited. Check the mirror.
-if touched_catalog "$mirror"; then
-  # Both sides touched. Likely already in sync. Pass.
-  exit 0
-fi
+# Catalog was edited. Check the mirror side — any file counts.
+for m in "${mirror_files[@]}"; do
+  if touched_catalog "$m"; then
+    # Both sides touched. Likely already in sync. Pass.
+    exit 0
+  fi
+done
 
 # Edited one side of the catalog without touching the mirror.
 rel_edited=${file_path#"${repo_root}/"}
-rel_mirror=${mirror#"${repo_root}/"}
 
 printf 'WARNING: %s edited the "Shared primitives catalog" table\n' "$rel_edited" >&2
 printf 'but its mirror at %s has no matching working-tree change.\n' "$rel_mirror" >&2
 printf '\n' >&2
 printf 'The catalog is intentionally duplicated for two audiences:\n' >&2
-printf '  - %s drives Claude Code + human contributors\n' "docs/shared-primitives.md" >&2
+printf '  - %s drives Claude Code + human contributors\n' "docs/primitives-*.md (index: docs/shared-primitives.md)" >&2
 printf '  - %s drives GitHub Copilot PR review\n' ".github/copilot-instructions.md" >&2
 printf '\n' >&2
 printf 'Drift between them is exactly how PR #47 slipped through (paste::normalize\n' >&2

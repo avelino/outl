@@ -119,7 +119,7 @@ flowchart TB
 
 2. **The materialized tree and the `.md` are projections.**
    Both can be thrown away.
-   If your sidecar is lost, `outl doctor` regenerates it from the op log.
+   If your sidecar is lost, `outl doctor --repair` regenerates it from the op log.
    If your `.md` is deleted, the op log still has every block.
 
 3. **Markdown on disk is *clean*.**
@@ -330,10 +330,24 @@ Each device only writes its own `ops-<actor>.jsonl`. iCloud syncs each file inde
 When a peer's jsonl arrives, the local client merges it with the others by HLC and replays through the move-op algorithm.
 The materialised `.md` + sidecar then get re-projected from the new tree.
 
+**The actor id does not live in the workspace.**
+"Each device only writes its own file" is a guarantee about *identity*, and identity cannot come from a directory both devices replicate.
+Syncthing, Dropbox, NFS, a shared volume and `git clone` all copy `.outl/` verbatim, so a device actor stored there is read identically on both machines — and the per-actor `flock` cannot arbitrate, being advisory and machine-local.
+Both devices then append to one `ops-<actor>.jsonl` and lose ops with no error raised.
+The actor therefore lives in the **device store** (`~/.config/outl/actors/`, or `$OUTL_DEVICE_DIR`), outside every workspace; see [storage.md → Where the actor id lives](storage.md#where-the-actor-id-lives--outside-the-workspace).
+Each binding is keyed by workspace id **and** the directory it lives in, because the workspace id is itself inside the copied bytes — `cp -R notes notes-backup` would otherwise give both copies one actor, and the P2P topic is keyed on that same id, so the two would dedup each other's distinct ops by `ts`.
+A move or rename keeps its actor; a second copy that is still live forks.
+
+`.outl/config.toml`'s `actor_id` is a legacy value, adopted only by the device whose `actor_claimed_by` marker is already in the file when it is copied.
+That marker is stamped at *creation*, never on first open — this transport section is exactly why.
+iroh ships ops, `workspace-id` and snapshots and never `config.toml`, so a claim written on first open propagates to nobody, and two machines holding a claim-less copy would each stamp their own file and collide permanently.
+A pre-upgrade workspace has no claim, so every device forks once and the old `ops-<legacy>.jsonl` stays readable.
+
 Two iCloud-specific decisions fall out of this transport:
 
 - **The ops directory is `ops/`, not `.ops/`.** iCloud Documents silently skips dotted paths across devices.
   Same rule keeps the sidecar at `pages/foo.outl` rather than the original `.foo.outl`.
+  Note this is also why iCloud never exposed the shared-actor bug above: `.outl/` simply never travelled.
 - **Peer files must be force-materialised before reads.** iCloud syncs metadata before content; a `std::fs::open` on a freshly notified file may read an empty placeholder.
   The mobile client wraps every read in `NSFileCoordinator` after calling `startDownloadingUbiquitousItemAtURL` so the Rust side never sees a placeholder.
   Details in [`crates/outl-mobile/CLAUDE.md`](../crates/outl-mobile/CLAUDE.md#peer-file-materialisation-the-icloud-catch).

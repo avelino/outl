@@ -306,7 +306,13 @@ fn walk(
             line,
             indent,
             content_hash: content_hash(&block.text),
+            // Not `SidecarBlock::from_text`: the handle may be an
+            // expanded (post-collision) one carried over verbatim from
+            // the previous sidecar.
             ref_handle: handles[*cursor].clone(),
+            // The text this sidecar entry describes. Next reconcile
+            // reads it back as the "before" side of level-2 matching.
+            text: block.text.clone(),
         });
 
         *cursor += 1;
@@ -345,20 +351,8 @@ mod tests {
         let id_a = NodeId::new();
         let id_b = NodeId::new();
         let old = vec![
-            SidecarBlock {
-                id: id_a,
-                line: 1,
-                indent: 0,
-                content_hash: content_hash("a"),
-                ref_handle: derive_ref_handle(id_a),
-            },
-            SidecarBlock {
-                id: id_b,
-                line: 2,
-                indent: 0,
-                content_hash: content_hash("b"),
-                ref_handle: derive_ref_handle(id_b),
-            },
+            SidecarBlock::from_text(id_a, 1, 0, "a"),
+            SidecarBlock::from_text(id_b, 2, 0, "b"),
         ];
         let (matches, orphans) = match_blocks(&ast.blocks, &old);
         let plan = diff_to_ops(
@@ -384,20 +378,8 @@ mod tests {
         let id_a = NodeId::new();
         let id_dead = NodeId::new();
         let old = vec![
-            SidecarBlock {
-                id: id_a,
-                line: 1,
-                indent: 0,
-                content_hash: content_hash("a"),
-                ref_handle: derive_ref_handle(id_a),
-            },
-            SidecarBlock {
-                id: id_dead,
-                line: 2,
-                indent: 0,
-                content_hash: content_hash("gone"),
-                ref_handle: derive_ref_handle(id_dead),
-            },
+            SidecarBlock::from_text(id_a, 1, 0, "a"),
+            SidecarBlock::from_text(id_dead, 2, 0, "gone"),
         ];
         let (matches, orphans) = match_blocks(&ast.blocks, &old);
         let plan = diff_to_ops(
@@ -466,11 +448,8 @@ mod tests {
         let id = NodeId::new();
         let custom_handle = "blk-r6s4a1z".to_string();
         let old = vec![SidecarBlock {
-            id,
-            line: 1,
-            indent: 0,
-            content_hash: content_hash("alpha"),
             ref_handle: custom_handle.clone(),
+            ..SidecarBlock::from_text(id, 1, 0, "alpha")
         }];
         let (matches, orphans) = match_blocks(&ast.blocks, &old);
         let plan = diff_to_ops(

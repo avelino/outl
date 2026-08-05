@@ -153,6 +153,11 @@ impl From<Settings> for Config {
             // hand-set `max_bytes` survives a settings write (same
             // restore-on-save pattern as `[calendar]` / `[tui]`).
             assets: outl_config::AssetsCfg::default(),
+            // `[backup]` is not modelled in the flat Settings either.
+            // `save` restores it from disk so a settings write can never
+            // silently turn a user's backups off (same restore-on-save
+            // pattern as `[calendar]` / `[assets]`).
+            backup: outl_config::BackupCfg::default(),
             // `[reminders]` IS modelled here — the feature is opt-in and
             // the settings modal is where the user turns it on, so
             // unlike `[calendar]` / `[tui]` it must not be restored
@@ -196,6 +201,11 @@ pub fn save(_app_config_dir: &std::path::Path, settings: &Settings) -> anyhow::R
     // `[assets]` (upload size cap) is core-managed and not modeled in the
     // flat Settings; restore it so a modal save keeps a custom max_bytes.
     cfg.assets = on_disk.assets;
+    // `[backup]` is core-managed and not modeled in the flat Settings.
+    // Restoring it matters more than the others: dropping to the default
+    // here would be a *silent* change to the user's safety net, and the
+    // only way they'd find out is the day they needed it.
+    cfg.backup = on_disk.backup;
     outl_config::save(&cfg)
 }
 

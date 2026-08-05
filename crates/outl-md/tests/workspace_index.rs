@@ -14,7 +14,7 @@ use outl_core::id::NodeId;
 use outl_md::index::WorkspaceIndex;
 use outl_md::parse::parse;
 use outl_md::sidecar::{
-    self, content_hash, derive_ref_handle, file_hash, write as write_sidecar, Sidecar, SidecarBlock,
+    self, derive_ref_handle, file_hash, write as write_sidecar, Sidecar, SidecarBlock,
 };
 use std::fs;
 use tempfile::TempDir;
@@ -84,13 +84,8 @@ fn build_populates_block_index_from_sidecar() {
     let page_id = NodeId::new();
     let block_id = NodeId::new();
     let mut sc = Sidecar::new_for_page(page_id, &file_hash("- decide backend\n"));
-    sc.blocks.push(SidecarBlock {
-        id: block_id,
-        line: 1,
-        indent: 0,
-        content_hash: content_hash("decide backend"),
-        ref_handle: derive_ref_handle(block_id),
-    });
+    sc.blocks
+        .push(SidecarBlock::from_text(block_id, 1, 0, "decide backend"));
     write_sidecar(&sidecar::sidecar_path_for(&page_path), &sc).unwrap();
 
     let idx = WorkspaceIndex::build(dir.path());
@@ -113,13 +108,7 @@ fn patch_page_refreshes_block_index() {
     let id_one = NodeId::new();
 
     let mut sc = Sidecar::new_for_page(page_id, &file_hash("- one\n"));
-    sc.blocks.push(SidecarBlock {
-        id: id_one,
-        line: 1,
-        indent: 0,
-        content_hash: content_hash("one"),
-        ref_handle: derive_ref_handle(id_one),
-    });
+    sc.blocks.push(SidecarBlock::from_text(id_one, 1, 0, "one"));
     write_sidecar(&sidecar::sidecar_path_for(&page_path), &sc).unwrap();
 
     let mut idx = WorkspaceIndex::build(dir.path());
@@ -127,13 +116,7 @@ fn patch_page_refreshes_block_index() {
 
     fs::write(&page_path, "- one\n- two\n").unwrap();
     let id_two = NodeId::new();
-    sc.blocks.push(SidecarBlock {
-        id: id_two,
-        line: 2,
-        indent: 0,
-        content_hash: content_hash("two"),
-        ref_handle: derive_ref_handle(id_two),
-    });
+    sc.blocks.push(SidecarBlock::from_text(id_two, 2, 0, "two"));
     sc.last_synced_hash = file_hash("- one\n- two\n");
     write_sidecar(&sidecar::sidecar_path_for(&page_path), &sc).unwrap();
 
@@ -160,25 +143,15 @@ fn patch_page_preserves_cross_page_reverse_refs() {
     // Sidecar A: one target block.
     let id_target = NodeId::new();
     let mut sc_a = Sidecar::new_for_page(NodeId::new(), &file_hash("- target block\n"));
-    sc_a.blocks.push(SidecarBlock {
-        id: id_target,
-        line: 1,
-        indent: 0,
-        content_hash: content_hash("target block"),
-        ref_handle: derive_ref_handle(id_target),
-    });
+    sc_a.blocks
+        .push(SidecarBlock::from_text(id_target, 1, 0, "target block"));
     write_sidecar(&sidecar::sidecar_path_for(&a_path), &sc_a).unwrap();
 
     // Sidecar B: one placeholder (no ref yet).
     let id_placeholder = NodeId::new();
     let mut sc_b = Sidecar::new_for_page(NodeId::new(), &file_hash("- placeholder\n"));
-    sc_b.blocks.push(SidecarBlock {
-        id: id_placeholder,
-        line: 1,
-        indent: 0,
-        content_hash: content_hash("placeholder"),
-        ref_handle: derive_ref_handle(id_placeholder),
-    });
+    sc_b.blocks
+        .push(SidecarBlock::from_text(id_placeholder, 1, 0, "placeholder"));
     write_sidecar(&sidecar::sidecar_path_for(&b_path), &sc_b).unwrap();
 
     let mut idx = WorkspaceIndex::build(dir.path());
@@ -189,13 +162,12 @@ fn patch_page_preserves_cross_page_reverse_refs() {
     let b_md_after = format!("- placeholder\n- see (({target_handle})) here\n");
     fs::write(&b_path, &b_md_after).unwrap();
     let id_cite = NodeId::new();
-    sc_b.blocks.push(SidecarBlock {
-        id: id_cite,
-        line: 2,
-        indent: 0,
-        content_hash: content_hash(&format!("see (({target_handle})) here")),
-        ref_handle: derive_ref_handle(id_cite),
-    });
+    sc_b.blocks.push(SidecarBlock::from_text(
+        id_cite,
+        2,
+        0,
+        format!("see (({target_handle})) here"),
+    ));
     sc_b.last_synced_hash = file_hash(&b_md_after);
     write_sidecar(&sidecar::sidecar_path_for(&b_path), &sc_b).unwrap();
     idx.patch_page(&b_path, &parse(&b_md_after));
@@ -218,13 +190,7 @@ fn block_at_location_returns_none_for_unknown_path() {
     let page_path = dir.path().join("pages/p.md");
     let id = NodeId::new();
     let mut sc = Sidecar::new_for_page(NodeId::new(), &file_hash("- alpha\n"));
-    sc.blocks.push(SidecarBlock {
-        id,
-        line: 1,
-        indent: 0,
-        content_hash: content_hash("alpha"),
-        ref_handle: derive_ref_handle(id),
-    });
+    sc.blocks.push(SidecarBlock::from_text(id, 1, 0, "alpha"));
     write_sidecar(&sidecar::sidecar_path_for(&page_path), &sc).unwrap();
 
     let idx = WorkspaceIndex::build(dir.path());
@@ -250,13 +216,8 @@ fn remove_page_drops_block_entries_too() {
     let block_id = NodeId::new();
 
     let mut sc = Sidecar::new_for_page(page_id, &file_hash("- alpha\n"));
-    sc.blocks.push(SidecarBlock {
-        id: block_id,
-        line: 1,
-        indent: 0,
-        content_hash: content_hash("alpha"),
-        ref_handle: derive_ref_handle(block_id),
-    });
+    sc.blocks
+        .push(SidecarBlock::from_text(block_id, 1, 0, "alpha"));
     write_sidecar(&sidecar::sidecar_path_for(&page_path), &sc).unwrap();
 
     let mut idx = WorkspaceIndex::build(dir.path());

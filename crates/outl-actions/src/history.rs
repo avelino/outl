@@ -133,7 +133,13 @@ pub fn restore_page_md(
     let meta = page_meta(ws, page_id).ok_or_else(|| ActionError::NotInTree(page_id.to_string()))?;
     let path = page_md_path(root, &meta);
     write_md_atomic(&path, md)?;
-    outl_md::reconcile::reconcile_md(ws, hlc, &path, None)?;
+    // An undo restores an *older* `.md`, so blocks created after the
+    // snapshot legitimately fall to matching level 3 and get trashed.
+    // That is precisely the case worth recording: it's the one path
+    // where a user action deletes blocks wholesale, and `orphans.log`
+    // is how they get them back if the undo went further than intended.
+    let orphans = crate::sync::orphans_log_path(root);
+    outl_md::reconcile::reconcile_md(ws, hlc, &path, Some(&orphans))?;
     Ok(())
 }
 

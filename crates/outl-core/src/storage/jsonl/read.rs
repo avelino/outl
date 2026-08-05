@@ -12,7 +12,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 use crate::hlc::Hlc;
 use crate::id::{ActorId, NodeId};
@@ -27,6 +27,15 @@ use super::{
 /// (several when a glued line is recovered). Same shape as
 /// [`RecordRead::Ops`]'s payload.
 type LiteOps = Vec<(Hlc, Option<NodeId>)>;
+
+/// How many *consecutive* unreadable records to tolerate before concluding
+/// the file (or the device) is gone rather than hiccuping, and stopping.
+///
+/// Skipping is right for a one-off bad record; spinning forever on a dead
+/// file handle is not. Shared by every sequential pass over a `.jsonl`
+/// ([`JsonlStorage::read_ops_file_into`], [`JsonlStorage::rebuild_actor_indexes`])
+/// so both bound the damage the same way.
+const MAX_CONSECUTIVE_IO_ERRORS: usize = 64;
 
 impl JsonlStorage {
     /// Read a single op from disk by `(actor, ts)`. Returns `None`
@@ -68,6 +77,30 @@ impl JsonlStorage {
             return Some(op);
         }
         self.read_op_at(actor, ts)
+    }
+
+    /// [`Self::read_op_hybrid`], but a miss is an **error** rather than
+    /// a silently dropped op.
+    ///
+    /// The offset index is the complete op set, so "the index says this
+    /// op exists, the file won't give it to us" means the log is
+    /// damaged. Every caller that assembles a *result set* — `ops_since`,
+    /// `ops_for_actor`, `ops_since_per_actor`, `ops_for_node` — must use
+    /// this: omitting the op yields a short read that looks exactly like a
+    /// healthy short read, and downstream the snapshot cutoff is derived
+    /// from the index — so the omission gets baked in as "already folded
+    /// in" and the op is never replayed again.
+    pub(super) fn read_op_or_missing(
+        &self,
+        actor: ActorId,
+        ts: Hlc,
+    ) -> Result<LogOp, StorageError> {
+        self.read_op_hybrid(actor, ts).ok_or_else(|| {
+            StorageError::MissingOp(format!(
+                "op {ts:?} by actor {actor} is in the offset index but could not be read back \
+                 from disk"
+            ))
+        })
     }
 
     /// Path of the `.jsonl` for `actor` under this storage's scope.
@@ -397,7 +430,24 @@ impl JsonlStorage {
     /// the parse-lite pass (extracts `(ts, node)` per op; never tokenizes
     /// `Op::Edit`'s `text_op`). Same cost as the legacy full load, so a
     /// missing/stale sidecar never makes boot slower than before this
-    /// optimization. Persists both sidecars unless the file doesn't exist.
+    /// optimization. Persists both sidecars unless the file doesn't exist or
+    /// the pass hit a read error (see below).
+    ///
+    /// **A read error skips the record, it does not stop the pass.** This is
+    /// the sharpest edge of invariant #5's read side, because the index is
+    /// what *defines* the known op set: stopping here produces an index that
+    /// never learns about the ops past the damage, so
+    /// [`Self::read_op_or_missing`] has nothing to complain about and the
+    /// whole `StorageError::MissingOp` mechanism is bypassed — the tree boots
+    /// short with no error anywhere. A skipped record costs its own bytes and
+    /// nothing after them.
+    ///
+    /// A pass that hit a read error also **does not persist** the sidecars.
+    /// I/O errors are transient in a way parse errors are not, so the index
+    /// it produced is missing ops the next boot could well read fine. Writing
+    /// it out would let the freshness check declare that short index
+    /// byte-exact and make the omission permanent — the "wrong fresh verdict"
+    /// this module's decision ladder exists to avoid.
     fn rebuild_actor_indexes(
         jsonl_path: &Path,
         idx_path: &Path,
@@ -419,25 +469,93 @@ impl JsonlStorage {
             }
         };
 
+        let saw_io_error =
+            Self::index_stream(&mut BufReader::new(file), jsonl_path, &mut hlc, &mut node);
+
+        // Persist both sidecars next to the `.jsonl` — but only for a clean
+        // pass. See this function's doc comment: caching an index built over
+        // a transient read error is how a recoverable omission becomes a
+        // permanent one.
+        if saw_io_error {
+            warn!(
+                "not persisting indexes for {} — the rebuild hit read errors and the \
+                 result is known-incomplete; the next boot rebuilds from the .jsonl",
+                jsonl_path.display()
+            );
+            return (hlc, node);
+        }
+
+        if let Err(e) = hlc.save(idx_path) {
+            warn!("could not persist index {}: {e}", idx_path.display());
+        }
+        if let Err(e) = node.save(node_idx_path) {
+            warn!(
+                "could not persist node index {}: {e}",
+                node_idx_path.display()
+            );
+        }
+        (hlc, node)
+    }
+
+    /// Drive the parse-lite indexing pass over one op-log stream, filling
+    /// `hlc` and `node` with `(ts → offset)` / `(node, ts) → offset`.
+    /// `label` names the source in log lines only. Returns whether the pass
+    /// hit a read error, which is what tells the caller the index is
+    /// known-incomplete and must not be cached.
+    ///
+    /// Split out of [`Self::rebuild_actor_indexes`] so the recovery
+    /// behaviour can be driven by a reader that fails on demand — a real
+    /// mid-file `read(2)` failure is not reproducible against a temp file,
+    /// and this loop's `continue`-don't-`break` is precisely the part that
+    /// must never regress.
+    pub(super) fn index_stream<R: BufRead>(
+        reader: &mut R,
+        label: &Path,
+        hlc: &mut OffsetIndex,
+        node: &mut NodeIndex,
+    ) -> bool {
         let mut offset: u64 = 0;
-        let mut reader = BufReader::new(file);
         let mut buf: Vec<u8> = Vec::new();
         let mut lines_read = 0usize;
+        let mut io_errors = 0usize;
+        let mut saw_io_error = false;
         loop {
             let start = offset;
-            let record = match read_log_record(&mut reader, &mut buf) {
+            let record = match read_log_record(reader, &mut buf) {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!("io error {}:{}: {e}", jsonl_path.display(), lines_read + 1);
-                    break;
+                    lines_read += 1;
+                    io_errors += 1;
+                    saw_io_error = true;
+                    warn!("io error {}:{}: {e}", label.display(), lines_read);
+                    if io_errors >= MAX_CONSECUTIVE_IO_ERRORS {
+                        error!(
+                            "giving up indexing {} after {io_errors} consecutive io errors — \
+                             ops past byte {offset} are NOT in the offset index for this boot",
+                            label.display()
+                        );
+                        break;
+                    }
+                    // `read_until` leaves whatever it managed to read in
+                    // `buf`, so the reader advanced by exactly that much.
+                    // Advancing the offset by the same amount keeps every
+                    // record AFTER the damage indexed at its true byte
+                    // position — a drifted offset would make `read_op_at`
+                    // seek to the wrong line, where the `ts` check rejects
+                    // it, so it surfaces as `MissingOp` instead of a wrong
+                    // op. Zero bytes read means no progress; the
+                    // consecutive-error cap is what bounds that.
+                    offset += buf.len() as u64;
+                    continue;
                 }
             };
+            io_errors = 0;
             match record {
                 RecordRead::Eof => break,
                 RecordRead::Skip { consumed, reason } => {
                     lines_read += 1;
                     if let Some(reason) = reason {
-                        warn!("skipping {}:{}: {reason}", jsonl_path.display(), lines_read);
+                        warn!("skipping {}:{}: {reason}", label.display(), lines_read);
                     }
                     offset += consumed;
                 }
@@ -448,7 +566,7 @@ impl JsonlStorage {
                             "recovered {} glued ops on {}:{} (concatenated JSON with no \
                              newline — likely an interleaved concurrent append)",
                             ops.len(),
-                            jsonl_path.display(),
+                            label.display(),
                             lines_read
                         );
                     }
@@ -462,18 +580,7 @@ impl JsonlStorage {
                 }
             }
         }
-
-        // Persist both sidecars next to the `.jsonl`.
-        if let Err(e) = hlc.save(idx_path) {
-            warn!("could not persist index {}: {e}", idx_path.display());
-        }
-        if let Err(e) = node.save(node_idx_path) {
-            warn!(
-                "could not persist node index {}: {e}",
-                node_idx_path.display()
-            );
-        }
-        (hlc, node)
+        saw_io_error
     }
 
     /// Cold-path `all_ops`: read every `.jsonl` this storage is
@@ -535,28 +642,67 @@ impl JsonlStorage {
     /// tails). A missing file is not an error (a peer file can vanish
     /// mid-sync, a PerPage page may have no ops yet) — it contributes
     /// nothing.
+    ///
+    /// A file that *exists* but won't open is a different animal: an entire
+    /// peer's history drops out of this replay. It is logged at `error!`
+    /// rather than returned as `Err` on purpose — failing here fails the
+    /// whole workspace open, and the omission is self-healing: `reload`'s
+    /// readability guard skips the same unopenable file, so the actor is
+    /// absent from the offset index too, so the snapshot cutoff (derived from
+    /// that index) never claims to have folded its ops in. The next boot that
+    /// can open the file replays all of them. That is the opposite of the
+    /// index-driven collectors, where the index *does* know the op and
+    /// dropping it would be baked into the next cutoff — those return
+    /// [`StorageError::MissingOp`].
     fn read_ops_file_into(path: &std::path::Path, out: &mut Vec<LogOp>) {
         let file = match File::open(path) {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
             Err(e) => {
-                warn!("cannot open {}: {e}", path.display());
+                error!(
+                    "cannot open {}: {e} — NONE of this actor's ops are in this replay",
+                    path.display()
+                );
                 return;
             }
         };
         let mut reader = BufReader::new(file);
+
         let mut buf: Vec<u8> = Vec::new();
         let mut line = 0usize;
+        let mut io_errors = 0usize;
         loop {
             buf.clear();
             let n = match reader.read_until(b'\n', &mut buf) {
                 Ok(0) => break,
                 Ok(n) => n,
                 Err(e) => {
+                    // `continue`, NOT `break`. This is the full-replay
+                    // path: bailing here discards every remaining op in
+                    // this actor's file — a transient error on line
+                    // 5_000 of 200_000 would silently truncate the tree
+                    // to the first 5_000 ops, and boot would carry on as
+                    // if that were the whole workspace. Skipping the one
+                    // unreadable line matches how a corrupt (non-UTF8 /
+                    // unparseable) line is already handled below.
+                    //
+                    // A read error usually repeats, so bound the damage
+                    // rather than spinning: give up after a run of them.
+                    io_errors += 1;
                     warn!("io error {}:{}: {e}", path.display(), line + 1);
-                    break;
+                    if io_errors >= MAX_CONSECUTIVE_IO_ERRORS {
+                        error!(
+                            "giving up on {} after {io_errors} consecutive io errors — \
+                             the remainder of this actor's log was NOT replayed",
+                            path.display()
+                        );
+                        break;
+                    }
+                    line += 1;
+                    continue;
                 }
             };
+            io_errors = 0;
             line += 1;
             let _ = n;
             let Ok(text) = std::str::from_utf8(&buf) else {
@@ -577,7 +723,17 @@ impl JsonlStorage {
     /// Cold-path `ops_for_node` when the LRU has no warm entry for the
     /// node. Walks the per-node secondary index across every known
     /// actor and pulls each op from the cache (if still resident) or
-    /// the disk file via [`Self::read_op_at`]. RFC #137 Phase A.
+    /// the disk file. RFC #137 Phase A.
+    ///
+    /// The fourth index-driven collector, and it uses
+    /// [`Self::read_op_or_missing`] for the same reason the other three do —
+    /// with a sharper consequence. Its result rebuilds a block's Yrs `Doc`
+    /// by replaying that node's `Edit` ops (#129), so an op quietly missing
+    /// from the set does not shorten a list the caller can notice; it
+    /// produces **wrong block text**, indistinguishable from text the user
+    /// typed. An `Err` costs a stale-but-correct string (both call sites in
+    /// `Workspace` warn and keep the text they already have); a short read
+    /// costs the content.
     pub(super) fn cold_ops_for_node(&self, id: NodeId) -> Result<Vec<LogOp>, StorageError> {
         let mut out: Vec<LogOp> = Vec::new();
         // Derive the actor set from the node index (persistent), not
@@ -586,15 +742,9 @@ impl JsonlStorage {
         for actor in self.node_index.actors() {
             let entries = self.node_index.get(actor, id);
             for (ts, _offset) in entries {
-                // Cache hit first.
-                if let Some(op) = self.cache.read().peek(&ts).cloned() {
-                    out.push(op);
-                    continue;
-                }
-                // Cold: read from disk via the offset index.
-                if let Some(op) = self.read_op_at(actor, ts) {
-                    out.push(op);
-                }
+                // `read_op_or_missing` already prefers a warm LRU hit over
+                // the disk seek, so there is no separate cache probe here.
+                out.push(self.read_op_or_missing(actor, ts)?);
             }
         }
         out.sort_by_key(|op| op.ts);

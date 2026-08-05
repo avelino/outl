@@ -129,7 +129,7 @@ Lives in `ops/ops-<actor>.jsonl` — one append-only JSONL file per device.
 Every block creation, every move, every text edit is one line.
 The tree is a projection over the merged log of every actor's file.
 
-This is the **source of truth** — if your markdown gets corrupted, `outl doctor` regenerates the pages from the log.
+This is the **source of truth** — if your markdown gets corrupted, `outl doctor --repair` regenerates the pages from the log (a bare `outl doctor` reports without changing anything).
 
 ## Slugs
 

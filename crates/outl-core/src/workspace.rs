@@ -227,7 +227,21 @@ impl Workspace {
         // Compute the delta the snapshot hasn't seen — per actor, so a
         // low-HLC op from an actor the snapshot never saw isn't dropped
         // below another actor's high-water mark (#156).
-        let delta = self.ops_since_per_actor_combined(&body.cutoff)?;
+        let delta = match self.ops_since_per_actor_combined(&body.cutoff) {
+            Ok(d) => d,
+            Err(e) => {
+                // An op the index lists but the file won't return. NOT
+                // fatal, and emphatically not something to skip past:
+                // the cutoff of the snapshot we write next comes from
+                // the index, so adopting a delta that quietly omitted
+                // this op would record it as "already folded in" and no
+                // future boot would replay it. Fall back to a full
+                // sequential replay, which re-reads the file and can
+                // still recover everything around the damaged line.
+                warn!("snapshot delta unreadable, falling back to full replay: {e}");
+                return Ok(false);
+            }
+        };
 
         // CONVERGENCE GUARD (invariant #1). The snapshot body is an opaque
         // MATERIALIZED tree, not a reorderable log, so applying the delta on

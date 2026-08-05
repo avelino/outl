@@ -4,18 +4,12 @@
 use outl_core::id::NodeId;
 use outl_md::matching::{match_blocks, MatchLevel};
 use outl_md::parse::parse;
-use outl_md::sidecar::{content_hash, derive_ref_handle, SidecarBlock};
+use outl_md::sidecar::SidecarBlock;
 
 #[test]
 fn ctrl_d_first_keeps_id_second_gets_new() {
     let id = NodeId::new();
-    let old = vec![SidecarBlock {
-        id,
-        line: 1,
-        indent: 0,
-        content_hash: content_hash("hello"),
-        ref_handle: derive_ref_handle(id),
-    }];
+    let old = vec![SidecarBlock::from_text(id, 1, 0, "hello")];
 
     // After Ctrl+D in VS Code.
     let edited = "- hello\n- hello\n";
@@ -36,13 +30,7 @@ fn ctrl_d_first_keeps_id_second_gets_new() {
 #[test]
 fn three_copies_of_same_content_two_get_new_ids() {
     let id = NodeId::new();
-    let old = vec![SidecarBlock {
-        id,
-        line: 1,
-        indent: 0,
-        content_hash: content_hash("hi"),
-        ref_handle: derive_ref_handle(id),
-    }];
+    let old = vec![SidecarBlock::from_text(id, 1, 0, "hi")];
 
     let edited = "- hi\n- hi\n- hi\n";
     let ast = parse(edited);

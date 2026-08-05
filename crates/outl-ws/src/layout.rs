@@ -18,6 +18,7 @@
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Local, NaiveDate};
+use outl_core::device::DeviceStore;
 use outl_core::id::ActorId;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -33,21 +34,68 @@ pub struct Config {
 /// Workspace-level configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceConfig {
-    /// This device's actor id. Persisted so HLCs stay coherent across runs.
+    /// Actor id seeded when this workspace was created.
+    ///
+    /// **Not** the source of truth for which actor a device writes
+    /// under — this file lives inside the workspace, so any transport
+    /// that replicates `.outl/` (Syncthing, Dropbox, NFS, git) hands the
+    /// same id to two machines. [`outl_core::DeviceStore`] owns that
+    /// answer; this field is the value one device may still *adopt*, and
+    /// [`WorkspaceConfig::actor_claimed_by`] records which one did.
+    /// See [`crate::actor`].
     pub actor_id: String,
     /// When the workspace was initialized.
     pub created_at: DateTime<FixedOffset>,
+    /// [`outl_core::MachineId`] of the device that owns
+    /// [`WorkspaceConfig::actor_id`], if any.
+    ///
+    /// Stamped **when the config is created** ([`Config::claimed_by`]),
+    /// not on first open. That timing is the whole point: the marker is
+    /// only trustworthy if it is already in the bytes a copy carries
+    /// away. Stamping it on first open works under a transport that keeps
+    /// replicating `config.toml` (Syncthing, Dropbox, NFS) and does
+    /// nothing under the default one — iroh ships ops, `workspace-id` and
+    /// snapshots, never the config — so two machines that copied a
+    /// pre-upgrade workspace would each stamp their own local file and
+    /// collide permanently. See [`crate::actor`].
+    ///
+    /// Absent on any workspace created before this existed. A device
+    /// never adopts `actor_id` without seeing its own id here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_claimed_by: Option<String>,
 }
 
 impl Config {
-    /// Build a fresh config with a new actor id.
+    /// Build a fresh config with a new actor id, unclaimed.
+    ///
+    /// Prefer [`Config::claimed_by`]: an `actor_id` nobody claims is an
+    /// `actor_id` no device will ever adopt.
     pub fn fresh() -> Self {
         Self {
             workspace: WorkspaceConfig {
                 actor_id: ActorId::new().0.to_string(),
                 created_at: Local::now().fixed_offset(),
+                actor_claimed_by: None,
             },
         }
+    }
+
+    /// Build a fresh config whose brand-new `actor_id` is claimed by
+    /// `store`'s device.
+    ///
+    /// Safe by construction: the ULID was generated on this machine
+    /// microseconds ago, so no other device can already be writing under
+    /// it. Every later copy of these bytes reads the claim as foreign and
+    /// mints its own actor.
+    pub fn claimed_by(store: &DeviceStore) -> Self {
+        let mut cfg = Self::fresh();
+        match store.machine_id() {
+            Ok(machine) => cfg.workspace.actor_claimed_by = Some(machine.to_string()),
+            // Leaving it unclaimed only costs one extra ops file on the
+            // first open; a wrong claim would cost ops.
+            Err(e) => tracing::warn!("could not stamp the actor claim: {e}"),
+        }
+        cfg
     }
 
     /// Parse the actor id from the config string into a typed [`ActorId`].
@@ -117,11 +165,19 @@ impl Paths {
     }
 }
 
-/// Create every directory and write the seed files for a fresh workspace.
+/// Create every directory and write the seed files for a fresh
+/// workspace, claiming its `actor_id` for this device.
 ///
 /// Idempotent up to the config file: if `config.toml` already exists, the
 /// caller's existing config is preserved.
 pub fn init(paths: &Paths) -> Result<()> {
+    init_with_device(paths, &DeviceStore::open_default())
+}
+
+/// [`init`] against an explicit device store — the seam that lets a test
+/// (or an embedder with its own identity directory) act as a *different*
+/// machine than the one that will open the workspace.
+pub fn init_with_device(paths: &Paths, store: &DeviceStore) -> Result<()> {
     for dir in [
         &paths.root,
         &paths.dot_outl,
@@ -135,8 +191,7 @@ pub fn init(paths: &Paths) -> Result<()> {
     }
 
     if !paths.config.exists() {
-        let cfg = Config::fresh();
-        write_config(paths, &cfg)?;
+        write_config(paths, &Config::claimed_by(store))?;
     }
 
     // The journal template is a **page** now (`templates/journal` with
@@ -193,10 +248,16 @@ pub fn read_config(paths: &Paths) -> Result<Config> {
 /// still propagates, and a genuinely-missing `.outl/` is rejected by the opener
 /// ([`crate::open`] checks `dot_outl.exists()` first).
 pub fn read_or_init_config(paths: &Paths) -> Result<Config> {
+    read_or_init_config_with_device(paths, &DeviceStore::open_default())
+}
+
+/// [`read_or_init_config`] against an explicit device store — same seam
+/// as [`init_with_device`].
+pub fn read_or_init_config_with_device(paths: &Paths, store: &DeviceStore) -> Result<Config> {
     match read_config(paths) {
         Ok(cfg) => Ok(cfg),
         Err(_) if !paths.config.exists() && paths.dot_outl.is_dir() => {
-            let cfg = Config::fresh();
+            let cfg = Config::claimed_by(store);
             write_config(paths, &cfg)?;
             Ok(cfg)
         }
@@ -204,11 +265,58 @@ pub fn read_or_init_config(paths: &Paths) -> Result<Config> {
     }
 }
 
-/// Write the workspace config.
+/// Write the workspace config, **preserving every key this struct does
+/// not model**.
+///
+/// [`Config`] covers `[workspace]` only, and serializing it wholesale
+/// erased the rest of the file: `[theme] preset` and `[workspace]
+/// storage` vanished on the first write, silently reverting a
+/// per-workspace theme to the global one. So the on-disk document is read
+/// back and the modelled keys are merged over it.
+///
+/// The merge never *removes* a key. Clearing
+/// [`WorkspaceConfig::actor_claimed_by`] by writing `None` therefore does
+/// nothing — no caller does, and dropping a claim by accident is exactly
+/// the failure this file guards against.
+///
+/// The write itself is temp-file + rename. Two processes racing a first
+/// open used to be able to leave a half-written `config.toml`, which
+/// fails every later open with "parsing config.toml" and is recoverable
+/// only by hand.
 pub fn write_config(paths: &Paths, cfg: &Config) -> Result<()> {
-    let s = toml::to_string_pretty(cfg).with_context(|| "serializing config.toml")?;
-    fs::write(&paths.config, s).with_context(|| format!("writing {}", paths.config.display()))?;
-    Ok(())
+    let mut doc: toml::Table = match fs::read_to_string(&paths.config) {
+        Ok(s) => toml::from_str(&s)
+            .with_context(|| format!("parsing {} before rewriting it", paths.config.display()))?,
+        Err(_) => toml::Table::new(),
+    };
+    let rendered = toml::to_string_pretty(cfg).with_context(|| "serializing config.toml")?;
+    let modelled: toml::Table =
+        toml::from_str(&rendered).with_context(|| "re-reading the serialized config")?;
+    merge_tables(&mut doc, modelled);
+
+    let out = toml::to_string_pretty(&doc).with_context(|| "serializing config.toml")?;
+    // `outl_md::write_atomic`, not a local copy: it fsyncs the temp file
+    // *and* the parent directory after the rename. This file carries
+    // `actor_claimed_by`, which decides which device owns which op log —
+    // a rename that survives a crash without its bytes is exactly the
+    // shape of the collision the claim exists to prevent.
+    outl_md::write_atomic(&paths.config, out.as_bytes())
+        .with_context(|| format!("writing {}", paths.config.display()))
+}
+
+/// Overlay `over` onto `base`, recursing into sub-tables so an unmodelled
+/// sibling key survives.
+fn merge_tables(base: &mut toml::Table, over: toml::Table) {
+    for (key, value) in over {
+        match (base.get_mut(&key), value) {
+            (Some(toml::Value::Table(existing)), toml::Value::Table(incoming)) => {
+                merge_tables(existing, incoming);
+            }
+            (_, value) => {
+                base.insert(key, value);
+            }
+        }
+    }
 }
 
 /// Today's date in the user's configured timezone (falling back to the
@@ -233,4 +341,86 @@ pub fn is_workspace_md(paths: &Paths, path: &Path) -> bool {
         }
     }
     path.starts_with(&paths.pages) || path.starts_with(&paths.journals)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use outl_core::device::DeviceStore;
+    use tempfile::TempDir;
+
+    /// A workspace created by its own throwaway device, with both temp
+    /// dirs handed back so neither is dropped mid-test.
+    fn fresh_workspace() -> (TempDir, TempDir, Paths, DeviceStore) {
+        let home = TempDir::new().unwrap();
+        let store = DeviceStore::at(home.path());
+        let dir = TempDir::new().unwrap();
+        let paths = Paths::at(dir.path().to_path_buf());
+        init_with_device(&paths, &store).unwrap();
+        (home, dir, paths, store)
+    }
+
+    /// Defect: [`Config`] models `[workspace]` only, so serializing it
+    /// wholesale deleted every other section. A per-workspace `[theme]
+    /// preset` silently reverted to the global one on the first write.
+    #[test]
+    fn writing_the_config_preserves_sections_it_does_not_model() {
+        let (_home, _ws, paths, _store) = fresh_workspace();
+        let mut raw = std::fs::read_to_string(&paths.config).unwrap();
+        raw.push_str("storage = \"jsonl\"\n\n[theme]\npreset = \"monokai\"\n");
+        std::fs::write(&paths.config, &raw).unwrap();
+
+        let cfg = read_config(&paths).unwrap();
+        write_config(&paths, &cfg).unwrap();
+
+        let doc: toml::Table = toml::from_str(&std::fs::read_to_string(&paths.config).unwrap())
+            .expect("still valid toml");
+        assert_eq!(
+            doc["theme"]["preset"].as_str(),
+            Some("monokai"),
+            "the workspace theme override must survive: {doc:#?}"
+        );
+        assert_eq!(
+            doc["workspace"]["storage"].as_str(),
+            Some("jsonl"),
+            "unmodelled keys inside [workspace] too: {doc:#?}"
+        );
+        // And the modelled keys are still the ones we wrote.
+        assert_eq!(
+            doc["workspace"]["actor_id"].as_str(),
+            Some(cfg.workspace.actor_id.as_str())
+        );
+    }
+
+    /// Defect: `fs::write` truncates first, so a crash (or a second
+    /// process) between truncate and write leaves a `config.toml` that
+    /// fails every later open with "parsing config.toml".
+    #[test]
+    fn writing_the_config_leaves_no_partial_file_behind() {
+        let (_home, _ws, paths, _store) = fresh_workspace();
+        let cfg = read_config(&paths).unwrap();
+        write_config(&paths, &cfg).unwrap();
+        let leftovers: Vec<_> = std::fs::read_dir(&paths.dot_outl)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp file not renamed: {leftovers:?}");
+        read_config(&paths).expect("the config is readable after a rewrite");
+    }
+
+    /// A brand-new `actor_id` is claimed by the device that minted it, so
+    /// every later copy of those bytes reads the claim as foreign. Without
+    /// this, nothing ever claims it and the creating device forks off its
+    /// own workspace on the very first open.
+    #[test]
+    fn a_fresh_config_claims_its_actor_for_the_creating_device() {
+        let (_home, _ws, paths, store) = fresh_workspace();
+        let cfg = read_config(&paths).unwrap();
+        assert_eq!(
+            cfg.workspace.actor_claimed_by.as_deref(),
+            Some(store.machine_id().unwrap().as_str())
+        );
+    }
 }

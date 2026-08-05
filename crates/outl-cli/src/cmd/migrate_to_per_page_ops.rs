@@ -30,7 +30,13 @@ use std::path::PathBuf;
 pub fn run(path: &std::path::Path) -> Result<()> {
     let paths = Paths::at(path.to_path_buf());
     let cfg = read_config(&paths)?;
-    let actor = cfg.actor()?;
+    // This device's own log is the only one it may reshard — a peer's
+    // `ops-<other>.jsonl` is a read-only mirror.
+    let actor = outl_ws::actor::resolve_device_actor(
+        &paths,
+        &cfg,
+        &outl_core::device::DeviceStore::open_default(),
+    )?;
 
     let legacy_path = paths.ops.join(format!("ops-{actor}.jsonl"));
     if !legacy_path.exists() {

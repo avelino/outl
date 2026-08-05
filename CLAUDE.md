@@ -119,6 +119,8 @@ See `crates/outl-frontend-shared/CLAUDE.md` for the full policy.
 ## Reuse-first
 
 Before adding a helper, struct, or constant, **scan the [shared primitives catalog](docs/shared-primitives.md)** and **grep the workspace** for what already does the same thing.
+The catalog is one document in four files: the index, plus [core state](docs/primitives-core.md), [markdown pipeline](docs/primitives-markdown.md) and [editing actions](docs/primitives-actions.md).
+Grep them together: `grep -n 'symbol' docs/shared-primitives.md docs/primitives-*.md`.
 Two implementations of the same logic drift apart over time, and the user is the one who hits the divergence (backlinks, code-block execution, and external-markdown normalization have all been caught mid-PR for exactly this reason).
 
 The rule, past incidents, and what to do when a primitive doesn't exist yet live in [docs/contributing.md → Reuse-first](docs/contributing.md#reuse-first-no-parallel-implementations).

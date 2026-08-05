@@ -25,6 +25,10 @@ sha2 = { workspace = true }
 parking_lot = { workspace = true }
 chrono = { workspace = true }
 fs2 = { workspace = true }
+# Home / roaming-app-data resolution for the device store (`device.rs`),
+# where the per-device actor id lives. Deliberately NOT inside the
+# workspace: anything under `<root>/` rides the file-sync surface.
+dirs = { workspace = true }
 lru = { workspace = true }
 
 [dev-dependencies]

@@ -100,6 +100,27 @@ Everything translated, degraded, or dropped is counted in `ImportReport` — per
 `outl import roam <backup> <dst> --dry-run --json` answers "what would I lose" with numbers before any migration.
 **Silent loss is a bug**: if you add a lossy path, count it.
 
+Three rules that keep the contract honest:
+
+- **Count what landed, not just what you rendered.**
+  Every per-feature counter is bumped inside `emit/render.rs`, in memory, **before** a byte reaches disk.
+  They prove the parser and the renderer agree; they say nothing about a page that failed to write, failed to reconcile, or lost blocks in `reconcile_md`'s 3-level matcher.
+  So `emit::run` ends with `measure_landing`, which sums the block entries of each written page's sidecar — the one artefact `reconcile_md` writes *from* the materialized tree — into `landed_pages` / `landed_blocks` and sets `landing_measured`.
+  A gap makes `Reconciliation::balanced` false and prints `CONTENT NEVER REACHED THE OP LOG`.
+  `dry_run` leaves `landing_measured` false: it writes nothing, and claiming zero loss there would be the same lie the counters used to tell.
+  **If you add a stage downstream of render, it has to be visible to this measurement or it is silent loss.**
+- **Count the denominator, not just the numerator.**
+  Per-feature counts only describe what the pipeline *knows* it emitted; a block lost in the parse hides from both sides.
+  So an adapter also reports `source_pages` / `source_blocks`, counted straight off the parsed source structure, and `ImportReport::finalize` (called once by `run_import*` / `dry_run`) fills `reconciliation` with the input-vs-output balance.
+  Every legitimate reducer is subtracted **by name**: `pages_merged` (two source pages onto one journal date), `skipped` (with `blocks_dropped` per entry), `blocks_lifted_to_props` (a leading pure-attribute block promoted to page props).
+  What's left over is real, unexplained loss, and prints as an unmissable `UNACCOUNTED CONTENT` block.
+  A new adapter that doesn't set the source counts simply gets no `reconciliation` (a fabricated "0/0, balanced" would be worse than silence); wire them up when you add the adapter.
+- **Never `continue` past a construct you're dropping.**
+  Use `report.skip(path, reason, blocks)` — the block count matters, because dropping a page drops its whole subtree.
+- **Aggregate high-frequency warnings, don't emit one per hit.**
+  Roam's mid-block `{{[[TODO]]}}`/`{{[[DONE]]}}` keeps its literal word but loses the task state (outl models one task per block, at its head).
+  A real graph carries tens of thousands of them, so the adapter bumps `tasks_midtext_literal` per occurrence and emits exactly **one** `(graph)`-scoped warning at the end of `parse`.
+
 ## Files
 
 ```
@@ -109,7 +130,7 @@ src/
 ├── ir.rs              # ImportGraph / ImportPage / PageBody / ImportBlock / Inline
 ├── report.rs          # ImportReport (per-feature counts, warnings)
 ├── emit/
-│   ├── mod.rs         # pipeline orchestration + dry-run simulation
+│   ├── mod.rs         # pipeline orchestration + dry-run simulation + landing measurement
 │   ├── render.rs      # IR → markdown, placeholder emission, DFS bookkeeping
 │   ├── assets.rs      # asset resolution: copy/download + placeholder → link (pre-write)
 │   └── resolve.rs     # pass B: uid → handle, edit_text, SetCollapsed

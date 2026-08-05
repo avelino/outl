@@ -260,7 +260,8 @@ Insert mode in the TUI defers the reload via a `pending_reload` flag drained on 
 - `thiserror` for typed errors in libs.
 - `anyhow` only at the binary boundary (CLI prints errors with context).
 - No `unwrap()` in non-test code.
-- A corrupt sidecar is **recoverable**: `outl doctor` regenerates it from the op log.
+- A corrupt sidecar is **recoverable**: `outl doctor --repair` regenerates it from the op log.
+  A bare `outl doctor` only reports — repairs never happen without you asking.
   Don't crash, log + fall back.
 - A corrupt op log is **catastrophic** but we surface it loudly via `outl doctor` so the user can intervene before further writes.
 
@@ -269,6 +270,8 @@ Insert mode in the TUI defers the reload via a `pending_reload` flag drained on 
 ## Future considerations (documented, not built)
 
 - **End-to-end encryption** of sync traffic — iroh supports it, we'll enable.
-- **Per-workspace identity** — each device gets a stable ActorId stored in the workspace's `.outl/config.toml`. (Global preferences — theme, vim mode, font size, last workspace — live separately in `~/.config/outl/config.toml` via the `outl-config` crate.)
+- **Per-workspace identity** — each device gets a stable ActorId, stored **outside** the workspace in the device store (`~/.config/outl/actors/<workspace-id>`, or `$OUTL_DEVICE_DIR`) so two devices syncing one directory can never read the same one.
+  See [storage.md → Where the actor id lives](storage.md#where-the-actor-id-lives--outside-the-workspace).
+  Global preferences — theme, vim mode, font size, last workspace — live separately in `~/.config/outl/config.toml` via the `outl-config` crate.
 - **Read-only export** — Hugo, static HTML, PDF.
 - **Plugin system** — a JavaScript runtime (Boa) ships today (consume op stream, op hooks, slash commands); deeper hooks (new query types, richer render hooks) are still planned.
