@@ -28,11 +28,11 @@ Everything else in the workspace (`outl-cli`, `outl-tui`, the Tauri clients) is 
 
 ```toml
 [dependencies]
-outl-ws = "0.8"          # GA releases
-outl-actions = "0.8"
+outl-ws = "0.10"          # GA releases
+outl-actions = "0.10"
 ```
 
-A `"0.8.0-beta"`-style requirement rides the betas cut from `main`.
+A `"0.10.0-beta"`-style requirement rides the betas cut from `main`.
 The whole workspace shares one version, so keep the crates pinned to the same requirement.
 
 ## Opening a workspace
@@ -156,14 +156,23 @@ The `Storage` trait, the `Op` enum, and the sidecar format carry compatibility g
 An embedder with a `cargo deny` / `cargo audit` gate in CI is the case these crates are published for, so the dependency graph is treated as part of the public surface.
 A crate that trips a policy gate blocks adoption just as hard as a missing feature.
 
-Concretely, `outl-core` carries no advisory-flagged dependency.
-The snapshot encoder moved from bincode to [`postcard`](https://crates.io/crates/postcard) in schema 4, because every bincode version is unmaintained under [RUSTSEC-2025-0141](https://rustsec.org/advisories/RUSTSEC-2025-0141) (issue #207).
-See [Storage → Wire format](storage.md#wire-format-postcard-schema-4).
+**A gate will not come back clean today.**
+Here is exactly what it finds, so you can decide before you add the dependency rather than after.
 
-What the last sweep leaves in the four-crate contract graph: **one flagged crate, `smallstr 0.3.1`** ([RUSTSEC-2026-0215](https://rustsec.org/advisories/RUSTSEC-2026-0215), unmaintained), and **no non-permissive licenses**.
+Across the whole four-crate graph, transitive included, the last sweep leaves **one flagged crate and no non-permissive licenses**:
 
-`smallstr` is transitive through `yrs`, the block-text CRDT, and `yrs` 0.27.3 still depends on it — that one needs an upstream fix, not a bump here.
-It has no patched release, so a gate that fails on `informational = "unmaintained"` will still flag it.
+| crate | advisory | why it is still here |
+|---|---|---|
+| `smallstr 0.3.1` | [RUSTSEC-2026-0215](https://rustsec.org/advisories/RUSTSEC-2026-0215), `unmaintained` | transitive through `yrs`, the block-text CRDT. `yrs` 0.27.3 still depends on it and there is no patched release, so this needs an upstream fix rather than a bump here. |
+
+What changed is that `bincode` is gone.
+It was a **direct** dependency of `outl-core` until schema 4 moved the snapshot encoder to [`postcard`](https://crates.io/crates/postcard).
+Every bincode version is unmaintained under [RUSTSEC-2025-0141](https://rustsec.org/advisories/RUSTSEC-2025-0141).
+See issue #207 and [Storage → Wire format](storage.md#wire-format-postcard-schema-4).
+That one we owned and fixed.
+`smallstr` we don't.
+
+If your gate fails on `informational = "unmaintained"` and you need to ship before `yrs` moves, an advisory ignore scoped to RUSTSEC-2026-0215 is the honest workaround.
 
 This is also why `outl-exec` isn't embedding surface.
 Its language runtimes are where the rest of the noise lives: unmaintained crates plus **LGPL-3.0-only** (`malachite*`, via RustPython) and **MPL-2.0** (`im-rc`, `sized-chunks`, `bitmaps`).
