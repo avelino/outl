@@ -63,7 +63,7 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
   The cost is one slower boot per device, once.
   Cross-version pairing degrades the same way — a peer still on the old build ships a snapshot this build skips while it keeps scanning for a readable one, so it replays instead of erroring.
   The regression tests decode a **real** schema-3 snapshot captured from the old encoder rather than a synthetic corruption, on both the local-boot and the peer-adoption path.
-  `outl-core`'s dependency graph is now free of advisory-flagged crates.
+  `bincode` is gone from `outl-core`'s dependency graph, direct and transitive. One flagged crate remains across the whole embedding contract, `smallstr` (see the entry below), so a gate that fails on `unmaintained` is not clean yet.
   Note the workspace `Cargo.lock` still resolves bincode 1.3.3 through `steel-core`, the Lisp runtime behind `outl-exec`'s default features — that's a separate graph an embedder only opts into by taking `outl-exec`.
 
 - **Swept the rest of the published crates for the same class of problem, and cleared every advisory that a version bump could clear.**

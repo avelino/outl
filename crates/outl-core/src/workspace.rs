@@ -37,6 +37,11 @@ pub enum WorkspaceError {
     /// Underlying storage failure.
     #[error(transparent)]
     Storage(#[from] StorageError),
+    /// The snapshot boot cache could not be built or written. Never
+    /// fatal to the workspace — the op log is the source of truth, so a
+    /// caller logs this and carries on without a cache.
+    #[error(transparent)]
+    Snapshot(#[from] crate::snapshot::SnapshotError),
 }
 
 /// Top-level workspace.
@@ -534,6 +539,8 @@ impl Workspace {
         let (nodes, properties, collapsed, snoozed) = self.tree.snapshot_parts();
         // Convert to BTreeMap/BTreeSet for canonical (order-stable)
         // serialization — see `snapshot::SnapshotBody` for why.
+        // An encode failure surfaces as `WorkspaceError::Snapshot`; both
+        // callers warn and skip the cache rather than lose the workspace.
         Ok(Some(SnapshotBody::from_parts(
             self.actor,
             cutoff.into_iter().collect(),
@@ -552,7 +559,7 @@ impl Workspace {
                 .materialized_text(&self.log)
                 .into_iter()
                 .collect(),
-        )))
+        )?))
     }
 
     /// Build a `SnapshotBody` from the current materialized state and

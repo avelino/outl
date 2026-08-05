@@ -93,10 +93,15 @@ pub enum SnapshotError {
 /// Typed view over a snapshot's `bytes`.
 ///
 /// Built from a `Workspace` via [`SnapshotBody::from_parts`], serialized
-/// with postcard, and persisted by `Storage::save_snapshot`. On boot,
-/// `Workspace` calls [`SnapshotBody::decode`] on the bytes returned by
-/// `Storage::load_snapshot`; a [`SnapshotError`] triggers the full
-/// replay fallback.
+/// with postcard, and persisted by [`write_to_disk`]. On boot,
+/// `Workspace` calls [`SnapshotBody::decode`] on the bytes read by
+/// [`read_from_disk`]; a [`SnapshotError`] triggers the full replay
+/// fallback.
+///
+/// Not a `Storage` responsibility, and deliberately so: `Storage` owns
+/// the op log, `Workspace` owns this cache under `<root>/.outl/snapshots`.
+/// Two owners of the snapshot path is exactly what made snapshot boot
+/// silently inert in production (#156).
 ///
 /// All maps are `BTreeMap`s (not `HashMap`s) on purpose: the
 /// `content_hash` is computed over the serialized body, and `BTreeMap`'s
@@ -154,6 +159,10 @@ impl SnapshotBody {
     /// materialized state already reflects. We compute the `content_hash`
     /// here so what's returned is ready to [`encode`](Self::encode) and
     /// persist.
+    ///
+    /// Fails only if the body can't be encoded, which is also the point
+    /// at which [`encode`](Self::encode) would fail — no snapshot reaches
+    /// the disk either way, and the workspace keeps its op log.
     pub fn from_parts(
         actor: ActorId,
         cutoff: BTreeMap<ActorId, Hlc>,
@@ -162,7 +171,7 @@ impl SnapshotBody {
         collapsed: BTreeSet<NodeId>,
         snoozed: BTreeMap<NodeId, u64>,
         block_text: BTreeMap<NodeId, String>,
-    ) -> Self {
+    ) -> Result<Self, SnapshotError> {
         let mut body = Self {
             schema_version: SCHEMA_VERSION,
             actor,
@@ -174,8 +183,8 @@ impl SnapshotBody {
             block_text,
             content_hash: [0u8; 32],
         };
-        body.content_hash = compute_hash(&body);
-        body
+        body.content_hash = compute_hash(&body)?;
+        Ok(body)
     }
 
     /// Serialize via postcard for persistence by [`write_to_disk`].
@@ -203,7 +212,7 @@ impl SnapshotBody {
                 found: body.schema_version,
             });
         }
-        let recomputed = compute_hash(&body);
+        let recomputed = compute_hash(&body)?;
         if recomputed != body.content_hash {
             return Err(SnapshotError::HashMismatch);
         }
@@ -213,7 +222,12 @@ impl SnapshotBody {
 
 /// Hash the body with the `content_hash` field zeroed. Used both at
 /// build time (to stamp the hash) and at load time (to verify it).
-fn compute_hash(body: &SnapshotBody) -> [u8; 32] {
+///
+/// The encode error propagates rather than degrading to a default. A
+/// swallowed failure would hash the empty vector on **both** sides, and
+/// two `sha256([])` values compare equal — the integrity check would go
+/// on passing while checking nothing.
+fn compute_hash(body: &SnapshotBody) -> Result<[u8; 32], SnapshotError> {
     let mut clone = body.clone();
     clone.content_hash = [0u8; 32];
     // Two bodies with identical content must hash identical regardless
@@ -221,13 +235,13 @@ fn compute_hash(body: &SnapshotBody) -> [u8; 32] {
     // postcard's encoding is order-deterministic given a fixed in-memory
     // layout, so this is sufficient for the integrity check. Cross-actor
     // canonical comparison is not a goal of the hash.
-    let bytes = postcard::to_stdvec(&clone).unwrap_or_default();
+    let bytes = postcard::to_stdvec(&clone).map_err(|e| SnapshotError::Encode(e.to_string()))?;
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     let out = hasher.finalize();
     let mut arr = [0u8; 32];
     arr.copy_from_slice(out.as_slice());
-    arr
+    Ok(arr)
 }
 
 /// Write `body` to `snapshots_dir/snap-<actor>.bin` atomically.
@@ -391,6 +405,7 @@ mod tests {
             BTreeMap::new(),
             BTreeMap::new(),
         )
+        .expect("empty body encodes")
     }
 
     #[test]
@@ -435,7 +450,7 @@ mod tests {
         let mut body = empty_body();
         body.schema_version = SCHEMA_VERSION + 1;
         // Re-stamp the hash so the only thing wrong is the schema.
-        body.content_hash = compute_hash(&body);
+        body.content_hash = compute_hash(&body).expect("test body encodes");
         let bytes = body.encode().expect("encode");
         let err = SnapshotBody::decode(&bytes).unwrap_err();
         assert!(
@@ -453,7 +468,7 @@ mod tests {
     fn rejects_past_schema_version() {
         let mut body = empty_body();
         body.schema_version = SCHEMA_VERSION - 1;
-        body.content_hash = compute_hash(&body);
+        body.content_hash = compute_hash(&body).expect("test body encodes");
         let bytes = body.encode().expect("encode");
         let err = SnapshotBody::decode(&bytes).unwrap_err();
         assert!(

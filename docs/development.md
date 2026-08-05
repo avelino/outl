@@ -589,10 +589,11 @@ The cask carries a `caveats` block with the `xattr -dr com.apple.quarantine` wor
 
 ### crates.io (lib crates for embedders)
 
-The `publish_crates` job in `release.yml` publishes the embedder closure — `outl-core`, `outl-md`, `outl-exec`, `outl-actions`, `outl-ws` — to crates.io on every release, beta and GA, at the same version the binaries report.
+The `publish_crates` job in `release.yml` publishes `outl-core`, `outl-md`, `outl-actions`, `outl-ws` and `outl-exec` to crates.io on every release, beta and GA, at the same version the binaries report.
+The first four are the [embedding contract](embedding.md); `outl-exec` ships only because `outl-actions` references it and cargo refuses to publish a crate whose dependencies aren't in the registry.
 Every other crate in the workspace carries `publish = false`; flipping one later is a one-line change (plus adding it to the job's publish loop).
 
-SemVer keeps consumers safe: a plain `outl-core = "0.8"` requirement never resolves a `-beta.N` prerelease, so crates.io consumers only see GA versions unless they opt in with a `"0.8.0-beta"`-style requirement.
+SemVer keeps consumers safe: a plain `outl-core = "0.10"` requirement never resolves a `-beta.N` prerelease, so crates.io consumers only see GA versions unless they opt in with a `"0.10.0-beta"`-style requirement.
 
 The job is idempotent (it checks crates.io before each publish, so re-runs resume instead of failing) and self-gating (`cargo publish` verifies each crate by building it).
 It authenticates with the `CARGO_REGISTRY_TOKEN` secret in the `release` environment.

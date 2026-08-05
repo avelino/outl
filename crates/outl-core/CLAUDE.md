@@ -90,6 +90,9 @@ Two consequences for anyone touching `snapshot.rs`:
   `fixtures/legacy-snapshot-schema3.bin` — a real captured pre-#207 file, not a synthetic corruption — is what pins this.
 - **A format break here never needs a converter.**
   An unreadable snapshot falls back to full op-log replay, so the worst case of *any* format change is one slower boot.
+- **`compute_hash` and `from_parts` return `Result`, and that is load-bearing.**
+  Degrading an encode failure to a default would hash the empty vector on both the write and the verify side, and `sha256([])` compares equal to `sha256([])` — the integrity check would keep passing while checking nothing.
+  The error surfaces as `WorkspaceError::Snapshot`; both snapshot writers warn and skip the cache, which costs a replay and never the workspace.
 
 ### Snapshot dir has exactly one owner — the `Workspace`, keyed off `root`
 
