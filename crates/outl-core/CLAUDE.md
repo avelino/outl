@@ -73,6 +73,23 @@ Treat every change as production-bound.
   `<root>/ops/` (the op log) is deliberately **not** a dotfile because it must sync; `<root>/.outl/snapshots/` deliberately **is**, because it must not.
   The replay cutoff is a **per-actor vector clock** (`SnapshotBody.cutoff: BTreeMap<ActorId, Hlc>`), never a single global HLC — boot replays, per actor, every op above that actor's mark plus every op of an actor the snapshot never saw.
   A single global cutoff silently drops a low-HLC op from a lagging peer delivered after the snapshot (#156 Half 2); the delta comes from `Storage::ops_since_per_actor`.
+  The body is **postcard**-encoded at `SCHEMA_VERSION = 4` (bincode through schema 3) — see below.
+
+### This crate's dependency graph is public surface
+
+The snapshot encoder is postcard since schema 4 because bincode is unmaintained under RUSTSEC-2025-0141, not because postcard is nicer (#207 — the *why* lives in [`docs/storage.md`](../../docs/storage.md#wire-format-postcard-schema-4)).
+
+The rule that outlives that migration: **`outl-core` is published for embedding, so a dep that trips a downstream `cargo deny` blocks adoption as hard as a missing feature.**
+A new direct dep here needs a maintained upstream and a permissive license.
+Test-only helpers go in `[dev-dependencies]`, never `[dependencies]`.
+
+Two consequences for anyone touching `snapshot.rs`:
+
+- **`SCHEMA_VERSION` and the encoder move together, and `decode` compares `!=`.**
+  Bump one without the other and an old snapshot gets half-parsed as if it were current.
+  `fixtures/legacy-snapshot-schema3.bin` — a real captured pre-#207 file, not a synthetic corruption — is what pins this.
+- **A format break here never needs a converter.**
+  An unreadable snapshot falls back to full op-log replay, so the worst case of *any* format change is one slower boot.
 
 ### Snapshot dir has exactly one owner — the `Workspace`, keyed off `root`
 

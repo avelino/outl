@@ -9,12 +9,19 @@
 //!
 //! ## Layout
 //!
-//! [`SnapshotBody`] is bincode-serialized and written straight to
+//! [`SnapshotBody`] is [`postcard`]-serialized and written straight to
 //! `<root>/.outl/snapshots/snap-<actor>.bin` by [`write_to_disk`], and
 //! read back by [`read_from_disk`]. `Workspace` owns both the format and
 //! the on-disk location — the snapshot is a local boot cache, never
 //! routed through the storage backend (the op log). A single
 //! `schema_version` lets us migrate later without guessing.
+//!
+//! The encoder is postcard as of schema 4 (bincode through schema 3) —
+//! a dependency-policy decision, since this crate is published for
+//! embedding. Rationale in `docs/storage.md` → Wire format.
+//!
+//! A format change here needs no converter: an unreadable snapshot falls
+//! back to full op-log replay, so the worst case is one slower boot.
 //!
 //! ## Integrity
 //!
@@ -42,10 +49,10 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
-/// Current snapshot wire format. Bumped on any breaking change to
-/// [`SnapshotBody`]; `decode` rejects mismatched versions instead of
-/// guessing at backward compatibility.
-pub const SCHEMA_VERSION: u32 = 3;
+/// Current snapshot wire format. Bump it on any breaking change to
+/// [`SnapshotBody`] **or to the encoder**; `decode` rejects every other
+/// version instead of guessing at backward compatibility.
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Errors that can occur while encoding or decoding a snapshot.
 ///
@@ -55,11 +62,12 @@ pub const SCHEMA_VERSION: u32 = 3;
 /// silently eating the I/O cost.
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotError {
-    /// Snapshot was written by a future schema version we don't know.
-    #[error("snapshot schema version mismatch: expected <= {max_supported}, got {found}")]
+    /// Snapshot was written by a different schema version, newer or
+    /// older — see [`SnapshotBody::decode`] on why older is rejected too.
+    #[error("snapshot schema version mismatch: expected {expected}, got {found}")]
     SchemaMismatch {
-        /// Highest schema version this binary understands.
-        max_supported: u32,
+        /// The only schema version this binary reads.
+        expected: u32,
         /// Schema version found in the snapshot buffer.
         found: u32,
     },
@@ -67,10 +75,12 @@ pub enum SnapshotError {
     /// partially rewritten (e.g. `kill -9` mid-save).
     #[error("snapshot content hash mismatch — corrupt or stale")]
     HashMismatch,
-    /// Failed to serialize the snapshot body via bincode.
+    /// Failed to serialize the snapshot body via postcard.
     #[error("snapshot encode error: {0}")]
     Encode(String),
-    /// Failed to deserialize the snapshot body via bincode.
+    /// Failed to deserialize the snapshot body via postcard. Also where
+    /// a snapshot from an older encoder lands — a foreign format dies in
+    /// the parser, before the schema check ever runs.
     #[error("snapshot decode error: {0}")]
     Decode(String),
     /// Filesystem error while writing or reading the snapshot file.
@@ -83,18 +93,18 @@ pub enum SnapshotError {
 /// Typed view over a snapshot's `bytes`.
 ///
 /// Built from a `Workspace` via [`SnapshotBody::from_parts`], serialized
-/// with bincode, and persisted by `Storage::save_snapshot`. On boot,
+/// with postcard, and persisted by `Storage::save_snapshot`. On boot,
 /// `Workspace` calls [`SnapshotBody::decode`] on the bytes returned by
 /// `Storage::load_snapshot`; a [`SnapshotError`] triggers the full
 /// replay fallback.
 ///
 /// All maps are `BTreeMap`s (not `HashMap`s) on purpose: the
-/// `content_hash` is computed over the bincode-serialized body, and
-/// `BTreeMap`'s iteration order is determined by key order — not by
-/// per-instance hash-table state — so two bodies with the same content
-/// produce the same hash. (Rust's `HashMap` randomizes layout per
-/// process and even two `HashMap`s with identical contents can iterate
-/// in different orders after different insertion histories.)
+/// `content_hash` is computed over the serialized body, and `BTreeMap`'s
+/// iteration order is determined by key order — not by per-instance
+/// hash-table state — so two bodies with the same content produce the
+/// same hash. (Rust's `HashMap` randomizes layout per process and even
+/// two `HashMap`s with identical contents can iterate in different
+/// orders after different insertion histories.)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SnapshotBody {
     /// Bumped on any breaking change to this struct.
@@ -168,23 +178,28 @@ impl SnapshotBody {
         body
     }
 
-    /// Serialize via bincode for persistence by [`write_to_disk`].
+    /// Serialize via postcard for persistence by [`write_to_disk`].
     pub fn encode(&self) -> Result<Vec<u8>, SnapshotError> {
-        bincode::serialize(self).map_err(|e| SnapshotError::Encode(e.to_string()))
+        postcard::to_stdvec(self).map_err(|e| SnapshotError::Encode(e.to_string()))
     }
 
     /// Deserialize and validate a snapshot buffer.
     ///
     /// Returns [`SnapshotError::HashMismatch`] on tampering or
     /// truncation, and [`SnapshotError::SchemaMismatch`] if the buffer
-    /// came from a future version. Both are recoverable: the caller
-    /// falls back to a full op-log replay.
+    /// came from any version but the current one. Both are recoverable:
+    /// the caller falls back to a full op-log replay.
+    ///
+    /// The version check is `!=`, not `<=`, because there is no readable
+    /// older snapshot: encoder and `SCHEMA_VERSION` are bumped together.
+    /// Accepting an older number would let a future schema that keeps
+    /// postcard and merely appends a field half-parse into a partial tree.
     pub fn decode(bytes: &[u8]) -> Result<Self, SnapshotError> {
         let body: Self =
-            bincode::deserialize(bytes).map_err(|e| SnapshotError::Decode(e.to_string()))?;
-        if body.schema_version > SCHEMA_VERSION {
+            postcard::from_bytes(bytes).map_err(|e| SnapshotError::Decode(e.to_string()))?;
+        if body.schema_version != SCHEMA_VERSION {
             return Err(SnapshotError::SchemaMismatch {
-                max_supported: SCHEMA_VERSION,
+                expected: SCHEMA_VERSION,
                 found: body.schema_version,
             });
         }
@@ -203,10 +218,10 @@ fn compute_hash(body: &SnapshotBody) -> [u8; 32] {
     clone.content_hash = [0u8; 32];
     // Two bodies with identical content must hash identical regardless
     // of HashMap iteration order — serialize the canonical-form clone.
-    // bincode's default encoding is already order-deterministic given a
-    // fixed in-memory layout, so this is sufficient for the integrity
-    // check. Cross-actor canonical comparison is not a goal of the hash.
-    let bytes = bincode::serialize(&clone).unwrap_or_default();
+    // postcard's encoding is order-deterministic given a fixed in-memory
+    // layout, so this is sufficient for the integrity check. Cross-actor
+    // canonical comparison is not a goal of the hash.
+    let bytes = postcard::to_stdvec(&clone).unwrap_or_default();
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     let out = hasher.finalize();
@@ -217,7 +232,7 @@ fn compute_hash(body: &SnapshotBody) -> [u8; 32] {
 
 /// Write `body` to `snapshots_dir/snap-<actor>.bin` atomically.
 ///
-/// Encodes the body to bincode, writes to a sibling `.tmp`, `fsync`s,
+/// Encodes the body to postcard, writes to a sibling `.tmp`, `fsync`s,
 /// and renames into place. A crash at any point leaves either nothing
 /// (`.tmp` never created) or a stale `.tmp` (rename didn't happen) —
 /// never a half-written `snap-*.bin` that `load` could mistake for a
@@ -362,6 +377,10 @@ pub fn read_best_from_disk(
 mod tests {
     use super::*;
 
+    /// See `crates/outl-core/fixtures/README.md`.
+    const LEGACY_BINCODE_SCHEMA_3: &[u8] =
+        include_bytes!("../fixtures/legacy-snapshot-schema3.bin");
+
     fn empty_body() -> SnapshotBody {
         SnapshotBody::from_parts(
             ActorId::new(),
@@ -396,6 +415,21 @@ mod tests {
         assert!(matches!(err, SnapshotError::HashMismatch), "got {err:?}");
     }
 
+    /// A snapshot written by a pre-#207 build (schema 3, bincode) must be
+    /// rejected, never half-parsed. Either outcome the decoder can reach —
+    /// a parse failure or a `content_hash` mismatch — routes the caller to
+    /// the full op-log replay it already had for corrupt snapshots, so the
+    /// upgrade costs one slower boot and nothing else.
+    #[test]
+    fn rejects_legacy_bincode_snapshot() {
+        let err =
+            SnapshotBody::decode(LEGACY_BINCODE_SCHEMA_3).expect_err("legacy must not decode");
+        assert!(
+            matches!(err, SnapshotError::Decode(_) | SnapshotError::HashMismatch),
+            "got {err:?}"
+        );
+    }
+
     #[test]
     fn rejects_future_schema_version() {
         let mut body = empty_body();
@@ -406,6 +440,24 @@ mod tests {
         let err = SnapshotBody::decode(&bytes).unwrap_err();
         assert!(
             matches!(err, SnapshotError::SchemaMismatch { found, .. } if found == SCHEMA_VERSION + 1),
+            "got {err:?}"
+        );
+    }
+
+    /// The `<=` this check used to be would have accepted this body — a
+    /// well-formed, correctly-hashed buffer claiming an *older* schema.
+    /// Harmless today (a real schema-3 file is bincode and dies in the
+    /// parser), but the moment a schema bump keeps postcard and merely
+    /// appends a field, that is a partial tree read as if it were whole.
+    #[test]
+    fn rejects_past_schema_version() {
+        let mut body = empty_body();
+        body.schema_version = SCHEMA_VERSION - 1;
+        body.content_hash = compute_hash(&body);
+        let bytes = body.encode().expect("encode");
+        let err = SnapshotBody::decode(&bytes).unwrap_err();
+        assert!(
+            matches!(err, SnapshotError::SchemaMismatch { found, .. } if found == SCHEMA_VERSION - 1),
             "got {err:?}"
         );
     }

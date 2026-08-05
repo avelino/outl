@@ -104,3 +104,9 @@ pub fn create_op(node: NodeId, parent: NodeId, position: Fractional) -> Op {
         position,
     }
 }
+
+/// One real `snap-<actor>.bin` from a schema-3 (bincode) build — the
+/// upgrade every device lives through exactly once (#207).
+/// See `crates/outl-core/fixtures/README.md`.
+pub const LEGACY_BINCODE_SCHEMA_3_SNAPSHOT: &[u8] =
+    include_bytes!("../../fixtures/legacy-snapshot-schema3.bin");

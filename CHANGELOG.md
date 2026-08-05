@@ -49,6 +49,31 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
   Pasting Roam content converts `^^…^^` to `==…==` too (previously it was stripped), trimming any space next to the markers so the result renders.
   The matcher rejects a space next to either marker, so a spaced comparison (`a == b`) stays plain text — unlike `~~strike~~`.
 
+### Changed
+
+- **The snapshot boot cache is encoded with `postcard` instead of `bincode`, so `outl-core` can be embedded in a project with a dependency-policy gate (issue #207).**
+  `outl-core` is on crates.io specifically so other projects can [embed outl](docs/embedding.md) as a storage layer.
+  That story was blocked in practice: a maintainer auditing a PR that embedded outl rejected it because the graph failed their policy gate.
+  The cause is [RUSTSEC-2025-0141](https://rustsec.org/advisories/RUSTSEC-2025-0141) — the bincode team ceased development permanently, and the advisory carries `patched = []`, meaning **every** version is flagged, 1.x and 2.x alike (the 3.0.0 "release" is a tombstone whose entire `lib.rs` is a `compile_error!`).
+  So moving from bincode 1 to bincode 2 would have changed the version number and left every downstream `cargo deny` / `cargo audit` failing exactly as before.
+  postcard is serde-native, actively maintained, `MIT OR Apache-2.0`, and its varint encoding is smaller on the wire — which also helps the peer snapshot transfer over iroh.
+  **Nothing about this can lose data.**
+  A snapshot has never been source of truth; the op log is.
+  `SCHEMA_VERSION` goes `3` → `4`, an old snapshot fails `decode`, and that lands on the same path a corrupt snapshot always took: full op-log replay, nothing surfaced to the user.
+  The cost is one slower boot per device, once.
+  Cross-version pairing degrades the same way — a peer still on the old build ships a snapshot this build skips while it keeps scanning for a readable one, so it replays instead of erroring.
+  The regression tests decode a **real** schema-3 snapshot captured from the old encoder rather than a synthetic corruption, on both the local-boot and the peer-adoption path.
+  `outl-core`'s dependency graph is now free of advisory-flagged crates.
+  Note the workspace `Cargo.lock` still resolves bincode 1.3.3 through `steel-core`, the Lisp runtime behind `outl-exec`'s default features — that's a separate graph an embedder only opts into by taking `outl-exec`.
+
+- **Swept the rest of the published crates for the same class of problem, and cleared every advisory that a version bump could clear.**
+  #207 was one symptom; the audit was the point.
+  `wasmtime` 46.0.1 → **47.0.3** closes two real vulnerabilities (RUSTSEC-2026-0222 / -0223 — cross-engine type-index confusion and VM-state corruption on preempted bulk operations). 46.0.2 was never published, so the fix required the major bump; it needed no code change.
+  `crossbeam-epoch` 0.9.18 → 0.9.20 (RUSTSEC-2026-0204, invalid pointer dereference), `anyhow` 1.0.102 → 1.0.104 (RUSTSEC-2026-0190, unsoundness in `Error::downcast_mut`), `event-listener` 5.4.1 → 5.4.2 (RUSTSEC-2026-0221, `!Send` tags crossing threads).
+  **The embedding contract — `outl-core`, `outl-md`, `outl-actions`, `outl-ws` — now carries exactly one flagged crate between all four**: `smallstr 0.3.1` (unmaintained, no patched release), transitive through `yrs`. `yrs` 0.27.3 still depends on it, so that one needs upstream and is tracked separately.
+  Its licenses are fully permissive.
+  The sweep also clarified something [Embedding](docs/embedding.md) had wrong: **`outl-exec` is not embedding surface.** It sits on crates.io only because `outl-actions` references it and cargo won't publish a crate whose dependencies aren't in the registry. Running code fences is an app concern, not a storage-layer one, which is why the workspace has always pinned it at `default-features = false` — and why the LGPL-3.0 / MPL-2.0 crates its language runtimes pull in never reach an embedder. The doc now says so instead of listing it as a fifth option.
+
 ### Fixed
 
 - **`outl doctor` no longer claims every `.md` parses cleanly right after listing the ones that don't.**

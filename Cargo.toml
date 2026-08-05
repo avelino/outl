@@ -78,7 +78,12 @@ serde_json = "1"
 serde_yaml_ng = "0.10"
 toml = "1.1"
 # Compact binary serialization for snapshots (see docs/storage.md → Snapshots).
-bincode = "1"
+# postcard, not bincode: every bincode version is flagged unmaintained by
+# RUSTSEC-2025-0141, and `outl-core` is published for embedding — a downstream
+# `cargo deny` / `cargo audit` gate fails on the advisory no matter which
+# bincode we pin (issue #207). `default-features = false` drops `heapless`;
+# `use-std` is what the alloc-backed `BTreeMap` / `String` fields need.
+postcard = { version = "1", default-features = false, features = ["use-std"] }
 
 # Errors
 thiserror = "2"
