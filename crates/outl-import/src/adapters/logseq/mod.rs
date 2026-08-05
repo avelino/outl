@@ -32,7 +32,7 @@ use crate::adapters::scan::{parse_prop_line, parse_whole_fence};
 use crate::ir::{
     AssetRef, BlockContent, ImportBlock, ImportGraph, ImportPage, PageBody, PageName, TaskState,
 };
-use crate::report::{ImportReport, SkippedFile};
+use crate::report::ImportReport;
 use outl_md::slug::slugify;
 use std::path::{Path, PathBuf};
 
@@ -91,12 +91,12 @@ fn md_files_shallow(dir: &Path, report: &mut ImportReport) -> Vec<PathBuf> {
         }
         match path.extension().and_then(|x| x.to_str()) {
             Some("md") => out.push(path),
-            Some("org") => report.skipped.push(SkippedFile {
-                path: path.display().to_string(),
-                reason: "org-mode files are not supported — convert the graph to markdown \
-                         in Logseq first"
-                    .to_string(),
-            }),
+            Some("org") => report.skip(
+                path.display().to_string(),
+                "org-mode files are not supported — convert the graph to markdown \
+                 in Logseq first",
+                0,
+            ),
             _ => {}
         }
     }

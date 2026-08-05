@@ -104,7 +104,18 @@ pub fn reconcile_md(
     let existing_sidecar: Option<Sidecar> = match sidecar::read(&sidecar_path) {
         Ok(sc) => Some(sc),
         Err(sidecar::SidecarError::Io(e)) if e.kind() == io::ErrorKind::NotFound => None,
-        Err(_) => None, // Corrupt sidecar — rebuild from scratch.
+        // A sidecar written by a **newer** binary is not corruption —
+        // it is a mixed-version workspace (the mobile build on
+        // TestFlight lags the desktop by days). Rebuilding "from
+        // scratch" here would hand every block a fresh ULID while the
+        // old ids stay in the tree: the page duplicates, every
+        // `((blk-…))` handle changes, and the next boot of the newer
+        // binary does the same in reverse. Refuse the page loudly and
+        // leave the workspace untouched; the caller logs and skips it.
+        // See `SIDECAR_VERSION` for why a version bump is a
+        // fleet-coordinated break rather than a patch.
+        Err(e @ sidecar::SidecarError::UnsupportedVersion(_)) => return Err(e.into()),
+        Err(_) => None, // Corrupt JSON — rebuild from scratch.
     };
     let (page_id, old_blocks, created_sidecar) = match &existing_sidecar {
         Some(sc) => (sc.page_id, sc.blocks.clone(), false),

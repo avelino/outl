@@ -28,9 +28,16 @@ A path stored in `config.toml` that no longer exists on disk is **skipped silent
 **Opening a workspace created by a GUI client or P2P sync.**
 The desktop, mobile, and the iroh transport seed a workspace with `.outl/workspace-id` + `ops/` + the page/journal dirs, but **never** the per-workspace `.outl/config.toml`.
 They keep the device actor in `<app-config-dir>/actor`, not in the workspace.
-The CLI/TUI/MCP read the device actor from `config.toml`, so pointing them at a GUI-made workspace used to fail with "no outl workspace — run `outl init`".
-`workspace_layout::read_or_init_config` fixes that: when the `.outl/` dir exists but `config.toml` doesn't, it seeds a fresh one (new actor) and proceeds, so `outl --workspace <gui-folder>` just works.
+The CLI/TUI/MCP used to read the device actor from `config.toml`, so pointing them at a GUI-made workspace failed with "no outl workspace — run `outl init`".
+`workspace_layout::read_or_init_config` fixes that: when the `.outl/` dir exists but `config.toml` doesn't, it seeds a fresh one and proceeds, so `outl --workspace <gui-folder>` just works.
 `ws::open` (CLI + MCP) and `outl_tui`'s `open_workspace` both go through this lazy-seed path; a genuinely-missing `.outl/` still errors.
+
+**Never read the write actor out of `config.toml`.**
+Every opener here resolves it through `outl_ws::actor::resolve_device_actor`, which reads `outl_core::DeviceStore` — a directory outside the workspace.
+`.outl/config.toml` rides the file-sync surface on every transport except iCloud, so an actor read from it is the *same* on two devices.
+The per-actor `flock` cannot arbitrate either (advisory, machine-local): both devices append to one `ops-<actor>.jsonl` and lose ops silently.
+That applies to `init`, `serve`, `doctor` and `migrate-to-per-page-ops` too — `doctor` reports the **resolved device actor**, not `cfg.workspace.actor_id`.
+See `outl-core/CLAUDE.md` → "Actor id is device-local, and the workspace cannot hold it".
 
 > Full schema + per-OS path of `config.toml` is documented in [`docs/config.md`](../../docs/config.md).
 > The `outl-config` crate is the only reader; never re-parse the TOML by hand here.
@@ -49,15 +56,51 @@ The CLI/TUI/MCP read the device actor from `config.toml`, so pointing them at a 
   A legacy file, if present, migrates into the page body best-effort.
   Opening today's journal then auto-instantiates it.
 - `outl serve [<path>] [--once]` — run file watcher; `--once` reconciles every `.md` and exits (smoke tests, scripting).
-- `outl doctor [<path>]` — integrity check (sidecars, orphan block refs, **parser warnings** from non-dialect `.md` content).
-  Read-only.
+- `outl doctor [<path>] [--json] [--repair]` — integrity check.
+  **Read-only by default**; `--repair` is the only writing mode.
+  Full user-facing check list lives in [`docs/cli.md`](../../docs/cli.md#outl-doctor).
   Parser warnings are appended to `.outl/orphans.log` tagged `parse-warning <iso> <path>:<line> <kind> <raw>` so the trail persists across runs.
+
+  `cmd/doctor/` is a module dir, one file per class of check.
+  `oplog.rs` — raw `.jsonl` line sweep, snapshot decode, offset-index coherence.
+  `files.rs` — `.md` ↔ sidecar, parse warnings, orphan block refs, sync-conflict copies.
+  `tree.rs` — trash contents, unmaterialized ops, projection drift (needs a booted `Workspace`).
+  `repair.rs` — the `--repair` pass.
+  `mod.rs` — report types + orchestration.
+
+  Two invariants for anyone touching this:
+
+  1. **The raw `.jsonl` sweep in `oplog.rs` must stay independent of `JsonlStorage`.**
+     `JsonlStorage::open` skips malformed records on purpose — one torn tail line must never lock a user out of their workspace — and reports them only via `tracing::warn!`.
+     Doctor is the only surface that names *which line of which file* was lost, so it frames records itself rather than asking the storage layer.
+  2. **`--repair` writes projections and caches, never the op log.**
+     Allow-list: re-project a `.md` + sidecar from the log, rebuild a missing sidecar over byte-identical content, delete a corrupt snapshot, prune old repair backups.
+     It never deletes a `.md`, never touches `ops/`, never moves a block to the trash, and never picks a winner between sync-conflict copies.
+     Every file it writes is copied to `.outl/repair-backup/<timestamp>/` first; that directory is pruned by `BACKUP_KEEP` / `BACKUP_MIN_AGE_DAYS` (an entry must fail **both** to be removed).
+     The page write itself delegates to `outl_actions::apply_page_md_with_sidecar{,_if_stale}` so the doctor never develops its own opinion about when a projection is safe to overwrite.
+  3. **A damaged op log has no authority to overwrite its own projection.**
+     `JsonlStorage` skips malformed records by design, so a torn `ops/` file replays into a **truncated tree** — while the `.md` on disk still matches its sidecar hash and therefore still looks "faithful".
+     Re-projecting there overwrites a good `.md` with an incomplete render and rewrites the sidecar to declare the truncation faithful, which is a silent, unrecoverable delete dressed as a repair.
+     So `OpLogHealth` gates `reproject` **and** `rebuild_sidecar`: both are cleared before `describe()`, so a damaged log doesn't even *offer* them in the read-only listing.
+     Three things mark the log damaged — a line carrying no usable op, an unreadable file / mid-scan I/O error, and a sync-conflict copy inside `ops/` (a forked log whose ops never reached the tree).
+     Snapshot deletion is deliberately **not** gated: it is pure cache, and dropping it only forces the full replay a damaged log wants anyway.
+  4. **Read-only means read-only, including the index sidecars.**
+     `JsonlStorage::open` runs `create_dir_all` + `reload`, and `reload` persists `.ops-*.idx` / `.ops-*.nodes.idx` — so merely *opening* the storage writes into `ops/`, in both modes.
+     `ops_guard.rs` snapshots `ops/` before the open and restores it afterwards, in **both** modes, so "never touches `ops/`" holds for the whole command rather than just the repair pass.
+     A `.jsonl` that changed under the guard is reported as an **error**, never silently patched.
+     The test asserts over the whole directory (names + bytes); comparing a single file is what let this hide.
 - `outl reconcile [<path>]` — list orphans pending manual resolution.
 - `outl migrate-to-shared [<path>]` — copy local sqlite log into shared `ops/` JSONL for cross-device sync.
 - `outl import roam|logseq|obsidian|auto <src> <dst>` — graph import.
   Every source routes through the adapter-based `outl-import` crate (`--dry-run`, `--json`, `--preserve-timestamps`; real `((blk-XXXXXX))` ref/embed resolution, `Op::SetCollapsed`).
   `auto` picks the adapter from the source's shape.
-  See `crates/outl-import/CLAUDE.md`; `cmd/import.rs` here is pure glue (args, workspace bootstrap, report printing).
+  A non-dry run **refuses a destination that already holds content** (`cmd/import/guard.rs`): re-importing overwrites those pages and reconciles the result, erasing anything written in outl since the last import.
+  `--force` is the explicit opt-in; `--dry-run` never reaches the guard.
+  Three things that guard gets right and a file-counting one cannot.
+  It reads occupancy off the **materialized tree**, not `pages/*.md` — a device paired over iroh holds the whole graph with nothing projected, and importing into it fuses the new blocks under the existing (slug-derived, identical) page roots.
+  It treats `outl init`'s output (template page + empty journal) as vacant, so the documented `init` + `import` flow never asks for `--force` — a guard that fires on the happy path only teaches users to type the destructive flag.
+  And it recognises `.outl/import-in-progress.json`, the marker a real import holds for its duration, so an import that died at page 40k of 66k is resumable with a plain re-run instead of `--force`.
+  See `crates/outl-import/CLAUDE.md`; `cmd/import/mod.rs` here is pure glue (args, workspace bootstrap, report printing).
 - `outl theme list|show <preset>` — TUI theme inspection.
 - `outl plugin init|list|install|run|enable|disable|remove` — manage the workspace's JS plugins (under `<workspace>/.outl/plugins/`), wrapping `outl-plugins`.
   `init <NAME> [--id <ID>] [--dir <PATH>]` scaffolds a buildable plugin project (manifest + `package.json` + `tsconfig` + `src/index.ts` + README); it touches no workspace.
@@ -174,7 +217,9 @@ src/
 │   ├── doctor.rs          # outl doctor
 │   ├── reconcile.rs       # outl reconcile
 │   ├── theme.rs           # outl theme
-│   ├── import.rs          # outl import — glue over the outl-import crate (adapters, --dry-run, auto-detect)
+│   ├── import/            # outl import — glue over the outl-import crate
+│   │   ├── mod.rs         #   adapters, --dry-run, auto-detect, progress line, report printing
+│   │   └── guard.rs       #   re-import safety: op-log occupancy + the in-progress marker
 │   ├── migrate_to_shared.rs
 │   ├── export.rs          # legacy `outl export --to fmt` placeholder
 │   ├── export_v2.rs       # outl export {hugo,md,json}

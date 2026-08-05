@@ -174,11 +174,21 @@ fn component(
 
     // Mid-text task markers → literal prefix text (start-of-block
     // markers are stripped upstream before tokenize runs).
+    //
+    // The word survives, the task state doesn't: outl models one task
+    // per block, driven by the marker at the block's head, so a marker
+    // buried mid-text can't become one without moving the user's words
+    // around. Keeping it literal is the least-bad option — and it's
+    // counted, because the block silently stops answering `outl query
+    // --kind=task`. The aggregate warning is emitted once per import
+    // (a 10k-DONE graph would otherwise produce 10k warnings).
     if inner == "[[TODO]]" || inner == "TODO" {
+        report.tasks_midtext_literal += 1;
         buf.push_str("TODO");
         return;
     }
     if inner == "[[DONE]]" || inner == "DONE" {
+        report.tasks_midtext_literal += 1;
         buf.push_str("DONE");
         return;
     }

@@ -28,11 +28,11 @@ Everything else in the workspace (`outl-cli`, `outl-tui`, the Tauri clients) is 
 
 ```toml
 [dependencies]
-outl-ws = "0.10"          # GA releases
-outl-actions = "0.10"
+outl-ws = "0.11"          # GA releases
+outl-actions = "0.11"
 ```
 
-A `"0.10.0-beta"`-style requirement rides the betas cut from `main`.
+A `"0.11.0-beta"`-style requirement rides the betas cut from `main`.
 The whole workspace shares one version, so keep the crates pinned to the same requirement.
 
 ## Opening a workspace
@@ -139,8 +139,9 @@ These are the [repo invariants](contributing.md) as seen from the outside:
 An embedder is a **passive writer**, same policy as `outl mcp serve` and the ephemeral CLI (see [CLI](cli.md) → passive writers).
 Practical consequences:
 
-- Your process may get an ephemeral actor when the app holds the config actor.
+- Your process may get an ephemeral actor when the app holds this device's actor.
   That is normal, not an error.
+  (The device actor itself comes from the device store outside the workspace, not from `.outl/config.toml` — see [storage.md](storage.md#where-the-actor-id-lives--outside-the-workspace).)
 - Ops you write while the GUI is open are picked up by its file watcher and shipped to peers by its transport.
 - Ops written while nothing else runs sit on disk until any long-lived surface opens, then converge.
 - Reads see whatever the log held when you called `open`.

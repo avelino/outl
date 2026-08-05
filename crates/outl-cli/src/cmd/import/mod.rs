@@ -10,8 +10,17 @@
 //! `outl import auto <src> <dst>` picks the adapter from the source's
 //! shape (Roam = JSON file, Logseq = graph dir, Obsidian = vault with
 //! `.obsidian/`).
+//!
+//! Re-import safety (is this destination safe to write into, and is a
+//! half-finished import resumable) lives in [`guard`].
+
+mod guard;
 
 use anyhow::{Context, Result};
+use guard::{
+    clear_marker, guard_foreign_destination, guard_workspace, read_marker, recovery_hint,
+    write_marker,
+};
 use outl_import::adapters::{LogseqAdapter, ObsidianAdapter, RoamAdapter};
 use outl_import::SourceAdapter;
 use std::path::Path;
@@ -27,6 +36,9 @@ pub struct ImportFlags {
     pub preserve_timestamps: bool,
     /// Skip pulling referenced files into `assets/` — keep original links.
     pub no_assets: bool,
+    /// Import into a destination that already holds content, overwriting
+    /// it. Off by default — see [`guard::guard_workspace`].
+    pub force: bool,
 }
 
 /// Dispatch on the source format chosen by the user.
@@ -181,12 +193,19 @@ fn run_adapter(
             .with_context(|| format!("{} dry-run from {}", adapter.id(), src.display()))?
     } else {
         let dst = dst.to_path_buf();
+        guard_foreign_destination(&dst, flags.force)?;
         if !dst.exists() {
             crate::cmd::init::run(&dst, "global")?;
         }
         let paths = crate::workspace_layout::Paths::at(dst.clone());
+        // Read before opening: `ws::open` itself writes nothing to the
+        // marker, but keeping the read next to the guard makes the
+        // "resume" decision one place.
+        let unfinished = read_marker(&paths.dot_outl);
         let mut ctx = crate::ws::open(&dst)
             .map_err(|e| anyhow::anyhow!("opening workspace: {} ({})", e.message, e.code))?;
+        guard_workspace(&dst, &ctx.workspace, flags.force, unfinished.as_ref())?;
+        write_marker(&paths.dot_outl, adapter.id(), src);
         let dest = outl_import::ImportDest {
             workspace: &mut ctx.workspace,
             hlc: &ctx.hlc,
@@ -201,7 +220,15 @@ fn run_adapter(
         })
         .with_context(|| format!("{} import from {}", adapter.id(), src.display()));
         progress.finish();
-        out?
+        match out {
+            Ok(report) => {
+                clear_marker(&paths.dot_outl);
+                report
+            }
+            // Leave the marker in place: it's what makes the retry
+            // possible without `--force`.
+            Err(e) => return Err(e.context(recovery_hint(&dst, &paths.dot_outl))),
+        }
     };
 
     if flags.json {

@@ -1,0 +1,13 @@
+[env]
+# Keep every cargo-spawned process (tests, `cargo run`) off the developer's
+# real device store at `~/.config/outl/`.
+#
+# The per-device actor id now lives outside the workspace
+# (`outl_core::device`), and the CLI/TUI test suites open hundreds of temp
+# workspaces. Without this override each one would leave a file in the
+# developer's config directory, and two test binaries would share the machine
+# id that arbitrates actor-claim migration.
+#
+# An installed `outl` binary is unaffected — cargo only exports this to
+# processes it launches itself.
+OUTL_DEVICE_DIR = { value = "target/device-store", relative = true }

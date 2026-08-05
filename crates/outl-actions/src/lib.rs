@@ -53,6 +53,7 @@ pub mod asset;
 pub mod backlinks;
 pub mod backlinks_index;
 pub mod backlinks_sort;
+pub mod backup;
 pub mod block;
 pub mod clipboard;
 pub mod clock;

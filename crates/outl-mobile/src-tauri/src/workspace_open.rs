@@ -183,7 +183,11 @@ fn spawn_background_reconcile(
             let Some(ws) = slot.as_mut() else {
                 return;
             };
-            if let Err(e) = outl_md::reconcile::reconcile_md(ws, &hlc, path, None) {
+            // Never `None` — level-3 fallout is a delete, and it has to
+            // be recorded before it happens (`outl-md` hard rule).
+            if let Err(e) =
+                outl_md::reconcile::reconcile_md(ws, &hlc, path, Some(&engine.orphans_log()))
+            {
                 warn!("orphan reconcile failed for {}: {e}", path.display());
             }
         }

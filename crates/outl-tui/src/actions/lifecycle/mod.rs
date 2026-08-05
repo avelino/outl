@@ -70,6 +70,7 @@ impl App {
             last_visual: None,
             status: String::new(),
             parse_warnings: Vec::new(),
+            load_failed: false,
             overlay: None,
             autocomplete: None,
             last_search: None,

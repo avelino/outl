@@ -9,28 +9,79 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-/// Current sidecar format version. Bump when introducing breaking changes.
+/// Current sidecar format version.
 ///
 /// Version history:
 /// - **1** — initial format (page_id, last_synced_hash, blocks with id /
 ///   line / indent / content_hash).
-/// - **2** — added `ref_handle` on every block to power `((blk-XXXXXX))`
+/// - **2** — `ref_handle` on every block to power `((blk-XXXXXX))`
 ///   inline references. Backward-compatible read: v1 sidecars load fine
 ///   and their handles are derived on the fly from the block id.
+///   Later **additive** fields ride along at this same version:
+///   `pipeline_version` on the payload, [`SidecarBlock::text`] on every
+///   block. See the bump rule below for why they did not move the
+///   number.
+///
+/// # When to bump — and when not to
+///
+/// The version answers exactly one question for a reader that did not
+/// write the file: *can I still trust the fields I know?* Compatibility
+/// runs in **both** directions, and the two directions are not
+/// symmetric.
+///
+/// - **Backward** — this binary reading an older payload. Always
+///   supported, down to [`MIN_READABLE_SIDECAR_VERSION`]. A read path is
+///   never dropped when a newer one lands.
+/// - **Forward** — an *already shipped* binary reading a payload this
+///   one wrote. Every released binary rejects
+///   `version > its own SIDECAR_VERSION`, and that rejection cannot be
+///   patched retroactively. On the paths that consume a sidecar, an
+///   unreadable one used to look exactly like a missing one: no old
+///   blocks, so every block matched at level 3, got a fresh ULID, and
+///   the old id stayed in the tree — one boot of a stale device on a
+///   shared iCloud folder duplicated the whole workspace and broke
+///   every `((blk-…))` handle. The devices in one workspace never
+///   update at the same instant (TestFlight lag, a laptop closed for a
+///   week), so this is a real user, not a hypothetical one.
+///
+/// Hence the rule:
+///
+/// - **An additive field does NOT bump the version.** Give it
+///   `#[serde(default)]` and the format stays readable in both
+///   directions: an older reader ignores the unknown JSON key, a newer
+///   reader treats "missing" as "feature off for this entry".
+///   `pipeline_version` and [`SidecarBlock::text`] are both this shape.
+///   **Feature detection is per-field presence, never per version
+///   number** — an empty `text` disables level-2 matching for that
+///   block whatever the number on the file says, which is also the only
+///   correct answer once an old binary rewrites the sidecar and drops
+///   the field it never knew about.
+/// - **Bump only when an older reader would _misread_ the file** — an
+///   existing field changes meaning, changes encoding, or goes away.
+///   There the old binary's [`SidecarError::UnsupportedVersion`] is the
+///   *desired* outcome: a loud refusal beats silent corruption, and
+///   `reconcile_md` propagates that error instead of rebuilding the
+///   page from scratch.
+/// - A bump is a coordinated release, not a patch. It needs a migration
+///   note in `docs/markdown-format.md` and an `outl doctor` path,
+///   because every device that has not updated stops reconciling those
+///   pages until it does.
 ///
 /// Note: the sidecar is intentionally **only structural metadata**
-/// (ids, position, content hashes, ref handles). Any state that needs
-/// to *converge between devices* — collapsed/folded blocks, future
-/// per-block flags — goes through the `Op` log in `outl-core`, not
-/// here. The sidecar is a projection cache for matching `.md` ↔ tree;
-/// it is not a sync surface. See the root `CLAUDE.md` invariants.
+/// (ids, position, content hashes, ref handles, last-synced text). Any
+/// state that needs to *converge between devices* — collapsed/folded
+/// blocks, future per-block flags — goes through the `Op` log in
+/// `outl-core`, not here. The sidecar is a projection cache for
+/// matching `.md` ↔ tree; it is not a sync surface. See the root
+/// `CLAUDE.md` invariants.
 pub const SIDECAR_VERSION: u32 = 2;
 
 /// Lowest sidecar version this crate is willing to read.
 ///
 /// Older versions return [`SidecarError::UnsupportedVersion`]. Keeping
 /// this explicit (rather than a magic number in `read`) so the contract
-/// is greppable when a v3 ever needs to drop v1 support.
+/// is greppable when a future version ever needs to drop v1
+/// support.
 pub const MIN_READABLE_SIDECAR_VERSION: u32 = 1;
 
 /// Prefix every block ref handle carries in the `.md` file.
@@ -75,6 +126,57 @@ pub struct SidecarBlock {
     /// missing handles are backfilled by [`read`] from the id.
     #[serde(default)]
     pub ref_handle: String,
+    /// The block's text **as of the last sync** — the input level-2
+    /// matching diffs a freshly-parsed `.md` against.
+    ///
+    /// `content_hash` can only answer "identical or not"; recovering an
+    /// id after the user rewords a block needs the old string itself.
+    /// Without it, any save that both edits one block and adds/removes
+    /// another falls straight to level 3: fresh ULID, old id orphaned,
+    /// every `((blk-…))` pointing at it broken.
+    ///
+    /// Stored **verbatim and in full** (not truncated). A prefix would
+    /// make two blocks that share a long opening look identical, and a
+    /// level-2 false positive hands one block's id — and its ref handle
+    /// — to a different block. That is the exact corruption matching
+    /// exists to prevent, so the duplicated bytes are the cheaper side
+    /// of the trade.
+    ///
+    /// **Additive on purpose, at the same [`SIDECAR_VERSION`].**
+    /// `#[serde(default)]` is what lets a payload written before this
+    /// field existed load cleanly — and, just as importantly, what lets
+    /// a binary that predates the field keep reading (and rewriting)
+    /// the sidecar without the version number turning it away. A block
+    /// whose `text` is missing or empty simply doesn't participate in
+    /// level 2; matching degrades to hash + position, exactly what
+    /// shipped before, never worse. The next write by a binary that
+    /// knows the field records the text again.
+    #[serde(default)]
+    pub text: String,
+}
+
+impl SidecarBlock {
+    /// Build an entry for `text` at `line` / `indent`, deriving
+    /// `content_hash` and the default `ref_handle` from `id`.
+    ///
+    /// The one constructor every caller building a sidecar from a tree
+    /// or an AST should use: it keeps hash, handle, and stored text
+    /// derived from the same string, so a block can never end up with
+    /// a `content_hash` describing one revision and a `text` from
+    /// another. Callers preserving a *previous* handle (an expanded
+    /// one, post-collision) build the literal and overwrite
+    /// `ref_handle`.
+    pub fn from_text(id: NodeId, line: usize, indent: u32, text: impl Into<String>) -> Self {
+        let text = text.into();
+        Self {
+            id,
+            line,
+            indent,
+            content_hash: content_hash(&text),
+            ref_handle: derive_ref_handle(id),
+            text,
+        }
+    }
 }
 
 /// Full sidecar payload.
@@ -233,6 +335,22 @@ pub fn resolve_sidecar_path(md_path: &Path) -> PathBuf {
 /// `ref_handle` gets one [derived from its id](derive_ref_handle), and
 /// the in-memory `version` is bumped to [`SIDECAR_VERSION`]. The next
 /// [`write()`] then persists the upgraded shape.
+///
+/// A missing `text` is **not** backfilled — there is nothing to backfill
+/// it from, since the whole point of the field is to hold the text as it
+/// was *before* the `.md` on disk changed. Those blocks come back with
+/// an empty `text` and level-2 matching skips them; the next [`write()`]
+/// records their current text, so the page is covered from that point
+/// on. This is the steady state in a mixed-version workspace, where a
+/// peer that predates the field rewrites the sidecar without it.
+///
+/// **Unknown JSON keys are ignored, not rejected.** That is half of the
+/// forward-compatibility contract described on [`SIDECAR_VERSION`]: a
+/// field added by a newer binary at the same version costs this reader
+/// nothing. The other half is that a *higher* version is refused with
+/// [`SidecarError::UnsupportedVersion`], because by that rule a bumped
+/// number means a field this reader already knows has changed meaning —
+/// the one case where guessing is worse than stopping.
 pub fn read(path: &Path) -> Result<Sidecar, SidecarError> {
     let s = std::fs::read_to_string(path)?;
     let mut sc: Sidecar = serde_json::from_str(&s)?;
@@ -372,6 +490,114 @@ mod tests {
     }
 
     #[test]
+    fn future_version_is_refused_even_when_every_known_field_is_valid() {
+        // The forward half of the compatibility contract on
+        // `SIDECAR_VERSION`: by the bump rule, a *higher* number can
+        // only mean a field this reader already knows changed meaning.
+        // Guessing there is worse than stopping, so `read` refuses —
+        // and `reconcile_md` propagates that refusal instead of
+        // rebuilding the page from scratch with fresh ULIDs.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("future.outl");
+        let page = NodeId::new();
+        let block = NodeId::new();
+        let json = format!(
+            r#"{{
+              "version": 99,
+              "page_id": "{page}",
+              "last_synced_hash": "sha256:abc",
+              "last_synced_at": "2026-05-24T10:00:00-03:00",
+              "pipeline_version": 2,
+              "blocks": [
+                {{
+                  "id": "{block}",
+                  "line": 1,
+                  "indent": 0,
+                  "content_hash": "sha256:def",
+                  "ref_handle": "blk-abcdef",
+                  "text": "still perfectly parseable"
+                }}
+              ]
+            }}"#
+        );
+        std::fs::write(&path, json).unwrap();
+        match read(&path) {
+            Err(SidecarError::UnsupportedVersion(99)) => {}
+            other => panic!("a future version must be refused, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_fields_at_the_current_version_are_ignored_not_rejected() {
+        // The other half of the contract: an additive field does NOT
+        // bump the version, so this reader has to survive keys it has
+        // never heard of. If this ever regresses to `deny_unknown_
+        // fields`, the next additive field becomes a fleet-wide break
+        // for every already-shipped binary.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("newer.outl");
+        let page = NodeId::new();
+        let block = NodeId::new();
+        let json = format!(
+            r#"{{
+              "version": {SIDECAR_VERSION},
+              "page_id": "{page}",
+              "last_synced_hash": "sha256:abc",
+              "last_synced_at": "2026-05-24T10:00:00-03:00",
+              "pipeline_version": 2,
+              "invented_by_a_newer_binary": {{"nested": [1, 2, 3]}},
+              "blocks": [
+                {{
+                  "id": "{block}",
+                  "line": 1,
+                  "indent": 0,
+                  "content_hash": "sha256:def",
+                  "ref_handle": "blk-abcdef",
+                  "text": "hello",
+                  "some_future_per_block_field": 42
+                }}
+              ]
+            }}"#
+        );
+        std::fs::write(&path, json).unwrap();
+        let sc = read(&path).expect("unknown keys must not fail the read");
+        assert_eq!(sc.blocks.len(), 1);
+        assert_eq!(sc.blocks[0].id, block);
+        assert_eq!(sc.blocks[0].ref_handle, "blk-abcdef");
+        assert_eq!(sc.blocks[0].text, "hello");
+    }
+
+    #[test]
+    fn the_text_field_did_not_bump_the_version() {
+        // Regression guard for the incident this rule came from: `text`
+        // was shipped as v3, every already-released binary rejected the
+        // file, and on the paths that consume a sidecar a rejected one
+        // looked exactly like a missing one — fresh ULID per block,
+        // every `((blk-…))` handle rotated, duplicates on both sides of
+        // the sync. The field is additive; the number must not move.
+        assert_eq!(
+            SIDECAR_VERSION, 2,
+            "adding a `#[serde(default)]` field must not bump \
+             SIDECAR_VERSION — see the bump rule on that constant"
+        );
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("written.outl");
+        let mut sc = Sidecar::new_for_page(NodeId::new(), &file_hash("- hello\n"));
+        sc.blocks
+            .push(SidecarBlock::from_text(NodeId::new(), 1, 0, "hello"));
+        write(&path, &sc).unwrap();
+
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            raw["version"], 2,
+            "what lands on disk is what an older binary version-checks"
+        );
+        assert_eq!(raw["blocks"][0]["text"], "hello");
+    }
+
+    #[test]
     fn derive_ref_handle_uses_last_six_chars_lowercased() {
         // The derivation is "take the lowercased tail of the ULID's
         // Display impl". We assert that property holds for an arbitrary
@@ -446,13 +672,8 @@ mod tests {
         let page_id = NodeId::new();
         let block_id = NodeId::new();
         let mut sc = Sidecar::new_for_page(page_id, &file_hash("- hello\n"));
-        sc.blocks.push(SidecarBlock {
-            id: block_id,
-            line: 1,
-            indent: 0,
-            content_hash: content_hash("hello"),
-            ref_handle: derive_ref_handle(block_id),
-        });
+        sc.blocks
+            .push(SidecarBlock::from_text(block_id, 1, 0, "hello"));
         write(&path, &sc).unwrap();
 
         let loaded = read(&path).unwrap();

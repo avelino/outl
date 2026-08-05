@@ -55,6 +55,31 @@ pub enum ActionError {
     #[error("page `{0}` not found")]
     PageNotFound(String),
 
+    /// A page's `.md` is gone while its `.outl` sidecar is still there.
+    ///
+    /// The sidecar is only ever written next to a `.md` this device
+    /// projected, so it is proof the page existed. Treating that as "a
+    /// new page" and rendering over it rebuilds the sidecar from the
+    /// fresh content, and the next `reconcile_md` trashes every block
+    /// whose id just disappeared. Refusing keeps the loss recoverable:
+    /// the op log still holds the content, and re-projecting the page
+    /// brings the `.md` back.
+    #[error(
+        "refusing to rewrite `{0}`: the .md is missing but its sidecar is still there, \
+         so this is a lost file, not a new page — re-project the page from the op log"
+    )]
+    PageMarkdownVanished(String),
+
+    /// A page's `.md` is an iCloud placeholder whose bytes have not been
+    /// downloaded to this device yet.
+    ///
+    /// On iOS and legacy iCloud Drive the un-downloaded form is
+    /// `.foo.md.icloud` and the real name does **not** exist, so the
+    /// read comes back `NotFound` rather than as an I/O error. Writing
+    /// then replaces a file that was never lost.
+    #[error("refusing to rewrite `{0}`: iCloud has not downloaded this file to this device yet")]
+    PageMarkdownNotDownloaded(String),
+
     /// Underlying workspace failure (storage, etc).
     #[error(transparent)]
     Workspace(#[from] WorkspaceError),

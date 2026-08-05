@@ -6,9 +6,9 @@
 //! lives here so the two can't drift on semantics.
 
 use std::path::Path;
-use std::str::FromStr;
 
 use outl_actions::{migrate_legacy_into_today, open_today};
+use outl_core::device::DeviceStore;
 use outl_core::hlc::HlcGenerator;
 use outl_core::id::ActorId;
 use outl_core::storage::JsonlStorage;
@@ -123,20 +123,21 @@ pub fn open_workspace_at(
 /// The actor identifies the device, not the workspace — it's reused
 /// across whatever directory the user picks. Lives at
 /// `<local_dir>/actor` as a plain ULID string.
+///
+/// `local_dir` is **outside** any workspace (`~/.config/outl` on the
+/// desktop, the app sandbox's data dir on mobile), which is what keeps
+/// the GUI clients clear of the cross-device actor collision described
+/// in [`outl_core::device`]: nothing here ever rides the file-sync
+/// surface. Being device-wide rather than per-workspace is deliberate —
+/// the `HlcGenerator` is built at app start, before a workspace is
+/// picked — so these clients stay on
+/// [`DeviceStore::device_actor`] while the CLI / TUI key theirs by
+/// workspace id.
 pub fn load_or_create_actor(local_dir: &Path) -> std::io::Result<ActorId> {
-    let path = local_dir.join("actor");
-    if path.exists() {
-        let raw = std::fs::read_to_string(&path)?;
-        let raw = raw.trim();
-        if let Ok(ulid) = ulid::Ulid::from_str(raw) {
-            info!("loaded existing actor id {ulid}");
-            return Ok(ActorId(ulid));
-        }
-        warn!("invalid actor id in {}, regenerating", path.display());
-    }
-    let actor = ActorId::new();
-    std::fs::write(&path, actor.to_string())?;
-    info!("generated fresh actor id {actor}");
+    let actor = DeviceStore::at(local_dir)
+        .device_actor()
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    info!("device actor id {actor}");
     Ok(actor)
 }
 
@@ -156,8 +157,14 @@ pub fn load_or_create_actor(local_dir: &Path) -> std::io::Result<ActorId> {
 /// sidecar ids preserved so the blocks finally reach the log and sync.
 pub fn reconcile_orphan_md(workspace: &mut Workspace, hlc: &HlcGenerator, storage_root: &Path) {
     let engine = outl_actions::SyncEngine::new(storage_root.to_path_buf(), hlc.actor());
+    // `Some(..)`, never `None`: a block that fails to match here drops
+    // to matching level 3, which trashes it. `outl-md`'s hard rule is
+    // that such a block is recorded before it goes. Booting with the
+    // log off made every GUI client delete silently — exactly the case
+    // a half-synced `.md` from iCloud produces.
+    let orphans = engine.orphans_log();
     for path in &engine.scan_for_orphans() {
-        if let Err(e) = outl_md::reconcile::reconcile_md(workspace, hlc, path, None) {
+        if let Err(e) = outl_md::reconcile::reconcile_md(workspace, hlc, path, Some(&orphans)) {
             warn!("orphan reconcile failed for {}: {e}", path.display());
         }
     }

@@ -8,7 +8,7 @@
 //! switch does **not** touch it — it's keyed by slug on read.
 
 use crate::outline_ops::flat_count;
-use crate::state::{App, Focus};
+use crate::state::{App, Focus, ToastKind};
 use anyhow::{Context, Result};
 use outl_md::parse::parse;
 use outl_md::reconcile::reconcile_md;
@@ -93,7 +93,25 @@ impl App {
         // `peer_sync`.) Invalidating here rebuilt the index from every
         // `.md` on every page switch, inline.
         let path = self.current_path();
-        let text = fs::read_to_string(&path).unwrap_or_default();
+        // A page that isn't on disk yet is legitimately empty; a page
+        // we *can't read* is not. Treating the latter as `""` would
+        // parse to an empty AST that the next commit renders straight
+        // back over the user's file. `load_failed` fences that off —
+        // see the field's docs and the guard at the top of `persist`.
+        let text = match outl_md::read_for_rewrite(&path) {
+            Ok(t) => {
+                self.load_failed = false;
+                t
+            }
+            Err(e) => {
+                self.load_failed = true;
+                self.toast(
+                    ToastKind::Error,
+                    format!("cannot read {}: {e} — editing disabled", path.display()),
+                );
+                String::new()
+            }
+        };
         self.page = parse(&text);
         self.parse_warnings = self.page.warnings.clone();
         // Surface a brief chip in the status line so the user notices

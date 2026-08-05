@@ -281,7 +281,28 @@ impl std::fmt::Debug for SyncEngine {
     }
 }
 
+/// Path of a workspace's orphan log (`<root>/.outl/orphans.log`).
+///
+/// **Every caller of `outl_md::reconcile_md` must pass this.** A block
+/// that fails to match an existing id drops to matching level 3, which
+/// moves it to the trash — and the crate's hard rule is that it appears
+/// in this log *before* that happens. Passing `None` is what turned a
+/// GUI boot reconcile into a silent delete: the ids are gone from the
+/// tree, the `.md` no longer shows them, and nothing on disk says why.
+///
+/// This lives here rather than in `outl-ws` because the GUI clients and
+/// `outl-actions` itself reconcile without depending on that crate; one
+/// owner beats each client joining `.outl` to a filename by hand.
+pub fn orphans_log_path(workspace_root: &Path) -> PathBuf {
+    workspace_root.join(".outl").join("orphans.log")
+}
+
 impl SyncEngine {
+    /// Path of this workspace's orphan log — see [`orphans_log_path`].
+    pub fn orphans_log(&self) -> PathBuf {
+        orphans_log_path(&self.workspace_root)
+    }
+
     /// Bind to a workspace root + actor.
     pub fn new(workspace_root: PathBuf, actor: ActorId) -> Self {
         Self {

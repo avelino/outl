@@ -24,7 +24,9 @@ If a new client needs a different shape on the wire, do the same — adapt, don'
 ```
 ~/.config/outl/                         ← `config_dir()` (XDG-style on every OS)
 ├── config.toml                         ← `config_path()`
-└── actor                               ← the desktop's per-machine ULID (NOT this crate's concern)
+├── machine-id                          ← device fingerprint (outl-core's device store)
+├── actor                               ← device-wide ULID, desktop + mobile (outl-core's device store)
+└── actors/<workspace-id>               ← per-workspace ULID, CLI + TUI + MCP (outl-core's device store)
 ```
 
 - macOS / Linux: respects `$XDG_CONFIG_HOME` first, else `~/.config/outl/`.
@@ -34,8 +36,14 @@ If a new client needs a different shape on the wire, do the same — adapt, don'
   The `~/.config` layout is not a Windows convention, and dropping the config under `%USERPROFILE%` directly would surprise PowerShell users and tools that expect Roaming.
   The `cfg(windows)` branch in `config_dir()` routes through `dirs::config_dir()` to honour that.
 
-The `actor` file next to `config.toml` is **not** part of this crate's schema; it's the desktop's device identity (a ULID) and is read directly by `outl-desktop/src-tauri/src/lib.rs`.
-Don't add `actor` to `Config` — actors belong with the workspace they write to, not with user preferences.
+The `machine-id` / `actor` / `actors/` entries next to `config.toml` are **not** part of this crate's schema.
+They are `outl_core::DeviceStore` (`crates/outl-core/src/device/`), which resolves its own directory via `outl_core::device_dir()`.
+That is the same base path as [`config_dir`], plus an `$OUTL_DEVICE_DIR` override, so a test or container can rotate this device's identity without discarding the user's preferences.
+Two functions on purpose: one answers "where are the user's preferences", the other "where is this device's identity".
+If the base layout ever moves, move both.
+
+Don't add `actor` to `Config`.
+An actor id must **differ** per device, and `config.toml` is a file users copy between machines; that is the exact shape of the bug `outl-core/CLAUDE.md` → "Actor id is device-local" describes.
 
 ## Schema
 
@@ -69,6 +77,10 @@ max_bytes = 104857600             # 100 MiB default; 0 = unbounded. Cap on a sin
 [reminders]
 enabled = true                    # default on; `remind::` on a block is itself the opt-in
 quiet_hours = "22:00-07:00"       # optional; a fire landing inside is pushed to the window's end
+
+[backup]
+enabled = true                    # default on; automatic local git snapshots of the workspace
+interval_minutes = 30             # floor between automatic snapshots, not a schedule
 ```
 
 Nine sections, each modelled as its own struct ([`WorkspaceCfg`], [`ThemeCfg`], [`EditorCfg`], [`CalendarCfg`], [`SyncConfig`], [`TuiCfg`], [`DisplayCfg`], [`AssetsCfg`], [`RemindersCfg`]).
@@ -81,6 +93,10 @@ It exists for environments where the OS clock lies about the zone — containers
 `TuiCfg::mouse_capture` (default `false`) is read by the TUI at boot in `runtime.rs` to decide whether to call `EnableMouseCapture` and listen for `Event::Mouse`; the desktop ignores this section entirely.
 `DisplayCfg::backlinks_order` is a [`BacklinksOrder`] enum (`Newest` | `Oldest`, serde `lowercase`, default `Newest`) — a pure display preference, same "never converges between devices" policy as `theme.preset` (root `CLAUDE.md` invariant #7).
 `BacklinksOrder::newest_first()` returns the `bool` `outl_actions::sort_backlinks` expects.
+`BackupCfg::enabled` defaults to **`true`** — the second non-`Default::default()` bool in the schema, for the same reason as `RemindersCfg::enabled`.
+The failures a backup catches (a projection bug, a mis-aimed `outl import` over a populated workspace, a page deleted with the app then closed) are ones the user discovers *after* the window to enable a safety net has closed.
+It costs nothing on an unchanged workspace (no diff, no commit) and degrades to a `warn!` where there is no `git` on `PATH`.
+The engine is `outl_actions::backup`; this section only carries the preference.
 `AssetsCfg::max_bytes` (default `100 * 1024 * 1024`, `0` = unbounded) is the upper bound on a single file `outl_actions::import_asset` copies into `<workspace>/assets/`; the directory itself is fixed by `outl-ws`'s layout, not configurable here.
 `#[serde(default)]` everywhere — a missing field falls back to the type's `Default`, so an older binary reading a newer config doesn't choke and a newer binary reading an older config doesn't blow up.
 

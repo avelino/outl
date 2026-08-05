@@ -152,7 +152,7 @@ That is why it is opt-in, not default, and why app-yank ships first.
 2. TUI app-yank: write clean markdown to clipboard (arboard + OSC 52) on `yy`/`Y`/visual `y`.
 3. Desktop + mobile wiring via a shared `copyMarkdown` command; unblock desktop `p`/`P`.
 4. TUI mouse capture behind `[tui] mouse_capture` (opt-in), with docs.
-5. Docs: `docs/tui.md` (copy behavior + mouse toggle), `docs/shortcuts.md` if a key changes, `docs/shared-primitives.md` (new serializer entry), changelog.
+5. Docs: `docs/tui.md` (copy behavior + mouse toggle), `docs/shortcuts.md` if a key changes, `docs/primitives-markdown.md` (new serializer entry, indexed from `docs/shared-primitives.md`), changelog.
 
 ## Decisions taken
 

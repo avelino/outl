@@ -29,6 +29,8 @@
 mod append;
 mod read;
 #[cfg(test)]
+mod read_robustness;
+#[cfg(test)]
 mod tests;
 
 use std::collections::{BTreeMap, HashMap};
@@ -403,9 +405,7 @@ impl Storage for JsonlStorage {
         // over a disk seek per op.
         let mut out = Vec::new();
         for (actor, hlc) in self.index.ts_after(ts) {
-            if let Some(op) = self.read_op_hybrid(actor, hlc) {
-                out.push(op);
-            }
+            out.push(self.read_op_or_missing(actor, hlc)?);
         }
         out.sort_by_key(|op| op.ts);
         Ok(out)
@@ -418,6 +418,12 @@ impl Storage for JsonlStorage {
         // drop that Edit history and corrupt the block's text on Doc
         // rebuild (#129). Always drive off the per-node index, which is
         // complete; `cold_ops_for_node` prefers a warm LRU hit per op.
+        //
+        // An op the index lists but disk won't return is an `Err`, not a
+        // shorter set: a silently-short answer here rebuilds the block's
+        // `Doc` from partial `Edit` history and hands the user text they
+        // never wrote. `Workspace` degrades on the error (keeps the text it
+        // has, warns) rather than failing the boot.
         self.cold_ops_for_node(id)
     }
 
@@ -427,9 +433,7 @@ impl Storage for JsonlStorage {
         // after the LRU has shed the actor's older ops.
         let mut out = Vec::new();
         for ts in self.index.ts_for_actor(id) {
-            if let Some(op) = self.read_op_hybrid(id, ts) {
-                out.push(op);
-            }
+            out.push(self.read_op_or_missing(id, ts)?);
         }
         out.sort_by_key(|op| op.ts);
         Ok(out)
@@ -474,9 +478,15 @@ impl Storage for JsonlStorage {
         // keeps a same-process re-read cheap.
         let mut out = Vec::new();
         for (actor, ts) in self.index.ts_since_per_actor(cutoff) {
-            if let Some(op) = self.read_op_hybrid(actor, ts) {
-                out.push(op);
-            }
+            // An op the index knows about but that we cannot read back
+            // is corruption, and dropping it here is the worst possible
+            // response: this is the snapshot-boot delta, and the cutoff
+            // of the NEXT snapshot comes from the index — so the new
+            // snapshot would claim to include an op its body never saw,
+            // and no later boot would ever replay it again. Fail instead;
+            // `try_boot_from_snapshot` degrades to a full replay, which
+            // reads the file sequentially and can still recover it.
+            out.push(self.read_op_or_missing(actor, ts)?);
         }
         out.sort_by_key(|op| op.ts);
         Ok(out)

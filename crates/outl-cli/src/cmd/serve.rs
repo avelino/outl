@@ -19,17 +19,25 @@ use tracing::{error, info};
 /// useful for smoke tests and scripting. Otherwise installs a 200 ms
 /// debounced file watcher and blocks until interrupted.
 ///
-/// Lock policy mirrors `ws::open` and `outl-tui::open_workspace`:
-/// shared workspace lock plus a per-actor write lock resolved through
+/// Actor + lock policy mirrors `ws::open` and
+/// `outl-tui::open_workspace`: the device actor from
+/// [`outl_ws::actor::resolve_device_actor`], then a shared workspace
+/// lock plus a per-actor write lock resolved through
 /// [`outl_core::resolve_write_actor`]. A `serve` running alongside a
 /// TUI/MCP server gets an ephemeral actor and writes to its own
 /// `ops-<ephemeral>.jsonl`. Without this, both processes would race
-/// on `ops-<config>.jsonl` — the very bug 0.5.1 was meant to close.
+/// on `ops-<device>.jsonl` — the very bug 0.5.1 was meant to close.
 pub fn run(path: &Path, once: bool) -> Result<()> {
     let paths = Paths::at(path.to_path_buf());
     let cfg =
         read_config(&paths).with_context(|| "workspace config missing — run `outl init` first")?;
-    let config_actor = cfg.actor()?;
+    // The actor comes from this device's store, never from the
+    // workspace — see `outl_ws::actor`.
+    let device_actor = outl_ws::actor::resolve_device_actor(
+        &paths,
+        &cfg,
+        &outl_core::device::DeviceStore::open_default(),
+    )?;
     // Shared workspace lock — coexists with every other well-behaved
     // `outl` process.
     let _lock = outl_core::WorkspaceLock::acquire(&paths.root).with_context(|| {
@@ -41,11 +49,11 @@ pub fn run(path: &Path, once: bool) -> Result<()> {
     ensure_ops_dir(&paths)?;
     // Exclusive per-actor write lock. Falls back to ephemeral when
     // another process already owns the config actor.
-    let (_actor_lock, actor) = outl_core::resolve_write_actor(&paths.ops, config_actor)
+    let (_actor_lock, actor) = outl_core::resolve_write_actor(&paths.ops, device_actor)
         .with_context(|| format!("acquiring per-actor write lock at {}", paths.ops.display()))?;
-    if actor != config_actor {
+    if actor != device_actor {
         info!(
-            "another outl process owns the config actor {config_actor}; serve writes under ephemeral actor {actor}"
+            "another outl process owns the device actor {device_actor}; serve writes under ephemeral actor {actor}"
         );
     }
     let storage = JsonlStorage::open(paths.ops.clone(), actor)?;

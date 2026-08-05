@@ -27,7 +27,14 @@ pub fn run(path: &Path, scope: &str) -> Result<()> {
     init(&paths)?;
 
     let cfg = read_config(&paths)?;
-    let actor = cfg.actor()?;
+    // Claims the freshly-seeded `actor_id` for this device, so the
+    // machine that ran `outl init` is the one that keeps writing to
+    // `ops-<that actor>.jsonl` after the workspace is replicated.
+    let actor = outl_ws::actor::resolve_device_actor(
+        &paths,
+        &cfg,
+        &outl_core::device::DeviceStore::open_default(),
+    )?;
     let initial_scope = match scope {
         "per-page" => PageScope::PerPage("home".into()),
         _ => PageScope::Global,

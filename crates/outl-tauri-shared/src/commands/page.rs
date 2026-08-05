@@ -284,9 +284,10 @@ pub fn open_journal_for<S: AppHost>(state: &S, slug: String) -> Result<PageView,
 /// **only when the `.md` is absent from disk**. Without this, a page
 /// synced from a peer exists in the in-memory CRDT tree (so it shows up
 /// in search) but its `.md` was never written on this device;
-/// `read_page_outline` does `fs::read_to_string().unwrap_or_default()`,
-/// a missing file silently returns `""`, `parse("")` produces an empty
-/// outline, and the page opens blank (issue #120).
+/// `read_page_outline` reads through `outl_md::read_for_rewrite`, where
+/// a **missing** file legitimately returns `""` (an unreadable one is an
+/// error), `parse("")` produces an empty outline, and the page opens
+/// blank (issue #120).
 /// The `_if_absent` guard avoids rewriting the `.outl` sidecar on every
 /// open: `build_sidecar` stamps `last_synced_at: now()`, so an
 /// unconditional projection would create constant sync churn on the
@@ -525,7 +526,7 @@ mod tests {
     use super::{block_snippet, collect_block_hits};
     use outl_core::id::NodeId;
     use outl_md::parse::OutlineNode;
-    use outl_md::sidecar::{content_hash, derive_ref_handle, SidecarBlock};
+    use outl_md::sidecar::{derive_ref_handle, SidecarBlock};
     use outl_md::BlockIndex;
     use std::path::PathBuf;
 
@@ -546,11 +547,10 @@ mod tests {
                 let handle = derive_ref_handle(id);
                 handles.push((handle.clone(), (*text).to_string()));
                 sidecar.push(SidecarBlock {
-                    id,
-                    line: line + 1,
-                    indent: 0,
-                    content_hash: content_hash(text),
+                    // The handle is captured above so the assertions can
+                    // reference it; everything else derives from the text.
                     ref_handle: handle,
+                    ..SidecarBlock::from_text(id, line + 1, 0, *text)
                 });
                 ast.push(OutlineNode {
                     text: (*text).to_string(),
@@ -596,13 +596,7 @@ mod tests {
         let mut sidecar = Vec::new();
         for (n, text) in [(1u128, "oldest"), (2, "middle"), (3, "newest")] {
             let id = NodeId(ulid::Ulid(n));
-            sidecar.push(SidecarBlock {
-                id,
-                line: n as usize,
-                indent: 0,
-                content_hash: content_hash(text),
-                ref_handle: derive_ref_handle(id),
-            });
+            sidecar.push(SidecarBlock::from_text(id, n as usize, 0, text));
             ast.push(OutlineNode {
                 text: text.to_string(),
                 properties: Vec::new(),

@@ -78,6 +78,62 @@ Each device's file is append-only and owned by exactly one writer.
 Sync transport ships the bytes; the merge happens inside `outl-core`'s CRDT, not at the filesystem layer.
 Zero coordination, zero conflicts, zero data loss.
 
+### Where the actor id lives — outside the workspace
+
+The guarantee above is only as strong as "one actor id per device".
+The id therefore lives in the **device store**, a directory outside every workspace:
+
+```text
+$OUTL_DEVICE_DIR, else $XDG_CONFIG_HOME/outl, else ~/.config/outl/
+├── machine-id                  ← this device's id + its host binding
+├── actor                       ← device-wide actor (desktop / mobile)
+└── actors/
+    ├── <workspace-id>          ← that workspace, at the directory it was bound to
+    └── <workspace-id>.<hash>   ← a second *copy* of it on this same device
+```
+
+It used to live at `<workspace>/.outl/config.toml`, and that was silent data loss waiting for the right transport.
+Syncthing, Dropbox, NFS, a shared volume and `git clone` all replicate `.outl/`, so two devices read the same `actor_id`.
+The per-actor `flock` does not save you — `flock(2)` is advisory and machine-local, so each device takes its lock successfully and both append to one file.
+iCloud Documents hid the bug by dropping dot-prefixed paths, so `.outl/` never travelled; that is an accident of one transport, not a design.
+
+#### The binding is per *directory*, not per workspace id
+
+`WorkspaceId` is persisted at `<root>/.outl/workspace-id`, i.e. inside the bytes a copy carries away.
+`cp -R notes notes-backup` therefore yields two directories holding one workspace id, and keying the actor on the id alone hands both of them the same actor.
+
+That is worse than sharing a file.
+The P2P transport hashes the workspace id into its gossip topic, so the two copies reconcile *as one workspace*; op identity is `Hlc { physical, logical, actor }` and dedup is by `ts`, so two independent HLC generators running under one actor mint colliding identities and genuinely distinct ops are dropped as duplicates.
+
+So each binding records the workspace **root** next to the actor.
+A root that does not match forks a second actor — unless the recorded root is *provably gone*, which is what a plain move or rename looks like and must keep its actor.
+"Provably gone" means the path no longer exists, or no longer holds this workspace id.
+Anything unreadable (unmounted volume, permission error) counts as still live: one extra actor wastes a file, one shared actor loses data.
+
+#### The device store is fingerprinted too
+
+`~/.config/outl` is outside the *workspace*, not outside everything.
+Migration Assistant, a Time Machine restore, a VM or container image, `chezmoi` / Mackup, and `$HOME` on NFS all replicate it, and the clone carries the same `machine-id`.
+Without a second signal both machines would answer "yes, that claim is mine" and nothing would self-heal.
+
+`machine-id` therefore binds its ULID to a hash of an OS-provided identifier of the physical machine — `/etc/machine-id` on Linux, `IOPlatformUUID` on macOS, `MachineGuid` on Windows.
+When the stored binding and the current host disagree the store was cloned: the machine id is reminted, every actor binding stamped with the old one reads as stale, and each workspace forks a fresh actor on its next open.
+
+Where the platform exposes no such identifier the check is inconclusive and deliberately does nothing.
+That is **iOS today**, where a restored device backup is exactly this hazard — a known gap, closable only by putting a writer fingerprint in the op log itself.
+Forking on every open would be its own bug.
+
+#### Adopting the legacy `actor_id`
+
+`[workspace] actor_id` in `config.toml` is a **legacy** value, adopted by a device only when `[workspace] actor_claimed_by` names that device.
+The marker is stamped when the config is **created**, not on first open, because it is only trustworthy if it is already inside the bytes a copy carries away: the default transport is iroh, which ships ops, `workspace-id` and snapshots and never `config.toml`, so a claim written on first open reaches nobody.
+
+A workspace created before the device store existed has no claim, so **every** device forks on its first open, leaving `ops-<legacy>.jsonl` untouched and still read.
+Nothing is lost — readers merge every `ops-*.jsonl` in the directory — and no two devices can land on one file.
+The full table is in `crates/outl-ws/src/actor.rs`.
+
+`$OUTL_DEVICE_DIR` overrides the location — used by the test suite (via the repo's `.cargo/config.toml`) and by containers that need a throwaway identity without discarding the user's preferences.
+
 ### Why JSONL specifically
 
 - **Append-only writes** map to the filesystem cleanly.
@@ -110,8 +166,9 @@ The non-dotted name pays a "visible directory" cost for guaranteed sync coverage
 
 ### What lives outside `ops/`
 
-- `.outl/config.toml` — actor id and creation timestamp.
-  Local to the device; not synced (each peer mints its own).
+- `.outl/config.toml` — creation timestamp, the legacy `actor_id`, and the `actor_claimed_by` marker naming the one device that adopted it.
+  **Do not assume this file is device-local**: it is inside the workspace, so every transport except iCloud replicates it.
+  The actor a device actually writes under comes from the device store above, never from here.
 - `.outl/.lock` — workspace lock file.
   Local, never synced.
 - `.outl/orphans.log` — diagnostic from the reconcile pipeline.
@@ -251,8 +308,21 @@ The op log is the source of truth; no snapshot format change can lose data.
 | `append_op` fails to flush | `Result` propagated to caller | Caller decides; the in-memory tree should be considered stale; `outl doctor` can reload from disk |
 | Partial-write tail in a `.jsonl` | `JsonlStorage::reload` logs the unparseable line via `tracing::warn!` and skips it | Truncate that line; the next valid op is fine |
 | Glued ops on one line (`…}}}{"ts":…`) from an interleaved concurrent append | `JsonlStorage::reload` streams every concatenated JSON object off the line and warns | No action — both ops are recovered on next open; dedup makes a double-read harmless |
-| Sidecar lost | `outl doctor` detects missing `.outl` | Regenerate from op log by re-rendering the page |
+| I/O error on one line during full replay | `warn!` per line; the read **skips that line and keeps going** | Only the damaged line is lost. After 64 consecutive I/O errors the file is treated as gone and the read stops, saying so — a hard stop on the *first* error used to discard every op after it, silently shrinking the workspace to whatever preceded the damage |
+| I/O error while **building** the offset index (`rebuild_actor_indexes`) | `warn!` per record; the pass **skips that record and keeps indexing**, and refuses to persist the `.idx` / `.nodes.idx` sidecars for a run that hit any read error | Only the damaged record is missing from the index. This is the worst place to stop early: a short index never *knows* about the ops past the damage, so `MissingOp` can never fire for them and the whole row below is bypassed — the tree boots short with no error anywhere. Not caching a known-incomplete index keeps the next boot free to rebuild and recover |
+| Op present in the offset index but unreadable from disk (truncated file, partial sync, bad sector) | All four index-driven reads (`ops_since`, `ops_for_actor`, `ops_since_per_actor`, `ops_for_node`) return `StorageError::MissingOp` instead of a shorter result set | Snapshot boot degrades to a full sequential replay, which re-reads the file and recovers everything around the damage. Dropping the op quietly was permanent loss: the next snapshot's cutoff comes from the *index*, so the omission would be recorded as "already folded in" and never replayed again. `ops_for_node` is the sharpest of the four — its result replays a block's `Edit` history into a fresh Yrs `Doc`, so a short read there does not shorten a visible list, it hands the user block text they never wrote (#129). `Workspace` warns and keeps the text it already has |
+| A whole peer's `ops-<actor>.jsonl` exists but won't open during full replay | `error!` (not `warn!`) naming the file, and none of that actor's ops enter the replay | Deliberately **not** fatal: `reload`'s readability guard skips the same file, so the actor is absent from the offset index too, so the snapshot cutoff never claims to have folded its ops in. The first boot that can open the file replays all of them. Failing the open instead would cost availability without buying correctness |
+| Sidecar lost | `outl doctor` detects missing `.outl` | `outl doctor --repair` regenerates it from the op log by re-rendering the page |
 | HLC clock skew | `uhlc` clamps to avoid runaway logical counter | Tracked in HLC config; rare in practice |
+
+The rule behind every read-side row: **a read that returns fewer ops than the log holds must be impossible to confuse with a healthy read.**
+Either recover the rest (skip the bad record and keep going) or fail loudly enough that the caller falls back to a path that can.
+Anything in between writes the loss into the next snapshot's cutoff, where nothing can find it again.
+
+Which of the two applies depends on one question: **does the offset index know about the op?**
+If it does, dropping it is invisible *and* gets baked into the next cutoff — so it is a `MissingOp` error.
+If the index does not know about it either (an unindexed record, an unopenable file), the omission is self-correcting on a later boot — so it is a loud log line, not a failed open.
+Which makes the index build itself the load-bearing case: it is what decides which of the two a damaged byte range gets to be.
 
 ---
 

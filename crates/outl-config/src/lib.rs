@@ -62,7 +62,7 @@ mod schema;
 
 pub use paths::{config_dir, config_path};
 pub use schema::{
-    AssetsCfg, BacklinksOrder, CalendarCfg, Config, DisplayCfg, EditorCfg, RemindersCfg,
+    AssetsCfg, BacklinksOrder, BackupCfg, CalendarCfg, Config, DisplayCfg, EditorCfg, RemindersCfg,
     SnapshotCfg, StorageCfg, SyncConfig, SyncTransportKind, ThemeCfg, TuiCfg, WorkspaceCfg,
 };
 

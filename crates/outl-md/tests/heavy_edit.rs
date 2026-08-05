@@ -1,28 +1,29 @@
 //! When a block's text changes substantially, the hash no longer matches
 //! the sidecar entry. The positional fallback (pass 1.5) catches this
-//! case when the block is at the same DFS index with the same indent,
-//! preserving the NodeId — so `((blk-…))` refs and `!((blk-…))` embeds
-//! stay stable across edits.
+//! case when the block is at the same DFS index, same indent and same
+//! parent, preserving the NodeId — so `((blk-…))` refs and `!((blk-…))`
+//! embeds stay stable across edits.
 //!
 //! When blocks are inserted or deleted, the DFS indices shift and
-//! positional fallback can't help — the block falls through to level 3
-//! (new ID) and the old ID surfaces as an orphan.
+//! positional fallback can't help. Level 2 (similarity against the
+//! sidecar's recorded text) takes over there — see
+//! `tests/edit_and_delete.rs`; below its threshold the block falls
+//! through to level 3 (new ID) and the old ID surfaces as an orphan.
 
 use outl_core::id::NodeId;
 use outl_md::matching::{match_blocks, MatchLevel};
 use outl_md::parse::parse;
-use outl_md::sidecar::{content_hash, derive_ref_handle, SidecarBlock};
+use outl_md::sidecar::SidecarBlock;
 
 #[test]
 fn heavy_edit_preserves_id_via_positional_fallback() {
     let id = NodeId::new();
-    let old = vec![SidecarBlock {
+    let old = vec![SidecarBlock::from_text(
         id,
-        line: 1,
-        indent: 0,
-        content_hash: content_hash("the original wording of this block"),
-        ref_handle: derive_ref_handle(id),
-    }];
+        1,
+        0,
+        "the original wording of this block",
+    )];
 
     let edited = "- a wholly different sentence now\n";
     let ast = parse(edited);
@@ -42,13 +43,7 @@ fn whitespace_only_change_is_still_a_match() {
     // The content hash normalizes whitespace; thus inserting extra
     // spaces should still match level 1.
     let id = NodeId::new();
-    let old = vec![SidecarBlock {
-        id,
-        line: 1,
-        indent: 0,
-        content_hash: content_hash("hello world"),
-        ref_handle: derive_ref_handle(id),
-    }];
+    let old = vec![SidecarBlock::from_text(id, 1, 0, "hello world")];
 
     let edited = "-   hello   world   \n";
     let ast = parse(edited);

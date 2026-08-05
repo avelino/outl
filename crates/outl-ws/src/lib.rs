@@ -6,23 +6,37 @@
 //! TUI, MCP server, and external embedders (e.g. ai-memory) share one
 //! implementation instead of re-deriving the multi-process contract.
 //!
-//! ## Lock policy
+//! ## Actor policy
 //!
-//! The shared workspace lock accepts multiple concurrent openers.
-//! Per-actor write coordination falls to
-//! [`outl_core::resolve_write_actor`]: each process tries the config
-//! actor first; if another `outl` already owns it (TUI running, MCP
-//! server proxy active, a peer CLI in flight), the process gets an
-//! ephemeral actor and writes to a fresh `ops-<ephemeral>.jsonl`. All
-//! readers merge every `ops-*.jsonl` so peers see every write.
+//! Two independent questions, resolved in order:
+//!
+//! 1. **Which actor does this *device* own?** [`actor::resolve_device_actor`]
+//!    answers from [`outl_core::DeviceStore`] — a directory outside the
+//!    workspace, keyed by (workspace id, workspace directory), so neither
+//!    two devices syncing one `.outl/` nor two copies of one directory
+//!    can read the same answer. `config.toml`'s `actor_id` is a legacy
+//!    value adopted only by the device whose `actor_claimed_by` marker is
+//!    already in the file; everyone else forks.
+//! 2. **Which actor may this *process* write under?**
+//!    [`outl_core::resolve_write_actor`] takes the exclusive per-actor
+//!    flock; when another `outl` on this machine already holds it (TUI
+//!    running, MCP server proxy active, a peer CLI in flight) the
+//!    process gets an ephemeral actor and a fresh
+//!    `ops-<ephemeral>.jsonl`.
+//!
+//! The shared workspace lock itself accepts multiple concurrent openers.
+//! All readers merge every `ops-*.jsonl`, so peers see every write
+//! regardless of how many actors a workspace accumulates.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod actor;
 pub mod layout;
 
 use std::path::{Path, PathBuf};
 
+use outl_core::device::DeviceStore;
 use outl_core::hlc::HlcGenerator;
 use outl_core::id::ActorId;
 use outl_core::storage::JsonlStorage;
@@ -66,18 +80,19 @@ pub struct WsCtx {
     /// Loaded `Workspace` ready for reads or `apply`.
     pub workspace: Workspace,
     /// HLC generator bound to whatever actor this process resolved to
-    /// (config actor on the first opener; ephemeral on the rest).
+    /// (device actor on the first opener; ephemeral on the rest).
     pub hlc: HlcGenerator,
     /// Workspace path on disk.
     pub root: PathBuf,
-    /// Actor id this process writes under. Equal to the config actor
-    /// when this process is the workspace's primary holder; a fresh
+    /// Actor id this process writes under. Equal to the device actor
+    /// ([`actor::resolve_device_actor`]) when this process is the
+    /// workspace's primary holder on this machine; a fresh
     /// `ActorId::new()` when another `outl` (TUI, MCP server, peer
     /// CLI) is already attached.
     pub actor: ActorId,
-    /// Whether [`Self::actor`] is the config-default actor (`false`
-    /// signals "ephemeral, this process spun a new ops jsonl"). Used
-    /// by diagnostics and doctor reporting.
+    /// Whether [`Self::actor`] is this device's actor (`false` signals
+    /// "ephemeral, this process spun a new ops jsonl"). Used by
+    /// diagnostics and doctor reporting.
     pub ephemeral_actor: bool,
     /// Hold the shared workspace lock for the lifetime of the context.
     #[allow(dead_code)]
@@ -119,22 +134,31 @@ pub fn open_with(path: &Path, opts: OpenOptions) -> Result<WsCtx, WsError> {
         return Err(WsError::NoWorkspace(paths.root.clone()));
     }
 
-    let cfg = read_or_init_config(&paths).map_err(|e| WsError::Config(e.to_string()))?;
-    let config_actor = cfg
-        .actor()
-        .map_err(|e| WsError::InvalidActor(e.to_string()))?;
-
-    // Shared workspace lock first — every well-behaved opener takes one.
+    // Shared workspace lock first — every well-behaved opener takes one,
+    // and nothing below should touch `.outl/` before it is held.
     let lock = WorkspaceLock::acquire(&paths.root).map_err(WsError::internal)?;
+
+    let cfg = read_or_init_config(&paths).map_err(|e| WsError::Config(e.to_string()))?;
+    // Which actor this DEVICE owns. Read from the device store, never
+    // from the workspace — `.outl/config.toml` travels with the
+    // workspace on every file transport except iCloud, and two devices
+    // reading one actor id is silent op loss (see `crate::actor`).
+    //
+    // The lock does not *serialize* this (it admits multiple openers by
+    // design), so resolution must be safe against a concurrent one on its
+    // own: it never writes `config.toml`, and the device-local binding it
+    // does write is an atomic compare-and-swap.
+    let device_actor = actor::resolve_device_actor(&paths, &cfg, &DeviceStore::open_default())
+        .map_err(|e| WsError::InvalidActor(e.to_string()))?;
 
     ensure_ops_dir(&paths).map_err(WsError::internal)?;
 
-    // Exclusive per-actor write lock: config actor if available,
+    // Exclusive per-actor write lock: the device actor if available,
     // ephemeral otherwise. This is the contract that lets multiple
-    // `outl` processes share the workspace safely.
+    // `outl` processes on ONE machine share the workspace safely.
     let (actor_lock, actor) =
-        resolve_write_actor(&paths.ops, config_actor).map_err(WsError::internal)?;
-    let ephemeral_actor = actor != config_actor;
+        resolve_write_actor(&paths.ops, device_actor).map_err(WsError::internal)?;
+    let ephemeral_actor = actor != device_actor;
 
     let storage = JsonlStorage::open(paths.ops.clone(), actor).map_err(WsError::internal)?;
     let mut workspace =

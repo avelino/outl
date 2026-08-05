@@ -383,6 +383,34 @@ The op log is authoritative: the next boot re-projects any stale page, and peers
 
 Plugin `onOp` hooks on desktop/mobile are fire-and-forget (no `await` on the reply path) for the same reason — a slow plugin can't stall the next keystroke or command.
 
+## Automatic backups
+
+`outl_actions::backup` is the shared engine: local, versioned git snapshots of a workspace, with `outl backup list|restore` on top.
+`[backup] enabled` defaults to **on** ([config.md → `[backup]`](config.md#backup)), so the pass that makes that default true has to exist on the client, not just in the CLI.
+
+**One call wires a client up:** `outl_actions::backup::spawn_auto_pass(root, enabled, interval_minutes)`.
+It spawns a detached background thread, waits `STARTUP_DELAY` (60 s — boot is already the busiest moment a client has), then snapshots whenever `interval_minutes` has passed since the newest commit.
+
+| Client | Automatic snapshots | Where it's wired |
+|---|---|---|
+| TUI | **Yes** | `runtime::run_with_theme_override`, right after `clock::init` |
+| CLI subcommands | No — a one-shot process; `outl backup now` is the explicit path | — |
+| Desktop | Not yet | — |
+| Mobile | Not yet — there is no `git` binary on iOS | — |
+
+Three rules any client that wires this up must keep:
+
+- **Never on the edit path.**
+  A snapshot walks the whole workspace and forks `git`; on a large graph that is seconds.
+  It belongs on a background thread, not on a tick, a commit boundary, or an idle hook that the render loop waits on.
+- **Never on the quit path.**
+  Blocking an exit on a whole-workspace `git add` is a worse bug than a snapshot arriving one session late — and the interval floor is derived from the git history, so the next launch takes it.
+- **Never fatal.**
+  No `git` on `PATH`, no disk, a refused commit — all of it degrades to a `warn!` and `None`.
+
+The repository is **device-local and outside the workspace** (`~/.config/outl/backups/<name>-<hash>.git`, workspace as `--work-tree`).
+That is what makes it safe for the pass to create the repository on first run: it can't turn the user's notes folder into a git repo, it can't collide with a repo they already keep there, and no file transport replicates it between devices.
+
 ## iCloud sync (mobile + TUI, today)
 
 The iOS app is on a public TestFlight beta — <https://testflight.apple.com/join/P2GdWAMd>.

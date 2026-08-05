@@ -235,6 +235,13 @@ Regression tests for the invariant live at the bottom of `actions/lifecycle/pers
 
 This means concurrent `outl serve` is OK — both go through the same reconcile path; the sidecar `last_synced_hash` short-circuits no-ops.
 
+### Automatic backups
+
+`runtime::run_with_theme_override` calls `outl_actions::backup::spawn_auto_pass(root, cfg.backup.enabled, cfg.backup.interval_minutes)` once at startup — the TUI is the **only** client running the pass today.
+It is a detached background thread on purpose: a snapshot walks the whole workspace and forks `git`, which on a large graph is seconds, so it must never sit on the event loop, a commit boundary, or the quit path.
+Don't "improve" this by hanging it off the idle tick or `flush_pending_save` — the interval floor is read back out of the git history, so a session that ends before a snapshot simply gets one on the next launch.
+Policy + the "which client snapshots" table live in [`docs/clients.md` → Automatic backups](../../docs/clients.md#automatic-backups).
+
 ## Layout
 
 ```
@@ -276,6 +283,11 @@ src/
 
 - `ratatui` + `crossterm` (UI).
 - `outl-core`, `outl-md` (workspace, parse/render/reconcile).
+- `outl-ws` (workspace layout + the device-actor protocol).
+  `runtime::open_workspace` calls `outl_ws::layout::read_or_init_config` and `outl_ws::actor::resolve_device_actor` instead of parsing `.outl/config.toml` by hand.
+  The hand-rolled version drifted from the CLI's schema: it seeded a config with `actor_id` but no `created_at`, which `outl-ws` then refused to deserialize.
+  It also read the write actor straight out of the workspace, which is silent op loss on any transport that replicates `.outl/` (see `outl-core/CLAUDE.md` → "Actor id is device-local").
+  Only the optional per-workspace `[theme]` is still read off the raw TOML, since `outl_ws::layout::Config` models `[workspace]` alone.
 - `arboard` (OS clipboard for `y r` / `/refer` / `/refer-embed` and for yank-to-clipboard; degrades to status-line-only on headless).
 - `base64` (encodes the OSC 52 escape sequence that writes to the clipboard in SSH / tmux / Crostini environments where `arboard` has no display server).
 - `outl-plugins` (JS plugin runtime — `PluginHost`, `load_installed`; default `js`/Boa feature on).

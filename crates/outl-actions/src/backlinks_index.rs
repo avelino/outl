@@ -31,6 +31,7 @@ use std::path::Path;
 use outl_core::fractional::Fractional;
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
+use tracing::warn;
 
 use crate::backlinks::{extract_refs, Backlink, BacklinkCrumb};
 use crate::journal::page_md_path;
@@ -130,8 +131,12 @@ impl BacklinkIndex {
     /// projected (callers do this before calling).
     pub fn reindex_page_from_disk(&mut self, meta: &PageMeta, root: &Path) {
         self.remove_page(&meta.slug);
-        let Ok(outline) = read_page_outline(root, meta) else {
-            return;
+        let outline = match read_page_outline(root, meta) {
+            Ok(o) => o,
+            Err(e) => {
+                warn!("backlink reindex: skipping page `{}`: {e}", meta.slug);
+                return;
+            }
         };
         let source_path = page_md_path(root, meta);
         let mut path: Vec<usize> = Vec::new();
@@ -259,8 +264,17 @@ pub fn build_backlink_index_from_disk(metas: &[PageMeta], root: &Path) -> Backli
     let started = std::time::Instant::now();
     let mut index = BacklinkIndex::default();
     for meta in metas {
-        let Ok(outline) = read_page_outline(root, meta) else {
-            continue;
+        let outline = match read_page_outline(root, meta) {
+            Ok(o) => o,
+            Err(e) => {
+                // Skipping a page here means every `[[ref]]` it makes
+                // disappears from the backlinks panel. A missing `.md`
+                // is silent by design (nothing to index); anything else
+                // is an unreadable page and the user deserves to know
+                // why their links went quiet.
+                warn!("backlink index: skipping page `{}`: {e}", meta.slug);
+                continue;
+            }
         };
         let source_path = page_md_path(root, meta);
         let mut path: Vec<usize> = Vec::new();

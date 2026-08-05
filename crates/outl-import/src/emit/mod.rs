@@ -61,7 +61,41 @@ pub fn run(
     }
 
     // Pass B: placeholders → real handles, collapsed flags → ops.
-    resolve::apply(&mut dest, &pages, &uid_map, report, sink)
+    resolve::apply(&mut dest, &pages, &uid_map, report, sink)?;
+
+    measure_landing(&pages, report);
+    Ok(())
+}
+
+/// Count what actually reached the destination's op log.
+///
+/// Every other counter in the report is bumped in `render`, in memory,
+/// **before** a byte hits disk — so a write failure, a reconcile
+/// failure, or a block the 3-level matcher dropped is invisible to all
+/// of them. The sidecar is the one artefact written *from* the
+/// materialized tree by `reconcile_md`, so summing its block entries
+/// measures the blocks that are genuinely in the op log.
+///
+/// A missing or unreadable sidecar is a page whose content is **not**
+/// confirmed; it is warned and left out of the total rather than
+/// assumed present.
+fn measure_landing(pages: &[render::RenderedPage], report: &mut ImportReport) {
+    for page in pages {
+        match outl_md::sidecar::read(&outl_md::sidecar::sidecar_path_for(&page.path)) {
+            Ok(sc) => {
+                report.landed_pages += 1;
+                report.landed_blocks += sc.blocks.len();
+            }
+            Err(e) => report.warn(
+                &page.title,
+                format!(
+                    "no readable sidecar after reconcile ({e}) — this page's blocks are NOT \
+                     confirmed in the op log"
+                ),
+            ),
+        }
+    }
+    report.landing_measured = true;
 }
 
 /// Dry-run: render in memory and simulate the resolve pass so the

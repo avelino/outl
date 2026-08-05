@@ -17,7 +17,7 @@ use outl_md::index::WorkspaceIndex;
 use outl_md::parse::parse;
 use outl_md::render::render;
 use outl_md::sidecar::{
-    self, content_hash, derive_ref_handle, file_hash, write as write_sidecar, Sidecar, SidecarBlock,
+    self, derive_ref_handle, file_hash, write as write_sidecar, Sidecar, SidecarBlock,
 };
 use std::fs;
 use tempfile::TempDir;
@@ -37,13 +37,8 @@ fn write_page_with_sidecar(
     let page_id = NodeId::new();
     let mut sc = Sidecar::new_for_page(page_id, &file_hash(md));
     for (id, text, line, indent) in blocks {
-        sc.blocks.push(SidecarBlock {
-            id: *id,
-            line: *line,
-            indent: *indent,
-            content_hash: content_hash(text),
-            ref_handle: derive_ref_handle(*id),
-        });
+        sc.blocks
+            .push(SidecarBlock::from_text(*id, *line, *indent, *text));
     }
     write_sidecar(&sidecar::sidecar_path_for(&full), &sc).unwrap();
 }
@@ -141,13 +136,12 @@ fn editing_citing_page_leaves_cited_handle_valid() {
     let b_path = dir.path().join("pages/b.md");
     fs::write(&b_path, &b_md2).unwrap();
     let mut sc = sidecar::read(&sidecar::sidecar_path_for(&b_path)).unwrap();
-    sc.blocks.push(SidecarBlock {
-        id: id_extra,
-        line: 2,
-        indent: 0,
-        content_hash: content_hash("and another thought entirely"),
-        ref_handle: derive_ref_handle(id_extra),
-    });
+    sc.blocks.push(SidecarBlock::from_text(
+        id_extra,
+        2,
+        0,
+        "and another thought entirely",
+    ));
     sc.last_synced_hash = file_hash(&b_md2);
     write_sidecar(&sidecar::sidecar_path_for(&b_path), &sc).unwrap();
 

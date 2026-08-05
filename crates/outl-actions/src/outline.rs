@@ -304,7 +304,11 @@ pub fn read_page_view(root: &Path, meta: &PageMeta) -> Result<Vec<OutlineNode>, 
 /// outl dialect". The bare [`read_page_view`] discards them.
 pub fn read_page_outline(root: &Path, meta: &PageMeta) -> Result<PageOutline, ActionError> {
     let md_path = page_md_path(root, meta);
-    let md_text = std::fs::read_to_string(&md_path).unwrap_or_default();
+    // A page whose `.md` isn't on disk yet legitimately reads as empty;
+    // an unreadable one does not. Rendering an empty outline for a page
+    // that *does* have content invites the user to retype it, and the
+    // next commit writes that emptiness back. See `read_for_rewrite`.
+    let md_text = outl_md::read_for_rewrite(&md_path)?;
     let parsed = outl_md::parse::parse(&md_text);
     let sidecar_path = outl_md::resolve_sidecar_path(&md_path);
     let sidecar = outl_md::sidecar::read(&sidecar_path).ok();

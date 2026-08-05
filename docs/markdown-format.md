@@ -417,20 +417,22 @@ Format: JSON.
       "line": 7,
       "indent": 0,
       "content_hash": "sha256:abc123...",
-      "ref_handle": "blk-r6s4a1"
+      "ref_handle": "blk-r6s4a1",
+      "text": "decide the storage backend"
     },
     {
       "id": "01HXY8KJZQ9T8M7VN3P2R6S4A2",
       "line": 8,
       "indent": 1,
       "content_hash": "sha256:def456...",
-      "ref_handle": "blk-r6s4a2"
+      "ref_handle": "blk-r6s4a2",
+      "text": "JSONL first, ChronDB later"
     }
   ]
 }
 ```
 
-> The sidecar is **structural matching metadata only** — block id, position, content hash, ref handle.
+> The sidecar is **structural matching metadata only** — block id, position, content hash, ref handle, last-synced text.
 > State that must converge between devices (fold flags, etc.) lives in the op log (`outl-core`), never here. iCloud syncs the sidecar with LWW per-file, which would silently drop concurrent writes.
 
 ### Fields
@@ -450,6 +452,13 @@ Format: JSON.
   - `ref_handle`: short, stable, user-typeable handle for `((blk-XXXXXX))` references.
     Default-derived from the id (last 6 chars of the ULID's Crockford base32, lowercased, with the `blk-` prefix).
     Persisted verbatim so future changes to the derivation cannot invalidate references already in the wild.
+  - `text`: the block's content **as of the last sync**, verbatim and untruncated.
+    Optional — see [Sidecar versioning](#sidecar-versioning) for why an additive field like this one does *not* bump `version`.
+    This is the "before" side [level 2](#level-2--medium-confidence) diffs the freshly parsed `.md` against; a hash can only answer "identical or not", so without it a reworded block is indistinguishable from a deleted one.
+    Yes, this duplicates the `.md` body inside the sidecar.
+    A truncated prefix would be smaller but makes two blocks sharing a long opening look identical, and a level-2 false positive hands one block's id — and its `ref_handle` — to a different block.
+    That is the exact corruption matching exists to prevent, so the duplicated bytes are the cheaper side of the trade.
+    A sidecar is a rebuildable cache, not a second source of truth: the `.md` still wins, always.
 
 ### Content hash
 
@@ -465,15 +474,50 @@ Diverging hashes silently break matching.
 
 ### Sidecar versioning
 
-Current version is **`2`** (added `ref_handle` per block to power `((blk-XXXXXX))` references).
-Reading is backward-compatible:
+Current version is **`2`**.
 
-- A v1 sidecar (no `ref_handle` field) loads fine; the field is backfilled in memory by deriving it from the block id.
-- The first write after a load upgrades the on-disk payload to the current version.
-- Sidecars below `MIN_READABLE_SIDECAR_VERSION` (currently `1`) fail loudly — old workspaces in the wild stay supported until that constant moves.
+`version` answers exactly one question for a reader that did not write the file: *can I still trust the fields I know?*
+Compatibility runs in **both directions**, and the two are not symmetric.
 
-When v3 ever ships, v1 + v2 read paths stay until they're explicitly retired.
-Silent format drops are not allowed.
+#### Backward — a new binary reading an old sidecar
+
+Always supported, down to `MIN_READABLE_SIDECAR_VERSION` (currently `1`).
+A read path is never dropped when a newer one lands; silent format drops are not allowed.
+
+- A v1 sidecar (no `ref_handle`) loads fine; the field is backfilled in memory by deriving it from the block id.
+- A sidecar with no `text` loads fine; the field comes back empty and **level 2 simply doesn't fire for those blocks**.
+  There is nothing to backfill it from — the point of the field is to hold the text as it was *before* the `.md` on disk changed.
+  Matching degrades to hash + position, exactly what shipped before the field existed, never worse.
+  The next write records the text, so the page is covered from then on.
+- Sidecars below `MIN_READABLE_SIDECAR_VERSION` fail loudly — old workspaces in the wild stay supported until that constant moves.
+
+#### Forward — an already-shipped binary reading a new sidecar
+
+**This is the direction that bites, and it cannot be fixed after the fact.**
+
+Every released binary rejects `version > its own SIDECAR_VERSION`, and that check is frozen in the copies already on users' machines.
+Worse, on the paths that consume a sidecar an *unreadable* one used to look exactly like a *missing* one: no old blocks, so every block matched at level 3, took a fresh ULID, and the old id stayed in the tree.
+One boot of a stale device against a shared folder duplicated the whole page and rotated every `((blk-…))` handle — and the newer binary did the same in reverse on its next boot.
+
+The devices in one workspace never update at the same instant: the mobile build sits on TestFlight for days while the desktop is already ahead, and a laptop can stay closed for a week.
+A version bump is therefore a **break for real users**, not a hypothetical one.
+
+#### The rule
+
+1. **An additive field does NOT bump `version`.**
+   Give it `#[serde(default)]` and the format stays readable in both directions: an older reader ignores the unknown JSON key, a newer reader treats "missing" as "feature off for this entry".
+   `pipeline_version` and `text` are both this shape, which is why both live at version `2`.
+   **Feature detection is per-field presence, never per version number.**
+   An empty `text` disables level 2 for that block whatever number the file carries.
+   That is also the only correct answer once an old binary rewrites the sidecar and drops the field it never knew about.
+2. **Bump only when an older reader would _misread_ the file** — an existing field changes meaning, changes encoding, or goes away.
+   There the old binary's `UnsupportedVersion` is the *desired* outcome: a loud refusal beats silent corruption.
+3. **A bump is a coordinated release, not a patch.**
+   It needs a migration note here and an `outl doctor` path, because every device that has not updated stops reconciling those pages until it does.
+
+Defence in depth for the day rule 2 applies: `reconcile_md` **propagates** `UnsupportedVersion` instead of treating the page as sidecar-less.
+A sidecar written by a newer peer is not corruption, and rebuilding "from scratch" over one is what turns a version mismatch into duplicated blocks.
+(A sidecar that is genuinely corrupt — unparseable JSON — still rebuilds, per the "never block on a corrupt sidecar" rule.)
 
 ---
 
@@ -521,19 +565,36 @@ Block matches by:
 → Preserve ID.
 If position changed, emit `Op::Move`.
 
-### Level 2 — Medium confidence
+### Level 1.5 — Positional fallback
 
-Block matches by:
-- Normalized Levenshtein similarity > 80%, AND
-- (same parent OR position within ±2 lines)
+Runs only when the new and old block counts are equal (any insert or delete shifts every following DFS index and makes position meaningless).
+A still-unmatched block at DFS index `i` takes the id of `old_blocks[i]` when that entry is unused, sits at the **same indent**, and has the **same parent**.
+
+Indent is not a parent: two blocks can sit at the same depth under different subtrees.
+Matching on indent alone teleported one subtree's id — and its `((blk-…))` handle — into another subtree.
+A rejection here is not fatal; level 2 below can still recover the id on similarity, and it warns when it does so across parents.
 
 → Preserve ID.
 Emit `Op::Edit` (and `Op::Move` if needed).
-Log a warning to `.outl/orphans.log`:
 
-```
-2026-05-24T11:22:01-03:00 medium-confidence match block=01HXY... similarity=0.83
-```
+### Level 2 — Medium confidence
+
+Block matches by:
+- Normalized Levenshtein similarity > 80% against the sidecar's `text`, AND
+- (same parent OR DFS index within ±2)
+
+Highest score wins; ties go to the candidate nearest in position.
+
+→ Preserve ID.
+Emit `Op::Edit` (and `Op::Move` if needed).
+Log a `tracing` warning carrying the block id and the score — and a distinct, louder one when the match crosses parents (the user reparented *and* reworded the block in the same save).
+
+This level is what carries a block's id through the common external edit: **one save that both rewords a block and adds or removes another**.
+The count mismatch takes level 1.5 out of play, so before level 2 existed every reworded block in such a save minted a fresh ULID, the old id went to the trash, and every reference to it dangled.
+
+A sidecar entry with no recorded `text` — written before the field existed, or by a peer binary that doesn't know it — doesn't fire level 2 at all; the gate is the empty string, not the version number.
+See [Sidecar versioning](#sidecar-versioning).
+Blocks longer than 4096 characters are skipped too: the Levenshtein DP is O(n·m), and a block that size is a pasted document, not a sentence someone reworded.
 
 ### Level 3 — No match
 
@@ -601,8 +662,8 @@ The content hash is gone.
 Similarity may drop below 80%.
 
 - If still > 80%: level 2, log warning.
-- If below 80% but parent and position match: still level 2, more prominent warning.
-- If below 80% AND parent doesn't match: level 3, treat as new block.
+- If below 80% but the counts are unchanged and the parent + indent still agree: level 1.5 keeps the id (structure says it's the same slot).
+- If below 80% AND the counts changed: level 3, treat as a new block — and the old id hits `orphans.log`.
 
 ### Rename of header with many children
 

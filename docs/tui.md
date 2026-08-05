@@ -78,7 +78,8 @@ The TUI reads two layers of TOML before launching:
    font_size = 15
    ```
 2. **Per-workspace** — `<workspace>/.outl/config.toml`.
-   Workspace identity (`[workspace] actor_id = "..."`) lives here and can't move to global — it's per-device-per-workspace by design.
+   Carries the legacy `[workspace] actor_id` plus the `actor_claimed_by` marker.
+   The actor this device actually writes under lives outside the workspace, in the device store — see [config.md](config.md#where-the-actor-id-actually-lives).
    A `[theme] preset` here overrides the global setting for this workspace only.
 
 Theme precedence at startup (first hit wins): `--theme` CLI flag → per-workspace `[theme] preset` → global `[theme] preset` → built-in default (`outl`).
@@ -414,6 +415,11 @@ When you open a `.md` that the outl parser had to recover from (a leading `# hea
   The actual `.md` write + op-log reconcile drains the moment you pause typing, or is forced after 600ms if you keep a burst going.
   It always flushes before quitting, `Ctrl+S`, cross-page navigation, or a `call:` re-run, so an edit is never lost — it just isn't on disk the instant you press `Esc`.
   Concurrent `outl serve` is safe — both routes go through `outl_md::reconcile_md`.
+- **An unreadable page is never overwritten.**
+  Causes: a permissions change, a raw I/O error, invalid UTF-8, or an iCloud file whose contents haven't downloaded to this device yet.
+  The TUI shows `cannot read <path> … editing disabled` and **refuses to save that page** until a load succeeds.
+  A failed read parses as an empty document, and without this guard the next commit would render that emptiness back over your page and reconcile it, sending every block to the trash on every device.
+  A page that simply doesn't exist yet is a different case and still opens as a normal empty page.
 - **No IDs on disk**: every block has a stable ULID, but it lives in the `.outl` sidecar file, not in your markdown.
   `outl serve` / `outl-tui` rebuild that sidecar after every change.
 - **External edits hot-reload**: when another editor writes the currently-open `.md`, the TUI picks it up automatically within about a second.

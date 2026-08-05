@@ -166,13 +166,12 @@ fn legit_remote_delete_is_not_resurrected_while_lost_blocks_are_added() {
     let md_stale = format!("{}- gamma\n", fs::read_to_string(&md_path).unwrap());
     let ghost = NodeId(ulid::Ulid::new());
     let mut sc = outl_md::sidecar::read(&sc_path).unwrap();
-    sc.blocks.push(outl_md::sidecar::SidecarBlock {
-        id: ghost,
-        line: sc.blocks.len() + 1,
-        indent: 0,
-        content_hash: outl_md::sidecar::content_hash("gamma"),
-        ref_handle: outl_md::sidecar::derive_ref_handle(ghost),
-    });
+    sc.blocks.push(outl_md::sidecar::SidecarBlock::from_text(
+        ghost,
+        sc.blocks.len() + 1,
+        0,
+        "gamma",
+    ));
     sc.last_synced_hash = outl_md::sidecar::file_hash(&md_stale);
     fs::write(&md_path, &md_stale).unwrap();
     outl_md::sidecar::write(&sc_path, &sc).unwrap();

@@ -119,11 +119,29 @@ enum Command {
         /// Emit the report as the JSON envelope instead of a human view.
         #[arg(long)]
         json: bool,
+        /// Apply the safe, reversible fixes the report lists as
+        /// repairable: re-project a stale `.md` from the op log,
+        /// rebuild a missing sidecar, drop a corrupt snapshot.
+        ///
+        /// Never touches `ops/`, never deletes a `.md`, never moves a
+        /// block to the trash. Every file it writes is copied to
+        /// `.outl/repair-backup/<timestamp>/` first.
+        #[arg(long)]
+        repair: bool,
     },
     /// Resolve orphan matches via the TUI.
     Reconcile {
         /// Workspace path. Overrides the global `--workspace`.
         path: Option<PathBuf>,
+    },
+    /// Take, list, and restore local snapshots of the workspace.
+    ///
+    /// Uses the global `--workspace` for the target, like every other
+    /// subcommand-carrying command (a positional path would be
+    /// ambiguous against the subcommand name).
+    Backup {
+        #[command(subcommand)]
+        sub: cmd::backup::BackupSubcommand,
     },
     /// Inspect or list theme presets.
     Theme {
@@ -155,6 +173,11 @@ enum Command {
         /// original relative/remote links verbatim.
         #[arg(long)]
         no_assets: bool,
+        /// Import even when the destination already holds content —
+        /// overwrites those pages and discards anything written in outl,
+        /// or received from a paired device, since the last import.
+        #[arg(long)]
+        force: bool,
     },
     /// Import a file (PDF, image, …) and link it into the workspace.
     Asset {
@@ -305,16 +328,20 @@ fn main() -> Result<()> {
             let p = resolve_path(cli.workspace.as_ref(), path.as_ref())?;
             cmd::serve::run(&p, once)
         }
-        Some(Command::Doctor { path, json }) => {
+        Some(Command::Doctor { path, json, repair }) => {
             let p = resolve_path(cli.workspace.as_ref(), path.as_ref())?;
             if json {
-                std::process::exit(cmd::doctor::run_json(&p));
+                std::process::exit(cmd::doctor::run_json(&p, repair));
             }
-            cmd::doctor::run(&p)
+            cmd::doctor::run(&p, repair)
         }
         Some(Command::Reconcile { path }) => {
             let p = resolve_path(cli.workspace.as_ref(), path.as_ref())?;
             cmd::reconcile::run(&p)
+        }
+        Some(Command::Backup { sub }) => {
+            let p = resolve_path(cli.workspace.as_ref(), None)?;
+            cmd::backup::run(&p, &sub)
         }
         Some(Command::Theme { sub }) => cmd::theme::run(sub.as_ref()),
         Some(Command::Import {
@@ -325,6 +352,7 @@ fn main() -> Result<()> {
             json,
             preserve_timestamps,
             no_assets,
+            force,
         }) => cmd::import::run(
             &format,
             &src,
@@ -334,6 +362,7 @@ fn main() -> Result<()> {
                 json,
                 preserve_timestamps,
                 no_assets,
+                force,
             },
         ),
         Some(Command::Asset { sub }) => {

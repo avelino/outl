@@ -58,4 +58,4 @@ The behaviour is shared across clients so it stays identical everywhere:
 The TUI reads the OS clipboard directly (`arboard`) and runs the same `outl_actions` pipeline; it has no `text/html` flavour to convert, so rich-clipboard conversion is a GUI-only capability.
 On the desktop, paste-without-formatting (`Cmd/Ctrl+Shift+V`) reads the clipboard through the Tauri clipboard-manager plugin (backend `arboard`), not `navigator.clipboard.readText()`.
 The macOS webview gates that web API behind a native "Paste" permission button when it is called outside a real paste gesture, so the plugin read is what makes the chord work.
-See the [Shared primitives catalog](shared-primitives.md) for where each piece lives.
+See the [Shared primitives catalog](shared-primitives.md) — specifically [Markdown pipeline](primitives-markdown.md) — for where each piece lives.

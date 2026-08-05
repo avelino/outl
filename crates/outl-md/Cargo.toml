@@ -24,6 +24,7 @@ comrak = { workspace = true }
 emojis = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+strsim = { workspace = true }
 chrono = { workspace = true }
 walkdir = { workspace = true }
 

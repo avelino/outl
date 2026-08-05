@@ -6,7 +6,7 @@ They are read in this order; the second can override fields from the first.
 | Layer | Path | Scope | Written by |
 |---|---|---|---|
 | **Global** | `~/.config/outl/config.toml` | The user's machine — every workspace, every client | The desktop app's Settings modal; you can also edit it by hand |
-| **Per-workspace** | `<workspace>/.outl/config.toml` | One workspace only | `outl init` (for the actor id); hand-edit for the rest |
+| **Per-workspace** | `<workspace>/.outl/config.toml` | One workspace only | `outl init` (seeds the legacy actor id); hand-edit for the rest |
 
 The path layout is **XDG-style on every OS — including macOS**.
 outl is keyboard-first and CLI-friendly; the macOS-native `~/Library/Application Support/…` location would split the TUI and desktop into two config files for no real benefit.
@@ -164,6 +164,45 @@ See [theming.md](theming.md) for the look of each.
 Both are **device-local on purpose**: quiet hours are a property of *this* phone or laptop, not of the workspace.
 The rule itself and a snooze converge through the op log; see [reminders.md](reminders.md).
 
+#### `[backup]`
+
+| Field | Type | Default | Read by | Effect |
+|---|---|---|---|---|
+| `enabled` | boolean | `true` | the TUI's background snapshot pass | Take periodic local git snapshots of the workspace. Costs nothing on an unchanged workspace (no diff → no commit) and degrades to a logged warning where there is no `git` on `PATH`. |
+| `interval_minutes` | integer | `30` | the TUI's background snapshot pass | Minimum minutes between automatic snapshots. A **floor, not a schedule** — the pass wakes on this cadence and commits only when at least this long has passed since the newest snapshot, so a burst of edits never becomes a burst of commits. The elapsed time is read back out of the git history, so it survives a restart. |
+
+Backups default **on** for the same reason reminders do.
+The failures they catch — a bad projection, an `outl import` aimed at a workspace that already had pages, a page deleted with the app then closed — are ones you discover *after* the moment when you could have enabled a safety net.
+
+**Which clients take automatic snapshots today.**
+
+| Client | Automatic snapshots |
+|---|---|
+| `outl-tui` (and `outl` with no subcommand) | **Yes** — a background thread started at launch, first pass ~60 s in, then every `interval_minutes` |
+| `outl` CLI subcommands | No — one-shot commands; use `outl backup now` |
+| Desktop | Not yet |
+| Mobile | Not yet — no `git` binary on iOS |
+
+The pass **creates the repository on first run**, so `enabled = true` needs no `outl backup init` to mean something.
+It never runs on the edit path, and it is not run at quit either: blocking an exit on a whole-workspace `git add` is worse than a snapshot arriving one session late, and the interval floor comes from git, so the next launch takes it.
+
+They are **device-local**, and the repository lives **outside the workspace** — under `~/.config/outl/backups/<name>-<hash>.git`, with the workspace as git's `--work-tree`.
+Two reasons:
+
+- The workspace is a **sync surface** on every transport except iCloud.
+  A `.git/` inside it means Syncthing / Dropbox / a shared mount replicate git's object store, index and lock files under eventual consistency.
+- If you already keep your notes in your own git repo, outl must not touch it.
+  It doesn't: your staging area, your branch, your hooks and your `info/exclude` are never read or written, and no snapshot is ever committed into your history.
+
+`outl backup list|restore` find the repository automatically; a workspace you **move or rename** starts a fresh history (the old one stays on disk).
+
+What is captured: `ops/` (the source of truth), `pages/`, `journals/`, `templates/`, `assets/`, and `.outl/config.toml`.
+What is excluded: caches the next boot rebuilds — `.outl/snapshots/`, `*.idx`, lock files, `*.tmp`.
+
+**A `.gitignore` in your workspace cannot exclude the captured paths.**
+Work-tree ignore rules beat the backup repo's own exclusions, so a `*.jsonl` line used to drop the op log out of every snapshot while the CLI still printed commit ids.
+Those paths are now staged with `git add --force`, and every snapshot **verifies that each `ops/*.jsonl` on disk is in the commit** before reporting success — a history missing the source of truth is reported as an error, not a backup.
+
 > The iroh transport also reads `~/.outl/identity.key` (this device's ed25519 keypair, per-machine) and `<workspace>/.outl/peers.json` (the paired-device list, per-graph).
 > Those are managed by `outl peer …`, not by this config file — see [sync.md → iroh transport](sync.md#transport-2-iroh-p2p).
 
@@ -178,10 +217,18 @@ Written by `outl init`; carries the device's per-workspace identity and (optiona
 # hand-edited.
 
 [workspace]
-# The per-device-per-workspace actor id (a ULID). DO NOT copy this
-# file between machines: every device needs its own id so the op
-# log can attribute writes correctly.
+# LEGACY actor id (a ULID), seeded at `outl init`. This is NOT where a
+# device reads the actor it writes under — that lives outside the
+# workspace, in the device store (see below). Exactly one device adopts
+# this value on first open; every other device mints its own.
 actor_id = "01HKZX9YBPDC5XJZ3R8K2QGM7E"
+
+# Machine id of the device that owns `actor_id`. Stamped when this
+# file is CREATED, by the device that created it. Every other device
+# reads it as "taken" and generates a fresh actor rather than sharing
+# this one. Absent on a workspace created before the device store
+# existed — and then nobody adopts `actor_id` at all.
+actor_claimed_by = "01HKZXA1M4N7QF0V6T2WSD9YB3"
 
 # Persistent storage backend. JSONL (one append-only `ops-<actor>.jsonl`
 # per device) is the ONLY backend, so this is almost always omitted.
@@ -194,8 +241,30 @@ storage = "jsonl"
 preset = "monokai"
 ```
 
-> The `[workspace] actor_id` field **cannot** move to the global config — it's per-device-per-workspace by design.
-> A peer's op log identifies writes by this id; sharing it across machines silently breaks convergence.
+### Where the actor id actually lives
+
+`.outl/config.toml` sits **inside** the workspace, so Syncthing, Dropbox, NFS, a shared volume and `git clone` all replicate it.
+A device actor read from here would therefore be the *same* on two machines, both would append to one `ops-<actor>.jsonl`, and the loser's ops would disappear with no error.
+(iCloud Drive never exposed this because it drops dot-prefixed paths, so `.outl/` never travelled.)
+
+The actor a device writes under lives in the **device store** instead — a directory outside every workspace:
+
+```text
+$OUTL_DEVICE_DIR, else $XDG_CONFIG_HOME/outl, else ~/.config/outl/
+├── machine-id                  # this device's id + its host binding
+├── actor                       # device-wide actor (desktop + mobile)
+└── actors/
+    ├── <workspace-id>          # that workspace, at the directory it was bound to
+    └── <workspace-id>.<hash>   # a second copy of it on this same device
+```
+
+Nothing to configure: it is created on first open.
+Copying `.outl/config.toml` between machines is safe — the second machine sees `actor_claimed_by` naming someone else and mints its own actor.
+Copying the whole workspace *directory* on one machine is safe too: the binding records which directory it belongs to, so a second live copy forks while a plain move or rename keeps its actor.
+
+The store is not beyond reach of a *whole-`$HOME`* clone (Migration Assistant, a Time Machine restore, a VM image, chezmoi, NFS), so `machine-id` is bound to a hash of an OS identifier of the physical machine and reminted when that changes.
+On iOS no such identifier is reachable, so a restored device backup is a known gap.
+Details in [storage.md → Where the actor id lives](storage.md#where-the-actor-id-lives--outside-the-workspace).
 
 ### `[workspace] storage` and peer sync
 

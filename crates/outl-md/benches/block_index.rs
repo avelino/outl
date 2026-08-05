@@ -16,7 +16,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use outl_core::id::NodeId;
 use outl_md::block_index::BlockIndex;
 use outl_md::parse::OutlineNode;
-use outl_md::sidecar::{content_hash, derive_ref_handle, SidecarBlock};
+use outl_md::sidecar::{derive_ref_handle, SidecarBlock};
 use std::hint::black_box;
 use std::path::PathBuf;
 
@@ -41,11 +41,8 @@ fn build_index(blocks_total: usize, pages_count: usize) -> (BlockIndex, Vec<Stri
             let handle = derive_ref_handle(id);
             handles.push(handle.clone());
             sidecar.push(SidecarBlock {
-                id,
-                line: b + 1,
-                indent: 0,
-                content_hash: content_hash(&text),
                 ref_handle: handle,
+                ..SidecarBlock::from_text(id, b + 1, 0, text.clone())
             });
             ast.push(OutlineNode {
                 text,
