@@ -103,7 +103,27 @@ impl OpsDirGuard {
         for path in walk(&self.dir) {
             match self.before.get(&path) {
                 None => {
-                    if let Err(e) = std::fs::remove_file(&path) {
+                    // A file that appeared after `capture` is USUALLY an
+                    // index sidecar `JsonlStorage::open` just rebuilt.
+                    // But `ops/` is a sync target: iCloud, Syncthing or a
+                    // co-resident client can land a brand-new
+                    // `ops-<peer>.jsonl` while a 66k-block replay is
+                    // still running, and this guard holds no lock.
+                    //
+                    // Deleting that is not "un-creating a cache file",
+                    // it is destroying a peer's entire op log — and
+                    // `remove_file` returning `Ok` means it would never
+                    // even reach the report. Only remove what we could
+                    // plausibly have made; anything else gets reported
+                    // and left exactly where it is.
+                    if is_op_log(&path) {
+                        unrestorable.push(format!(
+                            "{} appeared while the doctor was reading — another process \
+                             (a peer sync, or a client sharing this workspace) is writing \
+                             to the op log; left untouched",
+                            path.display()
+                        ));
+                    } else if let Err(e) = std::fs::remove_file(&path) {
                         unrestorable.push(format!(
                             "{} was created and could not be removed: {e}",
                             path.display()
@@ -128,10 +148,28 @@ impl OpsDirGuard {
                     let now_len = meta.as_ref().map(|m| m.len());
                     let now_mtime = meta.and_then(|m| m.modified().ok());
                     if now_len != Some(*len) || now_mtime != *mtime {
-                        unrestorable.push(format!(
-                            "{} changed during a run that must only read it",
-                            path.display()
-                        ));
+                        // An op log that only GREW is an append by
+                        // someone else — a GUI client, `outl serve`, a
+                        // peer landing ops. On a synced workspace that
+                        // is the common case, not the rare one, and
+                        // blaming the doctor for it (an error, exit 1,
+                        // "this is a bug in the doctor") teaches the
+                        // user to ignore the loudest line in the report.
+                        // Only a log that shrank or was rewritten is
+                        // evidence something went wrong.
+                        if now_len.is_some_and(|n| n > *len) {
+                            b.warn(format!(
+                                "{} grew while the doctor was reading it — another process \
+                                 is writing to this workspace, so the findings above are a \
+                                 snapshot, not a live view",
+                                path.display()
+                            ));
+                        } else {
+                            unrestorable.push(format!(
+                                "{} changed during a run that must only read it",
+                                path.display()
+                            ));
+                        }
                     }
                 }
                 Some(Snapshot::Opaque) => {}
@@ -192,4 +230,52 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 
 fn is_op_log(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()) == Some("jsonl")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The guard holds no lock, and `ops/` is a sync target. A peer's
+    /// op log can land mid-run: iCloud finishes a download, Syncthing
+    /// delivers, or a co-resident client writes while a 66k-block
+    /// replay is still going.
+    ///
+    /// Removing it would destroy that peer's entire history, and
+    /// `remove_file` returning `Ok` means it would never even reach the
+    /// report. Un-creating an index sidecar is the only thing this
+    /// guard is entitled to do.
+    #[test]
+    fn a_peer_op_log_that_lands_mid_run_is_never_deleted() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ops = tmp.path().join("ops");
+        std::fs::create_dir_all(&ops).unwrap();
+        std::fs::write(ops.join("ops-local.jsonl"), "{\"a\":1}\n").unwrap();
+
+        let guard = OpsDirGuard::capture(&ops);
+
+        // Mid-run arrivals: a peer's log (must survive) and an index
+        // sidecar the storage layer rebuilt (ours to clean up).
+        let peer = ops.join("ops-peer.jsonl");
+        std::fs::write(&peer, "{\"b\":2}\n").unwrap();
+        let sidecar = ops.join(".ops-local.idx");
+        std::fs::write(&sidecar, "cache").unwrap();
+
+        let mut b = Builder::new("ws".into(), "actor".into());
+        guard.restore(&mut b);
+
+        assert!(
+            peer.exists(),
+            "a peer's op log arriving mid-run must never be deleted by a diagnostic"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&peer).unwrap(),
+            "{\"b\":2}\n",
+            "and it must be left byte-identical, not rewritten"
+        );
+        assert!(
+            !sidecar.exists(),
+            "an index sidecar the doctor caused IS ours to remove"
+        );
+    }
 }

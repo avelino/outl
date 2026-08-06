@@ -125,7 +125,13 @@ pub struct Paths {
     pub ops: PathBuf,
     /// `.outl/config.toml`.
     pub config: PathBuf,
-    /// `.outl/orphans.log`.
+    /// `.outl/orphans.log`, derived by
+    /// [`outl_actions::sync::orphans_log_path`].
+    ///
+    /// Not re-joined here: `outl-md`'s rule is that a block dropping to
+    /// matching level 3 is recorded in this file *before* it is trashed,
+    /// and the CLI reaches that file exclusively through this field. A
+    /// second derivation is a second owner of where those records land.
     pub orphans: PathBuf,
     /// `.outl/peers.toml` (legacy peer-registry placeholder).
     pub peers: PathBuf,
@@ -141,7 +147,7 @@ impl Paths {
         Self {
             ops: root.join("ops"),
             config: dot_outl.join("config.toml"),
-            orphans: dot_outl.join("orphans.log"),
+            orphans: outl_actions::sync::orphans_log_path(&root),
             peers: dot_outl.join("peers.toml"),
             pages: root.join("pages"),
             journals: root.join("journals"),

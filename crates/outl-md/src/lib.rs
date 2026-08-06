@@ -27,6 +27,7 @@ pub mod reconcile;
 pub mod remind;
 pub mod render;
 pub mod sidecar;
+mod similarity;
 pub mod slug;
 pub mod tag;
 pub mod view;

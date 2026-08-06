@@ -48,7 +48,7 @@ The only follow-up here is consistency review, not new capability.
 | Mobile | Context-menu "Copy text" writes **one block's raw text** via `navigator.clipboard` (`components/Journal.tsx:1555`), no children, no `- `. | yes, single block only |
 
 There is **no serializer** anywhere (Rust or TS) that turns a selected subtree into clean outline markdown.
-The closest primitive, `render_page_md` (`outl-actions/src/journal.rs:87`), is page-scoped:
+The closest primitive, `render_page_md` (`outl-actions/src/journal/render.rs`), is page-scoped:
 it skips the root node's own text and **drops block properties** (`build_outline` passes `properties: Vec::new()`).
 
 ### Root cause of the issue #114 mess

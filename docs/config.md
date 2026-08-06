@@ -174,17 +174,7 @@ The rule itself and a snooze converge through the op log; see [reminders.md](rem
 Backups default **on** for the same reason reminders do.
 The failures they catch — a bad projection, an `outl import` aimed at a workspace that already had pages, a page deleted with the app then closed — are ones you discover *after* the moment when you could have enabled a safety net.
 
-**Which clients take automatic snapshots today.**
-
-| Client | Automatic snapshots |
-|---|---|
-| `outl-tui` (and `outl` with no subcommand) | **Yes** — a background thread started at launch, first pass ~60 s in, then every `interval_minutes` |
-| `outl` CLI subcommands | No — one-shot commands; use `outl backup now` |
-| Desktop | Not yet |
-| Mobile | Not yet — no `git` binary on iOS |
-
-The pass **creates the repository on first run**, so `enabled = true` needs no `outl backup init` to mean something.
-It never runs on the edit path, and it is not run at quit either: blocking an exit on a whole-workspace `git add` is worse than a snapshot arriving one session late, and the interval floor comes from git, so the next launch takes it.
+Which clients run the automatic pass today, and the rules a client that wires it up must keep, live in [clients.md → Automatic backups](clients.md#automatic-backups).
 
 They are **device-local**, and the repository lives **outside the workspace** — under `~/.config/outl/backups/<name>-<hash>.git`, with the workspace as git's `--work-tree`.
 Two reasons:

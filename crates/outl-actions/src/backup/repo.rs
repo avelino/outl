@@ -199,16 +199,27 @@ impl BackupRepo {
     /// a commit id, `outl backup status` reports a healthy history, and
     /// the one thing that can rebuild the workspace was never in it.
     pub(crate) fn verify_op_log_captured(&self) -> Result<(), BackupError> {
+        // Recursive, NOT `read_dir`: under the per-page layout
+        // (`ops/<actor>/<slug>.jsonl`, what `outl migrate-to-per-page-ops`
+        // produces) every top-level entry is a *directory*, so a flat
+        // scan finds zero `.jsonl` files, the emptiness check below
+        // short-circuits, and this function reports success having
+        // verified nothing at all — on the layout with the most files to
+        // lose. `doctor/oplog.rs` already walks the same tree this way.
+        let ops_dir = self.work_tree.join("ops");
         let mut on_disk: Vec<String> = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(self.work_tree.join("ops")) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                    continue;
-                }
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    on_disk.push(format!("ops/{name}"));
-                }
+        for entry in walkdir::WalkDir::new(&ops_dir).max_depth(3) {
+            let Ok(entry) = entry else { continue };
+            let path = entry.path();
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            // Git tracks paths relative to the work tree, with `/`.
+            if let Ok(rel) = path.strip_prefix(&self.work_tree) {
+                on_disk.push(rel.to_string_lossy().replace('\\', "/"));
             }
         }
         if on_disk.is_empty() {
@@ -317,13 +328,23 @@ impl BackupRepo {
             });
         }
 
+        // Resolve the id to a commit SHA before it reaches `checkout`.
+        // An id starting with `-` is otherwise absorbed as an option
+        // (`outl backup restore -- -q --into …` gets one past clap), and
+        // the user sees an inscrutable git error instead of "no such
+        // snapshot". The resolved SHA can never be argument-shaped.
+        let commit = self
+            .git(&["rev-parse", "--verify", &format!("{id}^{{commit}}")])?
+            .trim()
+            .to_string();
+
         // A scratch index, so the checkout cannot touch the
         // repository's own: `git checkout <id> -- .` stages what it
         // writes, and against the live index the next snapshot would
         // commit the restored state as if it were current.
         let scratch_index = dest_abs.join(".outl-restore-index");
         let res = self.run(
-            &["checkout", id, "--", "."],
+            &["checkout", &commit, "--", "."],
             &dest_abs,
             Some(&scratch_index),
         );

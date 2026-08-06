@@ -77,6 +77,7 @@ See `outl-core/CLAUDE.md` → "Actor id is device-local, and the workspace canno
      Allow-list: re-project a `.md` + sidecar from the log, rebuild a missing sidecar over byte-identical content, delete a corrupt snapshot, prune old repair backups.
      It never deletes a `.md`, never touches `ops/`, never moves a block to the trash, and never picks a winner between sync-conflict copies.
      Every file it writes is copied to `.outl/repair-backup/<timestamp>/` first; that directory is pruned by `BACKUP_KEEP` / `BACKUP_MIN_AGE_DAYS` (an entry must fail **both** to be removed).
+     **All four are `Plan` entries**, so `describe()` announces the prune like the rest and a run whose only work is a prune still happens — an otherwise-healthy workspace is exactly the one that would keep every generation forever.
      The page write itself delegates to `outl_actions::apply_page_md_with_sidecar{,_if_stale}` so the doctor never develops its own opinion about when a projection is safe to overwrite.
   3. **A damaged op log has no authority to overwrite its own projection.**
      `JsonlStorage` skips malformed records by design, so a torn `ops/` file replays into a **truncated tree** — while the `.md` on disk still matches its sidecar hash and therefore still looks "faithful".
@@ -87,8 +88,17 @@ See `outl-core/CLAUDE.md` → "Actor id is device-local, and the workspace canno
   4. **Read-only means read-only, including the index sidecars.**
      `JsonlStorage::open` runs `create_dir_all` + `reload`, and `reload` persists `.ops-*.idx` / `.ops-*.nodes.idx` — so merely *opening* the storage writes into `ops/`, in both modes.
      `ops_guard.rs` snapshots `ops/` before the open and restores it afterwards, in **both** modes, so "never touches `ops/`" holds for the whole command rather than just the repair pass.
-     A `.jsonl` that changed under the guard is reported as an **error**, never silently patched.
      The test asserts over the whole directory (names + bytes); comparing a single file is what let this hide.
+
+     Two things the restore pass must never get wrong, because both destroy user data while reporting success:
+
+     - **A file that appeared mid-run is not automatically the doctor's to delete.**
+       `ops/` is a sync target and this guard holds no lock, so iCloud, Syncthing or a co-resident client can land a brand-new `ops-<peer>.jsonl` during a replay that takes minutes on a large graph.
+       Only an index sidecar is ours to un-create; a `.jsonl` is reported and left exactly where it is.
+       `remove_file` returning `Ok` means the alternative would erase a peer's whole history without a single line in the report.
+     - **An op log that only grew is someone else appending, not a defect.**
+       On a synced workspace that is the common case, and calling it "a bug in the doctor" (an error, exit 1) trains the user to ignore the loudest line in the report.
+       Growth is a `warn` saying the findings are a snapshot rather than a live view; only a log that shrank or was rewritten is an error.
 - `outl reconcile [<path>]` — list orphans pending manual resolution.
 - `outl migrate-to-shared [<path>]` — copy local sqlite log into shared `ops/` JSONL for cross-device sync.
 - `outl import roam|logseq|obsidian|auto <src> <dst>` — graph import.
@@ -214,7 +224,13 @@ src/
 │   ├── mod.rs
 │   ├── init.rs            # outl init
 │   ├── serve.rs           # outl serve
-│   ├── doctor.rs          # outl doctor
+│   ├── doctor/            # outl doctor — one file per class of check
+│   │   ├── mod.rs         #   report types + orchestration
+│   │   ├── oplog.rs       #   raw .jsonl sweep, snapshots, offset indexes
+│   │   ├── files.rs       #   .md ↔ sidecar, parse warnings, conflicts
+│   │   ├── tree.rs        #   trash, unmaterialized ops, projection drift
+│   │   ├── ops_guard.rs   #   restores ops/ byte-for-byte after the run
+│   │   └── repair.rs      #   the --repair pass
 │   ├── reconcile.rs       # outl reconcile
 │   ├── theme.rs           # outl theme
 │   ├── import/            # outl import — glue over the outl-import crate
@@ -271,4 +287,4 @@ New tools land by:
 - ❌ Add a helper here that re-implements something already in `outl-core` / `outl-md` / `outl-actions`.
   `cmd/*` handlers are glue — they parse args, call the upstream API, and JSON-envelope the result.
   If you need a new operation, add it upstream first (`outl-actions` is the usual home), then call it.
-  See root [`CLAUDE.md`](../../CLAUDE.md#reuse-first-no-parallel-implementations) for the policy.
+  See root [`CLAUDE.md`](../../CLAUDE.md#reuse-first) for the policy.

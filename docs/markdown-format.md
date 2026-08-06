@@ -581,9 +581,16 @@ Emit `Op::Edit` (and `Op::Move` if needed).
 
 Block matches by:
 - Normalized Levenshtein similarity > 80% against the sidecar's `text`, AND
-- (same parent OR DFS index within ±2)
+- a DFS index within ±2 — **unconditional**.
+  Parent agreement is not an alternative gate; it only selects which warning gets logged.
 
-Highest score wins; ties go to the candidate nearest in position.
+Assignment is by **global confidence**, not by the order blocks appear in the file.
+Every candidate pair is scored first, then resolved from the highest score down, and a winner must beat the runner-up on **both** sides (the best rival for that new block *and* the best rival for that old block) by a margin.
+A pair that fails the margin declines and leaves both of its blocks free to keep competing.
+
+Scoring first is what stops a **newly typed** block from taking the id, and the `((blk-…))` handle, of a block it merely resembles.
+Consuming candidates in file order did exactly that: the new block was reached first and claimed the id, while the block the user actually edited fell to level 3.
+`orphans` came out empty, so nothing was recorded anywhere.
 
 → Preserve ID.
 Emit `Op::Edit` (and `Op::Move` if needed).

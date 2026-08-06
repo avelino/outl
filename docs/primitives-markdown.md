@@ -46,8 +46,6 @@ For the reuse-first rule (why this matters, past drift incidents, what to do whe
 | Convert clipboard markdown into outl ops grafted at a position | `outl_actions::paste::paste_markdown` → `PasteOutcome` (anchor described by `PasteAnchor`) | `crates/outl-actions/src/paste/mod.rs` |
 | Paste raw text as a single block with no normalisation or outline parsing (the "without formatting" path) | `outl_actions::paste::paste_plain(workspace, hlc, anchor, raw)` → `PasteOutcome` | `crates/outl-actions/src/paste/mod.rs` |
 | Serialize a block selection (+ subtrees) to clean outl markdown **for the clipboard** (the inverse of `paste_markdown` / `parse`) | `outl_actions::clipboard::copy_markdown` (workspace + `NodeId`s; GUI backends) / `copy_markdown_nodes` (already-projected `OutlineNode`s; the TUI's AST-first yank) | `crates/outl-actions/src/clipboard.rs` |
-| **Ingest a `.md` as a real page** (creates page node + reconciles blocks; used by import / `serve` / mobile + TUI orphan scanners) | `outl_actions::ingest::ingest_md_file` / `ingest_dir` | `crates/outl-actions/src/ingest.rs` |
-| Create stub pages for every `[[ref]]` with no file of its own (Logseq "implicit pages") | `outl_actions::ingest::create_missing_ref_pages` | `crates/outl-actions/src/ingest.rs` |
 
 ---
 
@@ -74,13 +72,13 @@ For the reuse-first rule (why this matters, past drift incidents, what to do whe
 | Construct a fresh sidecar for a new page | `outl_md::sidecar::Sidecar::new_for_page(page_id, &file_hash)` | `crates/outl-md/src/sidecar.rs` |
 | Build one sidecar block entry — **the only way to build one** unless you're preserving an expanded `ref_handle`; keeps `content_hash`, `ref_handle` and the level-2 `text` derived from the same revision | `outl_md::sidecar::SidecarBlock::from_text(id, line, indent, text)` | `crates/outl-md/src/sidecar.rs` |
 | Sidecar format version — currently `2`. **Feature-detect by field presence, never by version number**: an additive `#[serde(default)]` field (`text`, `pipeline_version`) does NOT bump it, because a reader that doesn't know the field still reads every field it does know correctly. Bump only when an existing field changes meaning or encoding — there, an older reader's `UnsupportedVersion` is the *desired* outcome. Bumping for an additive field is what makes an already-shipped binary reject the file, rebuild the sidecar from scratch, and duplicate every block | `outl_md::sidecar::SIDECAR_VERSION` / `MIN_READABLE_SIDECAR_VERSION` | `crates/outl-md/src/sidecar.rs` |
-| Read / write sidecar (JSON, version 3, backward-reads v1/v2) | `outl_md::sidecar::read` / `write` | `crates/outl-md/src/sidecar.rs` |
+| Read / write sidecar (JSON, writes `SIDECAR_VERSION` = 2, backward-reads v1) | `outl_md::sidecar::read` / `write` | `crates/outl-md/src/sidecar.rs` |
 | Sidecar path resolution for a `.md` | `outl_md::sidecar::sidecar_path_for` / `resolve_sidecar_path` | `crates/outl-md/src/sidecar.rs` |
 | Derive `((blk-XXXXXX))` ref handle from `NodeId` (deterministic, collision-aware) | `outl_md::sidecar::derive_ref_handle` | `crates/outl-md/src/sidecar.rs` |
 | Hash block / file content for sidecar (`content_hash` = single block; `file_hash` = whole `.md`) | `outl_md::sidecar::content_hash` / `file_hash` | `crates/outl-md/src/sidecar.rs` |
 | Low-level crash-safe write (use the `journal::write_md_atomic` wrapper unless you have a reason) | `outl_md::atomic::write_atomic` | `crates/outl-md/src/atomic.rs` |
 | Read a `.md` you are about to mutate and write back (missing → empty, every other I/O error propagates) | `outl_md::atomic::read_for_rewrite` | `crates/outl-md/src/atomic.rs` |
-| Path of a workspace's orphan log — **every `reconcile_md` caller must pass this**, never `None` | `outl_actions::orphans_log_path` / `SyncEngine::orphans_log` | `crates/outl-actions/src/sync.rs` |
+| Path of a workspace's orphan log — **every `reconcile_md` caller must pass this**, never `None`. The one owner: `outl_ws::layout::Paths::at` derives its `orphans` field from it rather than re-joining the path | `outl_actions::sync::orphans_log_path` / `SyncEngine::orphans_log` | `crates/outl-actions/src/sync.rs` |
 
 ---
 

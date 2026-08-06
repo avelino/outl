@@ -24,7 +24,8 @@ Treat matching with the same paranoia as the CRDT.
   **Additive fields ride at the same version — see [Sidecar versioning](#sidecar-versioning-both-directions) before touching `SIDECAR_VERSION`.**
   The sidecar is **structural metadata only** (id, line, indent, content hash, ref handle, last-synced text).
   State that must converge between devices (fold flags, pinned, etc.) goes through the op log in `outl-core`, never here.
-- The 3-level matching algorithm (external edit → reconstruct IDs)
+- The 3-level matching algorithm (external edit → reconstruct IDs).
+  `matching.rs` owns the level walk; `similarity.rs` (crate-private) owns level-2 scoring and the global-confidence assignment that decides which new block keeps which old id.
 - Diff (old AST + new AST + old sidecar blocks) → minimal sequence of `Op`s, preserving `ref_handle` verbatim on level-1/2 matches.
   The old-handle lookup is O(N) overall (HashMap by id), not O(N²) — never reintroduce a linear scan per new block.
   **`diff_to_ops` only emits structural ops (Create / Move / SetProp); a second pass inside `reconcile_md::sync_block_text` walks the AST + new sidecar in lockstep and emits one `Op::Edit` per block whose text differs from the workspace.
@@ -142,7 +143,7 @@ When an external save lands on `pages/foo.md`:
 |-------|-----------|----------|--------|
 | 1 | High | `content_hash` exact match, same parent (by hash) or identical structure | Preserve ID, emit `Move` if position changed |
 | 1.5 | High | Equal block counts + same DFS index + same indent + **same parent** | Preserve ID, emit `Edit` (+ `Move` if needed) |
-| 2 | Medium | Normalized Levenshtein similarity > 80% against `SidecarBlock::text`, same parent OR DFS index within ±2 | Preserve ID, emit `Edit` (+ `Move` if needed), log warning |
+| 2 | Medium | Normalized Levenshtein similarity > 80% against `SidecarBlock::text`, **and** DFS index within ±2 (unconditional) | Preserve ID, emit `Edit` (+ `Move` if needed), log warning |
 | 3 | Low / no match | Falls through | New ULID for new block; old block becomes `Delete` (`Move` to `TRASH_ROOT`); record in `.outl/orphans.log` |
 
 **Hard rule:** a block that drops to level 3 must appear in `orphans.log` before being deleted.
@@ -164,6 +165,14 @@ Implementation notes:
 - A length-ratio pre-filter (`min_len / max_len <= 0.8` ⇒ reject) skips the O(n·m) DP for pairs that could not have cleared the threshold anyway.
   It's exact, so it can never discard a real match.
 - Blocks over 4096 chars are skipped: at that size it's a pasted document, not a reworded sentence.
+- The ±2 DFS window is **unconditional** — parent agreement is not an alternative gate.
+  It used to be skipped whenever the parents agreed, but `parents_agree(None, None)` is `true`, so every pair of *root* blocks agreed and the window never fired on a journal page.
+  `same_parent` today only selects which of the two warnings is logged.
+- **Assignment is by global confidence, never by document order** (`src/similarity.rs`).
+  Every in-window pair is scored first, then resolved from the highest score down, and the runner-up margin is **two-sided**: a winner must beat the best other claim on its new block *and* the best other claim on its old entry.
+  Walking `0..flat.len()` and taking each new block's first above-threshold candidate let a freshly typed block steal the id — and the `ref_handle` — of the block it merely resembles, purely by sitting at a lower index.
+  The real owner then fell to level 3 with a fresh ULID, and because the old id *was* consumed, `orphans` came back empty and nothing reached `orphans.log`.
+  Pinned by `tests/similarity_contention.rs`.
 - The match is `MatchLevel::Medium`, which `diff_to_ops` already treats like level 1 for id **and** `ref_handle` preservation (invariant 6).
 
 ## Sidecar format
@@ -279,6 +288,7 @@ src/
 ├── render.rs       # AST → md (clean)
 ├── sidecar.rs      # read/write .outl JSON, derive_ref_handle, content_hash
 ├── matching.rs     # 3-level matching algorithm
+├── similarity.rs   # level-2 scoring + global-confidence assignment (private to the crate)
 ├── diff.rs         # AST diff → Op sequence (takes old_blocks to preserve ref_handle)
 ├── inline.rs       # InlineTok (Plain/Bold/.../BlockRef/Embed/Emoji), RefTarget
 ├── cursor.rs       # ref_at_cursor, link_at_cursor, byte_index_for_char (re-exported via inline)
@@ -302,6 +312,7 @@ tests/
 ├── duplicate_block.rs        # Ctrl+D in vscode → first keeps ID, second gets new
 ├── identical_blocks_swap.rs  # two identical blocks change parents
 ├── heavy_edit.rs             # >20% content change → level 2 warning
+├── similarity_contention.rs  # two new blocks claim one old entry: confidence decides, not index order
 └── mixed_version_sidecar.rs  # shipped v2 binary + current one over one folder: no dup, no handle rotation
 
 benches/

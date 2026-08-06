@@ -143,7 +143,7 @@ Before adding a helper that walks blocks, normalises text, or maps a cursor acro
 
 Only write a helper directly under `outl-mobile/src/lib/` when it's genuinely mobile-specific (touch gestures, iOS UIKit bridges, haptics, viewport math).
 
-Workspace-level policy: [`CLAUDE.md`](../../CLAUDE.md#reuse-first-no-parallel-implementations).
+Workspace-level policy: [`CLAUDE.md`](../../CLAUDE.md#reuse-first).
 Frontend-specific policy: [`outl-frontend-shared/CLAUDE.md`](../outl-frontend-shared/CLAUDE.md).
 
 What this crate **does** own:

@@ -450,3 +450,81 @@ fn repair_keeps_its_own_backup_generation() {
         "the generation this run wrote must survive its own prune"
     );
 }
+
+/// Backdate `dir`'s mtime so the TTL guard sees it as ancient.
+///
+/// `File::set_times` on a directory fd is `futimens(2)`, which needs
+/// ownership rather than a writable handle — true for a `TempDir` we
+/// just created, on every platform CI runs.
+fn backdate(dir: &Path, days: u64) {
+    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 24 * 60 * 60);
+    let times = std::fs::FileTimes::new()
+        .set_accessed(when)
+        .set_modified(when);
+    std::fs::File::open(dir)
+        .expect("open the generation dir")
+        .set_times(times)
+        .expect("backdate the generation dir");
+}
+
+/// **The prune that never ran.**
+///
+/// `Plan::is_empty` used to ignore prunables and the prune itself was
+/// discovered *inside* `repair::run` — so a workspace with nothing else
+/// wrong never reached `run` at all, and `.outl/repair-backup/`
+/// accumulated forever on exactly the graph the pruning exists for. The
+/// prune was also invisible in `repairable[]`, contradicting the promise
+/// that `--repair` prints what it will do.
+#[test]
+fn a_clean_workspace_still_prunes_its_stale_backups() {
+    let (_dir, root, paths) = fresh();
+    seed_page(&root, "notes", &["first"]);
+
+    // 25 generations: 15 over the keep floor, all past the TTL.
+    let backups = paths.dot_outl.join("repair-backup");
+    let gens: Vec<PathBuf> = (0..25)
+        .map(|i| backups.join(format!("2020{:04}T000000", 100 + i)))
+        .collect();
+    for gen in &gens {
+        std::fs::create_dir_all(gen).unwrap();
+        backdate(gen, 400);
+    }
+
+    // Read-only first: the prune has to be announced, not just done.
+    let dry = collect(&root, false).expect("doctor runs");
+    let announced: Vec<&String> = dry
+        .repairable
+        .iter()
+        .filter(|l| l.starts_with("prune stale backup generation"))
+        .collect();
+    assert_eq!(
+        announced.len(),
+        15,
+        "every prune must show up in `repairable[]`: {:#?}",
+        dry.repairable
+    );
+    assert!(
+        dry.repair.is_none() && gens.iter().all(|g| g.exists()),
+        "a read-only run never deletes anything"
+    );
+
+    let report = collect(&root, true).expect("doctor --repair runs");
+    let rep = report
+        .repair
+        .expect("a prune alone is enough work to run `--repair`");
+    let pruned: Vec<&repair::RepairAction> = rep
+        .actions
+        .iter()
+        .filter(|a| a.kind == "prune_backup")
+        .collect();
+    assert_eq!(pruned.len(), 15, "25 generations, 10 kept: {pruned:#?}");
+    assert!(pruned.iter().all(|a| a.ok), "{pruned:#?}");
+    assert!(
+        gens.iter().take(15).all(|g| !g.exists()),
+        "the surplus generations are gone from disk"
+    );
+    assert!(
+        gens.iter().skip(15).all(|g| g.exists()),
+        "the newest 10 stay, whatever their age"
+    );
+}
