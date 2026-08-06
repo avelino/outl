@@ -38,7 +38,7 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
   2. **The desktop, mobile and undo paths reconciled with the orphan log switched off.**
      `outl-md`'s hard rule is that a block dropping to matching level 3 is recorded in `orphans.log` *before* it is moved to the trash.
      Four call sites passed `None` for that log, so on those clients the deletion happened with no record anywhere — the exact case a half-synced `.md` from iCloud produces at boot.
-     `outl_actions::orphans_log_path` is now the one owner of that path and every caller passes it.
+     `outl_actions::sync::orphans_log_path` is now the one owner of that path — every caller passes it, and `outl_ws`'s `Paths::at` derives its `orphans` field from it instead of re-joining `.outl/orphans.log` itself.
   3. **One unreadable line truncated the whole op log.**
      The sequential replay hit an I/O error and `break`, discarding every op *after* it.
      A transient failure on line 5,000 of 200,000 booted a workspace containing the first 5,000 ops and carried on as if that were everything.
@@ -58,7 +58,7 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 - **External edits no longer break block references in the common case.**
   Editing a `.md` outside outl in a way that both **rewords one block and adds or removes another** made the block counts disagree, which disabled the positional fallback and sent every reworded block to matching level 3: fresh ULID, old id trashed, and every `((blk-…))` pointing at it dangling.
   That is the *ordinary* external edit, not an exotic one.
-  Level 2 of the documented matching algorithm is now implemented (normalized Levenshtein > 0.8 against the previous text, which the sidecar stores as of v3), so the id **and** its ref handle survive.
+  Level 2 of the documented matching algorithm is now implemented (normalized Levenshtein > 0.8 against the previous text, which the sidecar keeps in the `text` field — additive, still version 2), so the id **and** its ref handle survive.
   The positional fallback also compares real parents instead of indent depth — same depth in a different subtree used to hand one subtree's id to another block.
 
 - **The actor id no longer lives inside the workspace.**
@@ -89,8 +89,10 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 - **`outl doctor` now checks what it couldn't, and `--repair` fixes what is safe to fix.**
   New checks: corrupt `.jsonl` lines (named by line number, byte offset and reason — previously the one gap the code itself admitted to), snapshot integrity, offset-index coherence, blocks sitting in the trash (previously invisible to the user entirely), sync-conflict copies from iCloud / Syncthing / Dropbox, and ops the materialized tree never applied.
-  `--repair` re-projects a stale `.md` from the op log, rebuilds a missing sidecar, and drops a corrupt snapshot — nothing else.
+  `--repair` re-projects a stale `.md` from the op log, rebuilds a missing sidecar, drops a corrupt snapshot, and prunes stale `.outl/repair-backup/` generations — nothing else.
   It never deletes a `.md`, never writes into `ops/`, never trashes a block, and copies every file it touches to `.outl/repair-backup/<timestamp>/` first.
+  All four are announced before they run, so the read-only listing and the repair pass can't disagree.
+  A run whose only work is a prune still happens — a workspace with nothing wrong with it is the one that would otherwise hoard backups forever.
 
 - **The Roam importer now tells you what it didn't bring over.**
   It reports `pages: N/M` and `blocks: N/M` against counts taken from the source JSON, subtracting only the reductions it can name (blocks lifted into page properties, journals merged, pages skipped) and shouting when the books don't balance.

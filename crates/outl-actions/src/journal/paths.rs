@@ -64,14 +64,17 @@ pub fn remove_page_projection(root: &Path, meta: &PageMeta) -> std::io::Result<(
     Ok(())
 }
 
-/// Best-effort atomic write of `contents` to `path`, creating parents
-/// as needed.
+/// Atomic write of `contents` to `path`, creating parents as needed.
+///
+/// Delegates to [`outl_md::write_atomic`] rather than repeating the
+/// tmp-then-rename dance. The hand-rolled copy this replaced wrote the
+/// temp file and renamed it with **no fsync at all**, on the hottest
+/// `.md` write path in the crate (`apply_page_md`,
+/// `apply_page_md_with_sidecar`, undo restore), while the primitives
+/// catalog told readers this function wrapped the crash-safe one.
+/// A rename is only durable once the file's bytes and the parent
+/// directory entry are both synced; without that, a crash can leave the
+/// rename visible and the contents empty.
 pub fn write_md_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let tmp = path.with_extension("md.tmp");
-    std::fs::write(&tmp, contents)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    outl_md::write_atomic(path, contents.as_bytes())
 }

@@ -17,7 +17,7 @@ But a handful of pieces are dumb pure logic the two clients need *identically*:
 - DTO interfaces the backend serialises (`PageMeta`, `OutlineNode`, `BlockNode`, `Backlink`, `InlineToken`, …).
 - Typed `invoke()` wrappers for the Tauri commands every client calls (navigation, mutations, paste, collapsed).
 
-Keeping these in a separate library is the Rust "Reuse-first" policy ([root CLAUDE.md](../../CLAUDE.md#reuse-first-no-parallel-implementations)) applied to TS — one owner, every client wraps.
+Keeping these in a separate library is the Rust "Reuse-first" policy ([root CLAUDE.md](../../CLAUDE.md#reuse-first)) applied to TS — one owner, every client wraps.
 
 ## Layout
 

@@ -11,12 +11,18 @@
 //! - **Level 2 (similarity)** — normalized Levenshtein over the text the
 //!   sidecar recorded at last sync (`SidecarBlock::text`) versus
 //!   the freshly parsed text, gated on a similarity threshold of 80%
-//!   (`SIMILARITY_THRESHOLD`) and on *either* an
-//!   agreeing parent *or* a DFS index within two positions. Preserves
-//!   the ID and logs a warning.
+//!   (`SIMILARITY_THRESHOLD`) and — **unconditionally** — on the two
+//!   DFS indices sitting within `SIMILARITY_POSITION_WINDOW` positions
+//!   of each other. Whether the parents agree gates nothing; it only
+//!   selects which warning is logged. Preserves the ID and logs that
+//!   warning.
 //!   This is what survives the common external edit: one save
 //!   that reworded a block **and** added or removed another, which
 //!   makes the counts disagree and takes level 1.5 out of play.
+//!   Candidates are assigned by **global confidence** — every pair in
+//!   the window is scored first and the pairs resolve highest score
+//!   down, with a two-sided runner-up margin — never in the order the
+//!   new blocks appear. See the `similarity` module for why.
 //! - **Level 3** — no match. New ULID assigned for new blocks; old blocks
 //!   without a match become orphans (caller moves them to `TRASH_ROOT`).
 //!
@@ -29,65 +35,9 @@
 
 use crate::parse::OutlineNode;
 use crate::sidecar::{content_hash, SidecarBlock};
+use crate::similarity;
 use outl_core::id::NodeId;
 use std::collections::HashSet;
-
-/// Minimum normalized Levenshtein similarity for a level-2 match.
-///
-/// `0.8` is the documented threshold (see the crate's `CLAUDE.md`):
-/// "the user reworded this block" stays above it; "the user replaced
-/// this block with something else" falls below and is treated as a
-/// deletion plus an insertion, which is the safe reading.
-const SIMILARITY_THRESHOLD: f64 = 0.8;
-
-/// How far apart (in DFS index) a new and an old block may sit and
-/// still be considered for a level-2 match.
-///
-/// **Applied unconditionally.** It used to be skipped whenever the
-/// parents agreed — but `parents_agree(None, None)` is `true`, so every
-/// pair of *root* blocks agreed and the window never fired. A journal
-/// page is a flat list of root blocks, which made it inert on exactly
-/// the page shape this workspace has most of: block 0 could take the id
-/// (and the `((blk-…))` handle) of block 40.
-const SIMILARITY_POSITION_WINDOW: usize = 2;
-
-/// Shortest text (in `char`s) level 2 will consider.
-///
-/// The ratio pre-filter is scale-free, so two blocks of equal length
-/// always clear it, and at 6 chars a single differing character already
-/// scores above the threshold. Measured false positives below this
-/// floor: `item 1`/`item 2` (0.833), `[[2026-01-01]]`/`[[2026-07-01]]`
-/// (0.929), `[[buser/tech]]`/`[[buser/team]]` (0.857),
-/// `R$ 1.000,00`/`R$ 9.000,00` (0.909).
-///
-/// Dates, versions, amounts and namespaced refs are structured, short,
-/// and everywhere in a real graph. Short blocks fall to level 3, which
-/// is recoverable (recorded in `orphans.log`); a wrong level-2 match is
-/// not — it hands one block's ref handle to another and every
-/// `((blk-…))` pointing at it silently renders someone else's text.
-///
-/// Calibrated between the two: every measured lookalike above is 16
-/// chars or shorter, and the shortest genuine reword in the test suite
-/// (`review the storage RFC` → `…RFCs`) is 22. The floor is **not** the
-/// main defence — the unconditional ±2 position window is. It just
-/// removes the pairs where similarity carries no signal at all.
-const SIMILARITY_MIN_CHARS: usize = 20;
-
-/// How much better the best level-2 candidate must be than the runner-up.
-///
-/// Without a margin the choice between two near-identical candidates
-/// (`item 1` vs `item 2` against `item 3`) comes down to index
-/// proximity, which is a coin flip that costs a ref handle. When the
-/// top two are this close, level 2 declines and both fall to level 3.
-const SIMILARITY_RUNNER_UP_MARGIN: f64 = 0.05;
-
-/// Longest text (in `char`s) level 2 will run the O(n·m) Levenshtein DP
-/// over.
-///
-/// Blocks this large are pasted documents, not sentences someone
-/// reworded; the quadratic cost is not worth paying on every save. They
-/// fall through to level 3 exactly as they did before level 2 existed.
-const SIMILARITY_MAX_CHARS: usize = 4096;
 
 /// Confidence level of a matched pair.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -206,105 +156,6 @@ fn parents_agree(
     }
 }
 
-/// Normalized Levenshtein similarity in `0.0..=1.0`, or `None` when the
-/// pair is not worth (or not safe to) score.
-///
-/// Two cheap rejections come first, both exact — neither can discard a
-/// pair that would have scored above the threshold:
-///
-/// - An empty side (a sidecar entry with no recorded text) has nothing
-///   to compare.
-/// - Levenshtein distance is at least the length difference, so
-///   `similarity <= min_len / max_len`. When that ceiling is already at
-///   or below the threshold, the O(n·m) DP cannot change the outcome.
-fn similarity(new_text: &str, old_text: &str) -> Option<f64> {
-    let new_len = new_text.chars().count();
-    let old_len = old_text.chars().count();
-    if new_len == 0 || old_len == 0 {
-        return None;
-    }
-    // Absolute floor, not just a ratio: see SIMILARITY_MIN_CHARS. The
-    // ratio filter is scale-free, so `[[2026-01-01]]` and
-    // `[[2026-07-01]]` sail through it at 0.929.
-    if new_len < SIMILARITY_MIN_CHARS || old_len < SIMILARITY_MIN_CHARS {
-        return None;
-    }
-    if new_len > SIMILARITY_MAX_CHARS || old_len > SIMILARITY_MAX_CHARS {
-        return None;
-    }
-    let (min, max) = if new_len < old_len {
-        (new_len, old_len)
-    } else {
-        (old_len, new_len)
-    };
-    if (min as f64) / (max as f64) <= SIMILARITY_THRESHOLD {
-        return None;
-    }
-    Some(strsim::normalized_levenshtein(new_text, old_text))
-}
-
-/// Best level-2 candidate for the new block at DFS index `i`:
-/// `(old index, similarity, whether the parents agree)`.
-///
-/// A candidate must be unused, carry recorded text, score above
-/// [`SIMILARITY_THRESHOLD`], and satisfy the structural gate — the
-/// parents agree, *or* the two DFS indices are within
-/// [`SIMILARITY_POSITION_WINDOW`]. Highest score wins; ties go to the
-/// candidate nearest in position, so a duplicated block prefers the
-/// entry that sat where it sits.
-fn best_similar(
-    i: usize,
-    flat: &[FlatBlock<'_>],
-    old_blocks: &[SidecarBlock],
-    old_parents: &[Option<usize>],
-    resolved: &[Option<NodeId>],
-    used: &HashSet<NodeId>,
-) -> Option<(usize, f64, bool)> {
-    let new_text = flat[i].text;
-    let mut best: Option<(usize, f64, bool)> = None;
-    let mut runner_up: Option<f64> = None;
-    for (j, old) in old_blocks.iter().enumerate() {
-        if used.contains(&old.id) {
-            continue;
-        }
-        // Unconditional: see SIMILARITY_POSITION_WINDOW. Gating this on
-        // `!same_parent` disabled it entirely for root blocks, because
-        // `parents_agree(None, None)` is true.
-        if i.abs_diff(j) > SIMILARITY_POSITION_WINDOW {
-            continue;
-        }
-        let same_parent = parents_agree(flat[i].parent, old_parents[j], resolved, old_blocks);
-        let Some(score) = similarity(new_text, &old.text) else {
-            continue;
-        };
-        if score <= SIMILARITY_THRESHOLD {
-            continue;
-        }
-        let better = match best {
-            None => true,
-            Some((best_j, best_score, _)) => {
-                score > best_score || (score == best_score && i.abs_diff(j) < i.abs_diff(best_j))
-            }
-        };
-        if better {
-            if let Some((_, prev, _)) = best {
-                runner_up = Some(runner_up.map_or(prev, |r: f64| r.max(prev)));
-            }
-            best = Some((j, score, same_parent));
-        } else {
-            runner_up = Some(runner_up.map_or(score, |r: f64| r.max(score)));
-        }
-    }
-    // Two candidates this close means we are guessing which block the
-    // user reworded. Guessing costs a ref handle, so decline.
-    if let (Some((_, score, _)), Some(second)) = (best, runner_up) {
-        if score - second < SIMILARITY_RUNNER_UP_MARGIN {
-            return None;
-        }
-    }
-    best
-}
-
 /// Run the matching algorithm against new outline and old sidecar entries.
 ///
 /// Returns:
@@ -388,18 +239,28 @@ pub fn match_blocks(
     // another. The count mismatch takes level 1.5 out of play, so
     // without this pass every reworded block minted a fresh ULID and
     // the old one went to the trash with its references dangling.
+    //
+    // Assignment is by **global confidence**, not by the order the new
+    // blocks appear: every in-window pair is scored, then resolved from
+    // the highest score down with a two-sided runner-up margin. Walking
+    // `0..flat.len()` and taking the first candidate above the threshold
+    // let a newly typed block steal the id of the block it merely
+    // resembles, purely by sitting at a lower index — and because the
+    // old id was consumed, `orphans` came back empty and nothing was
+    // logged. See the `similarity` module.
+    let new_texts: Vec<&str> = flat.iter().map(|b| b.text).collect();
+    let candidates = similarity::collect_candidates(&new_texts, old_blocks, &found, &used);
+    let accepted =
+        similarity::resolve_candidates(candidates, old_blocks, flat.len(), &mut found, &mut used);
+
     let mut medium: HashSet<usize> = HashSet::new();
-    for i in 0..flat.len() {
-        if found[i].is_some() {
-            continue;
-        }
-        let Some((j, score, same_parent)) =
-            best_similar(i, &flat, old_blocks, &old_parents, &found, &used)
-        else {
-            continue;
-        };
+    for (i, j, score) in accepted {
+        medium.insert(i);
         let old = &old_blocks[j];
-        if same_parent {
+        // Evaluated after every level-2 winner landed, so a parent
+        // resolved by a later assignment still counts. It picks the
+        // warning, nothing else — the window above is the only gate.
+        if parents_agree(flat[i].parent, old_parents[j], &found, old_blocks) {
             tracing::warn!(
                 block = %old.id,
                 similarity = score,
@@ -418,9 +279,6 @@ pub fn match_blocks(
                 "level-2 match ACROSS PARENTS: block was reparented and reworded in the same save; id preserved"
             );
         }
-        found[i] = Some(old.id);
-        used.insert(old.id);
-        medium.insert(i);
     }
 
     // Final pass: level 3 for the remainder.
@@ -786,68 +644,5 @@ mod tests {
             sidecar_parents(&old),
             vec![None, Some(0), Some(1), Some(0), None]
         );
-    }
-
-    #[test]
-    fn similarity_skips_pairs_whose_lengths_alone_rule_out_a_match() {
-        // The length-ratio pre-filter is exact: it may only reject
-        // pairs that could not have cleared the threshold anyway.
-        assert!(similarity("hello there", "").is_none());
-        assert!(similarity("", "hello there").is_none());
-        assert!(similarity("short", "a very much longer block of text").is_none());
-        let score = similarity(
-            "buy groceries at the market",
-            "buy groceries at the markets",
-        )
-        .expect("near-identical texts must be scored");
-        assert!(score > SIMILARITY_THRESHOLD, "got {score}");
-    }
-}
-
-#[cfg(test)]
-mod level2_safety_tests {
-    use super::*;
-
-    /// Every pair here was measured scoring above the 0.8 threshold
-    /// before the length floor existed. They are the shapes a real graph
-    /// is made of — dates, namespaced refs, amounts, versions — and a
-    /// level-2 match on any of them hands one block's `((blk-…))` handle
-    /// to a different block.
-    #[test]
-    fn short_structured_lookalikes_never_reach_level_2() {
-        for (a, b) in [
-            ("item 1", "item 2"),
-            ("[[2026-01-01]]", "[[2026-07-01]]"),
-            ("[[buser/tech]]", "[[buser/team]]"),
-            ("R$ 1.000,00", "R$ 9.000,00"),
-            ("v1.2.3", "v1.2.9"),
-            ("TODO", "DONE"),
-        ] {
-            assert!(
-                similarity(a, b).is_none(),
-                "{a:?} vs {b:?} must not be scored at all — it is below the length floor"
-            );
-        }
-    }
-
-    /// The floor must not disarm the case level 2 exists for: a genuine
-    /// reword of a real sentence.
-    #[test]
-    fn a_genuine_reword_of_a_real_sentence_still_scores() {
-        let before = "decide the storage backend before the sprint ends";
-        let after = "decide the storage backend before this sprint ends";
-        let score = similarity(before, after).expect("a real reword must still be scored");
-        assert!(score > SIMILARITY_THRESHOLD, "got {score}");
-    }
-
-    /// A length difference big enough to be a replacement, not a reword,
-    /// stays rejected by the ratio filter.
-    #[test]
-    fn a_replacement_is_not_a_reword() {
-        assert!(similarity(
-            "decide the storage backend before the sprint ends",
-            "ship it"
-        )
-        .is_none());
     }
 }

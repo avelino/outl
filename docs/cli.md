@@ -444,6 +444,8 @@ Corrupt-snapshot deletion is not withheld: it is a pure cache, and dropping it o
 Every file `--repair` touches is copied to `.outl/repair-backup/<timestamp>/<relative path>` **before** the write, so undoing a repair is a plain `cp` back.
 
 Those generations are pruned at the end of each `--repair` run, because they are otherwise permanent.
+A prune is a repairable item like any other: it is listed under `N repairable item(s)` on a read-only run, and a `--repair` whose *only* work is a prune still runs.
+That is the case the pruning exists for — a workspace with nothing wrong with it is exactly the one that would otherwise keep every generation forever.
 `.outl/` is dot-prefixed, so iCloud drops it and iroh never ships it — but Syncthing, Dropbox and a shared volume all replicate it, and every generation is a full copy of every `.md` that run touched.
 A generation has to fail **both** guards before it goes — older than 14 days *and* outside the 10 newest — and each prune is reported as its own action.
 A directory whose age can't be read is always kept.

@@ -214,6 +214,11 @@ fn collect_internal(
     let scans = oplog::check_jsonl_lines(&mut b, &paths.ops, &mut health);
     oplog::check_offset_indexes(&mut b, &paths.ops, &scans);
     plan.corrupt_snapshots = oplog::check_snapshots(&mut b, &paths.root);
+    // Housekeeping over `--repair`'s own output. Collected here, not
+    // inside `repair::run`, so it is announced in `repairable[]` and so
+    // a workspace with nothing else wrong still gets its old backup
+    // generations reclaimed.
+    plan.prune_backups = repair::collect_prunable(&paths.root);
 
     // 2. The op log as the storage layer sees it: how many ops survive
     //    the skip-on-malformed read, and which nodes they touch.
@@ -436,18 +441,20 @@ fn collect_internal(
         (false, _, _) | (true, true, _) => None,
         (true, false, Some(ws)) => Some(repair::run(ws, &paths.root, &plan)),
         // No replayed tree, so page re-projection is off the table, but
-        // dropping a corrupt snapshot still is not — it needs no tree.
+        // dropping a corrupt snapshot and pruning stale backups still
+        // are not — neither needs a tree.
         (true, false, None) => {
-            let snapshots_only = Plan {
+            let treeless = Plan {
                 corrupt_snapshots: std::mem::take(&mut plan.corrupt_snapshots),
+                prune_backups: std::mem::take(&mut plan.prune_backups),
                 ..Plan::default()
             };
-            if snapshots_only.is_empty() {
+            if treeless.is_empty() {
                 None
             } else {
                 Workspace::open_in_memory(actor)
                     .ok()
-                    .map(|ws| repair::run(&ws, &paths.root, &snapshots_only))
+                    .map(|ws| repair::run(&ws, &paths.root, &treeless))
             }
         }
     };

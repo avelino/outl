@@ -86,6 +86,14 @@ pub(super) struct Plan {
     pub rebuild_sidecar: Vec<(NodeId, PathBuf)>,
     /// Snapshot files that failed to decode.
     pub corrupt_snapshots: Vec<PathBuf>,
+    /// `.outl/repair-backup/` generations past **both** prune guards.
+    ///
+    /// Collected here rather than discovered inside [`run`] so the prune
+    /// is announced like every other action and so a workspace whose
+    /// only remaining work *is* a prune still counts as repairable —
+    /// otherwise a healthy graph keeps every generation forever, which
+    /// is the case the pruning exists for.
+    pub prune_backups: Vec<PathBuf>,
 }
 
 impl Plan {
@@ -94,6 +102,7 @@ impl Plan {
         self.reproject.is_empty()
             && self.rebuild_sidecar.is_empty()
             && self.corrupt_snapshots.is_empty()
+            && self.prune_backups.is_empty()
     }
 
     /// Human-readable lines describing what a repair *would* do. Printed
@@ -119,6 +128,13 @@ impl Plan {
                 path.display()
             ));
         }
+        for path in &self.prune_backups {
+            out.push(format!(
+                "prune stale backup generation {} (older than {BACKUP_MIN_AGE_DAYS} days and \
+                 outside the newest {BACKUP_KEEP})",
+                path.display()
+            ));
+        }
         out
     }
 }
@@ -126,7 +142,8 @@ impl Plan {
 /// One repair attempt, as reported to the user and to `--json`.
 #[derive(Debug, Clone, Serialize)]
 pub struct RepairAction {
-    /// `reproject` | `rebuild_sidecar` | `delete_snapshot`.
+    /// `reproject` | `rebuild_sidecar` | `delete_snapshot` |
+    /// `prune_backup`.
     pub kind: String,
     /// Path the action targeted.
     pub path: String,
@@ -168,7 +185,7 @@ pub(super) fn run(ws: &Workspace, root: &Path, plan: &Plan) -> RepairReport {
     for path in &plan.corrupt_snapshots {
         actions.push(delete_snapshot(root, &backup_dir, path));
     }
-    actions.extend(prune_backups(root));
+    actions.extend(prune_backups(&plan.prune_backups));
 
     let repaired = actions.iter().filter(|a| a.ok).count();
     let failed = actions.len() - repaired;
@@ -355,13 +372,14 @@ pub(super) fn prunable_backups(
         .collect()
 }
 
-/// Delete what [`prunable_backups`] selected.
+/// Which generations under `<root>/.outl/repair-backup/` are past both
+/// guards, as of now.
 ///
-/// Runs at the tail of every `--repair`, so the pile is bounded by the
-/// same command that grows it and nothing has to be cleaned up by hand.
-/// The generation this run just wrote is the newest, so it is always
-/// inside [`BACKUP_KEEP`] and can never prune itself.
-fn prune_backups(root: &Path) -> Vec<RepairAction> {
+/// Called during collection, so the answer lands in [`Plan`] and is
+/// listed by [`Plan::describe`] before anything is deleted. Running it
+/// there also means the generation this run is about to write does not
+/// exist yet and cannot prune itself.
+pub(super) fn collect_prunable(root: &Path) -> Vec<PathBuf> {
     let dir = root.join(".outl").join("repair-backup");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Vec::new();
@@ -377,8 +395,16 @@ fn prune_backups(root: &Path) -> Vec<RepairAction> {
         .collect();
 
     prunable_backups(&mut generations, SystemTime::now())
-        .into_iter()
-        .map(|path| match std::fs::remove_dir_all(&path) {
+}
+
+/// Delete what [`collect_prunable`] selected.
+///
+/// Runs at the tail of every `--repair`, so the pile is bounded by the
+/// same command that grows it and nothing has to be cleaned up by hand.
+fn prune_backups(selected: &[PathBuf]) -> Vec<RepairAction> {
+    selected
+        .iter()
+        .map(|path| match std::fs::remove_dir_all(path) {
             Ok(()) => RepairAction {
                 kind: "prune_backup".to_string(),
                 path: path.display().to_string(),
