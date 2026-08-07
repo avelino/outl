@@ -60,7 +60,10 @@ Violating any one breaks user trust irreversibly.
    It does **not** answer *did these bytes come from the op log?*
    Those are different questions, and a page can answer yes to the first and no to the second — that is precisely the state a `reconcile_md` leaves behind when it rewrites the sidecar without emitting ops covering everything it read.
    So **never overwrite a `.md` on the strength of the hash gate alone.**
-   Before re-projecting, ask `outl_actions::content_lines_missing_from(disk, rendered)` and refuse when it returns anything (`ActionError::PageMarkdownAheadOfLog`).
+   Before re-projecting, ask `outl_actions::content_lines_missing_from(disk, &sidecar.blocks)` and refuse when it returns anything (`ActionError::PageMarkdownAheadOfLog`).
+   **Ask it against the sidecar's blocks, never against a fresh render.**
+   The sidecar is what the log held when the two last agreed, so it answers *"does the log know this line"*; a render answers *"do disk and tree disagree"*, and that is also yes for every remote edit, remote delete and reorder.
+   The first version of this guard compared against the render and therefore refused to re-project any page a peer had touched — issue #166 reintroduced, with the blame moved.
    That function is the single owner of the verdict; a second opinion about which pages are safe to overwrite is how a read-only listing promises a repair the writing pass then refuses.
 
    **Why this is an invariant and not a code comment.**

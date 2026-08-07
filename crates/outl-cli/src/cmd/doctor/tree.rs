@@ -198,14 +198,14 @@ pub(super) fn check_projections(
 
         let disk_hash = file_hash(&disk);
         let sidecar_path = sidecar_path_for(&path);
-        let faithful = outl_md::sidecar::read(&sidecar_path)
+        // Read the sidecar once: the faithful test needs its hash and the
+        // unlogged-content check below needs its blocks.
+        let sidecar = outl_md::sidecar::read(&sidecar_path).ok();
+        let faithful = sidecar
+            .as_ref()
             .map(|sc| sc.last_synced_hash == disk_hash)
             .unwrap_or(false);
-        // Render once: the unlogged-content check below needs the text,
-        // not just its hash, and rendering a page twice per doctor run is
-        // 2,560 wasted renders on a real workspace.
-        let rendered = render_page_md(ws, page_root);
-        let rendered_matches = file_hash(&rendered) == disk_hash;
+        let rendered_matches = file_hash(&render_page_md(ws, page_root)) == disk_hash;
 
         if !sidecar_path.exists() {
             if rendered_matches {
@@ -239,10 +239,9 @@ pub(super) fn check_projections(
             // be named. The caller's `OpLogHealth` gate suppresses these
             // repairs with the message that says how to recover, and it
             // can only count what it sees in the plan.
-            let unlogged = if log_damaged {
-                Vec::new()
-            } else {
-                outl_actions::content_lines_missing_from(&disk, &rendered)
+            let unlogged = match (log_damaged, &sidecar) {
+                (false, Some(sc)) => outl_actions::content_lines_missing_from(&disk, &sc.blocks),
+                _ => Vec::new(),
             };
             if let Some(sample) = unlogged.first() {
                 ahead += 1;
