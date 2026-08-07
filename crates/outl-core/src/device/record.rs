@@ -119,7 +119,10 @@ pub(super) fn create_new_record<K: AsRef<str>, V: AsRef<str>>(
     match linked {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(e),
-        Err(_) => exclusive_create(path, pairs),
+        // Never expose an empty destination: the atomic publication method
+        // is unavailable on this filesystem, so fail rather than reintroduce
+        // the O_EXCL-then-write visibility race.
+        Err(e) => Err(e),
     }
 }
 
