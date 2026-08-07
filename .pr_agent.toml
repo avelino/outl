@@ -1,0 +1,139 @@
+# Qodo code review — repository configuration.
+#
+# This file is the **only** place outl configures Qodo. Nothing is set in the
+# web portal, on purpose: a repo-local `.pr_agent.toml` takes precedence over
+# portal settings, so a knob changed in the UI would silently disagree with
+# what is committed here and nobody reviewing a PR would know which won.
+# Same reason `docs/contributing.md` is the one owner of the review policy.
+#
+# Qodo reads this from the **default branch**, so a change here only takes
+# effect for PRs opened after it merges. Editing it in a feature branch does
+# not change how that branch is reviewed.
+#
+# Where the review standards themselves live: Qodo's rule import already scans
+# `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `copilot-instructions.md`,
+# `best_practices.md`, `RULE.md`, `.cursor/rules/` and `skills/*/SKILL.md`, and
+# scopes each file's rules to the folder containing it, at any depth. This repo
+# therefore needs no `best_practices.md`: the root `CLAUDE.md` carries the
+# workspace-wide invariants and each `crates/<name>/CLAUDE.md` scopes itself to
+# that crate for free. Duplicating them into a Qodo-specific file would break
+# "one owner per fact" (docs/contributing.md#one-owner-per-fact--link-dont-duplicate)
+# and the copy is the one that would go stale.
+#
+# Keys are deliberately few. Qodo's own guidance is to set only what you need,
+# because a copied-in default becomes a pin the day upstream changes it.
+# Full reference: https://docs.qodo.ai/install-and-configure/configuration-overview
+
+[config]
+# Feed the invariants in as prompt context, not only as imported rules.
+# Default is `["AGENTS.md"]`, which does not exist here.
+repo_context_files = ["CLAUDE.md"]
+
+# Preserves the upstream `^\[Auto\]` / `^Auto` defaults — this key replaces the
+# list rather than extending it, so dropping them would start reviewing the
+# automated PRs they were there to skip.
+ignore_pr_title = ["^\\[Auto\\]", "^Auto", "^WIP", "^DRAFT", "^wip:"]
+
+[review_agent]
+# Extra instructions for the issue-finding agent.
+#
+# Everything here is a failure this repo has actually shipped, not a style
+# preference. The reasoning behind each line is in the RFC it names.
+issues_user_guidelines = """
+This is a local-first outliner whose sync layer is a tree CRDT. The op log is
+the source of truth; the materialized tree, the `.md` files and the `.outl`
+sidecars are projections. Silent data loss is the only category of bug that is
+unrecoverable here, so weight findings accordingly.
+
+Report, with priority in this order:
+
+1. A `.md` <-> tree reconciliation change that closes one direction of a
+   divergence without stating what happens in the mirrored direction.
+   `.md` ahead of tree deletes content; tree ahead of `.md` only hides it.
+   The pair that deletes is never the one being reported. See RFC 0210.
+2. Code that treats a sidecar hash match (`last_synced_hash == file_hash`) as
+   evidence that the op log holds the content. It proves only that outl wrote
+   those bytes last. Overwriting a `.md` on that basis alone is the #166 /
+   #210 bug. `outl_actions::content_lines_missing_from(disk, &sidecar.blocks)`
+   is the single owner of that verdict; a second opinion about which pages are
+   safe to overwrite is itself the defect.
+3. A guard, gate or safety check that a sentinel or empty value disarms.
+   Ask what an empty string, an empty vector, a zero, or a single empty
+   element does to the predicate. `.any()` where `.all()` was meant is the
+   shape: one empty block once disarmed a content guard for a whole page.
+4. Convergent state stored outside an `Op` — in the sidecar, in a config file,
+   in a process global. If two devices can disagree about a value and it must
+   reconcile, it belongs in the op log. A shared file is last-write-wins and
+   loses concurrent writes with no error. See RFC 0211.
+5. State moved across a boundary (out of the workspace, out of a file, out of
+   the op log) whose new home has no answer for: who writes it, who reads it,
+   how a test gets its own copy, what cleans it up. Question three going
+   unanswered is how the suite started writing into a developer's real
+   `~/.config/outl`.
+6. `unwrap()` in non-test code; `unsafe` in `outl-core` without a documented
+   invariant; a comparison of HLCs without the actor tiebreak; `Delete`
+   treated as physical removal.
+7. A helper that reimplements something already in `outl-core`, `outl-md` or
+   `outl-actions`, or client-side logic (Rust or TypeScript) that duplicates a
+   decision `outl-actions` already owns — reminder schedules and markdown
+   normalization have both drifted this way. The fix is to wrap the upstream
+   API, never to write a parallel one. Catalog: docs/shared-primitives.md.
+
+Verify before reporting. Findings whose evidence is a plausible reading of one
+hunk, rather than the code paths that actually reach it, cost more than they
+save here: prefer one finding you can trace to a concrete input and a wrong
+output over three that might hold.
+"""
+
+# Extra instructions for the compliance agent (the "rule violations" bucket).
+compliance_user_guidelines = """
+Process rules, each one load-bearing for a specific reason:
+
+- A change that touches an invariant, a data format, the CRDT, sync, or a
+  projection path lands its RFC in the **same** PR under `docs/rfcs/`, and that
+  RFC fills in **The opposite direction** and **How it cannot regress**. Those
+  two sections are mandatory in `docs/rfcs/0000-template.md`. A localized fix
+  needs a `CHANGELOG.md` entry, not an RFC.
+- Reasoning, rule and proof travel together: RFC in `docs/rfcs/`, rule in the
+  root or per-crate `CLAUDE.md`, and a **named test** that fails when someone
+  reverts the behaviour. A rule with no test is a comment.
+- A test named in an RFC's "Guarded by" row must not be deleted, skipped or
+  relaxed. If a diff weakens one, that is a blocker regardless of what else
+  the PR does — those tests exist because the behaviour they pin was already
+  regressed once.
+- Docs update in the same PR when the change touches a workflow, slash
+  command, hook, public API, sidecar, op-log format, config key, CLI
+  subcommand or shortcut. Checklist:
+  docs/contributing.md#keep-docs-in-sync-with-code.
+- One owner per fact. Tables (shortcuts, CLI subcommands, config keys, op
+  variants) live in `docs/*.md`; `CLAUDE.md` files link and never duplicate.
+  Flag a second copy of a table, not the original.
+- Conventional Commits on every commit and on the PR title. The mobile
+  pipeline builds TestFlight release notes from the commit log, so an
+  unprefixed commit loses its per-build context for the user.
+- Markdown uses semantic line breaks — one sentence per line, no column
+  reflow. Do not suggest reflowing a paragraph.
+- `crates/<name>/CLAUDE.md` is the scoped contract for that crate. Read it
+  before flagging anything inside that crate; several apparent violations are
+  documented deliberate exceptions (for example `outl-tui`'s `outline_ops.rs`,
+  which manipulates an in-flight AST and is explicitly exempt from the
+  "shared logic goes in outl-actions" rule).
+
+Settled decisions are not review material: ULID for ids, uhlc for time, Yrs
+for block text, comrak for markdown, iroh as default sync transport, Tauri for
+GUI clients, one `ops-<actor>.jsonl` per device, MIT license. They were decided
+before the code existed and are listed in the root `CLAUDE.md`. Proposing an
+alternative in a PR review is out of scope; it belongs in an issue.
+"""
+
+[review_agent_ux]
+# The evidence block is the part that carries file:line citations, which is
+# what makes a finding checkable instead of merely plausible. On PR #217 three
+# review bots each made claims and the ones that survived verification were
+# the ones whose evidence pointed at real call sites. Open it by default.
+expand_evidence = true
+
+# Automation (`pr_commands`, `push_commands`, `handle_push_trigger`) is
+# deliberately left unset. The defaults already run describe + review + fixer
+# on PR open, and this key **replaces** the default list rather than extending
+# it, so writing it out would quietly drop whatever the platform adds later.

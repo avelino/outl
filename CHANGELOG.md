@@ -144,6 +144,17 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 - **43 links now connect RFCs and docs in both directions**, including a `Reference doc` row in every RFC header (and in the template, so new RFCs inherit it).
 
+- **Qodo's code review is now configured by `.pr_agent.toml` in the repo, not in its web portal.**
+  A repo-local `.pr_agent.toml` outranks portal settings, so a knob changed in the UI would have silently disagreed with what is committed — and nobody reading a PR could tell which one won.
+  Five keys, no copied defaults: `repo_context_files = ["CLAUDE.md"]` (the default `AGENTS.md` does not exist here), `ignore_pr_title` extended with WIP/DRAFT while preserving the upstream `^Auto` entries the key would otherwise replace, `expand_evidence` so the file:line citations open by default, and two guideline blocks that name the failures this repo has actually shipped — the mirrored-divergence rule from RFC 0210, the hash-is-not-membership rule, guards a sentinel disarms, convergent state outside an `Op` from RFC 0211, and the four questions invariant 9 asks of state that moves.
+  Automation (`pr_commands`, `push_commands`) is deliberately absent: that key replaces the default list rather than extending it, so writing it out would quietly drop whatever the platform adds later.
+
+  No `best_practices.md` was added, though Qodo imports one if present.
+  Its rule import already reads root and per-crate `CLAUDE.md` and scopes each file's rules to the directory holding it at any depth, so `crates/outl-md/CLAUDE.md` is stricter inside that crate and silent elsewhere for free.
+  A `best_practices.md` would be a second copy of rules `CLAUDE.md` owns, and the copy is the one that goes stale.
+  One gap worth knowing: Qodo does **not** read `.github/instructions/*.instructions.md`, so anything that must reach both it and Copilot belongs in a `CLAUDE.md`.
+  Documented in `docs/contributing.md` → "The automated reviewers", which now maps each of the three review bots to the file that configures it.
+
 ## [0.11.0]
 
 ### Changed

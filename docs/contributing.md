@@ -11,8 +11,28 @@ Everything substantive lives across these two pages.
 We want outl to be a project where you can show up, read this page, and know exactly what you're walking into.
 No tribal knowledge, no hidden quality bar.
 
-The same priorities are encoded for automated review in [`.github/copilot-instructions.md`](https://github.com/avelino/outl/blob/main/.github/copilot-instructions.md).
-If you ever feel a reviewer comment came out of nowhere, it almost certainly traces back to this page or that file.
+The same priorities are encoded for automated review in [`.github/copilot-instructions.md`](https://github.com/avelino/outl/blob/main/.github/copilot-instructions.md) and [`.pr_agent.toml`](https://github.com/avelino/outl/blob/main/.pr_agent.toml).
+If you ever feel a reviewer comment came out of nowhere, it almost certainly traces back to this page or one of those files.
+
+### The automated reviewers
+
+Three bots review every PR.
+Where we configure one, we configure it in a file in the repo and never in a web UI, so what a reviewer checks is itself reviewable in a diff.
+
+| Reviewer | Configured by | Reads standards from |
+|---|---|---|
+| GitHub Copilot | [`.github/copilot-instructions.md`](https://github.com/avelino/outl/blob/main/.github/copilot-instructions.md) + [`.github/instructions/*.instructions.md`](https://github.com/avelino/outl/tree/main/.github/instructions) | those files, path-scoped by their `applyTo` frontmatter |
+| Qodo | [`.pr_agent.toml`](https://github.com/avelino/outl/blob/main/.pr_agent.toml) | root and per-crate `CLAUDE.md`, imported automatically and scoped to the folder holding each file |
+| CodeRabbit | (defaults) | the diff |
+
+Two consequences worth knowing before you wonder why a bot did or didn't say something.
+
+**Qodo reads `.pr_agent.toml` from the default branch**, so editing it in your branch does not change how your branch is reviewed — the change applies to PRs opened after it merges.
+
+**A per-crate `CLAUDE.md` is a scoped rule set, for humans and for Qodo alike.**
+Qodo's rule import scopes each file's rules to the directory containing it at any depth, which is why `crates/outl-md/CLAUDE.md` earns stricter review inside that crate and is silent elsewhere.
+It is also why this repo has no `best_practices.md`: that would be a second copy of rules `CLAUDE.md` already owns, and the copy is the one that goes stale.
+The gap in that mechanism is `.github/instructions/*.instructions.md` — Copilot reads those, Qodo does not, so anything that must reach both reviewers belongs in a `CLAUDE.md`.
 
 ---
 
@@ -405,6 +425,7 @@ Map of canonical homes (extend as new ones are minted):
 | Dev loop (clone, build, slash commands, hooks, agents, CI) | [`docs/development.md`](development.md) | every per-crate CLAUDE.md's "When you're done" section links here |
 | Shared Rust primitives (catalogue of reusable APIs) | [`docs/shared-primitives.md`](shared-primitives.md) (index) + its parts [`primitives-core.md`](primitives-core.md), [`primitives-markdown.md`](primitives-markdown.md), [`primitives-actions.md`](primitives-actions.md) + mirror at `.github/instructions/shared-primitives.instructions.md` | root `CLAUDE.md` references it |
 | Contributing policy (review, invariants enforced at PR time) | [`docs/contributing.md`](contributing.md) | root `CLAUDE.md` references it |
+| Automated-reviewer configuration (which bot reads which file) | [`docs/contributing.md`](contributing.md) § The automated reviewers | `.pr_agent.toml` and `.github/copilot-instructions.md` are the configured surfaces, not second owners of the policy |
 
 When you add a brand-new surface (a new CLI subcommand, a new `Op` variant, a new MCP tool, a new theme, a new client), it follows the same rule:
 
