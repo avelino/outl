@@ -66,14 +66,18 @@ concurrency:
 jobs:
   check:
     name: Linux x86_64
-    runs-on: blacksmith-4vcpu-ubuntu-2204
+    runs-on: blacksmith-8vcpu-ubuntu-2204
     # `cargo test -p outl-desktop` links the desktop's test binaries with
     # tauri + webkit + wasmtime + iroh all in one image; since wasmtime 46
-    # that link peaks past the runner's ~7 GB RAM and the OOM killer reaps
-    # the job (clippy compiles fine — only `cargo test` links the fat
-    # binaries, so it dies with no test output). `debuginfo=0` shrinks every
-    # linked object to cut the linker's peak. The whole job now builds on the
-    # dev profile (tests, clippy, and `tauri build --debug` share one
+    # that link used to peak past the GitHub runner's ~7 GB RAM and the OOM
+    # killer reaped the job (clippy compiles fine — only `cargo test` links
+    # the fat binaries, so it died with no test output). That ceiling is
+    # gone: `blacksmith-8vcpu-ubuntu-2204` has 32 GB, and the measured peak
+    # on the 16 GB 4 vCPU SKU was 3.7 GB with zero OOM events. `debuginfo=0`
+    # stays anyway — it is now a link-time and target-dir-size optimisation,
+    # not a survival hack. 8 vCPU because the job ran at 74% average CPU on
+    # 4 vCPU and it is the longest job in the pipeline. The whole job builds
+    # on the dev profile (tests, clippy, and `tauri build --debug` share one
     # unoptimised artefact set instead of compiling the workspace twice as
     # dev + release), so there's no `CARGO_PROFILE_RELEASE_*` override to make
     # here. The optimised, stripped release build lives in release.yml, gated
@@ -92,6 +96,17 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+
+      # `setup-bun` caches the bun binary, not the packages it
+      # downloads. On Blacksmith `actions/cache` is transparently
+      # redirected to the colocated cache, so this restores at
+      # ~400MB/s.
+      - name: Cache bun install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
 
       # Tauri 2 deps. Even the platform-agnostic checks (clippy,
       # `cargo test`) need outl-desktop to compile first, and that
@@ -147,7 +162,7 @@ jobs:
 
   build:
     name: ${{ matrix.label }}
-    # Gate the expensive runners (macOS is 10x, Windows 2x Linux billing)
+    # Gate the expensive runners (macOS is 6.67x, Windows 2x Linux billing)
     # behind the Linux `check` job. `check` already compiles the whole
     # desktop tree + runs clippy/tests/tsc/vitest, so any compile error or
     # desktop test failure stops the matrix before a single macOS/Windows
@@ -164,27 +179,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
+          - os: blacksmith-6vcpu-macos-15
             label: macOS arm64
             rust_target: aarch64-apple-darwin
-          - os: windows-latest
+          - os: blacksmith-4vcpu-windows-2025
             label: Windows x86_64
             rust_target: x86_64-pc-windows-msvc
           # macOS x86_64 is **not** in the PR matrix on purpose.
-          # GitHub's `macos-13` (Intel) runner pool is consistently
-          # depleted (jobs sit queued for hours, sometimes
-          # overnight), so we don't block PRs on a target we can't
-          # reliably schedule. `release.yml::build_desktop` still
-          # produces a working macOS x86_64 binary via
-          # `--target universal-apple-darwin`, which builds both
-          # arches on a single `macos-latest` (arm64) runner and
+          # The Intel macOS pools are consistently depleted (jobs sit
+          # queued for hours, sometimes overnight), so we don't block
+          # PRs on a target we can't reliably schedule.
+          # `release.yml::build_desktop` still produces a working
+          # macOS x86_64 binary via `--target universal-apple-darwin`,
+          # which builds both arches on a single arm64 runner and
           # lipo-merges them into one dmg.
           #
-          # Both surfaces converged on `*-latest` instead of pinned
-          # versions: `macos-13` is intentionally absent from CI and
-          # `macos-14`/`windows-2022` were pinned needlessly. Using
-          # `macos-latest` / `windows-latest` lets GitHub follow its
-          # runner cadence without us re-pinning each cycle.
+          # Both surfaces run on Blacksmith: Apple Silicon M4 for
+          # macOS (6 vCPU is the smallest tier offered) and Windows
+          # Server 2025 for Windows. The Windows image ships VS Build
+          # Tools 2022 rather than the full Visual Studio IDE, which
+          # is all `x86_64-pc-windows-msvc` needs to link.
 
     steps:
       - uses: actions/checkout@v4

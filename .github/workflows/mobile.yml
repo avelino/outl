@@ -61,40 +61,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # macOS minutes bill at 6.67x Linux, so this job carries only the
+  # work that *needs* macOS: `outl-mobile` itself, which pulls Tauri's
+  # iOS surface and can't build on the Linux CI runners.
+  #
+  # `outl-actions`, `outl-core` and `outl-md` used to be listed here
+  # too. Their tests already run on Linux *and* on macOS in
+  # `ci.yml::test`, so this job was the third execution of the same
+  # suites — on the most expensive hardware in the pipeline (it was
+  # 55% of the total bill of a full run). They still get *compiled*
+  # here, as dependencies of `outl-mobile`, so a breaking change in
+  # them still fails this job. `cargo fmt` moved out for the same
+  # reason: `ci.yml::fmt` runs `--all` on a 2 vCPU Linux runner and
+  # rustfmt output does not vary by platform.
   rust-check:
-    name: rust (fmt + clippy + test) — outl-mobile
+    name: rust (clippy + test) — outl-mobile
     runs-on: blacksmith-6vcpu-macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
         run: rustup show
+      # `rust-cache` instead of a hand-rolled `actions/cache`: the old
+      # key hashed **/Cargo.toml, so every manifest edit anywhere in
+      # the workspace threw away the whole macOS target dir, and the
+      # raw `target/` it stored grew without bound.
       - name: Cache cargo registry & target
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-mobile-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-mobile-
-            ${{ runner.os }}-cargo-
-      - name: cargo fmt --check
-        run: cargo fmt --all -- --check
-      - name: cargo clippy (mobile + shared)
-        run: |
-          cargo clippy \
-            -p outl-mobile -p outl-actions -p outl-core -p outl-md \
-            --all-targets -- -D warnings
-      - name: cargo test (mobile + shared)
-        run: |
-          cargo test \
-            -p outl-mobile -p outl-actions -p outl-core -p outl-md \
-            --all-targets
+          prefix-key: "v0.8-rust"
+          shared-key: mobile-macos
+      - name: cargo clippy (mobile)
+        run: cargo clippy -p outl-mobile --all-targets -- -D warnings
+      - name: cargo test (mobile)
+        run: cargo test -p outl-mobile --all-targets
 
+  # 2 vCPU: vitest + a Vite build finish in ~12s and never saturated
+  # 4 vCPU. Half the SKU, half the bill, same wall clock.
   frontend:
     name: frontend (vitest + build)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     defaults:
       run:
         working-directory: crates/outl-mobile
@@ -104,6 +109,13 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      # `setup-bun` caches the bun binary, not the packages.
+      - name: Cache bun install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
       - name: bun install
         run: bun install --frozen-lockfile
       - name: vitest
@@ -118,6 +130,14 @@ jobs:
   # any macOS runner — no simulator, no signing, no Xcode workspace.
   # The iOS app target consumes OutlKit as a local SPM dependency
   # (see project.pbxproj → XCLocalSwiftPackageReference).
+  #
+  # "Foundation-only" does *not* mean "runs on Linux": OpsFilePredicate
+  # builds an `NSPredicate` over `NSMetadataItemFSNameKey`, and
+  # NSMetadata is Spotlight — Apple platforms only, absent from
+  # swift-corelibs-foundation. `Package.swift` declares `.iOS` +
+  # `.macOS` and no Linux platform for exactly that reason. So this
+  # job stays on macOS despite the 6.67x rate; 6 vCPU is already the
+  # smallest macOS SKU.
   swift-tests:
     name: swift (OutlKit unit tests)
     runs-on: blacksmith-6vcpu-macos-15
@@ -152,16 +172,20 @@ jobs:
           rustup show
           rustup target add aarch64-apple-ios-sim x86_64-apple-ios
       - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0.8-rust"
+          shared-key: ios-sim
+      # `cargo install tauri-cli` compiles the CLI from source, which
+      # is several minutes of macOS-rate build time on every run. The
+      # install step is already guarded by `command -v`, so caching
+      # the built binary turns it into a no-op on a hit. Keyed on the
+      # requested version so a bump reinstalls.
+      - name: Cache cargo-tauri binary
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-ios-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-ios-
-            ${{ runner.os }}-cargo-
+          path: ~/.cargo/bin/cargo-tauri
+          key: ${{ runner.os }}-cargo-tauri-v2
       - name: Install tauri-cli
         run: |
           if ! command -v cargo-tauri >/dev/null; then
@@ -338,17 +362,18 @@ jobs:
         run: rustup target add aarch64-apple-ios
 
       - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0.8-rust"
+          shared-key: ios-release
+
+      # See `ios-build`: caching the built binary skips a from-source
+      # `cargo install` on macOS-rate minutes.
+      - name: Cache cargo-tauri binary
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-ios-release-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-ios-release-
-            ${{ runner.os }}-cargo-ios-
-            ${{ runner.os }}-cargo-
+          path: ~/.cargo/bin/cargo-tauri
+          key: ${{ runner.os }}-cargo-tauri-v2
 
       - name: Install tauri-cli
         run: |

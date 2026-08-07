@@ -46,9 +46,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Runner sizing across this file is measured, not guessed: see the
+  # numbers recorded in `docs/development.md` → "Runner sizing".
+  # `cargo fmt` never compiles anything (16s wall clock, no cargo
+  # build), so the smallest SKU is the right one.
   fmt:
     name: rustfmt
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain (rustfmt)
@@ -56,9 +60,14 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
+  # 8 vCPU: clippy is a pure compile job and the 4 vCPU run sat at 71%
+  # average CPU with only 2.6 GB of 16 GB used — CPU-bound, memory to
+  # spare. Blacksmith bills per vCPU-minute, so doubling cores is
+  # roughly billing-neutral as long as rustc keeps scaling, and it
+  # halves the wall clock a human waits on.
   clippy:
     name: clippy
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain (clippy)
@@ -76,13 +85,26 @@ jobs:
         # there).
         run: cargo clippy --workspace --exclude outl-mobile --exclude outl-desktop --exclude outl-tauri-shared --all-targets -- -D warnings
 
+  # The check name is `matrix.label`, never `matrix.os`, on purpose.
+  # Branch protection matches required checks by *name*, so having the
+  # runner SKU in the name means every runner change (this migration
+  # included) silently renames the required check and leaves `main`
+  # waiting forever on a check that no longer reports. `linux` /
+  # `macos` are stable across any future SKU move.
   test:
-    name: test (${{ matrix.os }})
+    name: test (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [blacksmith-4vcpu-ubuntu-2404, macos-latest]
+        include:
+          # 8 vCPU: measured 76% average CPU and 4.7 GB of 16 GB on
+          # 4 vCPU — the same CPU-bound / memory-idle shape as clippy.
+          - os: blacksmith-8vcpu-ubuntu-2404
+            label: linux
+          # 6 vCPU is the smallest macOS SKU Blacksmith offers.
+          - os: blacksmith-6vcpu-macos-15
+            label: macos
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain
@@ -106,6 +128,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install toolchain
         run: rustup show
+      # `cargo doc --workspace` compiles every dependency exactly like
+      # clippy and test do; this job was the only Rust job in the file
+      # running without the cache, paying a cold build every run.
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0.8-rust"
       - name: cargo doc
         env:
           RUSTDOCFLAGS: "-D warnings"
