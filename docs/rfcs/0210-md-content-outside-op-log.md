@@ -34,7 +34,17 @@ Every page in the state above answers yes to the first and no to the second.
 
 ## What we chose
 
-`outl_actions::content_lines_missing_from(disk, rendered) -> Vec<String>` is the single owner of the verdict "would re-projecting delete something?".
+`outl_actions::content_lines_missing_from(disk, sidecar_blocks) -> Vec<String>` is the single owner of the verdict "would re-projecting delete something?".
+
+**The reference is the sidecar's blocks, and the first version of this got it wrong.**
+It compared against a fresh render of the tree, which answers a different question: *do disk and tree disagree?*
+Every remote edit answers yes to that, since the pre-edit line is on disk and absent from the render.
+So does every remote delete and every reorder.
+The guard therefore refused to re-project any page a peer had touched, and the page froze showing pre-edit text with nothing surfaced — issue #166 reintroduced for the most ordinary sync case there is.
+The recovery command the error message recommended made it worse.
+Reconciling such a page wrote the pre-edit text back as ops, reverting the peer permanently, since the log is append-only.
+Caught in code review by an executable probe, after 1,687 tests and a green `/check` had not.
+The sidecar's blocks are what the log held at the last agreement, so they answer the question actually being asked.
 `apply_page_md_with_sidecar_if_stale` calls it after the hash gate passes and returns `ActionError::PageMarkdownAheadOfLog { path, lines, sample }` instead of writing.
 
 Two details that carry weight:

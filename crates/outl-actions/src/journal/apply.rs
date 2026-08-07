@@ -180,9 +180,19 @@ pub fn apply_page_md_with_sidecar_if_stale(
     // prove the bytes came from the op log. A `reconcile_md` that rewrote
     // the sidecar without emitting ops for everything it read leaves a
     // page in exactly that state, and re-rendering the tree over it drops
-    // the difference for good. Refuse when disk holds content the render
-    // doesn't, so "stale projection" can never mean "unlogged content".
-    let unlogged = content_lines_missing_from(&disk, &rendered);
+    // the difference for good.
+    //
+    // The question is "does the op log know this line", and the sidecar
+    // is what answers it: its blocks are what the log held at the last
+    // agreement. Asking the *render* instead answers a different
+    // question, "do disk and tree disagree", which every remote edit and
+    // every remote delete also answers yes to — that version of this
+    // guard froze any page a peer had touched, reintroducing #166 for
+    // the most ordinary sync case there is.
+    let sidecar_blocks = outl_md::sidecar::read(&sidecar_path)
+        .map(|sc| sc.blocks)
+        .unwrap_or_default();
+    let unlogged = content_lines_missing_from(&disk, &sidecar_blocks);
     if let Some(sample) = unlogged.first() {
         return Err(ActionError::PageMarkdownAheadOfLog {
             path: path.display().to_string(),
@@ -193,38 +203,80 @@ pub fn apply_page_md_with_sidecar_if_stale(
     write_page_projection(workspace, root, page_root, &meta, &rendered).map(Some)
 }
 
-/// The content lines present in `disk` that `rendered` does not account
-/// for, compared as a multiset so a line duplicated on disk but written
-/// once by the renderer still counts as at-risk.
+/// The content lines in `disk` that **no block the op log knows** can
+/// account for.
 ///
-/// A multiset rather than a diff on purpose: a line the renderer merely
-/// **moved** is not at risk, and an LCS diff reports it as unique to disk.
-/// On a real 2.5k-page workspace that difference is 616 pages flagged
-/// versus 233 genuinely holding unlogged content.
+/// `sidecar_blocks` is the reference, not a fresh render of the tree, and
+/// the distinction is the whole point. The sidecar's blocks are what the
+/// log held when the two last agreed, so comparing against them answers
+/// *"does the op log know this line"*. Comparing against a render answers
+/// *"do disk and tree disagree"*, which is also yes for every remote
+/// edit, every remote delete and every reorder — a guard built on that
+/// question refuses to re-project any page a peer has touched, which is
+/// issue #166 with the blame moved.
 ///
-/// Trailing whitespace and blank lines are ignored: the renderer's exact
-/// trailing-newline behaviour has changed across releases, and treating
-/// that as content would refuse to re-project a large share of a real
-/// workspace for a difference the user cannot see. Everything else is
-/// compared verbatim — this decides whether bytes get deleted, so it errs
-/// toward calling a line at-risk.
+/// Compared as a multiset, so a line duplicated on disk but present once
+/// in the log still counts as at-risk.
+///
+/// Lines are normalised before comparison: the bullet marker, the indent
+/// and trailing whitespace all come from the renderer's layout, not from
+/// the content, so a pure indent or outdent must not read as new text.
+/// Blank lines are dropped. Everything else is compared verbatim — this
+/// decides whether bytes get deleted, so it errs toward calling a line
+/// at-risk.
 ///
 /// Public because `outl doctor` must reach the *same* verdict in its
 /// read-only listing that `--repair` reaches when it writes; two opinions
 /// about which pages are safe is how a listing promises a repair the pass
 /// then silently skips.
-pub fn content_lines_missing_from(disk: &str, rendered: &str) -> Vec<String> {
+pub fn content_lines_missing_from(disk: &str, sidecar_blocks: &[SidecarBlock]) -> Vec<String> {
+    /// Strip what the renderer contributes (indent, `- ` marker) so only
+    /// the block's own text is compared.
+    fn normalise(line: &str) -> &str {
+        line.trim().trim_start_matches("- ").trim_start()
+    }
+    /// `key:: value` lines are skipped: a property is never part of a
+    /// block's `text` (it lives on the node as `Op::SetProp`, and a
+    /// page-level one belongs to the page root), so it can never match a
+    /// sidecar block and would be reported as unlogged on every page that
+    /// has one. `outl_md::parse_property_line` is the single owner of what
+    /// counts as a property line.
+    fn is_property(line: &str) -> bool {
+        outl_md::parse::parse_property_line(line).is_some()
+    }
     fn content_lines(s: &str) -> impl Iterator<Item = &str> {
-        s.lines().map(str::trim_end).filter(|l| !l.is_empty())
+        s.lines()
+            .map(normalise)
+            .filter(|l| !l.is_empty() && !is_property(l))
     }
 
-    let mut available: HashMap<&str, usize> = HashMap::new();
-    for line in content_lines(rendered) {
-        *available.entry(line).or_insert(0) += 1;
+    // `SidecarBlock::text` arrived in 0.11; every sidecar written before
+    // it carries `text: ""`. Such a sidecar cannot answer "does the log
+    // know this line", and answering anyway means every line on disk
+    // reads as unknown: on a real workspace that flagged 615 pages
+    // holding 35,261 lines against the 233 / 1,426 that are genuinely
+    // unlogged, which would freeze most of the graph instead of guarding
+    // it. A reference that cannot answer does not get to veto the write.
+    //
+    // Self-healing: the `CURRENT_PIPELINE_VERSION` bump re-reconciles
+    // every page on first boot, rewriting sidecars with text, so the
+    // guard arms itself from there.
+    if sidecar_blocks.iter().any(|b| b.text.is_empty()) {
+        return Vec::new();
     }
+
+    // A block's text can span lines (continuation), and each of those
+    // lands as its own line in the `.md`, so index the pieces.
+    let mut known: HashMap<&str, usize> = HashMap::new();
+    for block in sidecar_blocks {
+        for piece in content_lines(&block.text) {
+            *known.entry(piece).or_insert(0) += 1;
+        }
+    }
+
     let mut missing = Vec::new();
     for line in content_lines(disk) {
-        match available.get_mut(line) {
+        match known.get_mut(line) {
             Some(n) if *n > 0 => *n -= 1,
             _ => missing.push(line.to_string()),
         }

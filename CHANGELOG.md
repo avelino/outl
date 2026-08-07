@@ -5,6 +5,24 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ## [Unreleased]
 
+### Fixed
+
+- **The re-projection guard refused to update any page a peer had edited or deleted from, and the recovery command reverted the peer.**
+  Found in code review of the commit that introduced it, by an executable probe, after 1,687 tests and a green `/check` had not.
+  `content_lines_missing_from` compared the `.md` against a fresh render of the tree, which answers *"do disk and tree disagree"* — and every remote edit answers yes to that, since the pre-edit line is on disk and absent from the render.
+  So did every remote delete and every reorder.
+  The page then froze showing pre-edit text with nothing surfaced to the user, which is [issue #166](https://github.com/avelino/outl/issues/166) reintroduced for the most ordinary sync case there is.
+  Worse, `outl reconcile --ahead-of-log` (which the error message and `doctor` both recommended) wrote the pre-edit text back as ops on such a page, reverting the peer permanently, since the log is append-only.
+
+  The reference is now the **sidecar's blocks**, which are what the log held at the last agreement, so the question asked is the one intended: *does the op log know this line*.
+  The bullet marker, indent and trailing whitespace are normalised away — they are the renderer's layout, not content, so a pure indent no longer reads as new text — and `key:: value` lines are skipped, since a property is never part of a block's `text`.
+
+  One consequence worth stating: a sidecar whose blocks carry `text: ""` cannot answer the question at all.
+  That is **every sidecar written before 0.11**, when the field was added — measured on a real workspace, 7,400 blocks with not one populated.
+  Answering anyway flagged 615 pages holding 35,261 lines against the 233 / 1,426 that are genuinely unlogged, which would have frozen most of the graph instead of guarding it, so such a sidecar does not get to veto the write.
+  The `CURRENT_PIPELINE_VERSION` bump rewrites them on first boot and the guard arms itself from there.
+  On the measured workspace the post-migration count is **29 pages / 261 lines**, down from the 79 / 909 the render-based comparison reported.
+
 ## [0.12.0]
 
 ### Changed

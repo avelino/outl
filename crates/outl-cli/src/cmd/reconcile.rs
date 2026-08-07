@@ -32,7 +32,6 @@
 use crate::workspace_layout::Paths;
 use crate::ws;
 use anyhow::{Context, Result};
-use outl_core::id::NodeId;
 use std::fs;
 use std::path::Path;
 
@@ -184,9 +183,6 @@ fn invalidate_synced_hash(md_path: &Path) -> Result<()> {
 fn collect_ahead(ws: &outl_core::workspace::Workspace, root: &Path) -> Vec<AheadPage> {
     let mut out = Vec::new();
     for meta in outl_actions::list_pages(ws) {
-        let Ok(page_root) = meta.id.parse::<ulid::Ulid>().map(NodeId) else {
-            continue;
-        };
         let md_path = outl_actions::page_md_path(root, &meta);
         // A `.md` we cannot read is not a page running ahead — it is a
         // read failure, and guessing "empty" here is how content gets
@@ -194,8 +190,17 @@ fn collect_ahead(ws: &outl_core::workspace::Workspace, root: &Path) -> Vec<Ahead
         let Ok(disk) = fs::read_to_string(&md_path) else {
             continue;
         };
-        let rendered = outl_actions::render_page_md(ws, page_root);
-        let missing = outl_actions::content_lines_missing_from(&disk, &rendered).len();
+        // Same reference the write-side guard uses: the sidecar's blocks,
+        // not a render. A render answers "do disk and tree disagree",
+        // which every remote edit also answers yes to, and reconciling
+        // those would write the pre-edit text back as ops — reverting the
+        // peer, permanently, since the log is append-only.
+        let Some(sidecar) =
+            outl_md::sidecar::read(&outl_md::sidecar::sidecar_path_for(&md_path)).ok()
+        else {
+            continue;
+        };
+        let missing = outl_actions::content_lines_missing_from(&disk, &sidecar.blocks).len();
         if missing > 0 {
             out.push(AheadPage {
                 md_path,

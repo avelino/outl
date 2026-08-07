@@ -162,6 +162,106 @@ fn if_stale_refuses_when_the_md_carries_content_the_log_lacks() {
     );
 }
 
+/// A peer edited a block. The `.md` still holds the pre-edit text, the
+/// tree holds the edit, and the sidecar is hash-faithful to the file.
+///
+/// The old line is on disk and absent from the render, which is exactly
+/// what a disk-versus-render comparison measures — so the first version
+/// of this guard refused, and the page froze showing the pre-edit text
+/// with nothing surfaced to the user. That is issue #166 reintroduced
+/// for the most ordinary sync case there is.
+///
+/// The question the guard has to ask is "does the op log know this
+/// line", not "do disk and tree disagree". The sidecar answers the
+/// first: its blocks are what the log held at the last agreement.
+#[test]
+fn if_stale_reprojects_a_page_a_peer_edited() {
+    let (tmp, mut ws, hlc, page, md_path) = projected_page("original text");
+    let block = crate::tree::children_of(&ws, page)[0].0;
+    crate::block::edit_text(&mut ws, &hlc, block, "original text edited by peer").unwrap();
+
+    let wrote = apply_page_md_with_sidecar_if_stale(&ws, tmp.path(), page).unwrap();
+
+    assert!(
+        wrote.is_some(),
+        "a remote edit must reach the .md, not freeze the page"
+    );
+    assert!(std::fs::read_to_string(&md_path)
+        .unwrap()
+        .contains("edited by peer"));
+}
+
+/// Same shape, remote delete: the deleted block's text is on disk and
+/// gone from the render. It is not unlogged content, it is content the
+/// log deliberately removed, and refusing here resurrects it on the next
+/// forced reconcile.
+#[test]
+fn if_stale_reprojects_a_page_a_peer_deleted_from() {
+    let (tmp, mut ws, hlc, page, md_path) = projected_page("kept");
+    let doomed = append_block(&mut ws, &hlc, Some(page), Some("to be deleted")).unwrap();
+    apply_page_md_with_sidecar(&ws, tmp.path(), page).unwrap();
+    crate::block::delete(&mut ws, &hlc, doomed).unwrap();
+
+    let wrote = apply_page_md_with_sidecar_if_stale(&ws, tmp.path(), page).unwrap();
+
+    assert!(wrote.is_some(), "a remote delete must reach the .md");
+    let md = std::fs::read_to_string(&md_path).unwrap();
+    assert!(md.contains("kept") && !md.contains("to be deleted"));
+}
+
+/// Indent with no text change moved the line but changed nothing about
+/// what the log knows. `trim_end` alone left the indent in the
+/// comparison, so `- child` and `  - child` read as different lines and
+/// a pure indent counted as unlogged content.
+#[test]
+fn if_stale_reprojects_after_a_pure_indent() {
+    let (tmp, mut ws, hlc, page, md_path) = projected_page("parent");
+    let child = append_block(&mut ws, &hlc, Some(page), Some("child")).unwrap();
+    apply_page_md_with_sidecar(&ws, tmp.path(), page).unwrap();
+    crate::block::indent(&mut ws, &hlc, child).unwrap();
+
+    let wrote = apply_page_md_with_sidecar_if_stale(&ws, tmp.path(), page).unwrap();
+
+    assert!(wrote.is_some(), "a pure indent is not unlogged content");
+    assert!(std::fs::read_to_string(&md_path).unwrap().contains("child"));
+}
+
+/// A sidecar written before `SidecarBlock::text` existed (v1, and every
+/// v2 written by a pre-0.11 binary) carries `text: ""` on every block.
+///
+/// Measured on a real workspace: 7,400 blocks, **zero** with text. With
+/// no text to compare against, every line on disk reads as unknown, and
+/// the guard flagged 615 pages holding 35,261 lines — against the 233 /
+/// 1,426 that are genuinely unlogged. Refusing there would freeze most
+/// of the workspace instead of protecting it.
+///
+/// So a sidecar that cannot answer the question does not get to veto the
+/// write. The `CURRENT_PIPELINE_VERSION` bump re-reconciles every page on
+/// first boot, which rewrites the sidecars with text, and the guard turns
+/// itself on from there.
+#[test]
+fn if_stale_does_not_block_on_a_sidecar_with_no_text() {
+    let (tmp, mut ws, hlc, page, md_path) = projected_page("first");
+    // Strip `text` from every block, as a pre-0.11 sidecar has it.
+    let sidecar_path = outl_md::sidecar::sidecar_path_for(&md_path);
+    let mut sc = outl_md::sidecar::read(&sidecar_path).unwrap();
+    for b in &mut sc.blocks {
+        b.text = String::new();
+    }
+    outl_md::sidecar::write(&sidecar_path, &sc).unwrap();
+    append_block(&mut ws, &hlc, Some(page), Some("synced-in")).unwrap();
+
+    let wrote = apply_page_md_with_sidecar_if_stale(&ws, tmp.path(), page).unwrap();
+
+    assert!(
+        wrote.is_some(),
+        "a sidecar with no text cannot veto the write"
+    );
+    assert!(std::fs::read_to_string(&md_path)
+        .unwrap()
+        .contains("synced-in"));
+}
+
 /// The counterpart that must keep working: the tree genuinely ran ahead
 /// (a peer's ops landed), the `.md` holds a strict subset of what the log
 /// renders, so nothing on disk is at risk. This is issue #166's case and
