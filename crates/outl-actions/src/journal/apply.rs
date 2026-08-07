@@ -246,8 +246,12 @@ pub fn content_lines_missing_from(disk: &str, sidecar_blocks: &[SidecarBlock]) -
     }
     fn content_lines(s: &str) -> impl Iterator<Item = &str> {
         s.lines()
+            // A leading bullet is structural content, not part of the
+            // property syntax.  Check it before normalising so prose such as
+            // `- note:: value` is not mistaken for a property.
+            .filter(|line| line.trim_start().starts_with("- ") || !is_property(line.trim()))
             .map(normalise)
-            .filter(|l| !l.is_empty() && !is_property(l))
+            .filter(|l| !l.is_empty())
     }
 
     // `SidecarBlock::text` arrived in 0.11; every sidecar written before
@@ -261,7 +265,7 @@ pub fn content_lines_missing_from(disk: &str, sidecar_blocks: &[SidecarBlock]) -
     // Self-healing: the `CURRENT_PIPELINE_VERSION` bump re-reconciles
     // every page on first boot, rewriting sidecars with text, so the
     // guard arms itself from there.
-    if sidecar_blocks.iter().any(|b| b.text.is_empty()) {
+    if !sidecar_blocks.is_empty() && sidecar_blocks.iter().all(|b| b.text.is_empty()) {
         return Vec::new();
     }
 
