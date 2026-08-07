@@ -77,6 +77,14 @@ fn recovers_flight_blocks_from_real_device_fixture() {
 
     // The hash gate is blind to this state (that's the bug this
     // module fixes); the workspace-aware scan is not.
+    //
+    // The fixture's `pipeline_version` is kept at `CURRENT_PIPELINE_VERSION`
+    // on purpose. It is a real device capture in every other field, but a
+    // stale pipeline version would make `scan_for_orphans` flag the page
+    // for the *migration* reason and mask what this test is actually
+    // asserting: that the hash comparison alone cannot see a projection
+    // running ahead of the log. Bump it here whenever the pipeline
+    // version bumps.
     let engine = SyncEngine::new(root.to_path_buf(), actor);
     assert!(
         engine.scan_for_orphans().is_empty(),

@@ -6,6 +6,8 @@ If you want to *install and use* plugins, read [Plugins](plugins.md); if you wan
 The whole design answers one question: **how do you let untrusted JavaScript mutate a CRDT-backed workspace without ever handing it `&mut Workspace`, and have the result converge across devices?**
 The answer is a describe → apply loop on top of the op log.
 
+> **Why the runtime is an interpreter and not a JIT, and why Boa:** [RFC 0025](rfcs/0025-plugin-system.md).
+
 ---
 
 ## The one rule everything else follows
@@ -228,6 +230,21 @@ It's **best-effort**: a plugin with an invalid manifest, a hash mismatch, or a J
 - **`.outlpkg`** — the installed shape packed as tar+gzip for one-file distribution — is **roadmap**; today, install is from a local directory.
 
 ---
+
+## Client Tauri command surface (desktop + mobile)
+
+Both Tauri clients expose the host through the same commands (`commands/plugin.rs` in each crate; the bodies live in `outl-tauri-shared`).
+Mobile registers the subset its capabilities allow — no `keybinding`, since there is no chord surface on a phone.
+
+| Command | Returns | Behaviour |
+|---|---|---|
+| `plugin_list` | `Vec<PluginCommandDto>` | Every contributed command (best-effort; empty until plugins load) |
+| `plugin_run(plugin_id, command_id, page_id?)` | `PluginRunReply` (`applied`, `notifications`, `errors`, `view?`, `views`) | Runs the command on the plugin thread; `view` is the refreshed `PageView` of the on-screen page, `views` are emitted `ui-render` HTML overlays |
+| `plugin_sync_hooks(page_id?)` | `PluginSyncHooksReply` (`view?`, `views`) | Fires the `onOp` sweep; `view` is a refreshed `PageView` **only** when a hook mutated the workspace, `views` are emitted `ui-render` overlays (present even on the no-mutation path) |
+| `plugin_keybindings` | `Vec<PluginKeybindingDto>` (`chord`, `mode`, `plugin_id`, `command_id`, `description`) | Plugin-contributed desktop chords (best-effort; empty until plugins load) |
+| `plugin_toolbar` | `Vec<ToolbarButtonDto>` (`plugin_id`, `command_id`, `icon`, `title?`) | Plugin-contributed desktop chrome buttons (best-effort; empty until plugins load) |
+| `plugin_transformers` | `Vec<TransformerDto>` (`plugin_id`, `lang`, `kind`) | Content transformers a plugin declared for a code-fence language (best-effort; empty until plugins load) |
+| `plugin_transform(plugin_id, lang, input)` | `Option<TransformResultDto>` (`kind`, `content`) | Runs the content transformer for `lang` against a fence body. **Read-only** — never mutates the workspace, no re-projection. `None` when the transformer declined or no plugin owns `lang` |
 
 ## Where the code lives
 

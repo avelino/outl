@@ -55,6 +55,48 @@ Violating any one breaks user trust irreversibly.
    `Op::SetCollapsed` for the fold flag is the canonical example.
    The sidecar carries only **structural matching metadata** (ids, position, content hash, ref handle), not a sync surface.
 
+8. **A sidecar hash match is NOT evidence that the `.md` came from the op log.**
+   `sidecar.last_synced_hash == file_hash(disk)` answers exactly one question: *did outl write these bytes last?*
+   It does **not** answer *did these bytes come from the op log?*
+   Those are different questions, and a page can answer yes to the first and no to the second — that is precisely the state a `reconcile_md` leaves behind when it rewrites the sidecar without emitting ops covering everything it read.
+   So **never overwrite a `.md` on the strength of the hash gate alone.**
+   Before re-projecting, ask `outl_actions::content_lines_missing_from(disk, rendered)` and refuse when it returns anything (`ActionError::PageMarkdownAheadOfLog`).
+   That function is the single owner of the verdict; a second opinion about which pages are safe to overwrite is how a read-only listing promises a repair the writing pass then refuses.
+
+   **Why this is an invariant and not a code comment.**
+   Issue #166 fixed a real bug (tree ahead of `.md`, page renders empty) by re-projecting whenever the tree outran a *faithful* projection, where faithful meant the hash matched.
+   That traded one divergence direction for its mirror image, and the mirror is worse: `.md` ahead of tree is content **deleted**, while tree ahead of `.md` was only content **hidden** — the op log still had it.
+   On a real 2,560-page workspace that cost 233 pages holding 1,426 lines of work that existed in no op.
+   They were deleted by `doctor --repair` (which printed `708 fixed`) and by every GUI page open, with the rebuilt sidecar making the loss undetectable afterwards.
+   Full reasoning, rejected alternatives and what this change makes *worse*: [RFC 0210](docs/rfcs/0210-md-content-outside-op-log.md).
+   Open work (the producer, recovering the existing 1,426 lines, volume guards): [issue #210](https://github.com/avelino/outl/issues/210).
+
+   **The general rule this is an instance of:** when you fix one direction of a `.md` ↔ tree divergence, state what happens in the opposite direction *before* merging.
+   Reconciliation bugs come in mirrored pairs, and the pair that deletes is never the one being reported.
+
+   **The regression net.**
+   These tests exist to fail if someone re-simplifies the gate back to a hash comparison — do not delete or relax them:
+   `if_stale_refuses_when_the_md_carries_content_the_log_lacks`,
+   `if_stale_still_reprojects_when_the_md_holds_no_unlogged_content`,
+   `if_stale_ignores_whitespace_only_differences_when_deciding`
+   (`crates/outl-actions/src/journal/tests.rs`), plus
+   `a_torn_op_log_never_lets_repair_overwrite_a_good_md`
+   (`crates/outl-cli/src/cmd/doctor/tests/safety.rs`), which pins the precedence order: a damaged op log is reported as the damaged log, not as 2,000 pages of "unlogged content".
+
+9. **When state crosses a boundary, say what its new home requires.**
+   Moving state out of the workspace, out of a file, out of the op log, or into a process global does not delete its problems — it hands them to a place with different rules.
+   The RFC that moves state must answer four questions about the destination: **who can write it, who can read it, how does a test get its own copy, and what cleans it up?**
+
+   Not theory.
+   0.11.0 moved the write actor out of `.outl/config.toml` into a device-local store, correctly — the file rode every sync transport except iCloud, so two devices resolved the same actor and appended to one `ops-<actor>.jsonl`.
+   Question three went unanswered, so the test suite wrote into the developer's real `~/.config/outl` (64 entries, 15 of them orphaned `TempDir` paths) and three doctor tests went flaky.
+   Question four is still unanswered: nothing prunes a workspace the user deleted.
+   [RFC 0211](docs/rfcs/0211-state-that-leaves-a-boundary.md), [issue #211](https://github.com/avelino/outl/issues/211).
+
+   **The general rule, of which invariant 8 is one instance:** a fix relocates a problem far more often than it removes one.
+   After "did I fix it?" comes **"where does the problem live now, and what does that place require that the old one did not?"**
+   Three separate defects in this codebase came from skipping that question — a divergence fixed in one direction only (invariant 8), state moved without an isolation story (this one), and a size guard with no escape hatch that turned into a wall.
+
 ## Repo layout
 
 ```
@@ -206,6 +248,9 @@ Full review policy (Rust quality, hot paths, architecture, simplicity, testing) 
 - ❌ Calling `.unwrap()` to get out of error handling
 - ❌ Writing IDs into the `.md` file ("just for now")
 - ❌ Storing op log fields outside the `Op` variant (breaks undo)
+- ❌ Overwriting a `.md` because its sidecar hash matches (invariant 8 — that proves outl wrote it last, not that the op log holds it)
+- ❌ Rewriting a sidecar to agree with content you did not emit ops for (this is what *produces* the state invariant 8 defends against)
+- ❌ Fixing one direction of a `.md` ↔ tree divergence without stating what happens in the other
 - ❌ Comparing HLCs without actor tiebreak
 - ❌ Treating `Delete` as physical removal
 - ❌ Skipping tests because "the algorithm is the same as the paper"

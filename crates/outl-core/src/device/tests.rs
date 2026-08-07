@@ -21,6 +21,51 @@ fn machine_id_is_stable_across_calls() {
     assert_eq!(store.machine_id().unwrap(), store.machine_id().unwrap());
 }
 
+/// Regression, and the reason `machine_id` mints under `O_EXCL` instead
+/// of a plain write — plus the reason `create_new_record` publishes its
+/// content by `link(2)` rather than filling an `O_EXCL`-created file.
+///
+/// **Do not delete.** One device store is shared by every process on the
+/// machine, and its `machine-id` arbitrates *every* actor binding and
+/// every `actor_claimed_by` claim. Two processes racing the first-ever
+/// read used to each mint their own id, last writer winning, so the
+/// loser's already-written claims all read as foreign afterwards. A
+/// forked actor costs one file; a lost claim is durable — the claim lives
+/// in the workspace's `config.toml`, so that workspace never adopts its
+/// own legacy ops file again.
+///
+/// Not hypothetical: this made `outl-cli`'s doctor suite fail on every
+/// `cargo test --workspace` that started from a cold
+/// `target/device-store`. `init` stamped the claim, and the `open` right
+/// after it read a machine id a concurrent test binary had just
+/// overwritten.
+///
+/// Racing threads here stand in for racing processes: both reach the same
+/// two filesystem primitives, and a thread race is deterministic enough
+/// to fail loudly if either primitive stops being atomic.
+#[test]
+fn concurrent_first_opens_converge_on_one_machine_id() {
+    let dir = TempDir::new().unwrap();
+    let ids: Vec<MachineId> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..16)
+            .map(|_| s.spawn(|| DeviceStore::at(dir.path()).machine_id().unwrap()))
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    let distinct: std::collections::BTreeSet<_> = ids.iter().map(MachineId::as_str).collect();
+    assert_eq!(
+        distinct.len(),
+        1,
+        "16 racing first opens must agree on one machine id, got {distinct:?}"
+    );
+    assert_eq!(
+        DeviceStore::at(dir.path()).machine_id().unwrap().as_str(),
+        ids[0].as_str(),
+        "and a later uncontended open reads back the id they agreed on"
+    );
+}
+
 #[test]
 fn distinct_stores_get_distinct_machine_ids() {
     let (_a, a) = store();

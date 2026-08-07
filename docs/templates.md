@@ -18,6 +18,8 @@ There are two kinds, and you pick by what you want back:
 The daily journal is itself a template — see
 [Journal template](#journal-template).
 
+> **Why a template is a page with a property and not a new op:** [RFC 0146](rfcs/0146-template-engine.md).
+
 ## Surface scope
 
 Templates are one feature shared across every client through

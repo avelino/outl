@@ -288,7 +288,8 @@ fn collect_internal(
         Some(ws) => {
             tree::check_trash(&mut b, ws);
             tree::check_unmaterialized_ops(&mut b, ws, &known_node_ids);
-            let projection = tree::check_projections(&mut b, ws, &paths.root);
+            let projection =
+                tree::check_projections(&mut b, ws, &paths.root, health.is_compromised());
             plan.reproject = projection.reproject;
             plan.rebuild_sidecar = projection.rebuild_sidecar;
         }

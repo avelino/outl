@@ -9,6 +9,8 @@ Single source of truth for outl's keyboard bindings.
 
 ## Why this crate exists
 
+> Full reasoning, rejected alternatives, and the vim-parity gap on the desktop: [RFC 0070](../../docs/rfcs/0070-keybinding-ownership-and-vim-parity.md).
+
 Before this crate, the TUI defined its bindings in `outl-tui/src/input/` and the desktop wired its own `KeyboardEvent` handlers in `lib/shortcuts.ts`.
 Result: `Cmd+P` opened the picker on the desktop, `Ctrl+P` did nothing on the TUI for two weeks until somebody noticed.
 With both crates pulling from a shared `(chord → action)` table, "the key the user knows" works the same on every surface, and the help overlay on each client can list every binding in one query.

@@ -220,6 +220,17 @@ impl DeviceStore {
     /// Reminted when the persisted host binding disagrees with the
     /// current machine — see the module doc, "Why the store itself is
     /// fingerprinted".
+    ///
+    /// Minting is compare-and-swap, for the same reason an actor binding is
+    /// (see `bind`): two processes racing the *first* read of one store must
+    /// converge on one id rather than each stamping its own.
+    ///
+    /// It matters more here than for a binding. A forked actor costs one
+    /// extra ops file, but this id arbitrates every actor binding **and**
+    /// every `actor_claimed_by` claim, so a loser that overwrote the winner
+    /// makes all of the winner's already-written claims read as foreign —
+    /// and a claim lives in the workspace's `config.toml`, so that
+    /// workspace never adopts its own legacy ops file again.
     pub fn machine_id(&self) -> Result<MachineId, DeviceError> {
         let path = self.dir.join("machine-id");
         let host = host_fingerprint();
@@ -249,11 +260,34 @@ impl DeviceStore {
             }
         }
         let fresh = ulid::Ulid::new().to_string();
-        match host {
-            Some(now) => write_record(&path, &[("id", fresh.as_str()), ("host", now)])?,
-            None => write_record(&path, &[("id", fresh.as_str())])?,
+        let record: Vec<(&str, &str)> = match host {
+            Some(now) => vec![("id", fresh.as_str()), ("host", now)],
+            None => vec![("id", fresh.as_str())],
+        };
+        if existing.is_some() {
+            // Reminting a clone: the file is there on purpose and this
+            // process is the only one that decided to replace it.
+            write_record(&path, &record)?;
+            return Ok(MachineId(fresh));
         }
-        Ok(MachineId(fresh))
+        // First open of this store: create-if-absent, so a concurrent first
+        // open adopts whichever id landed instead of overwriting it.
+        match create_new_record(&path, &record) {
+            Ok(()) => Ok(MachineId(fresh)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                match read_record(&path)?.and_then(|r| r.get("id").map(str::to_string)) {
+                    Some(id) => Ok(MachineId(id)),
+                    // Present but unreadable as a record — a torn write, or
+                    // the winner between its `create` and its `write`. Both
+                    // leave nothing to adopt, so claim it.
+                    None => {
+                        write_record(&path, &record)?;
+                        Ok(MachineId(fresh))
+                    }
+                }
+            }
+            Err(source) => Err(DeviceError::Io { path, source }),
+        }
     }
 
     /// The actor this device writes under for the workspace identified by

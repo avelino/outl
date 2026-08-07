@@ -142,6 +142,8 @@ Client affordances (chrome per-client, one backend):
 
 ## Copy and paste
 
+> **Why copy-out and paste-in are one pair, and why the core speaks exactly one format:** [RFC 0044](rfcs/0044-clipboard-and-paste.md).
+
 Every client supports copying blocks as clean outl markdown and pasting markdown from external apps.
 
 ### Copy out
@@ -339,6 +341,8 @@ Consecutive references from the same branch collapse: the trail renders once, an
 Mobile's `BacklinksSection` groups references by source page and renders the breadcrumb the same way desktop and TUI do — it no longer shows a flat list of blocks.
 
 ## Backlinks index (performance)
+
+> **One definition of a mention, one index, four clients:** [RFC 0169](rfcs/0169-backlinks.md).
 
 `outl_actions::backlinks_for_page` walks the whole workspace (`O(blocks)`) on every call.
 Recomputing that on each page open made opening a page — or today's journal — noticeably slower as a workspace grew.
@@ -566,28 +570,7 @@ The `open_or_create_by_name(name, kind)` variant stays for callers that already 
 
 ## Deep links (`outl://`)
 
-External launchers open a client at a specific page or daily note through an `outl://` URL.
-The Raycast extension's "Enter → open in app" is the first consumer; links shared into the mobile app are the second.
-
-The scheme is tiny and identical on every platform:
-
-| URL | Opens |
-|---|---|
-| `outl://daily/today` | today's journal |
-| `outl://daily/2026-06-25` | the daily for that ISO date |
-| `outl://page/<slug>` | the page (slug may nest: `outl://page/ai-agent/learning`) |
-
-Parsing lives in **one** place: `outl_actions::parse_deep_link` returns a `DeepLinkTarget` (`Today` / `Daily(date)` / `Page(slug)`).
-Each client maps that target onto the same `open_*` command its UI already calls (`open_today_journal` / `open_journal_for` / `open_page_by_slug`) and focuses its window.
-The parser never touches a `Workspace` — it is pure string → enum — so the desktop and mobile handlers cannot drift on the contract the way two hand-rolled URL parsers would.
-
-A malformed URL (wrong scheme, unknown kind, bad date, path-traversal slug) returns `DeepLinkError`; the client logs it and no-ops.
-It must never crash the app or materialise a stray page.
-
-Registration is per-client transport, not shared logic:
-the desktop registers the scheme via `tauri-plugin-deep-link` (+ `tauri-plugin-single-instance` so the URL reaches an already-running instance on Linux/Windows);
-iOS registers the same scheme through the plugin's mobile config, which injects `CFBundleURLTypes` into the generated `Info.plist`.
-Universal Links (`https://outl.app/…`) are a later addition — they need an Associated Domains entitlement and a hosted `apple-app-site-association`, so the custom scheme ships first.
+The `outl://` scheme, its one parser (`outl_actions::parse_deep_link`), and each client's wiring live in [deep-links.md](deep-links.md).
 
 ## Adding a new client
 

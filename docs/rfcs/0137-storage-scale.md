@@ -1,9 +1,14 @@
 # RFC 0137 — Storage scale: constant RSS, then constant boot/sync
 
-**Status**: Phase A shipped; Phase B pending
-**Issue**: [#137](https://github.com/avelino/outl/issues/137)
-**Branch**: `feat/storage-scale-rfc-137`
-**Tracking**: 11 PRs across two phases (A done, B pending)
+| | |
+|---|---|
+| **Status** | Phase A shipped; Phase B pending |
+| **Issue** | [#137](https://github.com/avelino/outl/issues/137) |
+| **PR** | 11 PRs across two phases (A done, B pending) — branch `feat/storage-scale-rfc-137` |
+| **Date** | 2026-07-04 |
+| **Reference doc** | [storage.md § Boot reads an index](../storage.md#boot-reads-an-index-not-the-whole-log-rfc-137-front-a) |
+| **Invariant** | none (perf work; `outl-core/CLAUDE.md` → "Snapshot boot cache" describes the resulting rules) |
+| **Guarded by** | `boot_scale_bench.rs` (bench, not a test — see Scope) |
 
 ## Why
 

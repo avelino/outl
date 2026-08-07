@@ -1,5 +1,9 @@
 # Design: unified copy/paste across clients
 
+> **Superseded by [RFC 0044](../rfcs/0044-clipboard-and-paste.md), which is the canonical version of this decision.**
+> The RFC carries what this page does not: the alternatives that were rejected, what the change makes worse, and the tests that stop it being undone.
+> This page stays because it is published at outl.app; read it as the original design note, not as current guidance.
+
 Status: **implemented**
 Tracking issue: [#114 — Pasting from TUI into another app is a complete mess](https://github.com/avelino/outl/issues/114)
 Owner: Avelino

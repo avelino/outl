@@ -74,6 +74,7 @@ Every entry here routes through `Workspace::apply` — never build a `LogOp` fro
 | Apply every page's `.md` to disk in one pass | `outl_actions::journal::apply_all_pages_md` | `crates/outl-actions/src/journal/apply.rs` |
 | Run a closure that mutates a page's `.md` (read → modify → write atomically) | `outl_actions::journal::mutate_page_md` | `crates/outl-actions/src/journal/apply.rs` |
 | Atomic `.md` write (crash-safe, wraps `outl_md::atomic::write_atomic`) | `outl_actions::journal::write_md_atomic` | `crates/outl-actions/src/journal/paths.rs` |
+| Decide whether re-projecting a `.md` would delete content the op log never saw (multiset of content lines, whitespace-insensitive — **the** owner of that verdict, so the doctor's read-only listing and `--repair` cannot disagree) | `outl_actions::content_lines_missing_from` | `crates/outl-actions/src/journal/apply.rs` |
 
 ---
 

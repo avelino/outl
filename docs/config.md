@@ -92,6 +92,8 @@ enabled = true
 quiet_hours = "22:00-07:00"
 ```
 
+> **Why `[calendar] timezone` exists at all:** [RFC 0107](rfcs/0107-page-identity.md) — the journal's date decides its slug, so "what day is it" is an identity question, not a display preference.
+
 ### Field reference
 
 #### `[workspace]`
@@ -149,6 +151,8 @@ See [theming.md](theming.md) for the look of each.
 | `backlinks_order` | `"newest"` \| `"oldest"` | `"newest"` | every client (TUI, desktop, mobile) | Sort direction for the backlinks ("Linked from") list. `"newest"` puts the page holding the most recently created referencing block at the top; `"oldest"` flips it. Blocks within a page always keep document order. The TUI toggles it with `Ctrl+O` (see [shortcuts.md](shortcuts.md)); the desktop and mobile apps expose a direction button in the backlinks header. A pure display preference — it never converges between devices (issue #142). |
 
 #### `[assets]`
+
+> **Why the bytes live in `assets/` and never in the op log:** [RFC 0202](rfcs/0202-file-assets.md).
 
 | Field | Type | Default | Read by | Effect |
 |---|---|---|---|---|

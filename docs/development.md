@@ -69,6 +69,27 @@ Each crate has its own `CLAUDE.md` — read it before editing.
 | [`outl-frontend-shared`](../crates/outl-frontend-shared/CLAUDE.md) | `@outl/shared` — Solid + TS lib mobile + desktop both consume. |
 | `outl-config`, `outl-theme`, `outl-shortcuts` | Shared config / palette / chord catalog across TUI + desktop. |
 
+### Desktop crate layout
+
+```
+crates/outl-desktop/
+├── package.json / tsconfig*.json / vite.config.ts / vitest.config.ts / index.html
+├── src/                       # frontend (Solid)
+│   ├── index.tsx  App.tsx (Onboarding/AppShell gate)  styles.css  setup.test.ts
+│   ├── components/            # AppShell, Sidebar, OutlineView (owns BlockCallbacks),
+│   │                         #   BlockRow (+CodeFenceView), BacklinksPanel, Picker,
+│   │                         #   SettingsModal, ChromeToggleBar, SyncIndicator,
+│   │                         #   Onboarding, WorkspacePicker
+│   └── lib/                   # api.ts (desktop-only cmds), code-block.ts, events.ts,
+│                             #   shortcuts.ts, action-handlers.ts, store.ts
+└── src-tauri/
+    ├── Cargo.toml  build.rs  tauri.conf.json (app.outl.desktop)  capabilities/  icons/
+    └── src/                   # main.rs, lib.rs (run() registers all commands),
+                              #   settings.rs, state.rs, helpers.rs, workspace_open.rs,
+                              #   plugin_service.rs, fs_watcher.rs,
+                              #   commands/ (thin shims over outl_tauri_shared::commands)
+```
+
 ### Entry points by intent
 
 When you want to make a change, **don't start from the client** — start from the layer that owns the concept.
@@ -128,6 +149,23 @@ bun run tauri ios dev           # boots the iOS simulator with hot reload
 `crates/outl-mobile/CLAUDE.md` covers the versioning + TestFlight contract.
 **Do not touch `tauri.conf.json`'s `version` field** — the version is read from `Cargo.toml` at build time on purpose.
 
+#### Simulator, device, and release archive
+
+```bash
+cd crates/outl-mobile
+
+# iOS simulator
+cargo tauri ios dev "iPhone 17 Pro outl"
+
+# Physical device (Mac + iPhone on the same WiFi)
+cargo tauri ios dev "<device-name>" --host
+
+# Release archive for TestFlight (local smoke test only — CI ships)
+cargo tauri ios build
+```
+
+After the first run, the iCloud capability must be confirmed in Xcode (Signing & Capabilities → iCloud → Containers → `iCloud.app.outl.mobile-app`).
+
 #### Why the mobile crate has native Swift / ObjC code
 
 Tauri 2 gives you a WebView + a JS ↔ Rust bridge.
@@ -135,7 +173,7 @@ What it does **not** give you is direct access to the iOS platform APIs that out
 
 | Native surface | Why we need it |
 |---|---|
-| `NSMetadataQuery` + `NSFileCoordinator` + `startDownloadingUbiquitousItemAtURL` (in `main.mm`) | iCloud syncs file metadata aggressively and file content lazily. Without forcing materialisation before a `read`, the Rust side opens an **empty placeholder** for a peer's `ops-<actor>.jsonl`, the merge is wrong, and the projection writes a broken `.md` back. This is *the* iCloud catch — see `crates/outl-mobile/CLAUDE.md` § "Peer-file materialisation". |
+| `NSMetadataQuery` + `NSFileCoordinator` + `startDownloadingUbiquitousItemAtURL` (in `main.mm`) | iCloud syncs file metadata aggressively and file content lazily. Without forcing materialisation before a `read`, the Rust side opens an **empty placeholder** for a peer's `ops-<actor>.jsonl`, the merge is wrong, and the projection writes a broken `.md` back. This is *the* iCloud catch — see [ios-platform.md](ios-platform.md#peer-file-materialisation-the-icloud-catch). |
 | `BGTaskScheduler` (`OutlBackgroundRefresh.swift`) | Drain peer ops while the app is backgrounded so the user doesn't open to a stale tree. |
 | `UIInputAccessoryView` (`OutlToolbar.swift`) | The formatting toolbar must be UIKit — a WebView toolbar has input-focus latency and the keyboard re-anchors when the toolbar mounts. |
 | Native suggest overlay (`OutlSuggestOverlay.swift`, `OutlSuggestView.swift`) | Autocomplete chips anchored to the caret without the keyboard jumping or the WebView reflowing. |
@@ -165,6 +203,20 @@ bun run tauri dev               # dev window with hot reload
 
 A release dmg is built only in CI (`release.yml`'s `build_desktop` job, universal `arm64 + x86_64`).
 Local `bun run tauri build` is fine for smoke-testing your own arch.
+
+```bash
+# from the repo root
+bun install                            # hoists workspace deps
+
+# dev (Tauri opens a native window with the Vite dev server inside)
+cd crates/outl-desktop
+cargo tauri dev
+
+# production bundle (.dmg / .AppImage / .msi depending on host OS)
+cargo tauri build
+```
+
+The Vite dev server runs on **port 1421** so it can coexist with `outl-mobile` (port 1420) when both are running side by side.
 
 ### Playground workspace
 
@@ -258,6 +310,34 @@ Run it by hand before reporting done on any patch that touches module-level `//!
 | Frontend | `crates/outl-mobile/src/**/*.test.ts`, `crates/outl-frontend-shared/**/*.test.ts` (`bun test`) | Pure helpers and DTO conversions. |
 | Swift (`OutlKit`) | `crates/outl-mobile/swift/OutlKit/Tests/OutlKitTests/` (`swift test`) | Pure native helpers — brand color, suggester chip parser, toolbar MFU, peer-file predicates, JS escape. **Required** for new pure Swift logic. |
 | Native iOS bridges (`gen/apple/.../*.swift`, `main.mm`) | None (yet) — observed via `NSLog` probes on boot | UIKit / Foundation glue that needs the iOS runtime. If you add a piece that *can* be tested without UIKit, extract it into `OutlKit` first. |
+
+### Per-client test suites
+
+Two layers cover each GUI client.
+`outl-mobile`:
+
+| Layer | Tool | What it covers |
+|-------|------|----------------|
+| Rust commands + storage | `cargo test -p outl-mobile` | `ICloudStorage`, command shims, page model glue |
+| Frontend pure logic | `bun run test` (Vitest + happy-dom) | textarea/native-suggester helpers, future helpers (outline walks are tested in `@outl/shared/outline`) |
+
+Every bug fixed in a pure helper (the tokenize duplicate, refs/tags extraction, fuzzy matching) must land with a unit test before merge so it never regresses.
+
+Native bits (`main.mm` swizzle, BGTaskScheduler, NSMetadataQuery) are not covered by unit tests yet — they're observed via the NSLog probes shown on app boot.
+If we add Swift Tests later they belong next to `main.mm` in `gen/apple/Tests/`.
+
+`outl-desktop`:
+
+| Layer | Tool | What it covers |
+|-------|------|----------------|
+| Rust commands | `cargo test -p outl-desktop` | command shims, settings IO, fs_watcher, surgical undo invalidation across a peer reload (`helpers::invalidate_changed_history` — only pages whose projection changed lose their stacks) |
+| Frontend logic | `bun --filter outl-desktop test` | scaffold smoke, components + helpers |
+
+Frontend suites today: `src/setup.test.ts` (scaffold smoke — `@outl/shared` alias resolves),
+`src/lib/chord-format.test.ts`,
+`src/lib/markdown-wrap.test.ts`,
+and `src/lib/action-handlers.test.ts` — `OpenRefUnderCursor` regression (`Enter` edits the block; backlink rows open the source; pins #70).
+Same file smoke-tests the block clipboard (cut arms `blockClipboard`; paste routes cut → `moveBlockAfter`, copy → `pasteBlockAfter`).
 
 ### The 100% rule
 
@@ -579,6 +659,42 @@ The `tags: ["v*"]` trigger in `release.yml` picks it up.
 **Release notes** ("What to Test") come from `conventional-changelog-cli` (preset `conventionalcommits`) reading the commit log since the last tag.
 **Use Conventional Commits.**
 A commit without a `feat:` / `fix:` / `chore:` prefix lands under a generic "Other changes" bucket — the user loses context.
+
+### iOS version propagation and TestFlight
+
+**Single source of truth: `Cargo.toml` workspace `version`.**
+To bump the app version, edit `[workspace.package].version` at the repo root — everywhere else inherits:
+
+| Field | Where it lives | How it's resolved |
+|-------|----------------|-------------------|
+| Rust crate version | `crates/outl-mobile/src-tauri/Cargo.toml` | `version.workspace = true` |
+| Tauri config version | `crates/outl-mobile/src-tauri/tauri.conf.json` | Field intentionally **omitted** in the source; CI injects it via `cargo tauri ios build --config '{"version": "<short>"}'` |
+| `CFBundleShortVersionString` | iOS `Info.plist` | Tauri propagates from `--config` during `cargo tauri ios build` |
+| `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` | `gen/apple/.../project.pbxproj` | Same — Tauri regenerates from the merged config every build |
+
+**Why `--config` and not Tauri's `Cargo.toml` fallback?**
+The iOS code path doesn't honor that fallback — it uses `1.0.0` instead.
+So CI reads the workspace version (`awk` against `Cargo.toml` in `Compute build metadata`) and passes it via `--config`; the `Patch archive CFBundleVersion` step aborts if the propagated short version mismatches.
+**Never** put `"version": "x.y.z"` back in `tauri.conf.json` — Tauri would then use the static value over the `--config` override and the two drift on the next bump.
+
+#### CI release flow
+
+A push to `main` triggers in parallel:
+
+1. **`Release`** (`release.yml`) — auto-bumps `Cargo.toml` locally to `<base>-beta.<run_number>`, cuts a `v<...>-beta.<N>` tag, builds desktop binaries, ships the Homebrew formula (never commits the bump back).
+2. **`Mobile`** (`mobile.yml`) — builds the signed IPA from the *unbumped* `Cargo.toml`, uploads it as `outl-ios-release`, triggers `TestFlight`.
+3. **`TestFlight`** (`testflight.yml`) — downloads the artifact, uploads to App Store Connect (`xcrun altool`).
+
+#### CFBundleVersion (build number) scheme
+
+Apple needs `CFBundleVersion` strictly monotonic across every IPA, but the marketing version (`0.5.1`) repeats across beta builds.
+Scheme: `CFBundleShortVersionString = <SHORT_VERSION>` (e.g. `0.5.1`); `CFBundleVersion = <SHORT_VERSION><BETA_PAD>` (e.g. `0.5.1027`, beta number zero-padded to 3 digits).
+`BETA` comes from the latest `v<SHORT_VERSION>-beta.<N>` git tag (set by `Release`), falling back to Mobile's `github.run_number`; re-runs append `.<run_attempt>` as a 4th component to dodge Apple's duplicate guard.
+The build number is patched into the `.xcarchive`'s embedded `Info.plist` after `cargo tauri ios build` but **before** `xcodebuild -exportArchive` — the only injection point that survives, since Tauri exposes a single `version` field.
+
+#### What goes wrong if you forget this
+
+- Patching `gen/apple/.../Info.plist` pre-build is a no-op (Tauri regenerates it); `xcrun altool` exits 0 even on 409, so `testflight.yml` greps for `ERROR:`, don't simplify it.
 
 ### Homebrew
 

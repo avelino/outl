@@ -141,6 +141,19 @@ The `every_palette_field_is_hex` test catches a typo like `"#xyz123"` or a misse
 | **`outl-desktop`** | The Tauri commands `list_themes()` and `get_theme(name)` return the `Palette` as JSON. The frontend writes each field as a CSS custom property on `<html>` (`--color-outl-accent`, `--color-outl-ref-link-fg`, …) so Tailwind class utilities like `text-(--color-outl-accent)` resolve at runtime, and flips `color-scheme` (light/dark) from the palette's `bg` luminance so native controls and scrollbars follow. Settings modal exposes the dropdown. Chrome surfaces never hardcode a hue — translucent layers derive from `--color-outl-fg` (`bg-(--color-outl-fg)/10`) so they adapt to light and dark presets alike. |
 | **`outl-mobile`** | Today the mobile client uses its iOS-specific tokens (`--color-ios-*`). When desktop ships, it mirrors those names so `<MarkdownInline />` from `@outl/shared` stays portable. The migration to neutral `--color-outl-*` tokens lands when mobile picks up the theme picker. |
 
+### Desktop CSS custom-property namespaces
+
+`src/lib/palette.ts::applyPaletteToRoot` writes two CSS custom-property namespaces on every theme switch:
+
+- **`--color-outl-*`** — the canonical set.
+  New desktop code uses only these (`bg-(--color-outl-bg-elev)`, `border-(--color-outl-fg)/15`, etc.).
+- **`--color-ios-*` / `--color-iosd-*`** — legacy names still consumed by `MarkdownInline`, mapped from the active palette until it migrates.
+
+`src/styles.css` provides boot-default values for both namespaces so the page isn't flash-unstyled before `applyPaletteToRoot` runs.
+`color-scheme` is set from the palette's `bg` luminance so native controls (scrollbars, `<select>`) follow the active preset.
+
+When `MarkdownInline` migrates to `--color-outl-*`, the `--color-ios-*` writes in `applyPaletteToRoot` + the legacy `styles.css` block can both go — see [`outl-frontend-shared/CLAUDE.md`](../crates/outl-frontend-shared/CLAUDE.md#theming-note).
+
 ## Future
 
 - **User TOML overrides** — `[theme.colors]` table letting you tweak fields without rebuilding the binary.

@@ -104,23 +104,9 @@ Removing it (watcher → no-op, strip the entitlements + plist keys) is a follow
 
 ## Background sync (iOS)
 
-iOS suspends the app's sockets the moment it backgrounds, so there is **no continuous background P2P**.
-The sanctioned paths are the two opportunistic `BGTaskScheduler` windows — **both** sync, wired across three pieces:
-
-1. **Info.plist** declares `UIBackgroundModes` (`fetch` + `processing`) and `BGTaskSchedulerPermittedIdentifiers` (`app.outl.mobile-app.refresh`, `app.outl.mobile-app.sync`).
-   Without these the toggle never shows in Settings and `BGTaskScheduler.register`/`submit` fail silently.
-2. **`OutlBackgroundRefresh.swift`** registers both tasks (`+load` → `install`) through one shared `handleTask` helper (reschedule first, FFI on a background queue, complete exactly once — the work and the OS expiration handler race).
-   The `refresh` (`BGAppRefreshTask`, ~30s windows) drives the short FFI; the `sync` (`BGProcessingTask`, `requiresNetworkConnectivity = true`) drives the long one.
-   **Scheduling is gated on having paired peers** (`outl_ios_peer_count() > 0`) so an unpaired device never boots the stack for nothing.
-   A `didEnterBackgroundNotification` observer re-submits on every backgrounding, which also arms the gate right after the first pairing.
-3. **`bg_sync.rs`** owns the three FFIs (C ABI, `@_silgen_name` on the Swift side).
-   They are `outl_ios_background_sync()` (cap 20s), `outl_ios_background_sync_short()` (cap 12s, refresh-window budget), and `outl_ios_peer_count()` (reads `<root>/.outl/peers.json` fresh from disk, so post-boot pairings count).
-   `wire_iroh_transport` registers a `Clone` of the live `IrohSyncTransport` **plus the workspace root** into a re-settable global.
-   The sync FFIs fire `sync_now()` (a forced delta-sync against every peer, mobile side initiating, which is NAT-friendly).
-   They then poll `completed_sync_passes()` every 250ms, returning as soon as the pass lands — the cap is a fallback, not a fixed sleep.
-
-The FFI + Swift handler can only be validated with a **device build**.
-The simulator has no `BGTaskScheduler` daemon, so `submit` always fails there and is swallowed; the Rust side is `cargo check`-clean on its own.
+iOS suspends the app's sockets the moment it backgrounds, so there is **no continuous background P2P**; the two opportunistic `BGTaskScheduler` windows are the sanctioned paths and **both** sync.
+The three-piece wiring (Info.plist identifiers, `OutlBackgroundRefresh.swift`, the `bg_sync.rs` FFIs) is in [`docs/ios-platform.md`](../../docs/ios-platform.md#background-sync-ios).
+It can only be validated with a **device build** — the simulator has no `BGTaskScheduler` daemon, so `submit` always fails there.
 
 ## Hard rule
 
@@ -240,21 +226,9 @@ Wire commands are the shared `list_templates_cmd` / `instantiate_template_at` bo
 
 ## Reminders (`remind::`)
 
-The header bell opens `<RemindersSheet />` — every block with a `remind::`, grouped Today / Tomorrow / This week / Later / Done, with 1h / Tomorrow / Next week snooze chips per row.
-Long-pressing a block offers **Remind me…**, which prompts for the rule in its own syntax and writes it via `set_block_remind`.
-A prompt rather than a native time picker on purpose: the rule language is richer than a clock (`3pm every 1h until DONE`), and a picker that can only express the anchor would quietly hide the repeat. The picker is a follow-up, not a substitute.
-
-Grouping + the "in 3h" column come from `@outl/shared` (`groupReminders` / `formatNextFire`), shared byte-for-byte with the desktop panel; the instants come from `outl_actions::reminders` in Rust.
-
-Delivery is a 30s `setInterval` in `Journal.tsx` calling `deliver_due_reminders` (`tauri-plugin-notification` → `UNUserNotificationCenter`).
-It fires whenever the app is running, foreground or backgrounded.
-
-**Both device-local settings live in the sheet, not in a settings screen** — mobile has none, and `config.toml` sits inside the iOS sandbox, so they'd otherwise be unreachable from the device. Delivery is a switch; quiet hours are two native `<input type="time">` pickers rather than the desktop's text field, because typing `22:00-07:00` on a phone means switching keyboard layouts twice. Both write through `set_reminder_settings`, which replaces the pair — so every call sends **both** values, or flipping the switch would wipe a configured window. The UI only moves after the write returns, so a failed save can't leave it lying. Split / join for the wire string is `lib/quiet-hours.ts` (unit-tested: a half-filled window saves as empty, since `"22:00-"` is just something the backend drops).
-
-Rows carry a **Done** button, matching the desktop panel: it resolves the block's own page id first (the sheet lists the whole workspace, so the open page is usually a different one) and only applies the refreshed view when the user is looking at that page.
-
-**App-closed delivery is not covered yet.** That needs `UNCalendarNotificationTrigger` requests registered ahead of time (the system caps pending requests at 64) and re-filled from a `BGAppRefreshTask` — the same shape as the existing `bg_sync.rs` work.
-See [`docs/reminders.md`](../../docs/reminders.md) → Background delivery.
+The header bell opens `<RemindersSheet />`, a block long-press authors a rule via `set_block_remind`, and `Journal.tsx` polls `deliver_due_reminders` every 30s.
+Sheet wiring, why authoring is a prompt instead of a native time picker, and why both device-local settings live in the sheet: [`docs/reminders.md`](../../docs/reminders.md#mobile-outl-mobile).
+The one rule that matters here: **the schedule is never computed in TS** — `groupReminders` / `formatNextFire` only format what `outl_actions::reminders` decided.
 
 ## Plugins
 
@@ -268,7 +242,7 @@ The host loads plugins once, lazily, from `<root>/.outl/plugins/` on the first r
 Capabilities honored: `slash-command` + `op-hook` + `ui-render` + `toolbar-button` + `content-transformer:text` + `content-transformer:rich` (no `keybinding` — no chord surface on mobile).
 Each must be declared in `client_capabilities()` (`plugin_service.rs`); the host gates contributions on the client∩plugin intersection.
 Dropping `ToolbarButton` silently empties `toolbar_buttons("mobile")`; dropping either transformer cap silently filters `transformers()` (a custom-language fence then renders as plain code).
-Tauri commands in `commands/plugin.rs` have the **identical shape to desktop** — see [`outl-desktop/CLAUDE.md` → Plugins](../outl-desktop/CLAUDE.md#plugins) for the full command table.
+Tauri commands in `commands/plugin.rs` have the **identical shape to desktop** — the full command table is in [`docs/plugin-architecture.md`](../../docs/plugin-architecture.md#client-tauri-command-surface-desktop--mobile).
 
 Op-hooks fire at a single post-mutation point: `Journal.tsx`'s `commitEdit` calls `pluginSyncHooks(pid)` after an edit lands.
 One call dispatches every op since the last sweep, so it also catches structural ops (indent / move / delete).
@@ -371,146 +345,43 @@ See [`outl-sync-iroh/CLAUDE.md`](../outl-sync-iroh/CLAUDE.md) for what the trans
 
 ## iCloud layout (opt-in destination)
 
-When the user opts into iCloud, the root is `<ubiquity-container>/Documents/` (`workspace_open::icloud_workspace_root()`) — **one option**, not the default.
-The container is already the `outl` namespace, so no extra `outl/` nesting; the TUI uses `--path "<container>/Documents"`.
-Layout is the standard `journals/` + `pages/` (`.md` + `.outl` sidecar) + `ops/` (one `ops-<actor>.jsonl` per device).
-**iCloud trap:** every path must be undotted — iCloud Documents skips `.`-prefixed paths across devices, so `ops/` (not `.ops/`) and `pages/<slug>.outl`, else the file never leaves its origin.
+iCloud is one destination the chosen folder may live in, never the default; opting in puts the root at `<ubiquity-container>/Documents/`.
+Layout + the undotted-path trap: [`docs/ios-platform.md`](../../docs/ios-platform.md#icloud-layout-opt-in-destination).
 
 ## Peer-file materialisation (the iCloud catch)
 
-iCloud syncs file metadata aggressively and file content lazily.
-When `NSMetadataQuery` fires on a peer's `ops-<actor>.jsonl`, the file's bytes may not be on disk yet — a `std::fs::open` returns an empty placeholder.
-The Rust side sees a truncated op log; the merge is wrong; the projection writes a broken `.md` back.
-
-`main.mm`'s `OutlOpsWatcher.onUpdate:` works around this in two steps:
-
-```objc
-[fm startDownloadingUbiquitousItemAtURL:url error:&startErr];
-NSFileCoordinator *coord = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
-[coord coordinateReadingItemAtURL:url
-                          options:NSFileCoordinatorReadingForUploading
-                            error:&coordErr
-                       byAccessor:^(NSURL *u) { (void)u; }];
-```
-
-`startDownloadingUbiquitousItemAtURL` requests materialisation; `NSFileCoordinator` blocks until the file is fully on disk.
-Only after that does the watcher fire `window.__outlOpsChanged()` so the frontend can call `reload_workspace`.
-Skip either step and you race the iCloud download daemon.
+iCloud syncs file metadata aggressively and file content lazily, so a freshly notified peer `ops-<actor>.jsonl` can read as an empty placeholder — truncated op log, wrong merge, broken `.md` written back.
+`main.mm`'s `OutlOpsWatcher.onUpdate:` forces materialisation before notifying the frontend; the two mandatory steps are in [`docs/ios-platform.md`](../../docs/ios-platform.md#peer-file-materialisation-the-icloud-catch).
+Skip either and you race the iCloud download daemon.
 
 ## Bundle / signing
 
-- Bundle id: `app.outl.mobile-app`
-- Team: `CPEEKT3E77` (paid Apple Developer Program)
-- iCloud container: `iCloud.app.outl.mobile-app`
-- Display name (Files.app / iCloud Drive): `outl`
-- Category: `public.app-category.productivity`
-- Entitlements: `com.apple.developer.icloud-services` + `icloud-container-identifiers` + `ubiquity-container-identifiers`
-
-Bundle ID + iCloud container are **global** in the Apple Developer ecosystem.
-If you change either, also update:
-
-1. `tauri.conf.json` → `identifier`
-2. `src-tauri/src/lib.rs` → `ICLOUD_CONTAINER_ID`
-3. `gen/apple/outl-mobile.xcodeproj/project.pbxproj` → `PRODUCT_BUNDLE_IDENTIFIER`
-4. `gen/apple/outl-mobile_iOS/outl-mobile_iOS.entitlements`
-5. `gen/apple/outl-mobile_iOS/Info.plist` → `NSUbiquitousContainers` key
-6. `gen/apple/project.yml` → `bundleIdPrefix` and `PRODUCT_BUNDLE_IDENTIFIER`
+Bundle id + iCloud container are **global** in the Apple Developer ecosystem, so changing either means updating six files in lockstep.
+Identifiers, team, entitlements and that checklist: [`docs/ios-platform.md`](../../docs/ios-platform.md#bundle--signing).
 
 ## Running
 
-```bash
-cd crates/outl-mobile
-
-# iOS simulator
-cargo tauri ios dev "iPhone 17 Pro outl"
-
-# Physical device (Mac + iPhone on the same WiFi)
-cargo tauri ios dev "<device-name>" --host
-
-# Release archive for TestFlight (local smoke test only — CI ships)
-cargo tauri ios build
-```
-
-After the first run, the iCloud capability must be confirmed in Xcode (Signing & Capabilities → iCloud → Containers → `iCloud.app.outl.mobile-app`).
+Simulator, physical device and release-archive commands: [`docs/development.md`](../../docs/development.md#mobile-ios-simulator).
 
 ## Versioning + TestFlight release
 
 **Single source of truth: `Cargo.toml` workspace `version`.**
-To bump the app version, edit `[workspace.package].version` at the repo root — everywhere else inherits:
+To bump the app version, edit `[workspace.package].version` at the repo root — the Rust crate, the Tauri config, `CFBundleShortVersionString` and `MARKETING_VERSION` all inherit from there.
 
-| Field | Where it lives | How it's resolved |
-|-------|----------------|-------------------|
-| Rust crate version | `crates/outl-mobile/src-tauri/Cargo.toml` | `version.workspace = true` |
-| Tauri config version | `crates/outl-mobile/src-tauri/tauri.conf.json` | Field intentionally **omitted** in the source; CI injects it via `cargo tauri ios build --config '{"version": "<short>"}'` |
-| `CFBundleShortVersionString` | iOS `Info.plist` | Tauri propagates from `--config` during `cargo tauri ios build` |
-| `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` | `gen/apple/.../project.pbxproj` | Same — Tauri regenerates from the merged config every build |
+**Never** put `"version": "x.y.z"` back in `tauri.conf.json`.
+The iOS code path does NOT honor Tauri's `Cargo.toml` fallback (it uses `1.0.0`), so CI injects the workspace version via `cargo tauri ios build --config`.
+A static field in the file would win over that override and the two drift on the next bump.
 
-**Why `--config` and not Tauri's `Cargo.toml` fallback?**
-The iOS code path doesn't honor that fallback — it uses `1.0.0` instead.
-So CI reads the workspace version (`awk` against `Cargo.toml` in `Compute build metadata`) and passes it via `--config`; the `Patch archive CFBundleVersion` step aborts if the propagated short version mismatches.
-**Never** put `"version": "x.y.z"` back in `tauri.conf.json` — Tauri would then use the static value over the `--config` override and the two drift on the next bump.
-
-### CI release flow
-
-A push to `main` triggers in parallel:
-
-1. **`Release`** (`release.yml`) — auto-bumps `Cargo.toml` locally to `<base>-beta.<run_number>`, cuts a `v<...>-beta.<N>` tag, builds desktop binaries, ships the Homebrew formula (never commits the bump back).
-2. **`Mobile`** (`mobile.yml`) — builds the signed IPA from the *unbumped* `Cargo.toml`, uploads it as `outl-ios-release`, triggers `TestFlight`.
-3. **`TestFlight`** (`testflight.yml`) — downloads the artifact, uploads to App Store Connect (`xcrun altool`).
-
-### CFBundleVersion (build number) scheme
-
-Apple needs `CFBundleVersion` strictly monotonic across every IPA, but the marketing version (`0.5.1`) repeats across beta builds.
-Scheme: `CFBundleShortVersionString = <SHORT_VERSION>` (e.g. `0.5.1`); `CFBundleVersion = <SHORT_VERSION><BETA_PAD>` (e.g. `0.5.1027`, beta number zero-padded to 3 digits).
-`BETA` comes from the latest `v<SHORT_VERSION>-beta.<N>` git tag (set by `Release`), falling back to Mobile's `github.run_number`; re-runs append `.<run_attempt>` as a 4th component to dodge Apple's duplicate guard.
-The build number is patched into the `.xcarchive`'s embedded `Info.plist` after `cargo tauri ios build` but **before** `xcodebuild -exportArchive` — the only injection point that survives, since Tauri exposes a single `version` field.
-
-### What goes wrong if you forget this
-
-- Patching `gen/apple/.../Info.plist` pre-build is a no-op (Tauri regenerates it); `xcrun altool` exits 0 even on 409, so `testflight.yml` greps for `ERROR:`, don't simplify it.
+The field-resolution table, the `CFBundleVersion` (build number) scheme, and the three-workflow CI release flow are in [`docs/development.md`](../../docs/development.md#ios-version-propagation-and-testflight).
 
 ## Deep links (`outl://`)
 
-The mobile app registers the `outl://` scheme so links shared into it (or the Raycast extension on the same Mac, once Handoff is in play) open a specific page or daily note (issue #98).
-The scheme contract and the shared parser live in `outl-actions` — see [`docs/clients.md` → Deep links](../../docs/clients.md#deep-links-outl) — so the mobile and desktop handlers can't drift.
-
-Wiring:
-
-- **Plugin.**
-  `tauri-plugin-deep-link` is registered in `lib.rs`'s builder.
-  No single-instance plugin — iOS is single-instance by construction, so the OS routes the URL to the running app.
-- **Scheme registration is the iOS `Info.plist`, not config.**
-  Tauri's `plugins.deep-link.desktop.schemes` key is desktop-only.
-  For an iOS **custom scheme** the `CFBundleURLTypes` entry is added directly to `gen/apple/outl-mobile_iOS/Info.plist`, alongside the existing `UIBackgroundModes` / iCloud keys this project already hand-maintains there.
-  Universal Links (`https://outl.app/…`) would need the `mobile` config + Associated Domains + a hosted `apple-app-site-association` — a separate follow-up.
-- **Warm path** (`dispatch_deep_link`, on `on_open_url`) mirrors desktop: parse via `outl_actions::parse_deep_link`, emit `deep-link://navigate` (`today`/`daily`/`page`), focus the window.
-  A malformed URL is logged at `warn` and ignored.
-- **Cold path** (a URL that *launched* the app) buffers the parsed payload in a managed `PendingDeepLink(Mutex<Option<Value>>)` during `setup()`, because the frontend listener isn't up yet.
-  The `take_pending_deep_link` command drains it once `Journal` mounts.
-  Same shape as the desktop buffer; only the launch URL populates it.
-- **Frontend.**
-  `Journal.tsx` registers `listenForDeepLink()` in `onMount` (warm) and, right after `loadTodayWithRetry`, drains `take_pending_deep_link` (cold).
-  Both call the shared `navigateDeepLink` helper, which maps onto the same `openTodayJournal` / `openJournalFor` / `openPageBySlug` commands the ref-tap path uses, then `applyView`.
-  The warm listener skips while a block is being edited (`editingId()` guard) so it never resets the textarea mid-edit.
-  The cold drain runs after the workspace is open, so it overrides today's journal with the launch target.
-
-**Validation needs a device build.**
-The Rust side is `cargo check`-clean, but scheme registration + OS routing only exercise on a real device / simulator build (`cargo tauri ios dev`), same constraint as `BGTaskScheduler` / `NSMetadataQuery`.
-Don't mark the mobile half "verified" from a host `cargo check` alone.
+The scheme contract, the shared `outl_actions::parse_deep_link` parser, and this client's warm / cold wiring live in [`docs/deep-links.md`](../../docs/deep-links.md#mobile-wiring-outl-mobile).
+Two things to keep in mind before touching it: scheme registration is the iOS `Info.plist` (`CFBundleURLTypes`), **not** `tauri.conf.json` (that key is desktop-only), and validation needs a device build — a host `cargo check` proves nothing here.
 
 ## Testing
 
-Two layers cover the mobile crate:
-
-| Layer | Tool | What it covers |
-|-------|------|----------------|
-| Rust commands + storage | `cargo test -p outl-mobile` | `ICloudStorage`, command shims, page model glue |
-| Frontend pure logic | `bun run test` (Vitest + happy-dom) | textarea/native-suggester helpers, future helpers (outline walks are tested in `@outl/shared/outline`) |
-
-Every bug fixed in a pure helper (the tokenize duplicate, refs/tags extraction, fuzzy matching) must land with a unit test before merge so it never regresses.
-
-Native bits (`main.mm` swizzle, BGTaskScheduler, NSMetadataQuery) are not covered by unit tests yet — they're observed via the NSLog probes shown on app boot.
-If we add Swift Tests later they belong next to `main.mm` in `gen/apple/Tests/`.
+The two layers (Rust commands + storage, frontend pure logic), their tooling and what each covers: [`docs/development.md`](../../docs/development.md#per-client-test-suites).
 
 ## When you're done
 

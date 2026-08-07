@@ -65,6 +65,8 @@ See `outl-core/CLAUDE.md` → "Actor id is device-local, and the workspace canno
   `oplog.rs` — raw `.jsonl` line sweep, snapshot decode, offset-index coherence.
   `files.rs` — `.md` ↔ sidecar, parse warnings, orphan block refs, sync-conflict copies.
   `tree.rs` — trash contents, unmaterialized ops, projection drift (needs a booted `Workspace`).
+  Its drift check asks `outl_actions::content_lines_missing_from` before offering a page for re-projection, because the sidecar hash gate proves the sidecar agrees with the bytes on disk and **not** that those bytes came from the log.
+  A page holding unlogged content is reported and withheld from the plan, so the read-only listing never promises a repair `--repair` then refuses (invariant 4 below).
   `repair.rs` — the `--repair` pass.
   `mod.rs` — report types + orchestration.
 

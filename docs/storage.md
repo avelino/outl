@@ -145,6 +145,8 @@ The full table is in `crates/outl-ws/src/actor.rs`.
 
 ### Boot reads an index, not the whole log (RFC #137 Front A)
 
+> **Why constant RSS came before constant boot, with the measurements:** [RFC 0137](rfcs/0137-storage-scale.md).
+
 `JsonlStorage` keeps a bounded LRU of hot ops plus a per-actor **offset index** (`ops-<actor>.idx`, HLC → byte offset) and a per-node **secondary index** (`ops-<actor>.nodes.idx`).
 
 On `reload` (boot) the loader streams each `.jsonl` line with a **parse-lite** pass.
@@ -178,6 +180,8 @@ The non-dotted name pays a "visible directory" cost for guaranteed sync coverage
 
 Anything that doesn't make sense to share between devices stays under `.outl/`.
 The synced surface is `ops/` plus the `.md` / `.outl` (sidecar) projection.
+
+> **A sidecar hash match is not evidence the `.md` came from the op log** — what that cost on a real workspace, and what re-projection is allowed to overwrite: [RFC 0210](rfcs/0210-md-content-outside-op-log.md).
 
 ---
 
@@ -256,6 +260,8 @@ Tracked: <https://github.com/avelino/outl/issues/1>.
 
 ## Snapshot strategy
 
+> **Why boot has a snapshot, an offset index and a lazy `Doc` rather than one of the three:** [RFC 0128](rfcs/0128-boot-and-memory-at-scale.md).
+
 A snapshot is a **local boot cache** — a projection of the materialized tree + block text that short-circuits full op-log replay on open (#109/#128).
 It is owned by `Workspace`, **not** by `Storage`: `Storage` owns the op log, and the snapshot is written straight to `<root>/.outl/snapshots/snap-<actor>.bin`, never through the backend.
 
@@ -302,6 +308,8 @@ The op log is the source of truth; no snapshot format change can lose data.
 ---
 
 ## Failure modes
+
+> **Why an acknowledged op must survive the crash, the reader and the rebuild:** [RFC 0129](rfcs/0129-op-log-durability.md).
 
 | Failure | Detection | Recovery |
 |---------|-----------|----------|

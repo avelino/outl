@@ -228,7 +228,16 @@ pub struct Sidecar {
 ///   externally-authored `.md` files left the page as an unrooted
 ///   ghost (`Op::Move` is a no-op on never-created nodes), so
 ///   `children_of(root)` skipped them silently.
-pub const CURRENT_PIPELINE_VERSION: u32 = 2;
+/// - `3` — the parser stopped discarding prose that follows a block
+///   property. A `key:: value` line used to close continuation for the
+///   rest of the block, so every following text line was dropped with
+///   no AST entry and no warning — the same `.md` now parses to more
+///   text, which is precisely "a different op log for the same file".
+///   Without this bump those pages stay hash-faithful forever and the
+///   content never enters the log, because the short-circuit in
+///   `reconcile_md` only consults the hash. Measured on a real
+///   workspace: 233 pages, 1,426 lines. See issue #210 / RFC 0210.
+pub const CURRENT_PIPELINE_VERSION: u32 = 3;
 
 impl Sidecar {
     /// Build an empty sidecar for a new page.

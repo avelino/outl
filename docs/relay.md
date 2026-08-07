@@ -13,6 +13,8 @@ If you just want the short version:
 
 ## Why a relay exists at all
 
+> **Why iroh (and therefore a relay) is the default transport at all:** [RFC 0038](rfcs/0038-sync-transport-and-workspace-identity.md).
+
 Two devices on the open internet with public IPs could just open a QUIC connection and sync.
 That's never the real world.
 

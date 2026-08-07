@@ -4,6 +4,8 @@ Every keyboard shortcut outl ships with, across every client, in one table per c
 
 ## Source of truth
 
+> **Why one catalog owns every chord, and why the desktop has no character cursor:** [RFC 0070](rfcs/0070-keybinding-ownership-and-vim-parity.md).
+
 The desktop and TUI both pull their chord catalog from **`crates/outl-shortcuts`** (`src/defaults.rs::default_bindings()`).
 The mobile app doesn't expose a keyboard surface (touch + on-screen keyboard); the rows below leave its column blank when there's nothing to bind.
 

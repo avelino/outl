@@ -364,6 +364,8 @@ The long-lived surfaces (`outl mcp serve`, the desktop/TUI apps) sync continuous
 ### `outl doctor`
 
 The integrity check you run before trusting a migration, and after any sync weirdness.
+
+> **Why `--repair` refuses a page whose `.md` holds content the op log lacks:** [RFC 0210](rfcs/0210-md-content-outside-op-log.md).
 **Read-only by default** — it reports, it never fixes, unless you pass `--repair`.
 Exit code is `1` when the report carries any error, so it drops straight into a script or CI step.
 
@@ -391,6 +393,11 @@ The only thing a default run writes is its own stdout.
   Doctor reports the total block count in the trash, how many top-level deletions produced it, and a text preview of each one.
 - **Unmaterialized ops** — node ids the op log touches that never landed in the tree, i.e. `Edit` / `SetProp` / `SetCollapsed` whose effect you will never see.
 - **Projection drift** — every page in the op log compared against its `.md` on disk: missing files, stale projections, missing sidecars.
+- **`.md` content that never reached the op log** — a page whose sidecar agrees with the bytes on disk (so it looks like a merely *stale* projection) but which holds lines that exist in no op.
+  Reported with the count and one of the lines, and **`--repair` leaves it alone**.
+  Re-rendering the tree over it would delete that content and rebuild the sidecar from the same render, so nothing afterwards could tell the page had ever held more.
+  Content in this state also does not sync to your other devices — peers exchange ops, not files.
+  `outl reconcile` is what brings it into the log.
 
 **Files on disk.**
 

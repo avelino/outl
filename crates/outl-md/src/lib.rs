@@ -11,25 +11,34 @@
 #![warn(missing_docs)]
 
 pub mod asset;
+mod ast;
 pub mod atomic;
 pub mod block_index;
 pub mod cursor;
 pub mod diff;
 pub mod emoji;
+mod emphasis;
+mod fence;
 pub mod frontmatter;
 pub mod index;
 pub mod inline;
 pub mod lang;
+mod link;
 pub mod matching;
 pub mod outline_ops;
 pub mod parse;
+mod plain;
+mod property;
 pub mod reconcile;
+mod reference;
 pub mod remind;
 pub mod render;
+mod shortcode;
 pub mod sidecar;
 mod similarity;
 pub mod slug;
 pub mod tag;
+mod token;
 pub mod view;
 pub mod wikilink;
 

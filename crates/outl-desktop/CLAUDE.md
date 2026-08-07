@@ -44,24 +44,7 @@ What this crate **does** own:
 
 ## Layout
 
-```
-crates/outl-desktop/
-├── package.json / tsconfig*.json / vite.config.ts / vitest.config.ts / index.html
-├── src/                       # frontend (Solid)
-│   ├── index.tsx  App.tsx (Onboarding/AppShell gate)  styles.css  setup.test.ts
-│   ├── components/            # AppShell, Sidebar, OutlineView (owns BlockCallbacks),
-│   │                         #   BlockRow (+CodeFenceView), BacklinksPanel, Picker,
-│   │                         #   SettingsModal, ChromeToggleBar, SyncIndicator,
-│   │                         #   Onboarding, WorkspacePicker
-│   └── lib/                   # api.ts (desktop-only cmds), code-block.ts, events.ts,
-│                             #   shortcuts.ts, action-handlers.ts, store.ts
-└── src-tauri/
-    ├── Cargo.toml  build.rs  tauri.conf.json (app.outl.desktop)  capabilities/  icons/
-    └── src/                   # main.rs, lib.rs (run() registers all commands),
-                              #   settings.rs, state.rs, helpers.rs, workspace_open.rs,
-                              #   plugin_service.rs, fs_watcher.rs,
-                              #   commands/ (thin shims over outl_tauri_shared::commands)
-```
+The frontend / `src-tauri` file tree (which component owns what, where each `lib/*.ts` helper lives) is in [`docs/development.md`](../../docs/development.md#desktop-crate-layout).
 
 ## First-run onboarding
 
@@ -110,45 +93,17 @@ Convention: [`docs/clients.md` → Blockquote convention](../../docs/clients.md#
 
 ## Theme tokens
 
-`src/lib/palette.ts::applyPaletteToRoot` writes two CSS custom-property namespaces on every theme switch:
-
-- **`--color-outl-*`** — the canonical set.
-  New desktop code uses only these (`bg-(--color-outl-bg-elev)`, `border-(--color-outl-fg)/15`, etc.).
-- **`--color-ios-*` / `--color-iosd-*`** — legacy names still consumed by `MarkdownInline`, mapped from the active palette until it migrates.
-
-`src/styles.css` provides boot-default values for both namespaces so the page isn't flash-unstyled before `applyPaletteToRoot` runs.
-`color-scheme` is set from the palette's `bg` luminance so native controls (scrollbars, `<select>`) follow the active preset.
-
-When `MarkdownInline` migrates to `--color-outl-*`, the `--color-ios-*` writes in `applyPaletteToRoot` + the legacy `styles.css` block can both go — see [`outl-frontend-shared/CLAUDE.md`](../outl-frontend-shared/CLAUDE.md#theming-note).
+`src/lib/palette.ts::applyPaletteToRoot` writes the canonical `--color-outl-*` namespace plus the legacy `--color-ios-*` one `MarkdownInline` still consumes.
+New desktop code uses only `--color-outl-*`.
+Both namespaces, the boot defaults in `styles.css`, and the condition for deleting the legacy writes: [`docs/theming.md`](../../docs/theming.md#desktop-css-custom-property-namespaces).
 
 ## Running
 
-```bash
-# from the repo root
-bun install                            # hoists workspace deps
-
-# dev (Tauri opens a native window with the Vite dev server inside)
-cd crates/outl-desktop
-cargo tauri dev
-
-# production bundle (.dmg / .AppImage / .msi depending on host OS)
-cargo tauri build
-```
-
-The Vite dev server runs on **port 1421** so it can coexist with `outl-mobile` (port 1420) when both are running side by side.
+Dev + bundle commands, and why Vite runs on port 1421: [`docs/development.md`](../../docs/development.md#desktop-tauri-2).
 
 ## Tests
 
-| Layer | Tool | What it covers |
-|-------|------|----------------|
-| Rust commands | `cargo test -p outl-desktop` | command shims, settings IO, fs_watcher, surgical undo invalidation across a peer reload (`helpers::invalidate_changed_history` — only pages whose projection changed lose their stacks) |
-| Frontend logic | `bun --filter outl-desktop test` | scaffold smoke, components + helpers |
-
-Frontend suites today: `src/setup.test.ts` (scaffold smoke — `@outl/shared` alias resolves),
-`src/lib/chord-format.test.ts`,
-`src/lib/markdown-wrap.test.ts`,
-and `src/lib/action-handlers.test.ts` — `OpenRefUnderCursor` regression (`Enter` edits the block; backlink rows open the source; pins #70).
-Same file smoke-tests the block clipboard (cut arms `blockClipboard`; paste routes cut → `moveBlockAfter`, copy → `pasteBlockAfter`).
+Layers, tooling and the current frontend suites: [`docs/development.md`](../../docs/development.md#per-client-test-suites).
 
 ## Shortcuts
 
@@ -322,18 +277,9 @@ In a `call:<name>` fence, `CodeFenceView`'s `CALL:<NAME>` chip links to the temp
 
 ## Reminders (`remind::`)
 
-`<RemindersPanel />` (`Cmd/Ctrl+Shift+R`, or `g n` in Normal) lists every block carrying a `remind::`, grouped Today / Tomorrow / This week / Later / Done.
-`Cmd+R` (and `g r` / `g R` in Normal) authors a rule on the selected block via `set_block_remind`.
-`Ctrl+R` deliberately stays **Redo** on Linux / Windows, which is why authoring is `Cmd+R` only.
-
-Grouping labels and the "in 3h" column come from `@outl/shared` (`groupReminders` / `formatNextFire`) — the same functions the mobile sheet uses — and the instants behind them come from `outl_actions::reminders` in Rust.
-**Nothing about when a reminder fires is computed in the frontend.**
-
-Delivery is a 30s `setInterval` in `<AppShell />` calling `deliver_due_reminders`, which turns the shared "what's due" answer into an OS banner via `tauri-plugin-notification`.
-The Rust side keeps the device-local fired log, so polling twice never double-buzzes and a laptop that was asleep owes one banner, not a backlog.
-`[reminders] enabled` (Settings modal) defaults to **on**: `remind::` on a block is already the opt-in, and a device with no rules never fires, so defaulting off only bought the user a rule that silently did nothing. macOS asks for permission on the first actual fire.
-
-**App-closed delivery is not covered yet**: a launch agent on a `StartCalendarInterval` is the follow-up (see [`docs/reminders.md`](../../docs/reminders.md) → Background delivery).
+`<RemindersPanel />` lists them, `set_block_remind` authors a rule, and `<AppShell />` polls `deliver_due_reminders` every 30s.
+Panel wiring, the chord choices and the `[reminders] enabled` default: [`docs/reminders.md`](../../docs/reminders.md#desktop-outl-desktop).
+The one rule that matters here: **nothing about when a reminder fires is computed in the frontend** — the instants come from `outl_actions::reminders`, the labels from `@outl/shared`.
 
 ## Plugins
 
@@ -358,17 +304,8 @@ Capabilities honored: `slash-command` + `op-hook` + `ui-render` + `keybinding` +
 The host filters `keybinding` / `toolbar-button` by declared capability **before** `keybindings("desktop")` / `toolbar_buttons("desktop")` return anything,
 so both must be in `client_capabilities()` or the desktop sees an empty list.
 
-Tauri commands (`commands/plugin.rs`):
-
-| Command | Returns | Behaviour |
-|---|---|---|
-| `plugin_list` | `Vec<PluginCommandDto>` | Every contributed command (best-effort; empty until plugins load) |
-| `plugin_run(plugin_id, command_id, page_id?)` | `PluginRunReply` (`applied`, `notifications`, `errors`, `view?`, `views`) | Runs the command on the plugin thread; `view` is the refreshed `PageView` of the on-screen page, `views` are emitted `ui-render` HTML overlays |
-| `plugin_sync_hooks(page_id?)` | `PluginSyncHooksReply` (`view?`, `views`) | Fires the `onOp` sweep; `view` is a refreshed `PageView` **only** when a hook mutated the workspace, `views` are emitted `ui-render` overlays (present even on the no-mutation path) |
-| `plugin_keybindings` | `Vec<PluginKeybindingDto>` (`chord`, `mode`, `plugin_id`, `command_id`, `description`) | Plugin-contributed desktop chords (best-effort; empty until plugins load) |
-| `plugin_toolbar` | `Vec<ToolbarButtonDto>` (`plugin_id`, `command_id`, `icon`, `title?`) | Plugin-contributed desktop chrome buttons (best-effort; empty until plugins load) |
-| `plugin_transformers` | `Vec<TransformerDto>` (`plugin_id`, `lang`, `kind`) | Content transformers a plugin declared for a code-fence language (best-effort; empty until plugins load) |
-| `plugin_transform(plugin_id, lang, input)` | `Option<TransformResultDto>` (`kind`, `content`) | Runs the content transformer for `lang` against a fence body. **Read-only** — never mutates the workspace, no re-projection. `None` when the transformer declined or no plugin owns `lang` |
+Tauri commands live in `commands/plugin.rs`: `plugin_list`, `plugin_run`, `plugin_sync_hooks`, `plugin_keybindings`, `plugin_toolbar`, `plugin_transformers`, `plugin_transform`.
+Return types and per-command behaviour (which ones re-project, which are read-only, what `view` / `views` carry): [`docs/plugin-architecture.md`](../../docs/plugin-architecture.md#client-tauri-command-surface-desktop--mobile).
 
 ### `keybinding` + `toolbar-button` contributions
 
@@ -481,32 +418,8 @@ Only the cheap tail (history invalidation + `Mutex` swap + reconcile spawn) runs
 
 ## Deep links (`outl://`)
 
-The desktop registers the `outl://` scheme so external launchers (the Raycast extension, shared links) jump straight to a page or daily note (issue #98).
-The scheme contract and shared parser live in `outl-actions` — see [`docs/clients.md` → Deep links](../../docs/clients.md#deep-links-outl) — so handlers can't drift.
-
-Wiring (all in `src-tauri/src/lib.rs`):
-
-- **Plugins.**
-  `tauri-plugin-single-instance` is registered **first**.
-  Its `deep-link` feature forwards an `outl://` URL opened while the app runs to the existing instance on Linux/Windows; the callback just focuses the `main` window.
-  `tauri-plugin-deep-link` follows.
-  The scheme is declared in `tauri.conf.json` (`plugins.deep-link.desktop.schemes`), granted via `deep-link:default` in `capabilities/default.json`.
-- **Warm path** (`dispatch_deep_link`, fired by `on_open_url`) parses the URL with `outl_actions::parse_deep_link` — the one owner, this crate adds no parsing.
-  It then **emits** `deep-link://navigate` with one of `{kind:"today"}` / `{kind:"daily",date}` / `{kind:"page",slug}` and focuses the window.
-  A malformed URL is logged at `warn` and ignored — never a crash, never a stray page.
-- **Cold path** (a URL that *launched* the app) can't emit — the frontend listener isn't mounted yet.
-  So `setup()` buffers the parsed payload in a managed `PendingDeepLink(Mutex<Option<Value>>)` instead, and the `take_pending_deep_link` command drains it once on mount.
-  Only the launch URL populates the buffer; the warm path never does, so a stale target can't replay on the next plain launch.
-- **Frontend.**
-  `AppShell` listens via `onDeepLinkNavigate` (`lib/events.ts`) for the warm path.
-  On mount it calls `takePendingDeepLink()` (`lib/api.ts`) for the cold path — a buffered target wins over loading today's journal, which would otherwise race and overwrite it.
-  Both map onto the same `openTodayJournal` / `openJournalFor` / `openPageBySlug` commands the picker already calls, then `applyView`.
-  The backend, not the frontend, owns parsing + window focus.
-
-**Testing on macOS needs a bundled, installed app.**
-macOS registers URL schemes only via LaunchServices from the bundle's `CFBundleURLTypes` (written by `tauri-plugin-deep-link` at `cargo tauri build`), so `cargo tauri dev` does **not** register `outl://`.
-To test: `cargo tauri build`, copy the `.app` into `/Applications`, open it once so LaunchServices indexes it, then `open "outl://page/<slug>"`.
-Linux/Windows register at runtime (`register_all()` in `setup`), so dev mode works there.
+The scheme contract, the shared `outl_actions::parse_deep_link` parser, and this client's warm / cold wiring live in [`docs/deep-links.md`](../../docs/deep-links.md#desktop-wiring-outl-desktop).
+One thing that bites every time: **testing on macOS needs a bundled, installed app** — LaunchServices only registers `outl://` from the built bundle, so `cargo tauri dev` never sees it.
 
 ## When you're done
 

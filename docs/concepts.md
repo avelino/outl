@@ -133,6 +133,8 @@ This is the **source of truth** — if your markdown gets corrupted, `outl docto
 
 ## Slugs
 
+> **Why a page answers to three identities — its slug on disk, its title on screen, and the date that decides both:** [RFC 0107](rfcs/0107-page-identity.md).
+
 `[[Avelino]]` → `pages/avelino.md`.
 The slug rule:
 
