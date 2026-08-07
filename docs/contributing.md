@@ -358,7 +358,7 @@ The `doc-keeper` agent runs at the end of a feature to catch what slipped throug
 | Conventional Commits enforcement / release-notes pipeline | `docs/development.md` § 10 + root `CLAUDE.md` "Coding conventions" |
 | Storage trait surface, `JsonlStorage` / `MemoryStorage` test contract | `docs/development.md` § 5 ("What to mock and what not to") + `docs/storage.md` + `outl-core/CLAUDE.md` |
 | New `Action` variant in `outl-shortcuts` / new keybinding / chord rebound | `docs/shortcuts.md` (the row that ships to users) + `outl-shortcuts/src/{action.rs,defaults.rs}` + every client's dispatcher (`outl-tui/src/input/*.rs`, `outl-desktop/src/lib/{shortcuts.ts,action-handlers.ts}`) + `outl-desktop/src/lib/api.ts` (TS mirror of the `Action` union — no codegen) |
-| New helper / DTO promoted into `outl-core` / `outl-md` / `outl-actions` (anything that should be reused across clients) | the catalog part that owns the concept — `docs/primitives-core.md`, `docs/primitives-markdown.md` or `docs/primitives-actions.md` (index: `docs/shared-primitives.md`) + mirror at `.github/copilot-instructions.md` §5.1 |
+| New helper / DTO promoted into `outl-core` / `outl-md` / `outl-actions` (anything that should be reused across clients) | the catalog part that owns the concept — `docs/primitives-core.md`, `docs/primitives-markdown.md` or `docs/primitives-actions.md` (index: `docs/shared-primitives.md`) + mirror at `.github/instructions/shared-primitives.instructions.md` |
 | New code-block runtime in `outl-exec`, new fence language, or `OutputFormat`/`auto_run` change | `docs/markdown-format.md` § Query code blocks + `crates/outl-exec/CLAUDE.md` + alias table in `crates/outl-md/src/lang.rs` and TS mirror |
 
 When in doubt: **if a contributor's first 30 minutes with the repo would land them on outdated guidance, update the doc.** That's the bar.
@@ -403,7 +403,7 @@ Map of canonical homes (extend as new ones are minted):
 | Config file (`outl.toml`) | [`docs/config.md`](config.md) | per-crate CLAUDE.md where the field is read |
 | Theming palette + presets | [`docs/theming.md`](theming.md) | `outl-tui/CLAUDE.md`, `outl-desktop/CLAUDE.md` |
 | Dev loop (clone, build, slash commands, hooks, agents, CI) | [`docs/development.md`](development.md) | every per-crate CLAUDE.md's "When you're done" section links here |
-| Shared Rust primitives (catalogue of reusable APIs) | [`docs/shared-primitives.md`](shared-primitives.md) (index) + its parts [`primitives-core.md`](primitives-core.md), [`primitives-markdown.md`](primitives-markdown.md), [`primitives-actions.md`](primitives-actions.md) + mirror at `.github/copilot-instructions.md` §5.1 | root `CLAUDE.md` references it |
+| Shared Rust primitives (catalogue of reusable APIs) | [`docs/shared-primitives.md`](shared-primitives.md) (index) + its parts [`primitives-core.md`](primitives-core.md), [`primitives-markdown.md`](primitives-markdown.md), [`primitives-actions.md`](primitives-actions.md) + mirror at `.github/instructions/shared-primitives.instructions.md` | root `CLAUDE.md` references it |
 | Contributing policy (review, invariants enforced at PR time) | [`docs/contributing.md`](contributing.md) | root `CLAUDE.md` references it |
 
 When you add a brand-new surface (a new CLI subcommand, a new `Op` variant, a new MCP tool, a new theme, a new client), it follows the same rule:

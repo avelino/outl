@@ -248,7 +248,7 @@ pub(super) fn check_projections(
                 ahead_lines += unlogged.len();
                 b.warn(format!(
                     "{}: `.md` holds {} line(s) that exist in no op (e.g. {sample:?}) — \
-                     `--repair` will not touch it, run `outl reconcile` so they enter \
+                     `--repair` will not touch it, run `outl reconcile --ahead-of-log` so they enter \
                      the op log first",
                     path.display(),
                     unlogged.len(),
@@ -268,7 +268,7 @@ pub(super) fn check_projections(
         b.warn(format!(
             "{ahead} page(s) hold {ahead_lines} line(s) of content that reached the `.md` but \
              never the op log — they do not sync to other devices, and `--repair` leaves them \
-             alone. `outl reconcile` is what brings them into the log"
+             alone. `outl reconcile --ahead-of-log` is what brings them into the log"
         ));
     }
 

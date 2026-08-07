@@ -230,24 +230,57 @@ pub fn apply_page_md_with_sidecar_if_stale(
 /// about which pages are safe is how a listing promises a repair the pass
 /// then silently skips.
 pub fn content_lines_missing_from(disk: &str, sidecar_blocks: &[SidecarBlock]) -> Vec<String> {
-    /// Strip what the renderer contributes (indent, `- ` marker) so only
-    /// the block's own text is compared.
-    fn normalise(line: &str) -> &str {
-        line.trim().trim_start_matches("- ").trim_start()
+    /// One line of the `.md`, reduced to the text a sidecar block would
+    /// hold, or `None` when the line is not block content at all.
+    ///
+    /// The two sides are deliberately asymmetric: the `.md` carries the
+    /// renderer's layout (indent, `- ` marker) and a sidecar's `text` does
+    /// not, so only this side strips.
+    fn disk_line(line: &str) -> Option<&str> {
+        let t = line.trim();
+        if t.is_empty() {
+            return None;
+        }
+        // Strip the marker exactly once. Repeating it would turn
+        // `- - - x` into `x` and let it match a logged block `x`, which is
+        // a false negative: unlogged content walking past the guard.
+        // A bare `-` is an empty block, a first-class state (every Enter in
+        // the TUI makes one), and normalises to the empty text its sidecar
+        // entry carries.
+        if let Some(body) = t.strip_prefix("- ") {
+            return Some(body.trim_start());
+        }
+        if t == "-" {
+            return Some("");
+        }
+        // No marker. Either a `key:: value` line the renderer emits for a
+        // page or block property — which never lives in a block's `text`,
+        // so comparing it would flag every page that has one — or a
+        // continuation line, which is content. `parse_property_line` is
+        // the single owner of that distinction, and it is the same one the
+        // parser applies, so the two cannot disagree.
+        //
+        // Note this is decided *after* the marker check on purpose: a
+        // bullet whose own text looks like a property (`- note:: remember`)
+        // is stored by the parser as the block's text, so skipping it here
+        // would hide real content.
+        if outl_md::parse::parse_property_line(t).is_some() {
+            return None;
+        }
+        Some(t)
     }
-    /// `key:: value` lines are skipped: a property is never part of a
-    /// block's `text` (it lives on the node as `Op::SetProp`, and a
-    /// page-level one belongs to the page root), so it can never match a
-    /// sidecar block and would be reported as unlogged on every page that
-    /// has one. `outl_md::parse_property_line` is the single owner of what
-    /// counts as a property line.
-    fn is_property(line: &str) -> bool {
-        outl_md::parse::parse_property_line(line).is_some()
-    }
-    fn content_lines(s: &str) -> impl Iterator<Item = &str> {
-        s.lines()
-            .map(normalise)
-            .filter(|l| !l.is_empty() && !is_property(l))
+    /// A sidecar block's `text` split into the lines it occupies in the
+    /// `.md`. No marker to strip and no property filtering: whatever is in
+    /// `text` is, by definition, content the log holds.
+    ///
+    /// An empty block still occupies one line (the renderer emits a bare
+    /// `-`), and `"".lines()` yields nothing, so it is contributed
+    /// explicitly. Without this the bare `-` on disk matches no block and
+    /// every page holding an empty block reads as unlogged.
+    fn logged_lines(text: &str) -> impl Iterator<Item = &str> {
+        std::iter::once("")
+            .take(usize::from(text.is_empty()))
+            .chain(text.lines().map(str::trim))
     }
 
     // `SidecarBlock::text` arrived in 0.11; every sidecar written before
@@ -261,7 +294,11 @@ pub fn content_lines_missing_from(disk: &str, sidecar_blocks: &[SidecarBlock]) -
     // Self-healing: the `CURRENT_PIPELINE_VERSION` bump re-reconciles
     // every page on first boot, rewriting sidecars with text, so the
     // guard arms itself from there.
-    if sidecar_blocks.iter().any(|b| b.text.is_empty()) {
+    // `every`, not `any`: an empty block is a first-class state whose
+    // entry legitimately carries `text: ""`, so standing down on a single
+    // one disarmed the guard for the whole page. Only a sidecar where
+    // *nothing* has text is the pre-0.11 case this is about.
+    if !sidecar_blocks.is_empty() && sidecar_blocks.iter().all(|b| b.text.is_empty()) {
         return Vec::new();
     }
 
@@ -269,13 +306,13 @@ pub fn content_lines_missing_from(disk: &str, sidecar_blocks: &[SidecarBlock]) -
     // lands as its own line in the `.md`, so index the pieces.
     let mut known: HashMap<&str, usize> = HashMap::new();
     for block in sidecar_blocks {
-        for piece in content_lines(&block.text) {
+        for piece in logged_lines(&block.text) {
             *known.entry(piece).or_insert(0) += 1;
         }
     }
 
     let mut missing = Vec::new();
-    for line in content_lines(disk) {
+    for line in disk.lines().filter_map(disk_line) {
         match known.get_mut(line) {
             Some(n) if *n > 0 => *n -= 1,
             _ => missing.push(line.to_string()),

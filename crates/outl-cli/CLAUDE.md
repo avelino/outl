@@ -101,7 +101,12 @@ See `outl-core/CLAUDE.md` → "Actor id is device-local, and the workspace canno
      - **An op log that only grew is someone else appending, not a defect.**
        On a synced workspace that is the common case, and calling it "a bug in the doctor" (an error, exit 1) trains the user to ignore the loudest line in the report.
        Growth is a `warn` saying the findings are a snapshot rather than a live view; only a log that shrank or was rewritten is an error.
-- `outl reconcile [<path>]` — list orphans pending manual resolution.
+- `outl reconcile [<path>] [--ahead-of-log]` — no flags, list orphans pending manual resolution.
+  `--ahead-of-log` reconciles the pages whose `.md` holds content that exists in no op, **bypassing the sidecar hash gate** (it clears `last_synced_hash` so `reconcile_md` stops short-circuiting).
+  It has to exist because such a page is hash-faithful, so the ordinary reconcile reads it as in-sync and never looks at it.
+  Opt-in on purpose: it emits ops for content the log has never seen, which is a deliberate write, not a repair.
+  Detection is `outl_actions::content_lines_missing_from` against the **sidecar's blocks** — the same owner `doctor` and the write-side guard use, so the three cannot disagree about which pages qualify.
+  Run it only on a build whose parser preserves the content: reconciling with a parser that still drops prose after a block property writes the truncated text into the log, which is the one place the loss currently is not.
 - `outl migrate-to-shared [<path>]` — copy local sqlite log into shared `ops/` JSONL for cross-device sync.
 - `outl import roam|logseq|obsidian|auto <src> <dst>` — graph import.
   Every source routes through the adapter-based `outl-import` crate (`--dry-run`, `--json`, `--preserve-timestamps`; real `((blk-XXXXXX))` ref/embed resolution, `Op::SetCollapsed`).

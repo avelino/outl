@@ -2,7 +2,7 @@
 applyTo: "**/*.rs"
 ---
 
-## 3. Rust quality bar
+## Rust quality bar
 
 Comment when the diff introduces any of the following.
 Skip when the existing surrounding code already does it (that's a separate cleanup).
@@ -28,7 +28,7 @@ Skip these (CI / fmt / clippy handle them):
 
 ---
 
-## 4. Performance — hot paths only
+## Performance — hot paths only
 
 Comment on performance only when the code is on a path that runs frequently or scales with workspace size.
 **Do not flag allocations in setup, error paths, or one-shot CLI commands.**
@@ -56,7 +56,7 @@ If unsure whether it's a hot path, ask in the comment — do not assert.
 
 ---
 
-## 7. Testing bar
+## Testing bar
 
 - **Bug fix without a regression test → blocker.**
   The test must fail on `main` and pass with the patch.

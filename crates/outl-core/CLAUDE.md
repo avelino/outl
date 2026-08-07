@@ -129,7 +129,7 @@ A bare legacy line (the Tauri clients' plain-ULID `actor` file) still parses.
 
 `device_dir()` honours `$OUTL_DEVICE_DIR` before the XDG layout.
 That override is what keeps the test suite (and any container) off the developer's real store — the repo's `.cargo/config.toml` points every cargo-spawned process at `target/device-store`.
-`the_test_suite_runs_against_an_isolated_device_store` fails outright when that file is missing, because a suite that silently writes into `~/.config/outl/` is how 38 junk entries got there.
+`the_test_suite_runs_against_an_isolated_device_store` fails outright when that file is missing, because a suite that silently writes into `~/.config/outl/` is how 64 entries got there, 15 of them pointing at `TempDir` paths that no longer exist.
 
 **Migration lives in `outl_ws::actor`, not here**, because it needs `config.toml`.
 `config.toml`'s `actor_id` is a legacy value adopted only by the device named in `[workspace] actor_claimed_by`, and that marker is stamped when the config is **created**, never on first open — the default transport (iroh) never ships `config.toml`, so a claim written at open time propagates to nobody.

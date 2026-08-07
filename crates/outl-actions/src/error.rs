@@ -96,7 +96,7 @@ pub enum ActionError {
     /// brings the content into the log.
     #[error(
         "refusing to rewrite `{path}`: the .md holds {lines} line(s) that exist in no op \
-         (e.g. {sample}) — run `outl reconcile` so they enter the op log first"
+         (e.g. {sample}) — run `outl reconcile --ahead-of-log` so they enter the op log first"
     )]
     PageMarkdownAheadOfLog {
         /// The `.md` that would have been overwritten.

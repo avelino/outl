@@ -2,7 +2,7 @@
 applyTo: "**/*.md"
 ---
 
-## 3.1 Markdown / documentation style
+## Markdown / documentation style
 
 Flag when a `*.md` change introduces hard-wrapped prose (lines broken at ~70/80/100 chars mid-sentence).
 Every prose `*.md` in this repo uses [semantic line breaks](https://sembr.org/): one sentence per line, breaking after `.`/`!`/`?` (and sometimes `:`), never at an arbitrary column.
@@ -21,7 +21,7 @@ What to leave alone:
 
 Scope: root `CLAUDE.md`, per-crate `CLAUDE.md`, `docs/*.md`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `.github/*.md`, `.claude/agents/*.md`, `.claude/commands/*.md`.
 Root `CLAUDE.md` has the canonical rule under "Markdown / documentation style".
-## 3.2 One owner per fact — link, don't duplicate
+## One owner per fact — link, don't duplicate
 
 Every user-facing fact lives in exactly one `docs/*.md`. `CLAUDE.md` files **link** to it instead of copying the table or chord list.
 

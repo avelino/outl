@@ -260,7 +260,7 @@ CLI exit code is `1` in that case; MCP returns the payload via the normal envelo
 | `outl init <path>`                           | —                       |
 | `outl serve [--workspace=…]`                 | —                       |
 | `outl doctor [--json] [--repair]`            | `outl_workspace_doctor` |
-| `outl reconcile`                             | —                       |
+| `outl reconcile [--ahead-of-log]`            | —                       |
 | `outl mcp serve [--workspace=…]`             | —                       |
 | `outl peer pair\|list\|remove\|status`        | —                       |
 | `outl plugin init\|search\|list\|install\|run\|config\|secret\|enable\|disable\|remove` | — |
@@ -397,7 +397,10 @@ The only thing a default run writes is its own stdout.
   Reported with the count and one of the lines, and **`--repair` leaves it alone**.
   Re-rendering the tree over it would delete that content and rebuild the sidecar from the same render, so nothing afterwards could tell the page had ever held more.
   Content in this state also does not sync to your other devices — peers exchange ops, not files.
-  `outl reconcile` is what brings it into the log.
+  **`outl reconcile --ahead-of-log` is what brings it into the log.**
+  Plain `outl reconcile` will not: the page is hash-faithful, so it reads as in-sync and the ordinary pass skips it.
+  The flag clears the recorded hash on exactly the pages listed here and reconciles them, which emits ops for that content.
+  Detection is shared with this check, so the two can never disagree about which pages qualify.
 
 **Files on disk.**
 

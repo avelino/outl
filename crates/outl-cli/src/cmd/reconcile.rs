@@ -146,9 +146,12 @@ fn run_ahead_of_log(path: &Path) -> Result<()> {
     );
     if failed > 0 {
         println!("Re-run to retry the failures; their `.md` is untouched.");
-    } else {
-        println!("Run `outl doctor` to confirm nothing is left outside the log.");
+        // Exit non-zero. A partial migration that reports success is how a
+        // script marks the recovery done and moves on, leaving those pages
+        // outside the log with nobody watching.
+        anyhow::bail!("{failed} page(s) still hold content outside the op log");
     }
+    println!("Run `outl doctor` to confirm nothing is left outside the log.");
     Ok(())
 }
 
