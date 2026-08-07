@@ -40,6 +40,11 @@ That is the complete list. There is no hidden telemetry file, no usage cache upl
 - We do not request access to your contacts, photos, camera, microphone, location, calendar, or health data.
 - We do not transmit your notes anywhere. Markdown files stay on your device and in your iCloud only.
 
+## Peer-to-peer sync
+
+When you pair two of your own devices, they exchange notes directly over an encrypted iroh connection — outl operates no server that stores your data, and a relay only forwards already-encrypted bytes.
+Pairing a device grants it your notes, so outl treats a paired peer as authenticated but not trusted: what it is still validated against, and what remains open, is recorded in [RFC 0155](rfcs/0155-peer-trust.md).
+
 ## iCloud sync (iOS)
 
 Sync between your devices happens through Apple iCloud Drive. Your data flows through Apple's infrastructure under Apple's terms; the outl developer is not involved in that transit and has no access to the content. See Apple's iCloud privacy policy for details: <https://www.apple.com/legal/privacy/>.

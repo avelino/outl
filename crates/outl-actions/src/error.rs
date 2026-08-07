@@ -80,6 +80,34 @@ pub enum ActionError {
     #[error("refusing to rewrite `{0}`: iCloud has not downloaded this file to this device yet")]
     PageMarkdownNotDownloaded(String),
 
+    /// A page's `.md` holds content that exists in no op, while its
+    /// sidecar still declares those bytes a faithful projection.
+    ///
+    /// The hash gate that guards re-projection asks one question — does
+    /// the sidecar agree with the bytes on disk? — and a `.md` in this
+    /// state answers yes. So it reads as a merely *stale* projection,
+    /// and re-rendering the tree over it deletes the unlogged content
+    /// while every consistency check afterwards agrees the page is
+    /// healthy: the new sidecar is built from the same render.
+    ///
+    /// That is the shape of a silent loss, so this is an error rather
+    /// than a skipped write. The `.md` is left byte-for-byte alone;
+    /// `outl reconcile` owns the `.md → tree` direction and is what
+    /// brings the content into the log.
+    #[error(
+        "refusing to rewrite `{path}`: the .md holds {lines} line(s) that exist in no op \
+         (e.g. {sample}) — run `outl reconcile` so they enter the op log first"
+    )]
+    PageMarkdownAheadOfLog {
+        /// The `.md` that would have been overwritten.
+        path: String,
+        /// How many content lines exist only on disk.
+        lines: usize,
+        /// One of those lines, quoted, so the message names what is at
+        /// risk instead of only counting it.
+        sample: String,
+    },
+
     /// Underlying workspace failure (storage, etc).
     #[error(transparent)]
     Workspace(#[from] WorkspaceError),

@@ -5,6 +5,114 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ## [Unreleased]
 
+## [0.12.0]
+
+### Changed
+
+- **BREAKING — `ActionError` gains a third variant, `PageMarkdownAheadOfLog { path, lines, sample }`.**
+  The enum is `pub` and not `#[non_exhaustive]`, and `outl-actions` ships to crates.io, so a downstream `match` that enumerates every variant needs updating.
+  Same shape as 0.11.0's two-variant addition.
+
+- **BREAKING (behaviour) — `apply_page_md_with_sidecar_if_stale` now returns `Err` on a page it used to rewrite successfully.**
+  Louder than the type change and easier to miss: the signature is unchanged, so an embedder treating `Ok(None)` as "nothing to do" and `Err` as "something is broken" will start seeing errors on pages that previously re-projected silently.
+  The error is the correct outcome — see the fix below — but code that logs and continues will now log where it used to be quiet, and code that aborts on any `Err` will stop where it used to proceed.
+
+- **BREAKING (behaviour) — `DeviceStore::machine_id()` no longer overwrites a machine id minted by a racing process.**
+  It mints through a compare-and-swap and adopts the winner on `AlreadyExists`.
+  An embedder that relied on the last writer winning gets the first writer instead.
+  The deliberate remint-a-clone path still overwrites, because that is a replacement, not a race.
+
+### Fixed
+
+- **`outl init` racing `outl serve` on a fresh machine could permanently break that workspace's actor claim.**
+  `DeviceStore::machine_id()` minted with a plain write while `bind()` used a compare-and-swap.
+  Two processes reaching a fresh store both minted an id and the last writer won; `init` then stamped `actor_claimed_by = <machine>` into `config.toml`, the next `open` read a machine id someone else had reminted, the claim read as foreign, and the workspace forked an actor.
+  Reproducible 6 times out of 6 from a cold store, not intermittent — which is why it read as three flaky `doctor` tests for as long as it did.
+
+  Two further defects surfaced underneath it, and the second was the dominant cause:
+
+  1. **The compare-and-swap failed open.**
+     `create_new_record` used a bare `O_EXCL` open, which creates an **empty** file and fills it a moment later.
+     Every reader maps a blank record to `None` — "absent" — which is precisely the answer that licenses overwriting.
+     It now composes the content in a temp file and publishes with `link(2)`, so the record appears complete or not at all, falling back to the old open where the filesystem cannot link rather than breaking on FAT media.
+  2. **Concurrent writers shared one temp file.**
+     `scratch_path` keyed the scratch name on pid alone, and test threads share a pid, so two writers used the same path: one `fs::write` truncated into the other and the publish step shipped a record neither writer composed.
+     The name is now unique per call.
+
+  Pinned by `concurrent_first_opens_converge_on_one_machine_id`, verified non-vacuous against both old code paths (16 distinct ids with the old mint, 2 with the old scratch path), plus `outl-ws`'s `device_isolation` test as its complement rather than its copy.
+
+- **Opening a page could delete content that had reached the `.md` but never the op log.**
+  Re-projection was gated on one question — does the sidecar's `last_synced_hash` match the bytes on disk? — and a `.md` that answers yes was treated as a merely *stale* projection, safe to overwrite with a fresh render of the tree.
+  But that hash proves the sidecar agrees with those bytes; it never proves the bytes came from the log.
+  A `reconcile_md` that rewrites the sidecar without emitting ops for everything it read leaves a page in exactly that state, and re-rendering over it destroys the difference *and* rebuilds the sidecar from the same render — so no later scan, and no `doctor` check, could tell the page had ever held more.
+  Silent by construction, which is the shape this project treats as the worst kind of bug.
+  Measured on a real 2,560-page workspace: **233 pages holding 1,426 lines** in that state.
+  `outl doctor --repair` deleted all of it and reported `708 fixed`.
+  Worse, `--repair` was not the only path — `apply_page_md_with_sidecar_if_stale` runs on **every** GUI open (`open_page_by_slug`, `open_journal_for`, `open_today_journal`, `open_ref`), so a plain page open in the desktop or mobile app was enough.
+  `outl_actions::content_lines_missing_from` is now the single owner of the verdict, and `apply_page_md_with_sidecar_if_stale` returns the new `ActionError::PageMarkdownAheadOfLog { path, lines, sample }` instead of writing.
+  It compares a **multiset** of trimmed non-blank lines rather than running a diff, because a line the renderer merely *moved* is not at risk — on that same workspace an LCS diff flags 616 pages where only 233 genuinely hold unlogged content.
+  Whitespace-only drift is ignored on purpose: the renderer's trailing-newline behaviour changed across releases, and treating that as content would strand every genuine re-projection behind noise.
+  `outl doctor` calls the same function in its read-only listing, so it can no longer offer a repair the `--repair` pass then refuses (the "announced before they run" invariant), and names the count plus one of the lines at risk instead of only counting them.
+  Content in this state also never reached your other devices — peers exchange ops, not files — so the report says that too.
+  `outl reconcile` owns the `.md → tree` direction and remains what brings it into the log.
+
+- **`docs/query.md` rendered 46 lines as one code block, and four headings produced no anchors** (issue #214).
+  A three-backtick outer fence wrapping an inner ` ```query ` example closed at the *indented* inner closer instead of its own, so everything from line 115 on was inside a code block.
+  `## Relationship to {{query: ...}}`, `## Extensibility`, `## Architecture` and `## Plugin SDK API` were swallowed, which broke four links — two of them pre-existing in `docs/plugin-api.md` and `docs/plugins.md`, dead long enough that nobody had noticed.
+  The file already used a four-backtick fence for the same pattern 90 lines earlier.
+
+### Added
+
+- **RFCs: `docs/rfcs/`, 16 documents, and a process that ties reasoning to an enforceable rule.**
+  outl already recorded evolution in four places (a lone RFC, the decision table in the root `CLAUDE.md`, `CHANGELOG.md`, `docs/design/`), so a fifth format would have broken the one-owner-per-fact rule that keeps the shortcut and CLI tables from diverging.
+  ADRs were considered and rejected for a sharper reason: **an ADR would not have prevented the bug that prompted this.**
+  Issue #166 was documented — issue, changelog entry, code comment explaining the gate.
+  What was missing was not a record of the decision taken; it was the question nobody asked, *and in the opposite direction?*
+
+  So the template makes that a **required, non-deletable section**, and the process ties every RFC to an invariant and a named test:
+
+  | Layer | Where | Role |
+  |---|---|---|
+  | Reasoning | `docs/rfcs/NNNN-*.md` | Why the rule exists, what was rejected, what got worse |
+  | Rule | root or per-crate `CLAUDE.md` | Read on every edit to that crate — the enforcing surface |
+  | Proof | a named test | Fails mechanically when someone reverts the behaviour |
+
+  A rule with no RFC has no rationale and gets argued away in review; an RFC with no `CLAUDE.md` entry is never read at the moment it matters; either one without a test is a comment.
+  **Changing behaviour an RFC pinned means updating that RFC in the same PR** — amend, or supersede and mark the old one.
+  The RFC number **is** the issue number, so there is no second sequence to keep in sync.
+  Flow, "do I need an RFC?", and the retroactive triage live in [`docs/rfcs/README.md`](docs/rfcs/README.md); the four-step issue → discussion → PR-with-RFC → review path is in [`docs/contributing.md`](docs/contributing.md).
+
+  Of 78 closed issues, **27 carried decision content and collapsed into 14 retroactive RFCs**; the other 51 are changelog-only.
+  The collapsing is the point — eight keybinding issues tell one story about `outl-shortcuts` being the single catalog, so they are one document, not eight.
+
+  Writing them also corrected the record twice: **#179's Front B never shipped** (`actor_census` still does a full `all_ops()`, so the ~35 s delta was only half improved), and **#25 shipped inverted** (Boa primary, not the QuickJS-primary its own proposal described).
+  Five behaviours nothing pins are recorded as `none found — gap` rather than papered over with invented test names (issue #213).
+
+- **Invariants 8 and 9 in the root `CLAUDE.md`, each with the incident that produced it.**
+  Invariant 8: a sidecar hash match proves outl wrote those bytes last, never that the op log holds them.
+  Invariant 9: when state crosses a boundary, the RFC that moves it must say what the new home requires — **who writes it, who reads it, how a test gets its own copy, and what cleans it up.**
+  0.11.0 moved the write actor out of the workspace correctly and left question three unanswered; question four is still open (nothing prunes a workspace the user deleted).
+
+  Both generalize to one rule, stated in the root file: **a fix relocates a problem far more often than it removes one.**
+  After "did I fix it?" comes "where does the problem live now, and what does that place require that the old one did not?"
+  Three separate defects in this codebase came from skipping it.
+
+### Changed (tooling and docs)
+
+- **`.github/copilot-instructions.md`: 39,980 → 10,548 chars, split into path-scoped instruction files** (issue #215).
+  It sat ~20 chars under the size ceiling and roughly six times over GitHub's own "no longer than 2 pages" guidance, which made the two hooks contradict each other: adding a required catalog mirror row overflowed `markdown-size-guard`, while `catalog-sync-guard` required that row to exist.
+  Now four `.github/instructions/*.instructions.md` files carry `applyTo` globs and load **in addition** to the repo-wide file, so a Solid PR no longer pays for the Rust bar plus 17k of Rust primitives catalog.
+  `markdown-size-guard` had to be extended: its `.github/*.md` glob does not match a subdirectory, so the new files would have had no ceiling at all.
+  Note for anyone adding a rule: **there is no include mechanism** — each file loads whole or not at all, so anything that must always apply belongs in the repo-wide file.
+
+- **Three per-crate `CLAUDE.md` files were at or over the 40k ceiling; extracted to reference docs** (issue #216).
+  `outl-mobile` 42,345 → 32,265, `outl-desktop` 41,435 → 34,560, `outl-sync-iroh` 39,998 → 32,955.
+  New docs with real owners: `docs/iroh-internals.md`, `docs/ios-platform.md`, `docs/deep-links.md`; the rest went into `development.md`, `reminders.md`, `plugin-architecture.md`, `theming.md`.
+  Movement, not rewriting — of 350 lines removed, 338 exist verbatim in the destination, and each stub keeps whatever in it was genuinely an invariant.
+  The extraction surfaced seven documentation contradictions, filed as issue #212, including desktop settings documented at a path the code no longer reads.
+
+- **43 links now connect RFCs and docs in both directions**, including a `Reference doc` row in every RFC header (and in the template, so new RFCs inherit it).
+
 ## [0.11.0]
 
 ### Changed

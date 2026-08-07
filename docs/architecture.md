@@ -157,6 +157,8 @@ The rule: a new helper or constant only lands in a client crate when it's *genui
 
 ### 12. Tauri for desktop
 
+> **Why it works this way:** [RFC 0002](rfcs/0002-tauri-for-every-gui-client.md) — one Rust surface under every GUI client, covering decision 13 below as well.
+
 Rust core reuse, smaller binary than Electron, native webview.
 Slightly worse UX consistency than fully-native, but acceptable for an outliner where the bulk of the UX is text and lists.
 

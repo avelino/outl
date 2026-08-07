@@ -69,4 +69,4 @@ outl plugin enable template-stamper
 - **Auto-stamp on page create:** subscribe to `ctx.ops.onOp`, watch for `Create` ops on pages matching a pattern, and call `ctx.template.instantiate()` automatically.
 - **Callable templates:** combine with `ctx.blocks` to write a ` ```call:<name> ` block and trigger execution.
 
-See [Templates](../docs/templates.md) for the full template engine guide.
+See [Templates](../templates.md) for the full template engine guide.

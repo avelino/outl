@@ -21,8 +21,9 @@ For the reuse-first rule (why this matters, past drift incidents, what to do whe
 |---|---|---|
 | Parse `.md` → outline AST (no IDs) | `outl_md::parse::parse` → `ParsedPage` (includes `warnings: Vec<ParseWarning>`) | `crates/outl-md/src/parse.rs` |
 | Render outline AST → `.md` (clean, no IDs) | `outl_md::render::render` | `crates/outl-md/src/render.rs` |
-| Non-fatal parser recovery records (heading instead of bullet, etc.) | `outl_md::ParseWarning` + `outl_md::ParseWarningKind` (re-exported from `parse`) | `crates/outl-md/src/parse.rs` |
-| The outline AST node DTO (UI-friendly, no `Workspace` coupling) | `outl_md::OutlineNode` / `outl_actions::outline::OutlineNode` | `crates/outl-md/src/parse.rs` + `crates/outl-actions/src/outline.rs` |
+| Non-fatal parser recovery records (heading instead of bullet, etc.) | `outl_md::ParseWarning` + `outl_md::ParseWarningKind` (re-exported from `parse`) | `crates/outl-md/src/ast.rs` |
+| The outline AST node DTO (UI-friendly, no `Workspace` coupling) | `outl_md::OutlineNode` / `outl_actions::outline::OutlineNode` | `crates/outl-md/src/ast.rs` + `crates/outl-actions/src/outline.rs` |
+| Read one `key:: value` line (page property or block property) — never hand-roll the `::` split, both positions share this reader | `outl_md::parse::parse_property_line` (re-exported from `property`) | `crates/outl-md/src/property.rs` |
 | Project the workspace tree under a node into the UI DTO | `outl_actions::outline::project_outline` / `project_outline_node` | `crates/outl-actions/src/outline.rs` |
 | Project a **parsed** subtree (`.md` AST, no sidecar) into wire `OutlineNode`s with `tokens` attached — ids are **transient** (fresh per call), for read-only surfaces that re-resolve on navigation (the `!((blk))` embed subtree expansion) | `outl_actions::outline::project_parsed_subtree` (re-exported `outl_actions::project_parsed_subtree`) | `crates/outl-actions/src/outline.rs` |
 | Flatten an `OutlineNode` subtree to DFS paths (for selection / navigation) | `outl_actions::outline::flatten_subtree_paths` | `crates/outl-actions/src/outline.rs` |
@@ -123,7 +124,8 @@ UI-agnostic; both TUI and mobile consume them.
 | Resolve the ref under a caret position (`Page` / `Journal` / `Tag` / `Block`) | `outl_md::inline::ref_at_cursor` → `RefTarget` | `crates/outl-md/src/cursor.rs` |
 | Resolve the markdown link `[text](url)` under a caret position (anchor OR url) — the URL a client opens externally (TUI `gx`) | `outl_md::inline::link_at_cursor` → `Option<&str>` | `crates/outl-md/src/cursor.rs` |
 | Does a text mention `#tag` as a whole tag token? Boundary-correct via the tokenizer (`#tag-longer` / `#tagged` never match `tag`; `#tag` inside a code span is not a tag) — never use `text.contains("#tag")` | `outl_md::tag::text_contains_tag` | `crates/outl-md/src/tag.rs` |
-| Validate a `((blk-XXXXXX))` handle string | `outl_md::inline::is_valid_block_handle` | `crates/outl-md/src/inline.rs` |
+| Validate a `((blk-XXXXXX))` handle string | `outl_md::inline::is_valid_block_handle` | `crates/outl-md/src/reference.rs` |
+| Flatten a block's inline markup to the prose a human reads (notification bodies, a11y labels, plain-text export) — refs / tags keep their name, emphasis drops its markers, `((blk-…))` resolves to nothing | `outl_md::plain_text` (also `outl_md::inline::plain_text`) | `crates/outl-md/src/plain.rs` |
 | Byte offset for a char index (UTF-8 safe) | `outl_md::inline::byte_index_for_char` | `crates/outl-md/src/cursor.rs` |
 | Canonicalize a fence info-string (`rs` → `rust`, `js`/`javascript`/`node` → `js`, …) — single source of truth for both `outl-exec`'s runtime dispatch and the frontend syntax highlighter | `outl_md::lang::canonical`, `outl_md::lang::KNOWN_ALIASES` | `crates/outl-md/src/lang.rs` |
 | Resolve a `:shortcode:` to its unicode glyph (one-way; never retro-translate glyph → shortcode, multiple shortcodes can alias the same codepoint) | `outl_md::emoji::shortcode_to_unicode` | `crates/outl-md/src/emoji.rs` |

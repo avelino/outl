@@ -5,6 +5,8 @@ Toggling a TODO on the original block is reflected everywhere the query result a
 
 It solves the "tasks scattered across notes" problem ([issue #139](https://github.com/avelino/outl/issues/139)) without introducing a separate task manager — every block is already a potential task via the `TODO` / `DONE` prefix.
 
+> **Why a line-oriented DSL in a code fence and not datalog:** [RFC 0139](rfcs/0139-query-language.md).
+
 ## How it works
 
 1. You write a ` ```query ` fence inside any page.
@@ -101,7 +103,7 @@ The query runtime returns `OutputFormat::Embeds`, which tells the orchestrator t
 
 The rendered structure under the ` ```query ` block looks like:
 
-```markdown
+````markdown
 - ```query
   status: todo
   ```
@@ -109,7 +111,7 @@ The rendered structure under the ` ```query ` block looks like:
     - !((blk-abcdef))
     - !((blk-ghijkl))
     - !((blk-mnopqr))
-```
+````
 
 When the page is opened in the TUI or desktop, each `!((blk-…))` expands to show the original block's text and subtree.
 Because these are embeds — not copies — toggling a TODO on the original block updates the query result on the next page load.

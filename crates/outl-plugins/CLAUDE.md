@@ -10,6 +10,8 @@ It declares the **capabilities** it registers and the **permissions** it needs.
 The user approves permissions on install; the loader intersects capabilities with what the current client implements.
 A plugin written once runs on every client because it talks to *this* crate, never to anything client-specific.
 
+> **Why an interpreter, and why the shipped runtime inverted the original proposal:** [RFC 0025](../../docs/rfcs/0025-plugin-system.md).
+
 The runtime engine is **Boa** (already embedded in `outl-exec`, runs on iOS — pure-Rust, no JIT), behind the `PluginEngine` trait so it can move to QuickJS later **only if** gas/perf/async becomes a *measured* blocker.
 
 ## Non-negotiables (inherit the root invariants)

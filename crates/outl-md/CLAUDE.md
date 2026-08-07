@@ -56,7 +56,11 @@ Treat matching with the same paranoia as the CRDT.
   `is_valid_shortcode_char(c)` is the char-level alphabet check — exported so consumers walking buffers char-by-char (`try_emoji`, TUI's `detect_trigger`) avoid allocating a 1-char `String` per keystroke.
   The parser only tokenizes `:foo:` when `shortcode_to_unicode` finds `foo`, so unknown input (`:notarealemoji:`, `meeting at 14:00`) stays plain.
   **Never retro-translate `glyph → shortcode`** — multiple shortcodes can alias the same codepoint (`:+1:` and `:thumbsup:` both → 👍) so the disk form would become lossy.
-- **Inline tokenization** (`inline.rs`) — `**bold**`, `~~strike~~`, `==highlight==`, `[[refs]]`, `#tags`, `((blk-XXXXXX))`, `!((blk-XXXXXX))`, `![alt](url)`, `:shortcode:`.
+- **Inline tokenization** (`inline.rs` + its sibling slices) — `**bold**`, `~~strike~~`, `==highlight==`, `[[refs]]`, `#tags`, `((blk-XXXXXX))`, `!((blk-XXXXXX))`, `![alt](url)`, `:shortcode:`.
+  `inline.rs` owns the scan (`tokenize` / `tokenize_owned`), the `match_one` precedence table, and `inline_to_source` (the inverse that re-emits the source).
+  One matcher family per sibling module: `emphasis.rs` (delimiter pairs), `reference.rs` (`[[name]]`, `((blk-…))`, `!((blk-…))`, `#tag`, `is_valid_block_handle`), `link.rs` (`[text](url)`, `![alt](url)`), `shortcode.rs` (`:emoji:`).
+  The token vocabulary lives in `token.rs` and prose flattening (`plain_text`) in `plain.rs`.
+  All of them are private modules re-exported through `inline`, so every `outl_md::inline::…` path stays stable.
   `==highlight==` (Roam's `^^highlight^^` on import) rejects a space adjacent to either marker so a spaced `==` operator stays plain — unlike `~~strike~~`.
   `![alt](url)` (`InlineTok::Image` / owned `InlineToken::Image { alt, href }`) is the image / embedded-asset token.
   `try_image` runs right after `try_embed` in `match_one` so the leading `!` is never stranded before `try_md_link` claims the bare `[`.
@@ -78,7 +82,8 @@ Treat matching with the same paranoia as the CRDT.
   `chamados_chat`, `inc_lag1`, `prod.ml_atendimento` stay literal.
   `*` is not subject to this restriction — it works mid-word.
   Enforced in `try_italic_under` / `try_bold_under` via the `closing_underscore` helper.
-  The cursor-introspection concern was split out to `cursor.rs` to keep `inline.rs` under the file-size guard; keep new inline-token variants in `inline.rs` and new caret-resolution helpers in `cursor.rs`.
+  `inline.rs` was split by responsibility to stay under the file-size guard, so new code has one obvious home.
+  A token variant goes in `token.rs` (both forms, same change); a new matcher goes in the sibling module for its family, plus its slot in `match_one`; a caret-resolution helper goes in `cursor.rs`.
 - **External frontmatter** (`frontmatter.rs`) — metadata extraction for markdown authored by other tools.
   `split_frontmatter` splits the leading `---` fence off a `.md` body (CRLF-safe, honours the `...` end marker; no closing fence → whole file stays body).
   `parse_frontmatter(yaml, drop_keys) → Frontmatter { title, props, dropped }` flattens the YAML into `key:: value` properties: `title` lifted, `tags` normalized to `#name`, caller-supplied drop-list, values verbatim.
@@ -255,6 +260,8 @@ See the root `CLAUDE.md` invariant 7.
 
 ## Outl markdown dialect
 
+> **What it costs to add a token to this dialect:** [RFC 0008](../../docs/rfcs/0008-markdown-dialect-and-sidecar-tokens.md).
+
 ```markdown
 title:: example
 status:: active
@@ -284,13 +291,22 @@ tags:: #project
 ```
 src/
 ├── lib.rs
-├── parse.rs        # md → AST (no IDs)
+├── parse.rs        # md → AST (no IDs): the grammar + the block-list reader
+├── ast.rs          # OutlineNode, ParsedPage, ParseWarning(Kind) — re-exported by parse
+├── property.rs     # `key:: value` line + the page-property header run (private mod)
+├── fence.rs        # fenced code: literal capture while the outline grammar is suspended
 ├── render.rs       # AST → md (clean)
 ├── sidecar.rs      # read/write .outl JSON, derive_ref_handle, content_hash
 ├── matching.rs     # 3-level matching algorithm
 ├── similarity.rs   # level-2 scoring + global-confidence assignment (private to the crate)
 ├── diff.rs         # AST diff → Op sequence (takes old_blocks to preserve ref_handle)
-├── inline.rs       # InlineTok (Plain/Bold/.../BlockRef/Embed/Emoji), RefTarget
+├── inline.rs       # the scan: tokenize / tokenize_owned, match_one precedence, inline_to_source
+├── token.rs        # InlineTok (Plain/Bold/.../BlockRef/Embed/Emoji), owned InlineToken, RefTarget
+├── emphasis.rs     # `**`/`__`/`*`/`_`/`~~`/`==`/backtick matchers + the intra-word `_` rule
+├── reference.rs    # [[name]], ((blk-…)), !((blk-…)), #tag matchers + is_valid_block_handle
+├── link.rs         # [text](url) / ![alt](url) matchers (try_md_link reused by cursor)
+├── shortcode.rs    # :emoji: matcher — shape gate + emoji-catalog gate
+├── plain.rs        # plain_text — flatten tokens to the prose a human reads
 ├── cursor.rs       # ref_at_cursor, link_at_cursor, byte_index_for_char (re-exported via inline)
 ├── emoji.rs        # shortcode_to_unicode, search, is_valid_shortcode, EmojiHit
 ├── frontmatter.rs  # split_frontmatter, parse_frontmatter, extract_leading_h1 (external md metadata)
@@ -346,11 +362,20 @@ Today's numbers (M-series laptop):
    so a `((blk-XXXXXX))` already written in another `.md` keeps resolving even if the handle was once expanded past the default 6-char tail.
 7. **`derive_ref_handle` is deterministic** — same `NodeId` in, same handle out.
    Two devices building the sidecar independently must agree on what `((blk-XXXXXX))` means.
+8. **`last_synced_hash` may only be advanced over content the same call emitted ops for.**
+   Writing that hash is a claim — "the op log holds what is in this file" — and every consumer downstream believes it.
+   `reconcile_md` is the one place that both reads a `.md` and rewrites its sidecar, so it is the one place that can make the claim falsely.
+   Stamp the hash over a block that produced no op and the page becomes hash-faithful with unlogged content.
+   That reads as a merely *stale* projection to `apply_page_md_with_sidecar_if_stale`, and gets deleted on the next page open.
+   Measured cost on a real workspace: 233 pages, 1,426 lines ([RFC 0210](../../docs/rfcs/0210-md-content-outside-op-log.md), root `CLAUDE.md` invariant 8).
+   If you cannot emit an op for something you read, **do not advance the hash**.
+   Leave the page looking dirty so the reconcile runs again: a page that reconciles twice is a nuisance, a page that lies about its own state is a data-loss bug.
 
 ## Things to never do here
 
 - ❌ Write IDs into the `.md` file (use sidecar)
 - ❌ Delete a block in matching without recording in `orphans.log` first
+- ❌ Advance `last_synced_hash` over content this call did not emit ops for (invariant 8)
 - ❌ Match on similarity > 80% across **different parents** without warning
 - ❌ Skip the property test in `roundtrip.rs`
 - ❌ Use a different hash function in sidecar read vs write

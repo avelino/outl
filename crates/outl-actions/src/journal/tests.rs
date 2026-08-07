@@ -116,6 +116,96 @@ fn if_stale_never_clobbers_an_external_edit() {
     );
 }
 
+/// Re-stamp `path`'s sidecar so it declares the bytes currently on disk as
+/// the last faithful projection, without changing its block entries. This
+/// reproduces the state a `reconcile_md` leaves behind when it rewrites the
+/// sidecar to agree with a `.md` whose content never became ops.
+fn restamp_sidecar_as_faithful(md_path: &PathBuf) {
+    let sidecar_path = outl_md::sidecar::sidecar_path_for(md_path);
+    let mut sc = outl_md::sidecar::read(&sidecar_path).unwrap();
+    let disk = std::fs::read_to_string(md_path).unwrap();
+    sc.last_synced_hash = outl_md::sidecar::file_hash(&disk);
+    outl_md::sidecar::write(&sidecar_path, &sc).unwrap();
+}
+
+/// The `.md` is a *faithful* projection by the hash gate — its sidecar
+/// agrees with the bytes on disk — yet it carries content that exists in no
+/// op. Measured on a real 2.5k-page workspace: 616 pages in that exact
+/// state, ~3.7k lines of content the log had never seen.
+///
+/// The hash gate cannot tell this apart from a genuinely stale projection,
+/// and the old code called both "stale" and re-projected, which deletes
+/// the on-disk content and reports success. Every GUI open path
+/// (`open_page_by_slug`, `open_journal_for`, …) runs through here, so the
+/// loss fires on a plain page open, not just on `doctor --repair`.
+///
+/// Refuse, and say which lines would have been lost.
+#[test]
+fn if_stale_refuses_when_the_md_carries_content_the_log_lacks() {
+    let (tmp, ws, _hlc, page, md_path) = projected_page("first");
+    std::fs::write(&md_path, "- first\n- only ever on disk\n").unwrap();
+    restamp_sidecar_as_faithful(&md_path);
+
+    let result = apply_page_md_with_sidecar_if_stale(&ws, tmp.path(), page);
+
+    match result {
+        Err(crate::ActionError::PageMarkdownAheadOfLog { sample, .. }) => assert!(
+            sample.contains("only ever on disk"),
+            "the error must name the content at risk, got {sample:?}"
+        ),
+        other => panic!("expected PageMarkdownAheadOfLog, got {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read_to_string(&md_path).unwrap(),
+        "- first\n- only ever on disk\n",
+        "the bytes must survive untouched"
+    );
+}
+
+/// The counterpart that must keep working: the tree genuinely ran ahead
+/// (a peer's ops landed), the `.md` holds a strict subset of what the log
+/// renders, so nothing on disk is at risk. This is issue #166's case and
+/// the guard above must not regress it.
+#[test]
+fn if_stale_still_reprojects_when_the_md_holds_no_unlogged_content() {
+    let (tmp, mut ws, hlc, page, md_path) = projected_page("first");
+    append_block(&mut ws, &hlc, Some(page), Some("synced-in")).unwrap();
+
+    let wrote = apply_page_md_with_sidecar_if_stale(&ws, tmp.path(), page).unwrap();
+
+    assert!(
+        wrote.is_some(),
+        "a .md that lost nothing must still be re-projected"
+    );
+    assert!(std::fs::read_to_string(&md_path)
+        .unwrap()
+        .contains("synced-in"));
+}
+
+/// Whitespace-only drift must not trip the guard. The renderer's trailing
+/// newline changed between releases, so on a real workspace a large share
+/// of "stale" pages differ from the log by exactly that — refusing those
+/// would strand the genuine re-projections behind noise.
+#[test]
+fn if_stale_ignores_whitespace_only_differences_when_deciding() {
+    let (tmp, mut ws, hlc, page, md_path) = projected_page("first");
+    // Trailing spaces + a missing final newline: no content is unique to
+    // disk once trimmed, so the tree's new block still wins.
+    std::fs::write(&md_path, "- first   ").unwrap();
+    restamp_sidecar_as_faithful(&md_path);
+    append_block(&mut ws, &hlc, Some(page), Some("synced-in")).unwrap();
+
+    let wrote = apply_page_md_with_sidecar_if_stale(&ws, tmp.path(), page).unwrap();
+
+    assert!(
+        wrote.is_some(),
+        "whitespace-only drift is not unlogged content"
+    );
+    assert!(std::fs::read_to_string(&md_path)
+        .unwrap()
+        .contains("synced-in"));
+}
+
 /// A present-but-unreadable `.md` (non-UTF8 bytes here — `read_to_string`
 /// fails with `InvalidData`, not `NotFound`) must NOT be treated as absent
 /// and re-projected; that would clobber a file that may hold real content.

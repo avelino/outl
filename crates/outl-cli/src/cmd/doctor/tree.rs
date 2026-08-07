@@ -153,12 +153,25 @@ pub(super) fn check_unmaterialized_ops(
 /// `outl_actions::apply_page_md_with_sidecar_if_stale`, which re-runs
 /// the faithful/stale test itself. What lives here is detection only —
 /// `outl-actions` exposes no dry-run of that decision.
-pub(super) fn check_projections(b: &mut Builder, ws: &Workspace, root: &std::path::Path) -> Plan {
+///
+/// `log_damaged` comes from the caller's [`super::oplog::OpLogHealth`]: a
+/// torn op log replays a truncated tree, which makes every page look like
+/// it carries unlogged content. That verdict belongs to the log, not the
+/// pages, so the unlogged-content check stands down and the caller's gate
+/// reports the recoverable cause instead.
+pub(super) fn check_projections(
+    b: &mut Builder,
+    ws: &Workspace,
+    root: &std::path::Path,
+    log_damaged: bool,
+) -> Plan {
     let mut plan = Plan::default();
     let mut absent = 0usize;
     let mut stale = 0usize;
     let mut sidecar_only = 0usize;
     let mut pending_edit = 0usize;
+    let mut ahead = 0usize;
+    let mut ahead_lines = 0usize;
 
     for meta in list_pages(ws) {
         let Ok(page_root) = meta.id.parse::<ulid::Ulid>().map(NodeId) else {
@@ -188,7 +201,11 @@ pub(super) fn check_projections(b: &mut Builder, ws: &Workspace, root: &std::pat
         let faithful = outl_md::sidecar::read(&sidecar_path)
             .map(|sc| sc.last_synced_hash == disk_hash)
             .unwrap_or(false);
-        let rendered_matches = file_hash(&render_page_md(ws, page_root)) == disk_hash;
+        // Render once: the unlogged-content check below needs the text,
+        // not just its hash, and rendering a page twice per doctor run is
+        // 2,560 wasted renders on a real workspace.
+        let rendered = render_page_md(ws, page_root);
+        let rendered_matches = file_hash(&rendered) == disk_hash;
 
         if !sidecar_path.exists() {
             if rendered_matches {
@@ -211,6 +228,34 @@ pub(super) fn check_projections(b: &mut Builder, ws: &Workspace, root: &std::pat
             continue;
         }
         if !rendered_matches {
+            // `faithful` proves the sidecar agrees with these bytes, not
+            // that the bytes came from the log. Ask the same question
+            // `apply_page_md_with_sidecar_if_stale` asks before writing,
+            // so this listing never offers a repair that pass refuses.
+            //
+            // Skipped while the log is damaged: a torn `ops/` replays a
+            // truncated tree, so *every* page looks like it holds
+            // unlogged content and the real cause — the log — would never
+            // be named. The caller's `OpLogHealth` gate suppresses these
+            // repairs with the message that says how to recover, and it
+            // can only count what it sees in the plan.
+            let unlogged = if log_damaged {
+                Vec::new()
+            } else {
+                outl_actions::content_lines_missing_from(&disk, &rendered)
+            };
+            if let Some(sample) = unlogged.first() {
+                ahead += 1;
+                ahead_lines += unlogged.len();
+                b.warn(format!(
+                    "{}: `.md` holds {} line(s) that exist in no op (e.g. {sample:?}) — \
+                     `--repair` will not touch it, run `outl reconcile` so they enter \
+                     the op log first",
+                    path.display(),
+                    unlogged.len(),
+                ));
+                continue;
+            }
             stale += 1;
             b.warn(format!(
                 "{}: `.md` is a stale projection — the op log renders different content",
@@ -218,6 +263,14 @@ pub(super) fn check_projections(b: &mut Builder, ws: &Workspace, root: &std::pat
             ));
             plan.reproject.push((page_root, path));
         }
+    }
+
+    if ahead > 0 {
+        b.warn(format!(
+            "{ahead} page(s) hold {ahead_lines} line(s) of content that reached the `.md` but \
+             never the op log — they do not sync to other devices, and `--repair` leaves them \
+             alone. `outl reconcile` is what brings them into the log"
+        ));
     }
 
     if pending_edit > 0 {

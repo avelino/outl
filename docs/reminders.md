@@ -171,6 +171,51 @@ This is the [invariant #7](../CLAUDE.md) line, drawn explicitly:
 
 The split is the whole point: snoozing on one device must silence every device, but one device having buzzed must not stop another from buzzing.
 
+## Client wiring (desktop panel, mobile sheet)
+
+Which component lists the reminders on each GUI client, which command authors a rule, and where delivery is polled from.
+The schedule math is never here — see [For contributors](#for-contributors) below.
+
+### Desktop (`outl-desktop`)
+
+`<RemindersPanel />` (`Cmd/Ctrl+Shift+R`, or `g n` in Normal) lists every block carrying a `remind::`, grouped Today / Tomorrow / This week / Later / Done.
+`Cmd+R` (and `g r` / `g R` in Normal) authors a rule on the selected block via `set_block_remind`.
+`Ctrl+R` deliberately stays **Redo** on Linux / Windows, which is why authoring is `Cmd+R` only.
+
+Grouping labels and the "in 3h" column come from `@outl/shared` (`groupReminders` / `formatNextFire`) — the same functions the mobile sheet uses — and the instants behind them come from `outl_actions::reminders` in Rust.
+**Nothing about when a reminder fires is computed in the frontend.**
+
+Delivery is a 30s `setInterval` in `<AppShell />` calling `deliver_due_reminders`, which turns the shared "what's due" answer into an OS banner via `tauri-plugin-notification`.
+The Rust side keeps the device-local fired log, so polling twice never double-buzzes and a laptop that was asleep owes one banner, not a backlog.
+`[reminders] enabled` (Settings modal) defaults to **on**: `remind::` on a block is already the opt-in, and a device with no rules never fires, so defaulting off only bought the user a rule that silently did nothing.
+macOS asks for permission on the first actual fire.
+
+**App-closed delivery is not covered yet**: a launch agent on a `StartCalendarInterval` is the follow-up (see [Background delivery](#background-delivery--what-ships-today), above).
+
+### Mobile (`outl-mobile`)
+
+The header bell opens `<RemindersSheet />` — every block with a `remind::`, grouped Today / Tomorrow / This week / Later / Done, with 1h / Tomorrow / Next week snooze chips per row.
+Long-pressing a block offers **Remind me…**, which prompts for the rule in its own syntax and writes it via `set_block_remind`.
+A prompt rather than a native time picker on purpose: the rule language is richer than a clock (`3pm every 1h until DONE`), and a picker that can only express the anchor would quietly hide the repeat.
+The picker is a follow-up, not a substitute.
+
+Grouping + the "in 3h" column come from `@outl/shared` (`groupReminders` / `formatNextFire`), shared byte-for-byte with the desktop panel; the instants come from `outl_actions::reminders` in Rust.
+
+Delivery is a 30s `setInterval` in `Journal.tsx` calling `deliver_due_reminders` (`tauri-plugin-notification` → `UNUserNotificationCenter`).
+It fires whenever the app is running, foreground or backgrounded.
+
+**Both device-local settings live in the sheet, not in a settings screen** — mobile has none, and `config.toml` sits inside the iOS sandbox, so they'd otherwise be unreachable from the device.
+Delivery is a switch; quiet hours are two native `<input type="time">` pickers rather than the desktop's text field, because typing `22:00-07:00` on a phone means switching keyboard layouts twice.
+Both write through `set_reminder_settings`, which replaces the pair — so every call sends **both** values, or flipping the switch would wipe a configured window.
+The UI only moves after the write returns, so a failed save can't leave it lying.
+Split / join for the wire string is `lib/quiet-hours.ts` (unit-tested: a half-filled window saves as empty, since `"22:00-"` is just something the backend drops).
+
+Rows carry a **Done** button, matching the desktop panel: it resolves the block's own page id first (the sheet lists the whole workspace, so the open page is usually a different one) and only applies the refreshed view when the user is looking at that page.
+
+**App-closed delivery is not covered yet.**
+That needs `UNCalendarNotificationTrigger` requests registered ahead of time (the system caps pending requests at 64) and re-filled from a `BGAppRefreshTask` — the same shape as the existing `bg_sync.rs` work.
+See [Background delivery](#background-delivery--what-ships-today), above.
+
 ## For contributors
 
 `outl_actions::reminders::next_fire_at` is the **single owner** of the schedule math — pure, clock-free, takes `now` as a parameter.

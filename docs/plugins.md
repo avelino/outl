@@ -6,6 +6,8 @@ That's the lesson from Roam and Logseq: the moment a tool can't be extended, eve
 The bet is simple: **a plugin is written once and runs on every client that renders or edits** — TUI, desktop, mobile, and the CLI.
 Plugins are plain JavaScript, the largest ecosystem and the lowest barrier to entry.
 
+> **Why JavaScript, and why iOS is what decided the engine:** [RFC 0025](rfcs/0025-plugin-system.md).
+
 ## Pick your path
 
 By what you're here to do:

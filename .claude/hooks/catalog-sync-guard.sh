@@ -6,7 +6,8 @@
 #
 # The catalog is intentionally duplicated because it has two audiences:
 # - the docs/ catalog drives Claude Code + human contributors
-# - .github/copilot-instructions.md §5.1 drives GitHub Copilot PR review
+# - .github/instructions/shared-primitives.instructions.md drives GitHub
+#   Copilot PR review (path-scoped, `applyTo: crates/**`)
 #
 # The docs/ side is ONE logical document split across four files:
 #   docs/shared-primitives.md      — hub / index (links, no rows)
@@ -33,8 +34,16 @@ event_json=$(cat)
 file_path=$(printf '%s' "$event_json" | sed -n 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
 
 # Only act on the mirrored files.
+#
+# The Copilot side moved out of copilot-instructions.md into a
+# path-scoped instructions file (`applyTo: crates/**`): the repo-wide
+# file was 40k chars against GitHub's ~2-page guidance, and the catalog
+# was 62% of it. `copilot-instructions.md` stays matched here so an edit
+# that puts catalog rows back into it is still caught.
 case "$file_path" in
-  */docs/shared-primitives.md|*/docs/primitives-*.md|*/copilot-instructions.md) ;;
+  */docs/shared-primitives.md|*/docs/primitives-*.md) ;;
+  */.github/instructions/shared-primitives.instructions.md) ;;
+  */copilot-instructions.md) ;;
   *) exit 0 ;;
 esac
 
@@ -43,7 +52,8 @@ if [ -z "$repo_root" ] || [ ! -d "$repo_root" ]; then
   exit 0
 fi
 
-copilot="${repo_root}/.github/copilot-instructions.md"
+copilot="${repo_root}/.github/instructions/shared-primitives.instructions.md"
+copilot_legacy="${repo_root}/.github/copilot-instructions.md"
 
 # Every file that makes up the docs/ side of the catalog.
 catalog_files=()
@@ -54,6 +64,7 @@ done
 # The thing being edited must be one of the two sides.
 edited_side=""
 [ "$file_path" = "$copilot" ] && edited_side="copilot"
+[ "$file_path" = "$copilot_legacy" ] && edited_side="copilot"
 for c in "${catalog_files[@]}"; do
   [ "$file_path" = "$c" ] && edited_side="catalog"
 done
@@ -87,7 +98,7 @@ touched_catalog() {
 # a set: a row added to ANY part satisfies the copilot->docs direction.
 if [ "$edited_side" = "catalog" ]; then
   mirror_files=("$copilot")
-  rel_mirror=".github/copilot-instructions.md"
+  rel_mirror=".github/instructions/shared-primitives.instructions.md"
 else
   mirror_files=("${catalog_files[@]}")
   rel_mirror="docs/primitives-*.md (the catalog parts)"
@@ -114,7 +125,7 @@ printf 'but its mirror at %s has no matching working-tree change.\n' "$rel_mirro
 printf '\n' >&2
 printf 'The catalog is intentionally duplicated for two audiences:\n' >&2
 printf '  - %s drives Claude Code + human contributors\n' "docs/primitives-*.md (index: docs/shared-primitives.md)" >&2
-printf '  - %s drives GitHub Copilot PR review\n' ".github/copilot-instructions.md" >&2
+printf '  - %s drives GitHub Copilot PR review\n' ".github/instructions/shared-primitives.instructions.md" >&2
 printf '\n' >&2
 printf 'Drift between them is exactly how PR #47 slipped through (paste::normalize\n' >&2
 printf 'duplication invisible to the reviewer). Update %s in the\n' "$rel_mirror" >&2

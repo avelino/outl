@@ -7,11 +7,15 @@
 //! shadow anything, and the Tauri clients' pre-existing `actor` file keeps
 //! resolving to the same actor.
 //!
-//! Writes go through a temp file + rename. A torn record makes the next
-//! open mint a fresh actor for a workspace that already had one — cheap,
-//! but noisy, and there is no reason to risk it.
+//! Every write composes the whole record in a sibling temp file and then
+//! publishes it in one step — `rename` to replace, `link` to create-if-absent.
+//! A torn record makes the next open mint a fresh actor for a workspace
+//! that already had one — cheap, but noisy, and there is no reason to risk
+//! it. A *blank* one is worse than torn: readers here map an empty file to
+//! "absent", which is the answer that licenses a caller to overwrite it.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::DeviceError;
 
@@ -73,13 +77,7 @@ pub(super) fn write_record<K: AsRef<str>, V: AsRef<str>>(
     pairs: &[(K, V)],
 ) -> Result<(), DeviceError> {
     let parent = ensure_parent(path)?;
-    let tmp = parent.join(format!(
-        ".{}.{}.tmp",
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("record"),
-        std::process::id()
-    ));
+    let tmp = scratch_path(&parent, path, "tmp");
     std::fs::write(&tmp, render(pairs)).map_err(|source| DeviceError::Io {
         path: tmp.clone(),
         source,
@@ -90,19 +88,72 @@ pub(super) fn write_record<K: AsRef<str>, V: AsRef<str>>(
     })
 }
 
-/// Create `path` only if it does not exist yet (`O_EXCL`), so a caller
-/// can tell "I bound this" from "someone else got here first".
+/// Create `path` only if it does not exist yet, so a caller can tell "I
+/// bound this" from "someone else got here first" — and publish it with
+/// its content already in place.
+///
+/// The content half is not a nicety. A bare `O_EXCL` open creates an
+/// **empty** file and fills it a moment later, and every reader here maps
+/// a blank record to `None` — "absent", which is precisely the answer that
+/// licenses a caller to write its own value. A concurrent first open that
+/// lands in that window therefore overwrites the winner instead of
+/// adopting it, which is the compare-and-swap failing open. Writing a
+/// temp file and `link(2)`-ing it into place makes the file appear
+/// complete or not at all.
+///
+/// `hard_link` is the exclusive-create here; it reports
+/// [`std::io::ErrorKind::AlreadyExists`] exactly like `O_EXCL` did. On a
+/// filesystem that cannot link (FAT-family removable media), it fails for
+/// some other reason and we fall back to the plain `O_EXCL` open — the
+/// narrow race is still better than a device store that cannot be written
+/// at all.
 pub(super) fn create_new_record<K: AsRef<str>, V: AsRef<str>>(
     path: &Path,
     pairs: &[(K, V)],
 ) -> std::io::Result<()> {
+    let parent = ensure_parent(path).map_err(|DeviceError::Io { source, .. }| source)?;
+    let tmp = scratch_path(&parent, path, "new");
+    std::fs::write(&tmp, render(pairs))?;
+    let linked = std::fs::hard_link(&tmp, path);
+    let _ = std::fs::remove_file(&tmp);
+    match linked {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(e),
+        Err(_) => exclusive_create(path, pairs),
+    }
+}
+
+fn exclusive_create<K: AsRef<str>, V: AsRef<str>>(
+    path: &Path,
+    pairs: &[(K, V)],
+) -> std::io::Result<()> {
     use std::io::Write;
-    ensure_parent(path).map_err(|DeviceError::Io { source, .. }| source)?;
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)?;
     f.write_all(render(pairs).as_bytes())
+}
+
+/// A sibling scratch name for `path`, unique to this **call**.
+///
+/// The pid alone is not enough, and that is not a theoretical concern: two
+/// threads of one process resolving their actors concurrently would derive
+/// the same scratch name, so one's `fs::write` truncates and interleaves
+/// with the other's, and whichever wins the publish (`rename` or
+/// `hard_link`) publishes a record neither writer composed. A device store
+/// that answers with a torn machine id hands every workspace on the
+/// machine a fresh actor.
+fn scratch_path(parent: &Path, path: &Path, suffix: &str) -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    parent.join(format!(
+        ".{}.{}.{}.{suffix}",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("record"),
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed),
+    ))
 }
 
 fn ensure_parent(path: &Path) -> Result<PathBuf, DeviceError> {

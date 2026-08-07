@@ -61,6 +61,49 @@ Use it.
 
 ---
 
+## How a change lands
+
+Four steps, and the split between them is deliberate.
+
+1. **Issue — the problem only.**
+   Expose the bug or request the capability.
+   **Do not put a proposed solution in the issue body.**
+   A solution written into the body stops reading as a proposal and starts reading as the plan, before anyone has argued with it — and six months later nobody can tell what was actually wrong from what someone guessed the fix would be.
+2. **Discussion — in the comments.**
+   Alternatives, trade-offs, objections, benchmarks all belong in the thread.
+   The body stays a problem statement so a newcomer can read what broke without reading how three people thought about fixing it.
+3. **PR — implementation *and* its RFC together.**
+   One PR, not two.
+   An RFC-only PR gets accepted and then the implementation drifts from it; an implementation-only PR gets merged and the reasoning survives only in the diff.
+   Whether you need an RFC at all is answered in [docs/rfcs/README.md](rfcs/README.md#do-i-need-an-rfc).
+   Roughly: yes if it touches an invariant, a data format, the CRDT, sync, or a projection path, or carries a trade-off someone might want to reverse.
+   No for a localized fix — that belongs in `CHANGELOG.md`.
+4. **Review and merge.**
+   The reviewer checks the RFC against the diff, not only the diff.
+   A diff that contradicts its own RFC is a blocker, the same as one that contradicts an invariant.
+
+### RFCs, invariants and tests are one mechanism
+
+An RFC on its own prevents nothing — nobody reads `docs/rfcs/` while editing `reconcile.rs`.
+So a change that can cost a user data lands three things together:
+
+| Layer | Where | Role |
+|---|---|---|
+| Reasoning | `docs/rfcs/NNNN-*.md` | Why the rule exists, what was rejected, what got worse |
+| Rule | root or per-crate `CLAUDE.md` | Read on every edit to that crate — the enforcing surface |
+| Proof | a named test | Fails mechanically when someone reverts the behaviour |
+
+The `CLAUDE.md` entry links to the RFC; the RFC names the tests in its **Guarded by** row.
+A rule with no RFC has no rationale and gets argued away in review.
+An RFC with no `CLAUDE.md` entry is never read at the moment it matters.
+Either one without a test is a comment.
+
+**Changing behaviour an RFC pinned means updating that RFC in the same PR** — amend it, or supersede it and mark the old one `Superseded by RFC NNNN`.
+[RFC 0210](rfcs/0210-md-content-outside-op-log.md) exists because #166 shipped a correct fix for one direction of a divergence and nobody wrote down what happened in the other; the mirrored case deleted user content for months.
+That is why the template's **The opposite direction** section is required and not optional.
+
+---
+
 ## Non-negotiable invariants
 
 These are blockers in review.
@@ -353,6 +396,9 @@ Map of canonical homes (extend as new ones are minted):
 | CRDT algorithm + invariants | [`docs/crdt.md`](crdt.md) | `outl-core/CLAUDE.md` |
 | Storage trait + JSONL backend | [`docs/storage.md`](storage.md) | `outl-core/CLAUDE.md` |
 | Sync model (iCloud / Syncthing / iroh roadmap) | [`docs/sync.md`](sync.md) | `outl-mobile/CLAUDE.md`, `outl-desktop/CLAUDE.md` |
+| iroh transport internals (pinned iroh 1.0.0 API surface, the named regression + chaos test catalog) | [`docs/iroh-internals.md`](iroh-internals.md) | `outl-sync-iroh/CLAUDE.md` |
+| iOS platform integration (bundle ids + entitlements, `BGTaskScheduler` wiring, iCloud layout + peer-file materialisation) | [`docs/ios-platform.md`](ios-platform.md) | `outl-mobile/CLAUDE.md` |
+| `outl://` deep links (scheme contract + per-client wiring) | [`docs/deep-links.md`](deep-links.md) | `outl-mobile/CLAUDE.md`, `outl-desktop/CLAUDE.md` |
 | MCP wiring + recipes | [`docs/mcp.md`](mcp.md) + [`docs/mcp-recipes.md`](mcp-recipes.md) | (no per-crate CLAUDE.md owns this today) |
 | Config file (`outl.toml`) | [`docs/config.md`](config.md) | per-crate CLAUDE.md where the field is read |
 | Theming palette + presets | [`docs/theming.md`](theming.md) | `outl-tui/CLAUDE.md`, `outl-desktop/CLAUDE.md` |

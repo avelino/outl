@@ -120,7 +120,11 @@ The only reason this was not a daily disaster is that iCloud Documents drops dot
   A remint invalidates every actor binding stamped with the old id, so each workspace forks.
   Platforms exposing no such identifier (iOS above all) are inconclusive and change nothing — a documented gap, not a silent one.
 
-Every device-store file is `key=value` lines written temp-file-then-rename, and a new binding is a compare-and-swap (`O_EXCL`), so two processes racing a first open converge instead of minting two actors.
+Every device-store file is `key=value` lines composed in a sibling temp file and published in one step, and a create is a compare-and-swap, so two processes racing a first open converge instead of minting two ids.
+The publish step is `link(2)`, not an `O_EXCL` open, because an `O_EXCL` open creates the file **empty** and fills it a moment later.
+A reader landing in that window parses a blank record as *absent* — exactly the answer that licenses it to overwrite the winner.
+`machine_id` mints under that same compare-and-swap, and it matters more there than for an actor binding.
+A lost actor costs one extra ops file; a lost machine id invalidates every binding **and** every `actor_claimed_by` claim already written into a workspace config, so those workspaces never adopt their own legacy ops file again.
 A bare legacy line (the Tauri clients' plain-ULID `actor` file) still parses.
 
 `device_dir()` honours `$OUTL_DEVICE_DIR` before the XDG layout.
@@ -141,6 +145,8 @@ Rules that follow:
 
 ### Snapshot dir has exactly one owner — the `Workspace`, keyed off `root`
 
+> Why boot needs the snapshot, the offset index and the lazy `Doc` together: [RFC 0128](../../docs/rfcs/0128-boot-and-memory-at-scale.md).
+
 The snapshot directory is derived **only** from the workspace `root` (`<root>/.outl/snapshots`), never from the storage's `ops_dir`.
 This was a real bug (#156): `JsonlStorage` used to derive its own `ops_dir.parent()/snapshots`.
 But production passes `ops_dir = <root>/ops` (not `<root>/.outl/ops`), so the storage read `<root>/snapshots` while the background writer wrote `<root>/.outl/snapshots`.
@@ -149,6 +155,8 @@ The fix removed snapshot I/O from the `Storage` trait entirely: storage owns the
 Never re-add `save_snapshot` / `load_snapshot` to `Storage` — that reintroduces the two-owners divergence.
 
 ### Block text is two-tier, not one live `Doc` per block
+
+> Why RSS had to become constant before boot did, with the measurements: [RFC 0137](../../docs/rfcs/0137-storage-scale.md).
 
 `Workspace`'s `ContentStore` does **not** keep a live Yrs `Doc` resident for every block.
 That was the cause of issue #108: a vault in the hundreds-of-thousands-of-blocks range held 0.5-1GB of resident docs and iOS jetsam killed the app on open.
@@ -212,6 +220,7 @@ They are properties of the algorithm proven in Kleppmann et al. 2022.
    A short read there is the worst case in the crate: `build_snapshot_body` derives the next cutoff from the **index**, so an omitted op gets recorded as already-folded-in and no later boot replays it again.
    `ops_for_node` is the sharpest of the four, because its result is replayed into a fresh Yrs `Doc` — a short read there doesn't shorten a list anyone inspects, it produces **wrong block text** (#129).
    Pinned by `tests/op_log_truncation.rs` and `src/storage/jsonl/read_robustness.rs`.
+   Full reasoning: [RFC 0129](../../docs/rfcs/0129-op-log-durability.md).
 
 ## Op log is the only sync surface
 

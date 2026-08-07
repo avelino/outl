@@ -9,6 +9,8 @@ The op log uses stable IDs.
 We need both, without visible metadata in the file.
 Every design decision here serves that.
 
+> **Why the dialect looks like this, and what it costs to add a token to it:** [RFC 0008](rfcs/0008-markdown-dialect-and-sidecar-tokens.md).
+
 ---
 
 ## The .md file
@@ -279,6 +281,8 @@ The on-disk sidecar still records the deterministic 6-char handle — the diverg
 Workspaces that ever expanded a handle to 7+ characters keep working forever because lookup goes through the in-memory handle, not the literal sidecar field.
 
 #### Asset links (`[name](assets/<hash>.<ext>)`)
+
+> **Why asset bytes are content-addressed blobs and deliberately outside the op log:** [RFC 0202](rfcs/0202-file-assets.md).
 
 An uploaded file is copied into `<workspace>/assets/` under its content hash and referenced from a block.
 `outl asset add`, the MCP `outl_asset_add` tool, and the desktop/mobile "Attach file" action all do this.

@@ -133,6 +133,20 @@ enum Command {
     Reconcile {
         /// Workspace path. Overrides the global `--workspace`.
         path: Option<PathBuf>,
+        /// Reconcile the pages whose `.md` holds content that exists in
+        /// no op, ignoring the sidecar hash gate.
+        ///
+        /// A page can be hash-faithful (sidecar agrees with the bytes on
+        /// disk) and still carry content the op log never saw, so the
+        /// ordinary reconcile skips it as in-sync — see issue #210. This
+        /// writes ops for that content, which is why it is opt-in.
+        ///
+        /// Run it only on a build whose parser preserves the content:
+        /// reconciling with a parser that drops prose after a block
+        /// property writes the truncated text into the log, making the
+        /// loss permanent.
+        #[arg(long = "ahead-of-log")]
+        ahead_of_log: bool,
     },
     /// Take, list, and restore local snapshots of the workspace.
     ///
@@ -335,9 +349,9 @@ fn main() -> Result<()> {
             }
             cmd::doctor::run(&p, repair)
         }
-        Some(Command::Reconcile { path }) => {
+        Some(Command::Reconcile { path, ahead_of_log }) => {
             let p = resolve_path(cli.workspace.as_ref(), path.as_ref())?;
-            cmd::reconcile::run(&p)
+            cmd::reconcile::run(&p, ahead_of_log)
         }
         Some(Command::Backup { sub }) => {
             let p = resolve_path(cli.workspace.as_ref(), None)?;

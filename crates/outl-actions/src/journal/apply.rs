@@ -1,6 +1,7 @@
 //! Write `.md` + `.outl` projections to disk — the `apply_*` family,
 //! `mutate_page_md`, and the workspace-wide sweep.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use outl_core::id::NodeId;
@@ -175,7 +176,60 @@ pub fn apply_page_md_with_sidecar_if_stale(
     if file_hash(&rendered) == disk_hash {
         return Ok(None);
     }
+    // `faithful` proves the sidecar agrees with these bytes — it does NOT
+    // prove the bytes came from the op log. A `reconcile_md` that rewrote
+    // the sidecar without emitting ops for everything it read leaves a
+    // page in exactly that state, and re-rendering the tree over it drops
+    // the difference for good. Refuse when disk holds content the render
+    // doesn't, so "stale projection" can never mean "unlogged content".
+    let unlogged = content_lines_missing_from(&disk, &rendered);
+    if let Some(sample) = unlogged.first() {
+        return Err(ActionError::PageMarkdownAheadOfLog {
+            path: path.display().to_string(),
+            lines: unlogged.len(),
+            sample: format!("{sample:?}"),
+        });
+    }
     write_page_projection(workspace, root, page_root, &meta, &rendered).map(Some)
+}
+
+/// The content lines present in `disk` that `rendered` does not account
+/// for, compared as a multiset so a line duplicated on disk but written
+/// once by the renderer still counts as at-risk.
+///
+/// A multiset rather than a diff on purpose: a line the renderer merely
+/// **moved** is not at risk, and an LCS diff reports it as unique to disk.
+/// On a real 2.5k-page workspace that difference is 616 pages flagged
+/// versus 233 genuinely holding unlogged content.
+///
+/// Trailing whitespace and blank lines are ignored: the renderer's exact
+/// trailing-newline behaviour has changed across releases, and treating
+/// that as content would refuse to re-project a large share of a real
+/// workspace for a difference the user cannot see. Everything else is
+/// compared verbatim — this decides whether bytes get deleted, so it errs
+/// toward calling a line at-risk.
+///
+/// Public because `outl doctor` must reach the *same* verdict in its
+/// read-only listing that `--repair` reaches when it writes; two opinions
+/// about which pages are safe is how a listing promises a repair the pass
+/// then silently skips.
+pub fn content_lines_missing_from(disk: &str, rendered: &str) -> Vec<String> {
+    fn content_lines(s: &str) -> impl Iterator<Item = &str> {
+        s.lines().map(str::trim_end).filter(|l| !l.is_empty())
+    }
+
+    let mut available: HashMap<&str, usize> = HashMap::new();
+    for line in content_lines(rendered) {
+        *available.entry(line).or_insert(0) += 1;
+    }
+    let mut missing = Vec::new();
+    for line in content_lines(disk) {
+        match available.get_mut(line) {
+            Some(n) if *n > 0 => *n -= 1,
+            _ => missing.push(line.to_string()),
+        }
+    }
+    missing
 }
 
 /// Construct a sidecar that lines up with the `.md` we just rendered

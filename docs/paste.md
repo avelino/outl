@@ -9,6 +9,8 @@ The goal is that whatever you copied — a Slack message, a Google Doc paragraph
 The chords are per-client; the full table lives in [Shortcuts](shortcuts.md).
 In short: desktop `Cmd/Ctrl+V` (with) and `Cmd/Ctrl+Shift+V` (without); TUI `p` (with) and `Shift+P` (without); mobile is always with formatting.
 
+> **Why copy-out and paste-in are one pair, and why the core speaks exactly one format:** [RFC 0044](rfcs/0044-clipboard-and-paste.md).
+
 ## Paste with formatting
 
 This is the default paste (`Cmd/Ctrl+V`, TUI `p`, every mobile paste).

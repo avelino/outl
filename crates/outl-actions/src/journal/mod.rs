@@ -39,7 +39,7 @@ mod tests;
 pub use apply::{
     apply_all_pages_md, apply_page_md, apply_page_md_with_sidecar,
     apply_page_md_with_sidecar_if_absent, apply_page_md_with_sidecar_if_stale,
-    apply_page_md_with_sidecar_rendered, mutate_page_md,
+    apply_page_md_with_sidecar_rendered, content_lines_missing_from, mutate_page_md,
 };
 pub use paths::{journals_dir, page_md_path, pages_dir, remove_page_projection, write_md_atomic};
 pub use render::{render_block_md, render_page_md};

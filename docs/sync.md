@@ -275,6 +275,8 @@ That's why [the test battery][tests] is huge and the coverage target on the four
 
 ## Transport: a trait, not a hard-coded provider
 
+> **Why iroh is the default, and why a joiner adopts the host's workspace id:** [RFC 0038](rfcs/0038-sync-transport-and-workspace-identity.md).
+
 The algorithm runs on every device; the *transport* is whatever ships each actor's `ops-*.jsonl` to every other device.
 Both transports outl ships today sit behind one trait, `outl_actions::SyncTransport`:
 
@@ -350,7 +352,7 @@ Two iCloud-specific decisions fall out of this transport:
   Note this is also why iCloud never exposed the shared-actor bug above: `.outl/` simply never travelled.
 - **Peer files must be force-materialised before reads.** iCloud syncs metadata before content; a `std::fs::open` on a freshly notified file may read an empty placeholder.
   The mobile client wraps every read in `NSFileCoordinator` after calling `startDownloadingUbiquitousItemAtURL` so the Rust side never sees a placeholder.
-  Details in [`crates/outl-mobile/CLAUDE.md`](../crates/outl-mobile/CLAUDE.md#peer-file-materialisation-the-icloud-catch).
+  Details in [ios-platform.md](ios-platform.md#peer-file-materialisation-the-icloud-catch).
 
 ### Transport 2: `iroh` (P2P)
 
@@ -379,6 +381,8 @@ What it gives you:
   The `file` transport gets them for free from the folder sync.
   Over iroh they travel on a dedicated `outl-asset/1` stream that negotiates a manifest of the peer's asset filenames (the names are content hashes), then pulls only the files the device is missing, verifying each against its hash.
   This runs after pairing and continuously on the catch-up loop, so a `SyncProgress` `asset` phase reports byte progress as large files transfer.
+
+> **A paired peer is not a trusted peer** — what the sync read path must still validate, and why `peers.json` needs an atomic write: [RFC 0155](rfcs/0155-peer-trust.md).
 
 The device identity is per-machine and lives in `~/.outl/`; the paired-peer list is per-graph and lives inside the workspace, in `<workspace>/.outl/`:
 
@@ -576,7 +580,7 @@ This needs **Background App Refresh** enabled for outl (Settings → outl → Ba
 The toggle only appears because the app declares `UIBackgroundModes` + `BGTaskSchedulerPermittedIdentifiers`; with it off, sync only happens while the app is open.
 There's no battery cost to speak of — the OS schedules the windows, and each pass is a short op-log diff, not a live connection.
 
-> Wiring (Info.plist → `OutlBackgroundRefresh.swift` → the `bg_sync.rs` FFI that drives `sync_now`) is documented in [`crates/outl-mobile/CLAUDE.md`](../crates/outl-mobile/CLAUDE.md#background-sync-ios).
+> Wiring (Info.plist → `OutlBackgroundRefresh.swift` → the `bg_sync.rs` FFI that drives `sync_now`) is documented in [ios-platform.md](ios-platform.md#background-sync-ios).
 
 ---
 
