@@ -13,7 +13,7 @@ Grep all four files together — they are one catalog:
 grep -n 'the_symbol' docs/shared-primitives.md docs/primitives-*.md
 ```
 
-> The catalog is mirrored (in condensed, review-checklist form) at [`.github/copilot-instructions.md`](https://github.com/avelino/outl/blob/main/.github/copilot-instructions.md) §5.1.
+> The catalog is mirrored (in condensed, review-checklist form) at [`.github/instructions/shared-primitives.instructions.md`](https://github.com/avelino/outl/blob/main/.github/instructions/shared-primitives.instructions.md), a path-scoped Copilot instruction file (`applyTo: crates/**`).
 > When you edit any part, sync that mirror — a `PostToolUse` hook flags drift, but the discipline starts before the hook fires.
 
 For the reuse-first rule (why this matters, past drift incidents, what to do when a primitive doesn't exist yet), see [Contributing → Reuse-first](contributing.md#reuse-first-no-parallel-implementations).
@@ -71,7 +71,7 @@ If you've grepped honestly and the primitive doesn't exist, that's a fair sign �
 - **`outl-actions`** for workspace mutations, ingest, page/journal helpers
 - **`outl-core`** for op-log / tree / HLC / storage trait
 
-Then add its row to the matching part **in the same commit**, and sync the mirror at `.github/copilot-instructions.md` §5.1.
+Then add its row to the matching part **in the same commit**, and sync the mirror at `.github/instructions/shared-primitives.instructions.md`.
 The `PostToolUse` hook will flag drift, but the discipline starts before the hook fires.
 
 For the broader reuse-first rule and past drift incidents that justify this catalog, see [Contributing → Reuse-first](contributing.md#reuse-first-no-parallel-implementations).

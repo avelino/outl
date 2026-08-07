@@ -163,7 +163,7 @@ case "$crate_dir" in
         msg+="       docs/primitives-core.md (op log / tree / sync / storage / backups),\n"
         msg+="       docs/primitives-markdown.md (parse / render / sidecar / index / inline / assets),\n"
         msg+="       docs/primitives-actions.md (block + page mutations, backlinks, exec, templates, reminders)\n"
-        msg+="       AND .github/copilot-instructions.md §5.1.\n"
+        msg+="       AND .github/instructions/shared-primitives.instructions.md.\n"
         msg+="       (docs/shared-primitives.md is the index — it carries links, not rows.)\n"
         msg+="       (catalog-sync-guard.sh verifies the catalog and its mirror stay in sync.)"
         warnings+=("$(printf "$msg" "$rel")")

@@ -81,6 +81,19 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ### Added
 
+- **`outl reconcile --ahead-of-log` — the `.md → tree` direction on pages the ordinary reconcile cannot see.**
+  A page holding content the op log never saw is *hash-faithful*: its sidecar agrees with the bytes on disk, so `needs_reconcile` reads it as in-sync and skips it.
+  Fixing the parser that produced that state does not recover anything by itself, which took measuring to notice — `serve --once` applied **0 ops** to all 233 such pages on the measured workspace.
+  The flag clears the recorded hash on exactly the pages `doctor` names and reconciles them, which emits ops for that content.
+  Opt-in on purpose, and it prints the page count and line count before it writes: this is a deliberate write, not a repair.
+  Detection is `outl_actions::content_lines_missing_from` against the sidecar's blocks, the same owner `doctor` and the write-side guard use, so the three cannot disagree about which pages qualify.
+  Run it only on a build whose parser preserves the content — reconciling with one that still drops prose after a block property writes the truncated text into the log, which is the one place the loss currently is not.
+
+- **`CURRENT_PIPELINE_VERSION` goes 2 → 3, which recovers the existing content without a command.**
+  The constant exists to force a re-reconcile when the pipeline could produce a different op log for the same `.md`, and a parser that now reads prose it used to discard is exactly that.
+  Every existing sidecar becomes stale by pipeline, so the first boot per device is a one-shot migration: **323 ops applied, 233 pages down to 79** on the measured workspace, and 29 after the guard was corrected to compare against the sidecar.
+  One slower boot per device, additive (the change only ever captures *more* text), and crash-safe, since the stamp is per page so partial progress is kept.
+
 - **RFCs: `docs/rfcs/`, 16 documents, and a process that ties reasoning to an enforceable rule.**
   outl already recorded evolution in four places (a lone RFC, the decision table in the root `CLAUDE.md`, `CHANGELOG.md`, `docs/design/`), so a fifth format would have broken the one-owner-per-fact rule that keeps the shortcut and CLI tables from diverging.
   ADRs were considered and rejected for a sharper reason: **an ADR would not have prevented the bug that prompted this.**
@@ -120,7 +133,7 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 - **`.github/copilot-instructions.md`: 39,980 → 10,548 chars, split into path-scoped instruction files** (issue #215).
   It sat ~20 chars under the size ceiling and roughly six times over GitHub's own "no longer than 2 pages" guidance, which made the two hooks contradict each other: adding a required catalog mirror row overflowed `markdown-size-guard`, while `catalog-sync-guard` required that row to exist.
   Now four `.github/instructions/*.instructions.md` files carry `applyTo` globs and load **in addition** to the repo-wide file, so a Solid PR no longer pays for the Rust bar plus 17k of Rust primitives catalog.
-  `markdown-size-guard` had to be extended: its `.github/*.md` glob does not match a subdirectory, so the new files would have had no ceiling at all.
+  `markdown-size-guard` already covers the new files: `*` matches `/` in a bash `case`, so `.github/*.md` reaches into `.github/instructions/` on its own.
   Note for anyone adding a rule: **there is no include mechanism** — each file loads whole or not at all, so anything that must always apply belongs in the repo-wide file.
 
 - **Three per-crate `CLAUDE.md` files were at or over the 40k ceiling; extracted to reference docs** (issue #216).

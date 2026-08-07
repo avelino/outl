@@ -43,13 +43,21 @@ The question after "did I fix it?" is **"where does the problem live now, and wh
 
 Three things, in increasing generality.
 
-**The specific fix.**
-Every test that opens a workspace resolves the device store inside its own temp directory, so no test can reach `~/.config/outl`.
-The mechanism deliberately avoids per-test `std::env::set_var`: Rust tests share a process, so mutating a process-global from many threads is racy by construction — the fix cannot be another instance of the bug.
+**The isolation, which already existed.**
+`.cargo/config.toml` sets `OUTL_DEVICE_DIR = "target/device-store"` under `[env]`, so every process cargo launches resolves the store inside the repo rather than in `~/.config/outl`.
+One repo-wide value, not a temp dir per test: `std::env::set_var` is process-global and Rust tests share a process, so mutating it per test would be racy by construction, and the fix cannot be another instance of the bug.
+Two gaps the mechanism does not cover, both worth knowing: a git worktree created before that file existed has no copy of it, and cargo only exports `[env]` to processes it launches, so invoking a built binary directly still reaches the real store.
 
 **The guard.**
-A test asserts that running the suite creates nothing outside its temp directories.
-Without it, nothing catches the next test that escapes, and "64 entries" is what "nothing catches it" looks like after a year.
+`outl-core`'s `the_test_suite_runs_against_an_isolated_device_store` fails outright when the override is missing.
+`outl-ws`'s `device_isolation` asserts it from the other side: `open` binds its actor under `device_dir()` and leaks no identity into the workspace.
+Without them, nothing catches the next path that escapes, and "64 entries" is what "nothing catches it" looks like after a year.
+
+**The production bug the shared store exposed.**
+`DeviceStore::machine_id` minted with a plain write while `bind` used a compare-and-swap, so two processes reaching a fresh store both minted an id and the last writer won.
+`outl init` racing `outl serve` on a new machine permanently broke that workspace's actor claim.
+The compare-and-swap was also failing open: a bare `O_EXCL` open creates an empty file, and every reader maps a blank record to "absent", which is exactly the answer that licenses overwriting.
+Minting now goes through `create_new_record`, which composes in a temp file and publishes with `link(2)`.
 
 **The rule, as invariant 9 in the root `CLAUDE.md`.**
 When state moves across a boundary — out of the workspace, out of a file, out of the op log, into a global — the RFC that moves it must state what the new location requires.
@@ -62,9 +70,11 @@ The 15 orphans are the answer to the fourth question being "nothing".
 The flakiness is a symptom, and the cheap read of it ("tests are racy, add a mutex") leaves the suite still writing to the user's machine.
 It also leaves the next test free to do the same, since nothing would object.
 
-**Set `OUTL_DEVICE_DIR` in a test harness once, globally.**
-Tempting and nearly right, but it makes correctness depend on how the suite is launched.
-A test run through an IDE, a single `cargo test --bin`, or a doctest would skip the harness and quietly touch the real store — the failure mode being fixed, in the configuration people actually debug in.
+**Set `OUTL_DEVICE_DIR` from a test harness (a `#[ctor]`, a shared `setup()`).**
+Rejected, and the distinction against what shipped is narrow enough to be worth stating.
+A *harness* makes correctness depend on the harness running, so a single `cargo test --bin`, a doctest, or a run through an IDE could skip it and quietly touch the real store.
+`[env]` in `.cargo/config.toml` is set by cargo itself before the process starts, so it holds for every one of those, including `cargo run`.
+It buys that at the cost of not covering what cargo does not launch, which is why invoking a built binary by hand still writes to the real store.
 
 **Make `device_dir()` panic outside a temp dir under `cfg!(test)`.**
 Attractive as a hard guarantee, and wrong at the boundary: `cfg!(test)` is false in integration tests (`tests/*.rs`), which is where most of the offenders live, so it would guarantee the wrong half.
@@ -111,7 +121,7 @@ It is a product decision (when is an entry safe to drop?), not a test-hygiene on
 **Not covered — the `CLAUDE.md` ceiling.**
 The three oversized files are being extracted into `docs/`.
 The general problem the third incident revealed — a guard with no escape hatch — has no mechanism here.
-The ceiling is at least enforced consistently now: `.github/instructions/*.md` was exempt through a glob that stopped at `.github/`.
+The ceiling does already cover the new path-scoped instruction files, since `*` matches `/` in a bash `case` — a redundant arm added on the assumption it did not has been removed.
 
 **Not covered — the other five test gaps.**
 Writing the retroactive RFCs surfaced behaviour nothing pins, listed in [`README.md`](README.md#gaps-these-rfcs-surfaced).

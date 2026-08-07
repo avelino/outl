@@ -115,9 +115,13 @@ How a page reaches this state is still open on [#210](https://github.com/avelino
 The suspect is `reconcile_md` rewriting the sidecar to agree with a file it did not fully emit ops for (`crates/outl-md/src/reconcile.rs:93,155,261`).
 This RFC prevents the deletion; it does not stop the state from being created.
 
-**Not covered — recovering existing content.**
-The 1,426 lines on the measured workspace are still outside the log.
-`outl reconcile` owns the `.md → tree` direction, and nothing today walks a user through 233 pages of it.
+**Covered, but only because measuring proved the parser fix was not enough.**
+Reading those lines again recovers nothing on its own: the sidecar already carries the hash of the file *with* the content, so the page reads as in-sync and the reconcile never looks at it.
+Measured: `serve --once` applied **0 ops** to all 233 pages.
+Two things close it.
+`CURRENT_PIPELINE_VERSION` goes 2 → 3, which makes every existing sidecar stale by pipeline and turns the first boot into a one-shot migration (323 ops, 233 pages down to 29 on the measured workspace).
+`outl reconcile --ahead-of-log` is the explicit escape hatch for whatever the migration leaves, clearing the recorded hash on exactly the pages `doctor` names.
+The remaining 29 are a different class: tabs, non-breaking spaces and `*` bullets inherited from Roam, which the parser still does not read.
 
 **Not covered — volume guards.**
 Matching level 3 trashes 1 block and 5,000 identically (`crates/outl-md/src/matching.rs:295`), and re-projection deleted across 233 files in one pass with no threshold and no count in the output.

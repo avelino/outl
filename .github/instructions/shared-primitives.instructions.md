@@ -7,8 +7,8 @@ applyTo: "crates/**"
 
 # Shared primitives catalog
 
-The catalog is indexed at [`docs/shared-primitives.md`](../docs/shared-primitives.md).
-Its rows live in [`primitives-core.md`](../docs/primitives-core.md), [`primitives-markdown.md`](../docs/primitives-markdown.md) and [`primitives-actions.md`](../docs/primitives-actions.md); the index says which part owns what.
+The catalog is indexed at [`docs/shared-primitives.md`](../../docs/shared-primitives.md).
+Its rows live in [`primitives-core.md`](../../docs/primitives-core.md), [`primitives-markdown.md`](../../docs/primitives-markdown.md) and [`primitives-actions.md`](../../docs/primitives-actions.md); the index says which part owns what.
 Before approving a helper, grep all four (`docs/shared-primitives.md docs/primitives-*.md`) and scan the relevant sub-table.
 If the diff adds a primitive that overlaps with a catalog entry, it is a duplicate — block the PR and point at the existing function with `file:line`.
 
@@ -97,7 +97,7 @@ Recently added — check these before writing a parallel template helper (catalo
 | Content-hash an uploaded file's bytes / build its workspace-relative link target / test whether a link points at a workspace asset / test whether a name is a safe asset basename (anti-traversal, the one owner the P2P transport validates peer-sent names through) — all pure, no filesystem | `outl_md::hash_bytes` / `outl_md::asset_rel_path` / `outl_md::is_asset_link` / `outl_md::is_safe_asset_name` (+ `outl_md::ASSETS_DIR`) | `crates/outl-md/src/asset.rs` |
 | Copy an uploaded file into `<root>/assets/<hash>.<ext>` (content-addressed, atomic, size-capped by `[assets] max_bytes`; `import_asset_bytes` takes already-in-memory bytes for a remote image downloaded during a Roam import) and resolve a `[name](assets/…)` link back to an on-disk path (traversal-safe) — the bytes never enter the op log, only the link does | `outl_actions::import_asset` / `outl_actions::import_asset_bytes` / `outl_actions::resolve_asset_path` | `crates/outl-actions/src/asset.rs` |
 
-Frontend shared primitives (`@outl/shared`) — canonical home is [`crates/outl-frontend-shared/CLAUDE.md`](../crates/outl-frontend-shared/CLAUDE.md) → "Today's surface"; the embed / block-ref pieces the desktop wires for issue #147:
+Frontend shared primitives (`@outl/shared`) — canonical home is [`crates/outl-frontend-shared/CLAUDE.md`](../../crates/outl-frontend-shared/CLAUDE.md) → "Today's surface"; the embed / block-ref pieces the desktop wires for issue #147:
 
 | Intent | Use this | File |
 |---|---|---|

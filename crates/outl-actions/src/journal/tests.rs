@@ -130,8 +130,9 @@ fn restamp_sidecar_as_faithful(md_path: &PathBuf) {
 
 /// The `.md` is a *faithful* projection by the hash gate — its sidecar
 /// agrees with the bytes on disk — yet it carries content that exists in no
-/// op. Measured on a real 2.5k-page workspace: 616 pages in that exact
-/// state, ~3.7k lines of content the log had never seen.
+/// op. Measured on a real 2.5k-page workspace: 233 pages in that exact
+/// state, 1,426 lines of content the log had never seen. (616 is what an
+/// LCS diff reports, which is why the comparison is a multiset.)
 ///
 /// The hash gate cannot tell this apart from a genuinely stale projection,
 /// and the old code called both "stale" and re-projected, which deletes
@@ -260,6 +261,66 @@ fn if_stale_does_not_block_on_a_sidecar_with_no_text() {
     assert!(std::fs::read_to_string(&md_path)
         .unwrap()
         .contains("synced-in"));
+}
+
+/// Four defects in the comparison itself, all found by AI review on the
+/// PR and reproduced with a probe before fixing.
+///
+/// An **empty block** is a first-class state (every Enter in the TUI makes
+/// one) and its sidecar entry carries `text: ""`, so a sentinel that stood
+/// down whenever *any* block had empty text disarmed the guard for the
+/// whole page. Standing down only when *every* block is empty is the
+/// legacy case it was meant for — but that alone reintroduces #166,
+/// because the renderer emits a bare `-` for an empty block and a bare
+/// `-` matched nothing on the sidecar side.
+///
+/// The other two are false negatives, where unlogged content slips
+/// through: stripping the bullet marker repeatedly turned `- - - x` into
+/// `x`, and filtering `key:: value` on the disk side hid content the
+/// parser stores as a block's own text.
+#[test]
+fn content_comparison_handles_empty_blocks_and_marker_edge_cases() {
+    fn blk(n: u128, text: &str) -> outl_md::sidecar::SidecarBlock {
+        outl_md::sidecar::SidecarBlock::from_text(NodeId(ulid::Ulid(n)), 1, 0, text)
+    }
+
+    // An empty block among logged ones: the page is fully logged.
+    let logged = vec![blk(1, "first"), blk(2, ""), blk(3, "third")];
+    assert!(
+        content_lines_missing_from("- first\n-\n- third\n", &logged).is_empty(),
+        "an empty block is logged content, not a reason to flag or to stand down"
+    );
+
+    // And the guard still fires on the same page when a line really is
+    // absent from the log.
+    assert_eq!(
+        content_lines_missing_from("- first\n-\n- unlogged\n", &logged),
+        vec!["unlogged".to_string()],
+        "an empty block must not disarm the guard for the rest of the page"
+    );
+
+    // The marker is stripped once, so a block whose text itself starts
+    // with `- ` cannot be laundered into matching a different block.
+    assert_eq!(
+        content_lines_missing_from("- - - x\n", &[blk(9, "x")]),
+        vec!["- - x".to_string()],
+        "stripping the marker repeatedly let unlogged content pass"
+    );
+
+    // A bullet whose text looks like a property is content: that is how
+    // the parser stores it.
+    assert_eq!(
+        content_lines_missing_from("- note:: remember\n", &[blk(8, "other")]),
+        vec!["note:: remember".to_string()],
+        "property-shaped block text must not be invisible to the guard"
+    );
+
+    // A property line the renderer emits for page or block props has no
+    // bullet and never lives in a block's text, so it stays skipped.
+    assert!(
+        content_lines_missing_from("title:: Notes\n- first\n", &[blk(1, "first")]).is_empty(),
+        "a rendered page property is not unlogged content"
+    );
 }
 
 /// The counterpart that must keep working: the tree genuinely ran ahead

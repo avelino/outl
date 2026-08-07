@@ -2,7 +2,7 @@
 applyTo: "crates/**"
 ---
 
-## 5.2 Reuse-first violations — no parallel implementations
+## Reuse-first violations — no parallel implementations
 
 Duplication here is a real hazard: two implementations of the same logic drift apart over time, and the user is the one who hits the divergence.
 
@@ -13,7 +13,7 @@ Duplication here is a real hazard: two implementations of the same logic drift a
 - PR #47 (Logseq import) opened with `crates/outl-cli/src/cmd/import/normalize.rs` reimplementing `\r\n` handling, `id::` stripping, and long-form date rewriting — every one of which `outl_actions::paste::normalize_external_syntax` already owned.
   (That directory has since been replaced by the adapter-based `crates/outl-import`; the lesson carries over.)
   Caught in review *after* a Claude-assisted PR shipped without the catalog being visible.
-  That's why §5.1 exists.
+  That is why the shared primitives catalog exists (see `shared-primitives.instructions.md`).
 
 The rule the PR author was expected to follow:
 
@@ -53,7 +53,7 @@ Anything else is a blocker.
   A new trait or generic with one impl and no second use case in sight.
   The Rule of Three applies — concrete first, abstract on the third caller.
 
-## 5.3 Documentation drift — block PRs that change behavior without updating the dev/contrib docs
+## Documentation drift — block PRs that change behavior without updating the dev/contrib docs
 
 `docs/development.md` (engineer onramp) and `docs/contributing.md` (review policy) are the two pages a new contributor reads before opening their first PR.
 A stale onramp is **worse than no onramp** because it sends contributors confidently into a wall — they follow steps that no longer work and silently distrust the project the rest of the way.

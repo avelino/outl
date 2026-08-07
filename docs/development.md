@@ -440,7 +440,7 @@ The rule from the root `CLAUDE.md` is: any operation more than one client needs 
 3. Routes every mutation through `Workspace::apply` — no direct storage writes.
 4. Add an integration test in `crates/outl-actions/tests/`.
 5. Wire the TUI / mobile / desktop calls in their respective crates.
-6. Add the function to the Shared primitives catalog (root `CLAUDE.md` §5.1 + mirror in `.github/copilot-instructions.md`).
+6. Add the function to the Shared primitives catalog (`docs/primitives-*.md` + mirror in `.github/instructions/shared-primitives.instructions.md`).
 
 ### Add an MCP tool
 

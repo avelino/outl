@@ -65,10 +65,11 @@ chars=$(wc -c < "$file_path" | tr -d ' ')
 is_strict=0
 case "$rel" in
   CLAUDE.md|*/CLAUDE.md) is_strict=1 ;;
+  # `*` matches `/` in a bash `case`, so this covers the path-scoped
+  # instruction files under .github/instructions/ too. They are loaded
+  # whole by Copilot exactly like the repo-wide file, so the same ceiling
+  # applies.
   .github/*.md) is_strict=1 ;;
-  # Path-scoped Copilot instructions are loaded whole too, same as the
-  # repo-wide file — the glob above stops at `.github/`, so name them.
-  .github/instructions/*.md) is_strict=1 ;;
 esac
 
 if [ "$is_strict" = "1" ]; then
