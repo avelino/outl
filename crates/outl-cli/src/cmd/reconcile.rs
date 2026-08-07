@@ -146,6 +146,7 @@ fn run_ahead_of_log(path: &Path) -> Result<()> {
     );
     if failed > 0 {
         println!("Re-run to retry the failures; their `.md` is untouched.");
+        anyhow::bail!("ahead-of-log recovery failed for {failed} page(s)");
     } else {
         println!("Run `outl doctor` to confirm nothing is left outside the log.");
     }
