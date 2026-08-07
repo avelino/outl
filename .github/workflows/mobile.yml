@@ -63,7 +63,7 @@ concurrency:
 jobs:
   rust-check:
     name: rust (fmt + clippy + test) — outl-mobile
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
@@ -94,7 +94,7 @@ jobs:
 
   frontend:
     name: frontend (vitest + build)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     defaults:
       run:
         working-directory: crates/outl-mobile
@@ -120,7 +120,7 @@ jobs:
   # (see project.pbxproj → XCLocalSwiftPackageReference).
   swift-tests:
     name: swift (OutlKit unit tests)
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-15
     defaults:
       run:
         working-directory: crates/outl-mobile/swift/OutlKit
@@ -133,7 +133,7 @@ jobs:
 
   ios-build:
     name: iOS Simulator build (opt-in)
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-15
     # Run when explicitly requested or on a PR labelled `ios-build`.
     if: |
       github.event_name == 'workflow_dispatch' &&
@@ -205,7 +205,7 @@ jobs:
   # ----------------------------------------------------------------
   ios-release:
     name: iOS device build (signed IPA artifact)
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-15
     needs: [rust-check, frontend, swift-tests]
     if: |
       github.event_name == 'push' ||
