@@ -48,7 +48,7 @@ concurrency:
 jobs:
   prepare:
     name: Compute version
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     outputs:
       base: ${{ steps.compute.outputs.base }}
       version: ${{ steps.compute.outputs.version }}
@@ -93,7 +93,7 @@ jobs:
     name: Create tag
     needs: prepare
     if: needs.prepare.outputs.create_tag == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
         with:
@@ -117,7 +117,7 @@ jobs:
     needs: [prepare, tag]
     # `tag` is skipped for tag-triggered runs; don't let that fail us.
     if: always() && needs.prepare.result == 'success' && (needs.tag.result == 'success' || needs.tag.result == 'skipped')
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
         with:
@@ -163,21 +163,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
+          - os: blacksmith-6vcpu-macos-15
             target: aarch64-apple-darwin
             artifact: outl-macos-arm64
-          # Cross-compile to Intel macOS from the ARM `macos-latest`
-          # runner. We previously used `macos-13` here, but GitHub's
-          # macos-13 runner pool got depleted and jobs sat queued for
-          # ~14h before timing out. outl is pure Rust with no system
-          # libs that need linking, so cross-compile works cleanly.
-          - os: macos-latest
+          # Cross-compile to Intel macOS from the Apple Silicon
+          # runner. We previously used `macos-13` here, but the Intel
+          # macOS pool got depleted and jobs sat queued for ~14h
+          # before timing out. outl is pure Rust with no system libs
+          # that need linking, so cross-compile works cleanly.
+          - os: blacksmith-6vcpu-macos-15
             target: x86_64-apple-darwin
             artifact: outl-macos-x64
-          - os: ubuntu-latest
+          - os: blacksmith-8vcpu-ubuntu-2404
             target: x86_64-unknown-linux-gnu
             artifact: outl-linux-x64
-          - os: windows-latest
+          - os: blacksmith-4vcpu-windows-2025
             target: x86_64-pc-windows-msvc
             artifact: outl-windows-x64
 
@@ -388,7 +388,7 @@ jobs:
     # runner's glibc + webkit2gtk, so building on the oldest supported
     # image gives the widest downstream compatibility. `ubuntu-latest`
     # (24.04) would raise the glibc floor and break older distros.
-    runs-on: blacksmith-4vcpu-ubuntu-2204
+    runs-on: blacksmith-8vcpu-ubuntu-2204
     steps:
       - uses: actions/checkout@v4
         with:
@@ -494,7 +494,7 @@ jobs:
     name: build Android (arm64 APK)
     needs: [prepare, create_release]
     if: needs.create_release.result == 'success'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     # Optimized (release-build) APK, debug-signed, attached to the GitHub
     # Release (no Google Play). Like iOS, the build is RELEASE (optimized);
     # only the *signature* is a throwaway debug key — a real upload
@@ -644,7 +644,7 @@ jobs:
       needs.build.result == 'success' &&
       needs.build_desktop.result == 'success' &&
       needs.build_desktop_linux.result == 'success'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
 
@@ -665,7 +665,7 @@ jobs:
     # GA cask by hand the first time; after that we can add a
     # similar job for GA.
     if: needs.publish_release.result == 'success' && needs.prepare.outputs.prerelease == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions:
       contents: write
     steps:
@@ -735,7 +735,7 @@ jobs:
     # Both publish under the `latest` dist-tag, so `npm i @outl/plugin-sdk`
     # always resolves the newest build cut from main.
     if: needs.prepare.result == 'success'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     # `NPM_TOKEN` lives in the `release` environment.
     environment: release
     steps:
@@ -805,7 +805,7 @@ jobs:
     # {`outl-core`, `outl-md`, `outl-exec`}); every other crate carries
     # `publish = false` in its manifest.
     if: needs.prepare.result == 'success'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     # `CARGO_REGISTRY_TOKEN` lives in the `release` environment.
     environment: release
     steps:

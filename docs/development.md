@@ -597,13 +597,42 @@ cargo test -p outl-actions --release --test composite_write_bench -- --ignored -
 
 | Workflow | Triggers | What it runs | Blocks merge? |
 |---|---|---|---|
-| [`ci.yml`](../.github/workflows/ci.yml) | Push / PR to `main` (skipped on docs-only) | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo doc -D warnings`, plus a dedicated **`sync`** job (`outl-core` + `outl-sync-iroh` with `PROPTEST_CASES=1024`). Excludes `outl-mobile` + `outl-desktop`. Test matrix: `ubuntu-latest` + `macos-latest`. | **Yes** |
+| [`ci.yml`](../.github/workflows/ci.yml) | Push / PR to `main` (skipped on docs-only) | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo doc -D warnings`, plus a dedicated **`sync`** job (`outl-core` + `outl-sync-iroh` with `PROPTEST_CASES=1024`). Excludes `outl-mobile` + `outl-desktop`. Test matrix: `test (linux)` + `test (macos)`. | **Yes** |
 | [`mobile.yml`](../.github/workflows/mobile.yml) | Push / PR touching mobile paths | Frontend tests, Swift tests, Rust mobile crate, iOS archive + sign on `push` | Mobile changes only |
 | [`desktop.yml`](../.github/workflows/desktop.yml) | Push / PR touching desktop paths | Tauri build matrix (macOS/Linux/Windows) | Desktop changes only |
 | [`bench.yml`](../.github/workflows/bench.yml) | Push / PR touching `outl-md`, plus weekly cron | Criterion (small/medium/large) on every PR; xlarge + CLI hyperfine on cron / manual dispatch. Artifacts retained 14–30 days. | No (informational) |
 | [`release.yml`](../.github/workflows/release.yml) | Push to `main` (beta), `v*` tag (GA), manual | Computes version from `Cargo.toml`, builds CLI + TUI matrix, builds universal desktop dmg, drafts release, uploads assets, publishes, bumps Homebrew tap (`Formula/outl-beta.rb` + `Casks/outl-desktop-beta.rb`), publishes `@outl/plugin-sdk` to npm and the embedder lib crates to crates.io. | n/a |
 | [`testflight.yml`](../.github/workflows/testflight.yml) | `Mobile` workflow completing successfully | Downloads the signed `.ipa`, uploads to App Store Connect via `xcrun altool`, sets "What to Test" notes via App Store Connect API. | n/a |
 | [`cleanup-tags.yml`](../.github/workflows/cleanup-tags.yml) | Cron | Garbage-collects stale beta tags. | n/a |
+
+### Runner sizing
+
+Every workflow runs on Blacksmith runners (`runs-on: blacksmith-<n>vcpu-<image>`), never on GitHub-hosted ones.
+Billing is per vCPU-minute, with a platform multiplier on top: ARM 0.625x, x64 Linux 1x, Windows 2x, macOS 6.67x.
+That multiplier is why job placement matters more than job speed: a 29s macOS job costs more than a 5min Linux one.
+
+Two rules follow from it, and both are already applied in the workflows:
+
+1. **Only platform-specific work runs on macOS or Windows.**
+   Anything that produces the same result on Linux runs on Linux, once.
+   `mobile.yml::rust-check` builds `outl-mobile` only for this reason — `outl-actions` / `outl-core` / `outl-md` are covered by `ci.yml::test`, and running their suites again on macOS was 55% of a full run's bill.
+2. **Size the SKU from measured CPU and memory, not from intuition.**
+   `blacksmith jobs stats <job_id>` prints the per-job CPU timeseries, memory peak and OOM count; `blacksmith usage --breakdown-by workflow_job` prints what each job costs.
+
+Sizes as of the Blacksmith migration, from a full run of every workflow:
+
+| Job | SKU | Why |
+|---|---|---|
+| `ci.yml::fmt` | 2 vCPU | rustfmt compiles nothing (16s) |
+| `mobile.yml::frontend` | 2 vCPU | vitest + Vite build, 12s, never saturated 4 vCPU |
+| `release.yml` orchestration (`prepare`, `tag`, `create_release`, `publish_*`, `update_tap`), `cleanup-tags.yml` | 2 vCPU | shell + `gh` calls, no compilation |
+| `ci.yml::docs`, `ci.yml::sync`, `bench.yml` | 4 vCPU | doc/proptest jobs already finish in ~100s; bench stays fixed so numbers remain comparable run over run |
+| `ci.yml::clippy`, `ci.yml::test (linux)`, `desktop.yml::check`, release builds | 8 vCPU | measured 71–76% average CPU on 4 vCPU with 2.6–4.7 GB of 16 GB used and zero OOM: CPU-bound, so more cores cut wall clock at roughly flat billing |
+| macOS jobs | 6 vCPU | smallest macOS tier Blacksmith offers |
+
+**Check names must not contain the runner SKU.**
+Branch protection matches required checks by name, so `test (ubuntu-latest)` becoming `test (blacksmith-8vcpu-ubuntu-2404)` leaves `main` blocked on a check that will never report again.
+Matrix jobs therefore carry a stable `label` (`linux`, `macos`, `macOS arm64`, …) and the SKU lives only in `matrix.os`.
 
 ### What blocks merge
 
