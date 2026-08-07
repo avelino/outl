@@ -9,12 +9,12 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 - **The re-projection guard refused to update any page a peer had edited or deleted from, and the recovery command reverted the peer.**
   Found in code review of the commit that introduced it, by an executable probe, after 1,687 tests and a green `/check` had not.
-  `content_lines_missing_from` compared the `.md` against a fresh render of the tree, which answers *"do disk and tree disagree"* — and every remote edit answers yes to that, since the pre-edit line is on disk and absent from the render.
+  `content_lines_missing_from` compared the `.md` against a fresh render of the tree, which answers _"do disk and tree disagree"_ — and every remote edit answers yes to that, since the pre-edit line is on disk and absent from the render.
   So did every remote delete and every reorder.
   The page then froze showing pre-edit text with nothing surfaced to the user, which is [issue #166](https://github.com/avelino/outl/issues/166) reintroduced for the most ordinary sync case there is.
   Worse, `outl reconcile --ahead-of-log` (which the error message and `doctor` both recommended) wrote the pre-edit text back as ops on such a page, reverting the peer permanently, since the log is append-only.
 
-  The reference is now the **sidecar's blocks**, which are what the log held at the last agreement, so the question asked is the one intended: *does the op log know this line*.
+  The reference is now the **sidecar's blocks**, which are what the log held at the last agreement, so the question asked is the one intended: _does the op log know this line_.
   The bullet marker, indent and trailing whitespace are normalised away — they are the renderer's layout, not content, so a pure indent no longer reads as new text — and `key:: value` lines are skipped, since a property is never part of a block's `text`.
 
   One consequence worth stating: a sidecar whose blocks carry `text: ""` cannot answer the question at all.
@@ -48,7 +48,6 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
   Reproducible 6 times out of 6 from a cold store, not intermittent — which is why it read as three flaky `doctor` tests for as long as it did.
 
   Two further defects surfaced underneath it, and the second was the dominant cause:
-
   1. **The compare-and-swap failed open.**
      `create_new_record` used a bare `O_EXCL` open, which creates an **empty** file and fills it a moment later.
      Every reader maps a blank record to `None` — "absent" — which is precisely the answer that licenses overwriting.
@@ -60,29 +59,29 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
   Pinned by `concurrent_first_opens_converge_on_one_machine_id`, verified non-vacuous against both old code paths (16 distinct ids with the old mint, 2 with the old scratch path), plus `outl-ws`'s `device_isolation` test as its complement rather than its copy.
 
 - **Opening a page could delete content that had reached the `.md` but never the op log.**
-  Re-projection was gated on one question — does the sidecar's `last_synced_hash` match the bytes on disk? — and a `.md` that answers yes was treated as a merely *stale* projection, safe to overwrite with a fresh render of the tree.
+  Re-projection was gated on one question — does the sidecar's `last_synced_hash` match the bytes on disk? — and a `.md` that answers yes was treated as a merely _stale_ projection, safe to overwrite with a fresh render of the tree.
   But that hash proves the sidecar agrees with those bytes; it never proves the bytes came from the log.
-  A `reconcile_md` that rewrites the sidecar without emitting ops for everything it read leaves a page in exactly that state, and re-rendering over it destroys the difference *and* rebuilds the sidecar from the same render — so no later scan, and no `doctor` check, could tell the page had ever held more.
+  A `reconcile_md` that rewrites the sidecar without emitting ops for everything it read leaves a page in exactly that state, and re-rendering over it destroys the difference _and_ rebuilds the sidecar from the same render — so no later scan, and no `doctor` check, could tell the page had ever held more.
   Silent by construction, which is the shape this project treats as the worst kind of bug.
   Measured on a real 2,560-page workspace: **233 pages holding 1,426 lines** in that state.
   `outl doctor --repair` deleted all of it and reported `708 fixed`.
   Worse, `--repair` was not the only path — `apply_page_md_with_sidecar_if_stale` runs on **every** GUI open (`open_page_by_slug`, `open_journal_for`, `open_today_journal`, `open_ref`), so a plain page open in the desktop or mobile app was enough.
   `outl_actions::content_lines_missing_from` is now the single owner of the verdict, and `apply_page_md_with_sidecar_if_stale` returns the new `ActionError::PageMarkdownAheadOfLog { path, lines, sample }` instead of writing.
-  It compares a **multiset** of trimmed non-blank lines rather than running a diff, because a line the renderer merely *moved* is not at risk — on that same workspace an LCS diff flags 616 pages where only 233 genuinely hold unlogged content.
+  It compares a **multiset** of trimmed non-blank lines rather than running a diff, because a line the renderer merely _moved_ is not at risk — on that same workspace an LCS diff flags 616 pages where only 233 genuinely hold unlogged content.
   Whitespace-only drift is ignored on purpose: the renderer's trailing-newline behaviour changed across releases, and treating that as content would strand every genuine re-projection behind noise.
   `outl doctor` calls the same function in its read-only listing, so it can no longer offer a repair the `--repair` pass then refuses (the "announced before they run" invariant), and names the count plus one of the lines at risk instead of only counting them.
   Content in this state also never reached your other devices — peers exchange ops, not files — so the report says that too.
   `outl reconcile` owns the `.md → tree` direction and remains what brings it into the log.
 
 - **`docs/query.md` rendered 46 lines as one code block, and four headings produced no anchors** (issue #214).
-  A three-backtick outer fence wrapping an inner ` ```query ` example closed at the *indented* inner closer instead of its own, so everything from line 115 on was inside a code block.
+  A three-backtick outer fence wrapping an inner ` ```query ` example closed at the _indented_ inner closer instead of its own, so everything from line 115 on was inside a code block.
   `## Relationship to {{query: ...}}`, `## Extensibility`, `## Architecture` and `## Plugin SDK API` were swallowed, which broke four links — two of them pre-existing in `docs/plugin-api.md` and `docs/plugins.md`, dead long enough that nobody had noticed.
   The file already used a four-backtick fence for the same pattern 90 lines earlier.
 
 ### Added
 
 - **`outl reconcile --ahead-of-log` — the `.md → tree` direction on pages the ordinary reconcile cannot see.**
-  A page holding content the op log never saw is *hash-faithful*: its sidecar agrees with the bytes on disk, so `needs_reconcile` reads it as in-sync and skips it.
+  A page holding content the op log never saw is _hash-faithful_: its sidecar agrees with the bytes on disk, so `needs_reconcile` reads it as in-sync and skips it.
   Fixing the parser that produced that state does not recover anything by itself, which took measuring to notice — `serve --once` applied **0 ops** to all 233 such pages on the measured workspace.
   The flag clears the recorded hash on exactly the pages `doctor` names and reconciles them, which emits ops for that content.
   Opt-in on purpose, and it prints the page count and line count before it writes: this is a deliberate write, not a repair.
@@ -92,21 +91,21 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 - **`CURRENT_PIPELINE_VERSION` goes 2 → 3, which recovers the existing content without a command.**
   The constant exists to force a re-reconcile when the pipeline could produce a different op log for the same `.md`, and a parser that now reads prose it used to discard is exactly that.
   Every existing sidecar becomes stale by pipeline, so the first boot per device is a one-shot migration: **323 ops applied, 233 pages down to 79** on the measured workspace, and 29 after the guard was corrected to compare against the sidecar.
-  One slower boot per device, additive (the change only ever captures *more* text), and crash-safe, since the stamp is per page so partial progress is kept.
+  One slower boot per device, additive (the change only ever captures _more_ text), and crash-safe, since the stamp is per page so partial progress is kept.
 
 - **RFCs: `docs/rfcs/`, 16 documents, and a process that ties reasoning to an enforceable rule.**
   outl already recorded evolution in four places (a lone RFC, the decision table in the root `CLAUDE.md`, `CHANGELOG.md`, `docs/design/`), so a fifth format would have broken the one-owner-per-fact rule that keeps the shortcut and CLI tables from diverging.
   ADRs were considered and rejected for a sharper reason: **an ADR would not have prevented the bug that prompted this.**
   Issue #166 was documented — issue, changelog entry, code comment explaining the gate.
-  What was missing was not a record of the decision taken; it was the question nobody asked, *and in the opposite direction?*
+  What was missing was not a record of the decision taken; it was the question nobody asked, _and in the opposite direction?_
 
   So the template makes that a **required, non-deletable section**, and the process ties every RFC to an invariant and a named test:
 
-  | Layer | Where | Role |
-  |---|---|---|
-  | Reasoning | `docs/rfcs/NNNN-*.md` | Why the rule exists, what was rejected, what got worse |
-  | Rule | root or per-crate `CLAUDE.md` | Read on every edit to that crate — the enforcing surface |
-  | Proof | a named test | Fails mechanically when someone reverts the behaviour |
+  | Layer     | Where                         | Role                                                     |
+  | --------- | ----------------------------- | -------------------------------------------------------- |
+  | Reasoning | `docs/rfcs/NNNN-*.md`         | Why the rule exists, what was rejected, what got worse   |
+  | Rule      | root or per-crate `CLAUDE.md` | Read on every edit to that crate — the enforcing surface |
+  | Proof     | a named test                  | Fails mechanically when someone reverts the behaviour    |
 
   A rule with no RFC has no rationale and gets argued away in review; an RFC with no `CLAUDE.md` entry is never read at the moment it matters; either one without a test is a comment.
   **Changing behaviour an RFC pinned means updating that RFC in the same PR** — amend, or supersede and mark the old one.
@@ -144,6 +143,17 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 - **43 links now connect RFCs and docs in both directions**, including a `Reference doc` row in every RFC header (and in the template, so new RFCs inherit it).
 
+- **Qodo's code review is now configured by `.pr_agent.toml` in the repo, not in its web portal.**
+  A repo-local `.pr_agent.toml` outranks portal settings, so a knob changed in the UI would have silently disagreed with what is committed — and nobody reading a PR could tell which one won.
+  Five keys, no copied defaults: `repo_context_files = ["CLAUDE.md"]` (the default `AGENTS.md` does not exist here), `ignore_pr_title` extended with WIP/DRAFT while preserving the upstream `^Auto` entries the key would otherwise replace, `expand_evidence` so the file:line citations open by default, and two guideline blocks that name the failures this repo has actually shipped — the mirrored-divergence rule from RFC 0210, the hash-is-not-membership rule, guards a sentinel disarms, convergent state outside an `Op` from RFC 0211, and the four questions invariant 9 asks of state that moves.
+  Automation (`pr_commands`, `push_commands`) is deliberately absent: that key replaces the default list rather than extending it, so writing it out would quietly drop whatever the platform adds later.
+
+  No `best_practices.md` was added, though Qodo imports one if present.
+  Its rule import already reads root and per-crate `CLAUDE.md` and scopes each file's rules to the directory holding it at any depth, so `crates/outl-md/CLAUDE.md` is stricter inside that crate and silent elsewhere for free.
+  A `best_practices.md` would be a second copy of rules `CLAUDE.md` owns, and the copy is the one that goes stale.
+  One gap worth knowing: Qodo does **not** read `.github/instructions/*.instructions.md`, so anything that must reach both it and Copilot belongs in a `CLAUDE.md`.
+  Documented in `docs/contributing.md` → "The automated reviewers", which now maps each of the three review bots to the file that configures it.
+
 ## [0.11.0]
 
 ### Changed
@@ -175,11 +185,11 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
      Reads on a rewrite path now go through `outl_md::read_for_rewrite`, where a missing file is empty and **every other I/O error propagates**.
      The TUI additionally refuses to save a page it could not read, and says so.
   2. **The desktop, mobile and undo paths reconciled with the orphan log switched off.**
-     `outl-md`'s hard rule is that a block dropping to matching level 3 is recorded in `orphans.log` *before* it is moved to the trash.
+     `outl-md`'s hard rule is that a block dropping to matching level 3 is recorded in `orphans.log` _before_ it is moved to the trash.
      Four call sites passed `None` for that log, so on those clients the deletion happened with no record anywhere — the exact case a half-synced `.md` from iCloud produces at boot.
      `outl_actions::sync::orphans_log_path` is now the one owner of that path — every caller passes it, and `outl_ws`'s `Paths::at` derives its `orphans` field from it instead of re-joining `.outl/orphans.log` itself.
   3. **One unreadable line truncated the whole op log.**
-     The sequential replay hit an I/O error and `break`, discarding every op *after* it.
+     The sequential replay hit an I/O error and `break`, discarding every op _after_ it.
      A transient failure on line 5,000 of 200,000 booted a workspace containing the first 5,000 ops and carried on as if that were everything.
      It now skips the damaged line and continues (with a cap on consecutive failures), matching how a corrupt or non-UTF8 line was already handled two lines below.
   4. **A snapshot could record an op it never applied.**
@@ -196,7 +206,7 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 - **External edits no longer break block references in the common case.**
   Editing a `.md` outside outl in a way that both **rewords one block and adds or removes another** made the block counts disagree, which disabled the positional fallback and sent every reworded block to matching level 3: fresh ULID, old id trashed, and every `((blk-…))` pointing at it dangling.
-  That is the *ordinary* external edit, not an exotic one.
+  That is the _ordinary_ external edit, not an exotic one.
   Level 2 of the documented matching algorithm is now implemented (normalized Levenshtein > 0.8 against the previous text, which the sidecar keeps in the `text` field — additive, still version 2), so the id **and** its ref handle survive.
   The positional fallback also compares real parents instead of indent depth — same depth in a different subtree used to hand one subtree's id to another block.
 
@@ -208,23 +218,22 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 ### Added
 
 - **Local backups (`outl backup init` / `now` / `list` / `restore` / `status`).**
-  The op log is append-only and every write is atomic, but that only covers the failures outl was *designed* for.
+  The op log is append-only and every write is atomic, but that only covers the failures outl was _designed_ for.
   It had no answer for a bug in a projection path, an `outl import` aimed at a workspace that already had pages, a sync tool resolving a conflict the wrong way, or a page deleted with the app then closed (undo is in-memory and dies with the process).
   For all of those, the recovery story was "reconstruct it by hand from `ops-*.jsonl`".
   Git-backed — the `git` binary, not `libgit2`, so nothing new reaches a dependent's `cargo deny`.
   Captures `ops/`, `pages/`, `journals/`, `templates/`, `assets/` and `.outl/config.toml`; excludes the caches the next boot rebuilds.
   **`restore` never writes in place.**
   It extracts to a directory you name — and refuses one inside the workspace — so you diff and choose what to bring back; a recovery tool that overwrites the live op log is the last thing you want when something has already gone wrong.
-  `[backup] enabled` defaults **on**, for the same reason reminders do: the failures it catches are ones you discover *after* the moment you could have turned it on.
+  `[backup] enabled` defaults **on**, for the same reason reminders do: the failures it catches are ones you discover _after_ the moment you could have turned it on.
 
   **The repository is device-local and lives outside the workspace**, at `<device-dir>/backups/<slug>-<hash>.git` with the workspace passed as `--work-tree`, so **nothing is written inside the workspace** — no `.git/`, no pointer file.
-  That single decision closes two problems at once: a `.git` inside the workspace would ride Syncthing / Dropbox / NFS (object store, `index`, `HEAD`, `index.lock` over eventual sync — the same class of bug the actor-id move exists to fix), and a workspace you already keep in *your own* git repo would have had outl staging over your index, committing to your branch, running your hooks, and tripping your `commit.gpgsign` into a Touch ID prompt per snapshot.
+  That single decision closes two problems at once: a `.git` inside the workspace would ride Syncthing / Dropbox / NFS (object store, `index`, `HEAD`, `index.lock` over eventual sync — the same class of bug the actor-id move exists to fix), and a workspace you already keep in _your own_ git repo would have had outl staging over your index, committing to your branch, running your hooks, and tripping your `commit.gpgsign` into a Touch ID prompt per snapshot.
   Now outl's snapshots use their own git dir, own branch, own identity (`outl backup <backup@outl.app>`), hooks disabled, signing off.
   Your repo is never touched, and backups keep working for the people who version their notes — the ones with the most to lose.
   **A `.gitignore` cannot silently drop your data**: `ops/`, `pages/`, `journals/`, `templates/`, `assets/` and `.outl/config.toml` are force-staged, and every snapshot is **verified** afterwards — an op log missing from the commit is an error, not a green checkmark.
   **The automatic pass is real**, not just a config key: a background thread snapshots on the `[backup] interval_minutes` floor (derived from git itself, no state file), wired into the TUI today.
   `docs/config.md` names exactly which clients run it, rather than implying all of them do.
-
 
 - **`outl doctor` now checks what it couldn't, and `--repair` fixes what is safe to fix.**
   New checks: corrupt `.jsonl` lines (named by line number, byte offset and reason — previously the one gap the code itself admitted to), snapshot integrity, offset-index coherence, blocks sitting in the trash (previously invisible to the user entirely), sync-conflict copies from iCloud / Syncthing / Dropbox, and ops the materialized tree never applied.
@@ -235,7 +244,7 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 - **The Roam importer now tells you what it didn't bring over.**
   It reports `pages: N/M` and `blocks: N/M` against counts taken from the source JSON, subtracting only the reductions it can name (blocks lifted into page properties, journals merged, pages skipped) and shouting when the books don't balance.
-  Four silent losses are now counted or refused: a `{{[[TODO]]}}` in the middle of a block (which becomes literal text and loses its task state — it is *counted*, aggregated into one warning rather than thousands), a page with an empty title (which used to be dropped along with its entire subtree, with no record), and re-importing into a populated workspace, which **overwrote the `.md` files and reconciled the result — destroying anything written in outl since the last import**.
+  Four silent losses are now counted or refused: a `{{[[TODO]]}}` in the middle of a block (which becomes literal text and loses its task state — it is _counted_, aggregated into one warning rather than thousands), a page with an empty title (which used to be dropped along with its entire subtree, with no record), and re-importing into a populated workspace, which **overwrote the `.md` files and reconciled the result — destroying anything written in outl since the last import**.
   That now aborts and asks for `--force`.
 
 - **`remind::` — a block-level reminder rule that turns a TODO into an OS notification, on desktop and mobile (issue #63).**
@@ -250,11 +259,11 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
   The TUI overlay, the desktop panel, the mobile sheet and every OS bridge call it; a second opinion in TS or Swift about when a reminder fires is drift that reaches the user at 3am on one device before it reaches a test.
   Two behaviours worth knowing: a device that was asleep owes you **one** banner, not a backlog (close the laptop at 10:00 on an hourly rule, open it at 18:00, get one reminder), and a block with two `[[date]]`s schedules on **both**, because you wrote both on purpose.
   **Snooze converges** via the new `Op::SnoozeRemind` — silencing a nag on the phone silences the same block on the laptop.
-  The device-local half ("this device already buzzed you") deliberately does *not*: it lives in `<root>/.outl/reminders-fired.json`, a dotfile iCloud drops and iroh never ships, pruned at 7 days.
+  The device-local half ("this device already buzzed you") deliberately does _not_: it lives in `<root>/.outl/reminders-fired.json`, a dotfile iCloud drops and iroh never ships, pruned at 7 days.
   **Quiet hours** (`[reminders] quiet_hours = "22:00-07:00"`, device-local, unset by default) push a fire to the window's end rather than dropping it — you asked for it, you get it, just not at 3am.
   Delivery itself (`[reminders] enabled`) is **on** by default: writing `remind::` is already the opt-in, and a device that never gets a rule never fires, so defaulting off only bought you a rule that silently did nothing.
   A fire pushed past its own `until` is genuinely over.
-  Surfaces: **TUI** `g r` / `g R` to author and `g n` for the overlay (`Ctrl+R` was the obvious chord and is already Redo — a terminal can't tell it from `Ctrl+Shift+R`); **desktop** `Cmd+R` to author, `Cmd/Ctrl+Shift+R` for the panel; **mobile** long-press → *Remind me…*, bell icon for the list.
+  Surfaces: **TUI** `g r` / `g R` to author and `g n` for the overlay (`Ctrl+R` was the obvious chord and is already Redo — a terminal can't tell it from `Ctrl+Shift+R`); **desktop** `Cmd+R` to author, `Cmd/Ctrl+Shift+R` for the panel; **mobile** long-press → _Remind me…_, bell icon for the list.
   **All three deliver**, including the TUI, which fires an OSC 9 desktop notification plus a toast on its event-loop tick (OSC 9 is the sibling of the OSC 52 the yank path already uses, honoured by iTerm2 / kitty / WezTerm / ghostty, and the toast covers the emulators that ignore it).
   That is why `take_due` and the fired log sit in `outl-actions` rather than behind the Tauri layer, which the TUI can't reach.
   `g s` snoozes the block under the cursor an hour without opening the list, on both keyboard clients.
@@ -266,7 +275,7 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
   Full spec: [`docs/reminders.md`](docs/reminders.md).
 
 - **Embedded assets now render: `![alt](url)` shows an inline image on desktop/mobile and a placeholder in the TUI, and imported images stop being dead links (issue #203).**
-  Uploading or importing a file already copied it into `assets/<hash>.<ext>`, but nothing rendered it — every asset, images included, landed as a plain `[name](assets/…)` link, so an imported graph showed clickable text where you expected to *see* the picture.
+  Uploading or importing a file already copied it into `assets/<hash>.<ext>`, but nothing rendered it — every asset, images included, landed as a plain `[name](assets/…)` link, so an imported graph showed clickable text where you expected to _see_ the picture.
   `![alt](url)` is now a first-class inline token (`InlineTok::Image` / owned `InlineToken::Image { alt, href }`), parsed by `try_image` right after the embed matcher so the leading `!` is never stranded before the bare-`[` link — one parser in `outl-md`, consumed by every client (no parallel TS/Swift tokenizer).
   **Desktop and mobile** render an image inline through the shared `<MarkdownInline />`: a local `assets/…` asset loads its bytes through a new `read_asset_data_url` backend command (resolved with the existing traversal-safe `resolve_asset_path`, capped at 25 MB, returned as a `data:` URL — no Tauri asset-protocol config, identical on both clients), and a remote `http(s)` image loads directly.
   A non-image `![…]` (e.g. `![notes](assets/x.pdf)`) degrades to a clickable file chip (`📄 name`) that opens in the OS app, so nothing is ever left unrendered.
@@ -422,7 +431,7 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 - **Opening a page with many backlinks is much faster (issue #169).**
   A user with a template referenced from 760 places reported multi-second page opens.
-  The cause was `backlinks_for_page` being **quadratic**: it walks every block in the workspace and, per match, materializes the block's subtree — and both steps went through `children_of`, which rescans *every* node in the tree on each call (`Tree` stores only `node -> (parent, position)`, with no child index).
+  The cause was `backlinks_for_page` being **quadratic**: it walks every block in the workspace and, per match, materializes the block's subtree — and both steps went through `children_of`, which rescans _every_ node in the tree on each call (`Tree` stores only `node -> (parent, position)`, with no child index).
   The walk now builds a `parent -> children` map once per call (one scan + per-parent sort; `O(n log n)` worst case) and threads it through the walk and subtree projection, eliminating the `O(n²)` rescans.
   This still does a full workspace walk (no inverted index), but the report's shape — 760 backlinks in a ~35k-block workspace — drops from **3.83 s to 41 ms** (~94×), with **no change to results** (the full backlinks test suite is the correctness oracle).
   This is a pure internal refactor: `backlinks_for_page` / `project_outline` / `project_outline_node` keep their signatures and output; the index is scratch state rebuilt per call, never cached, so it can't go stale.
@@ -456,7 +465,7 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
   **Structural** (`/template <name>` in the TUI, `outl template apply <name> --page <slug>` on the CLI, `outl_template_apply` over MCP) deep-copies the template's subtree under the target block, minting fresh `NodeId`s and op-log entries, and substitutes the built-in variables `{{date}}`, `{{today}}`, `{{yesterday}}`, `{{tomorrow}}`, `{{page}}`, and `{{time}}` in the block text.
   **Callable** (a ` ```call:<name> ` fence, run with `gx` in the TUI or the Run action on desktop) resolves the named template's code block, injects the `params::` declared on the call block, and executes it through the existing `outl-exec` runtimes — Roam's `{{roam/render}}` without a ClojureScript runtime.
   Callable execution lives once in `outl_actions::run_callable_block` and is intercepted inside the shared `run_code_block` action, so the desktop and mobile Run paths get `call:` fences for free instead of erroring "no runtime for `call:<name>`".
-  On the GUI clients a `call:<name>` fence now renders as a proper code block (with a language chip and Run button) — the shared `detectFence` info-string pattern accepts the `:` so the block is no longer left as raw ```` ``` ```` text, and its `key: value` params are syntax-highlighted (as YAML) instead of rendering flat.
+  On the GUI clients a `call:<name>` fence now renders as a proper code block (with a language chip and Run button) — the shared `detectFence` info-string pattern accepts the `:` so the block is no longer left as raw ` ``` ` text, and its `key: value` params are syntax-highlighted (as YAML) instead of rendering flat.
   Finishing an edit on a `call:<name>` block re-runs it automatically, so the `> **result:**` reflects the freshly-typed params without a manual `gx` / Run — on the TUI (Insert commit) and both GUI clients (the shared `edit_block` command).
   **Every template page shows where it was used.** The template page's backlinks panel now lists every block that rendered it (a `call:<name>` fence) or instantiated it (`from-template:: <slug>`), so you jump from a template to its call sites with no hand-written `[[link]]` — the matcher reads the fence and the provenance property directly, not just plain `[[refs]]`.
   **The daily journal is now a template too.** `outl init` creates a `templates/journal` page (`template:: journal`) instead of a `templates/journal.md` file, and opening a fresh daily note stamps that template automatically — the built-in variables resolve against the daily's date. Existing customized `templates/journal.md` bodies migrate into the page on `init` (best-effort).
@@ -465,7 +474,7 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 - **Paste with formatting now brings rich clipboard formatting across (bold, italic, links, lists) on the GUI clients.**
   Copying a formatted message — a Slack post, a Google Doc paragraph, a Notion block, a Gmail draft — puts the bold/italic/links/lists on the clipboard's `text/html` flavour; the `text/plain` flavour is stripped of them.
   The desktop and mobile paste used to read only `text/plain`, so a pasted Slack message arrived flat.
-  It now reads `text/html` first and converts it to outl markdown (via **Turndown**, tuned for the outl dialect: `*italic*` not `_italic_`, `- ` bullets, `~~strike~~`, and Slack `:emoji:` kept from the image alt text), then routes it through the same paste pipeline — so the formatting and the bullet structure survive.
+  It now reads `text/html` first and converts it to outl markdown (via **Turndown**, tuned for the outl dialect: `*italic*` not `_italic_`, `-` bullets, `~~strike~~`, and Slack `:emoji:` kept from the image alt text), then routes it through the same paste pipeline — so the formatting and the bullet structure survive.
   Google Docs (and other editors that encode weight as inline CSS) are handled too: a `font-weight:700` span becomes `**bold**`, and the `<b style="font-weight:normal">` wrapper Docs wraps the whole payload in no longer bolds the entire block.
   Plain text with no richer HTML behaves exactly as before.
   The converter lives once in `@outl/shared/paste` (`htmlToOutlMarkdown`) so both GUI clients stay identical.
@@ -476,7 +485,7 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
   TUI: `p` = with formatting, `Shift+P` = without (both read the OS clipboard now; the old `p`/`P` yank-register paste is folded into this since copy mirrors the register to the clipboard).
   Mobile: paste is always with formatting.
 - **Copy a block selection as clean markdown to the OS clipboard, in every client (issue #114).**
-  Copying out of outl used to be a mess — selecting a block in the TUI with the terminal's mouse copied the on-screen tree guides (`│ `), bullets, and fold markers, so pasting elsewhere produced garbage.
+  Copying out of outl used to be a mess — selecting a block in the TUI with the terminal's mouse copied the on-screen tree guides (`│`), bullets, and fold markers, so pasting elsewhere produced garbage.
   Now every yank/copy writes the **canonical outl markdown** for the selection (each block plus its subtree) to the clipboard, so it re-pastes into outl as the same tree and reads as a tidy bullet list anywhere else.
   TUI: `yy` / `Y` / Visual `y` write the markdown to the clipboard via `arboard` **and** an OSC 52 escape, so it reaches the clipboard over SSH, inside tmux, and in Chrome OS **Crostini** where `arboard` has no display server (the in-app yank register that `p`/`P` reads is still filled too).
   Desktop: `Y` / Visual `y` copy the selection as markdown via `navigator.clipboard`.
@@ -491,7 +500,7 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 ### Changed
 
 - **P2P sync now defaults to outl's dedicated relay (`use1-1.relay.avelino.outl.iroh.link`) instead of the shared n0 public pool.**
-  The relay only ever sees end-to-end-encrypted bytes (never your notes), but it *can* observe coordination metadata — which two devices sync, and when.
+  The relay only ever sees end-to-end-encrypted bytes (never your notes), but it _can_ observe coordination metadata — which two devices sync, and when.
   Defaulting to a dedicated, outl-scoped relay endpoint (hosted on n0 infra under our `*.iroh.link` namespace) is the first step toward a fully outl-owned relay; n0's shared relays remain the documented fallback (a malformed `[sync] relay_url` degrades to them rather than failing the bind).
   No action needed — a device with an empty / omitted `[sync] relay_url` picks it up automatically. Point `relay_url` at any `iroh-relay` to override. See `docs/relay.md` (the vanity `relay.outl.app` name is on the roadmap, pending TLS).
 
@@ -501,19 +510,19 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
   Three sharp edges in the template engine (issue #146) are fixed.
   **Callable vs structural dispatch now keys off the presence of a runnable code block**, not on whether `params::` is declared — a callable template with a code block but no `params::` used to be misrouted as structural, so its ` ```lang…``` ` fence got deep-copied as literal text instead of executing; it now runs (with an empty `params`).
   **Duplicate template names are visible** — when two pages share a `template:: <name>`, resolution still picks the first in tree order but now logs a `tracing::warn!`, and `list_templates` flags the collision on each `TemplateEntry` (`duplicate`) so a client can surface it.
-  **Plugin-instantiated templates honour the target page's date** — the host derived `{{date}}` from *today* even on a journal page (`page_date: None`); it now derives it from the target slug, matching the CLI/TUI path.
+  **Plugin-instantiated templates honour the target page's date** — the host derived `{{date}}` from _today_ even on a journal page (`page_date: None`); it now derives it from the target slug, matching the CLI/TUI path.
 - **P2P sync no longer reports a false "sync ok" that silently drops a device's edits.**
-  A desktop-initiated delta-sync logged `catch-up: sync ok` as soon as it finished *writing* its push — never confirming the peer durably *ingested* it.
+  A desktop-initiated delta-sync logged `catch-up: sync ok` as soon as it finished _writing_ its push — never confirming the peer durably _ingested_ it.
   Over a lossy desktop → mobile path (a backgrounded iPhone / carrier NAT), the connection could tear down cleanly for the initiator while the mobile never persisted the pushed ops, so a page edited on the desktop stayed empty on the phone even though sync claimed success.
   The responder already closes the stream with a `done` sentinel **only after** a durable ingest; the initiator now **requires** that sentinel before reporting success (a lost close on an otherwise-successful ingest just costs a harmless, deduped re-push).
   Regression: `initiator_reports_failure_when_responder_never_confirms_ingest`.
 - **Sync connect no longer stalls ~30s on a stale peer address, and self-heals when a device moves networks.**
   iroh 1.0.0's QUIC multipath opens a path to every stored address at once and wedges ~30s on a dead one; a peer's old on-LAN IP (still in `peers.json` after it moved Wi-Fi / went cellular) passed the subnet filter and stalled every catch-up tick.
-  Each connect attempt is now bounded by a timeout, and a stalled/failed direct dial falls back to a **bare-node-id** dial so iroh's relay + discovery resolves the peer's *current* address instead of retrying the dead one forever.
-  On top of that, when a peer dials *in* directly, outl reads the live socket off the connection and rewrites the stored address to it (dropping the stale one), so the next outbound dial uses the fresh route with no re-pair — the stored address self-heals the moment the peer reconnects.
+  Each connect attempt is now bounded by a timeout, and a stalled/failed direct dial falls back to a **bare-node-id** dial so iroh's relay + discovery resolves the peer's _current_ address instead of retrying the dead one forever.
+  On top of that, when a peer dials _in_ directly, outl reads the live socket off the connection and rewrites the stored address to it (dropping the stale one), so the next outbound dial uses the fresh route with no re-pair — the stored address self-heals the moment the peer reconnects.
 - **Mobile stops flip-flopping a page between two devices' states on the sync poll.**
-  The mobile's routine reload (every ~3s) ran the orphan-`.md` reconcile + desync-recovery **inline** — operations that *mutate* the op log (md → ops). On a page being edited on two devices while sync ingested peer ops, the desync-recovery false-positived on the racing read and minted fresh ops each poll, so the page oscillated between the desktop's and the phone's versions (and briefly flashed an empty "0 ops" state).
-  Reconcile/recovery is a **boot** concern (a stable moment, no concurrent ingest); iroh peers ship *ops*, not `.md`, so a routine reload only needs to re-materialize the op log. The reload is now a pure re-read — orphan `.md` recovery still runs once at boot — and the reload no longer clobbers real content with a transient empty read.
+  The mobile's routine reload (every ~3s) ran the orphan-`.md` reconcile + desync-recovery **inline** — operations that _mutate_ the op log (md → ops). On a page being edited on two devices while sync ingested peer ops, the desync-recovery false-positived on the racing read and minted fresh ops each poll, so the page oscillated between the desktop's and the phone's versions (and briefly flashed an empty "0 ops" state).
+  Reconcile/recovery is a **boot** concern (a stable moment, no concurrent ingest); iroh peers ship _ops_, not `.md`, so a routine reload only needs to re-materialize the op log. The reload is now a pure re-read — orphan `.md` recovery still runs once at boot — and the reload no longer clobbers real content with a transient empty read.
 - **Callable-template results stop churning the op log and oscillating across devices.**
   The `> **result:**` subtree was deleted and recreated on every run with fresh node ids, so two devices running the same `call:` block fought a delete/recreate war (each deleting the other's result), bloating the op log into the thousands and flip-flopping the page between the two devices' outputs.
   The result now uses a **deterministic node id derived from the call block** and updates in place, so re-runs are idempotent and two devices converge on one result (last write wins per line) instead of competing subtrees.
@@ -593,8 +602,8 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 ### Fixed
 
 - **TUI now word-wraps block text to the pane width** ([#99](https://github.com/avelino/outl/issues/99)).
-  Typing past the right edge of the terminal used to run a block off-screen instead of flowing onto the next visual row — terminals don't reflow on their own, and the outline deliberately avoided ratatui's `Paragraph::wrap` because that expands lines *after* layout and would desync the `selected_line` scroll index.
-  The outline now pre-wraps itself (`outl-tui` `view::wrap::push_wrapped`): wrapped rows are emitted up front so the scroll index stays honest, the first visual row keeps the bullet/fold marker, continuations re-indent under the text column, and the `│ ` indent rails repeat top to bottom.
+  Typing past the right edge of the terminal used to run a block off-screen instead of flowing onto the next visual row — terminals don't reflow on their own, and the outline deliberately avoided ratatui's `Paragraph::wrap` because that expands lines _after_ layout and would desync the `selected_line` scroll index.
+  The outline now pre-wraps itself (`outl-tui` `view::wrap::push_wrapped`): wrapped rows are emitted up front so the scroll index stays honest, the first visual row keeps the bullet/fold marker, continuations re-indent under the text column, and the `│` indent rails repeat top to bottom.
   Wrapping runs on the already-styled spans (post-tokenization), so a break never splits a `**bold**` / `[[ref]]` token back into its literal markers, and wide glyphs (CJK, emoji) count as two cells.
   The block being edited (Insert) or selected in Normal mode stays on one line so the cursor column keeps matching the source bytes.
 - **Page-level properties now reach the workspace tree.**
@@ -638,8 +647,6 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
   The log inflates by roughly 2× the page-root ops once per legacy page per device.
   Acceptable for a one-shot migration: the CRDT converges deterministically.
   Subsequent boots skip the page via the `last_synced_hash` + `pipeline_version` short-circuit.
-
-
 
 **Desktop client ships.**
 
@@ -950,7 +957,7 @@ No protocol or storage changes — drop-in upgrade from 0.3.0.
 
 - **Autocomplete (`[[…]]`) now actually fires on iOS.** The native ref suggester chip strip was orphaned — `createEffect` was being registered after an `await` inside `onMount`, which lost Solid's reactive owner.
   State was published once at boot and never updated as the user typed.
-- **TODO/DONE prefix is visible (and editable) in Insert mode.** Tapping a TODO block used to show only the checkbox + body (`ship it`) with the `TODO ` prefix hidden, so erasing the prefix from the editor was impossible.
+- **TODO/DONE prefix is visible (and editable) in Insert mode.** Tapping a TODO block used to show only the checkbox + body (`ship it`) with the `TODO` prefix hidden, so erasing the prefix from the editor was impossible.
   Now the prefix appears in the textarea (`TODO ship it`) and the checkbox flips to a bullet while editing — toggling state via the text Just Works.
 - **Cursor lands inside `[[ ]]` / `(( ))` reliably.** `el.value = …` resets the textarea caret in iOS WKWebView; combined with Solid's `value={draft()}` rebinding the caret could end up outside the pair.
   Replaced with `setRangeText` + double `parkCaret` (sync + microtask) so every toolbar insert, paste completion, and suggester pick parks the caret where the user expects it.
@@ -975,7 +982,7 @@ No protocol or storage changes — drop-in upgrade from 0.3.0.
 
 ### Shared (`outl-actions`)
 
-- `edit_text` writes its argument **verbatim** instead of preserving a leading `TODO `/`DONE ` prefix automatically.
+- `edit_text` writes its argument **verbatim** instead of preserving a leading `TODO`/`DONE` prefix automatically.
   Callers that surface state separately (mobile checkbox) reattach the prefix themselves — required so erasing the prefix in the editor actually sticks.
   TUI path is unaffected (it always passes the raw block text through reconcile).
 
@@ -1047,7 +1054,7 @@ Backlinks become a first-class part of the TUI: they live inline below the outli
 
 - **Inline backlinks.** Replace the right-side panel with a section rendered below the outline, separated by a full-width `─` rule.
   Each source page shows up grouped under an icon + title header.
-- **Full source block + children.** Backlinks render the referencing `OutlineNode` *with its subtree* (not a truncated snippet), so you see context without jumping to the source page.
+- **Full source block + children.** Backlinks render the referencing `OutlineNode` _with its subtree_ (not a truncated snippet), so you see context without jumping to the source page.
 - **Cursor navigation crosses the boundary.** `j`/`k` flow transparently between outline and backlinks.
   `app.focus: Focus::{Outline, Backlink{idx, sub_path}}` tracks where the cursor lives.
 - **In-place edits land on the source `.md`.** `i`/`I`/`a`/`Esc`, `Ctrl+T` (TODO/DONE cycle), `o`/`O` (sibling create), `Tab`/`Shift+Tab` (indent/outdent), `dd` (delete), `K`/`J` (move up/down) — all work on a backlink the same way they work on the outline, persisting straight to the source page via `EditTarget::SourcePage`.
