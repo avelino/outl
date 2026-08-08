@@ -590,6 +590,35 @@ fn a_repair_that_would_delete_a_lot_of_content_stops_and_asks() {
     );
 }
 
+/// A refusal nobody can script against is a refusal that gets ignored.
+///
+/// The guard works in place: it empties the page-write plan and records
+/// why through `b.err(...)`. Both CLI entry points decide the process
+/// status from `error_count` alone (`run` exits 1, `run_json` forces 1),
+/// so recording the refusal at any lower severity would exit 0 and every
+/// cron / CI job reading that status would treat a repair that never
+/// happened as a repair that succeeded — the silent scaling this guard
+/// exists to end, moved into the exit code.
+#[test]
+fn a_refused_repair_is_an_error_so_the_process_exits_non_zero() {
+    let (_dir, root, _paths) = fresh();
+    let (_md, _witness) = page_with_deleted_blocks(&root, 150, 120);
+
+    let report = collect(&root, true).expect("doctor --repair runs");
+
+    assert!(
+        report.error_count > 0,
+        "the refusal must be an error — it is the only thing the exit status reads: {:#?}",
+        messages(&report)
+    );
+    if let Some(rep) = &report.repair {
+        assert_eq!(
+            rep.repaired, 0,
+            "the suppressed page writes must not be counted as fixed: {rep:#?}"
+        );
+    }
+}
+
 /// The escape hatch has to actually work, or the guard is a wall.
 #[test]
 fn the_same_repair_runs_once_it_is_explicitly_forced() {

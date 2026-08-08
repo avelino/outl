@@ -205,6 +205,35 @@ fn restoring_refuses_a_block_that_changed_since_the_scan() {
     );
 }
 
+/// The stale shape a prefix test waves through: the user cleared the
+/// block after the scan. Every recovery starts with the empty string, so
+/// "is the live text still a prefix" says yes and the deletion is undone
+/// behind their back.
+#[test]
+fn restoring_refuses_a_block_the_user_cleared_since_the_scan() {
+    let (mut ws, hlc) = workspace();
+    let node = block_through(&mut ws, &hlc, None, &[LONG, "🚨 Briefing"]);
+    let found = scan_truncated_blocks(&ws, 1).expect("scan");
+
+    edit_text(&mut ws, &hlc, node, "").expect("clear");
+    assert!(restore_truncated_block(&mut ws, &hlc, &found[0]).is_err());
+    assert_eq!(ws.block_text(node).as_deref(), Some(""));
+}
+
+/// Same hole, one step less extreme: the user trimmed the block to a
+/// shorter prefix of what the scan saw. Still a change they made after
+/// the scan, still not ours to revert.
+#[test]
+fn restoring_refuses_a_block_shortened_to_a_prefix_since_the_scan() {
+    let (mut ws, hlc) = workspace();
+    let node = block_through(&mut ws, &hlc, None, &[LONG, "🚨 Briefing"]);
+    let found = scan_truncated_blocks(&ws, 1).expect("scan");
+
+    edit_text(&mut ws, &hlc, node, "🚨").expect("shorten");
+    assert!(restore_truncated_block(&mut ws, &hlc, &found[0]).is_err());
+    assert_eq!(ws.block_text(node).as_deref(), Some("🚨"));
+}
+
 /// A workspace where nothing was ever truncated must cost nothing and
 /// report nothing — the ordinary case for every user who never hit the
 /// parser bug.

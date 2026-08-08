@@ -33,7 +33,9 @@
 //! - **Restoring cannot lose anything.** The recovered text *contains*
 //!   the current text as a prefix, so writing it back is strictly
 //!   additive from the block's point of view. [`restore_truncated_block`]
-//!   re-checks that rather than trusting it.
+//!   re-checks that rather than trusting it, and refuses outright when
+//!   the block no longer says what the scan saw — a prefix test alone
+//!   would wave through a block the user cleared in between.
 //!
 //! A false positive costs the user a line of output. A false negative
 //! costs them the content, so the threshold ([`scan_truncated_blocks`]'s
@@ -118,21 +120,38 @@ pub fn scan_truncated_blocks(
 
 /// Write a recovered revision back as a **new** `Op::Edit`.
 ///
-/// Refuses when the recovered text no longer contains the block's current
-/// text as a prefix — either the scan is stale (someone edited the block
-/// in between) or the entry was built by hand. Either way the write would
-/// stop being additive, and silently overwriting a block with a revision
-/// from before an edit the user made is the same class of bug this whole
-/// module exists to undo.
+/// Two checks, and the first is the one that matters:
+///
+/// - **The block must still say exactly what the scan saw**
+///   ([`TruncatedBlock::current`]). Asking only "is the live text still a
+///   prefix of the recovery" is weaker than it looks: every shorter
+///   prefix passes it, and the empty string is a prefix of everything, so
+///   a block the user cleared or trimmed between the two passes would be
+///   overwritten with a revision from before that edit — silently
+///   reverting a change the user made, which is the class of bug this
+///   whole module exists to undo.
+/// - The recovery must still contain that text as a prefix, so the write
+///   stays additive. Free for a scanned entry, and the only guard left
+///   for one built by hand.
 pub fn restore_truncated_block(
     workspace: &mut Workspace,
     hlc: &HlcGenerator,
     found: &TruncatedBlock,
 ) -> Result<(), ActionError> {
     let live = workspace.block_text(found.node).unwrap_or_default();
-    if !found.recovered.trim_end().starts_with(live.trim_end()) {
+    if live.trim_end() != found.current.trim_end() {
         return Err(ActionError::NotInTree(format!(
             "{} changed since the scan; re-run the scan before restoring",
+            found.node
+        )));
+    }
+    if !found
+        .recovered
+        .trim_end()
+        .starts_with(found.current.trim_end())
+    {
+        return Err(ActionError::NotInTree(format!(
+            "{} would not be restored additively; the recovered text does not start with what the block says",
             found.node
         )));
     }
