@@ -47,7 +47,7 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread;
 
-use outl_actions::apply_page_md_with_sidecar;
+use outl_actions::apply_page_md_with_sidecar_guarded;
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
 use parking_lot::Mutex;
@@ -95,8 +95,20 @@ impl ProjectionWriter {
                         let Some(ws) = guard.as_ref() else {
                             break;
                         };
-                        if let Err(e) = apply_page_md_with_sidecar(ws, &root, page) {
-                            warn!("background projection failed for {page}: {e}");
+                        // Guarded, not the plain write. This worker runs
+                        // after a real mutation, so it must write — but
+                        // "must write" is not "may delete". A page whose
+                        // `.md` carries content the op log never saw is
+                        // exactly what `apply_page_md_with_sidecar_if_stale`
+                        // refuses on the open path, and writing it here
+                        // deleted the same bytes one keystroke later.
+                        // The user's edit is safe either way: it went
+                        // through `Workspace::apply` and is in the log.
+                        // Only the on-disk projection lags, which is the
+                        // recoverable direction, and the banner the open
+                        // path raises already tells the user why.
+                        if let Err(e) = apply_page_md_with_sidecar_guarded(ws, &root, page) {
+                            warn!("background projection skipped for {page}: {e}");
                         }
                     }
                 }

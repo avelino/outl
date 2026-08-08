@@ -155,6 +155,16 @@ pub fn load_or_create_actor(local_dir: &Path) -> std::io::Result<ActorId> {
 /// the app right after an offline edit). The hash gate above can't see
 /// those; `recover_desynced_projection` re-emits the lost ops with the
 /// sidecar ids preserved so the blocks finally reach the log and sync.
+///
+/// Both passes run **`.md → tree`**: nothing here renders the tree over a
+/// `.md`, so neither can delete on-disk content, whatever the hash gate
+/// they select on says. The re-projection at the end of the desync
+/// recovery is the one write, and it carries its own guard.
+/// What this inherits from `scan_for_orphans` is its blind spot, not a
+/// hazard: a hash-faithful `.md` holding content that exists in no op is
+/// never queued here, so it stays local and unsynced until
+/// `outl reconcile --ahead-of-log` runs (see `needs_reconcile` in
+/// `outl-actions::sync`, RFC 0210).
 pub fn reconcile_orphan_md(workspace: &mut Workspace, hlc: &HlcGenerator, storage_root: &Path) {
     let engine = outl_actions::SyncEngine::new(storage_root.to_path_buf(), hlc.actor());
     // `Some(..)`, never `None`: a block that fails to match here drops

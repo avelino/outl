@@ -98,15 +98,42 @@ See `outl-core/CLAUDE.md` → "Actor id is device-local, and the workspace canno
        `ops/` is a sync target and this guard holds no lock, so iCloud, Syncthing or a co-resident client can land a brand-new `ops-<peer>.jsonl` during a replay that takes minutes on a large graph.
        Only an index sidecar is ours to un-create; a `.jsonl` is reported and left exactly where it is.
        `remove_file` returning `Ok` means the alternative would erase a peer's whole history without a single line in the report.
+
      - **An op log that only grew is someone else appending, not a defect.**
        On a synced workspace that is the common case, and calling it "a bug in the doctor" (an error, exit 1) trains the user to ignore the loudest line in the report.
        Growth is a `warn` saying the findings are a snapshot rather than a live view; only a log that shrank or was rewritten is an error.
-- `outl reconcile [<path>] [--ahead-of-log]` — no flags, list orphans pending manual resolution.
+  5. **A destructive operation must state its scale before it runs, and stop when the scale is large.**
+     Re-projection removes content legitimately — a peer deleted a block, the log is right, the `.md` is behind.
+     What it must not do is remove *thousands* of lines because something systemic is wrong, print a page count, and leave nothing to compare against afterwards.
+     That is not hypothetical: `--repair` printed `708 fixed` while removing 1,426 lines from 233 pages, and no line in the output mentioned a line ([RFC 0210](../../docs/rfcs/0210-md-content-outside-op-log.md)).
+     So `tree.rs` measures, per page, how many content lines the new projection would **not** reproduce, and carries the number in `repair::PageWrite`.
+     `Plan::volume()` totals it into `RepairVolume`; anything past `CONFIRM_ABOVE_LINES` (100) or `CONFIRM_ABOVE_PAGES` (20) needs `--repair --force` (`RepairScope::Forced`).
+     Three things this gets right that a page count cannot:
+     a page the write only *adds* to counts as zero, so a device that just paired and has the whole graph unprojected never asks for a flag it does not need;
+     the volume is announced in **both** modes, because read-only is where the user decides whether to authorise the write at all;
+     and the suppression is all-or-nothing over the page writes, since removing half of a bulk deletion is the failure the guard exists to prevent.
+     The measurement routes through `outl_md::content_lines_missing_from`, the same owner invariant 8 uses, with the render's blocks as the reference instead of the sidecar's.
+     "Will this line survive the write" and "does the log know this line" are different questions, and both get asked here.
+     Guarded by four tests in `cmd/doctor/tests/safety.rs`:
+     `a_repair_that_would_delete_a_lot_of_content_stops_and_asks`,
+     `the_same_repair_runs_once_it_is_explicitly_forced`,
+     `an_ordinary_amount_of_deletion_repairs_without_a_flag`,
+     `the_volume_is_announced_by_a_read_only_run_too`.
+- `outl reconcile [<path>] [--ahead-of-log] [--allow-bulk-delete]` — no flags, list orphans pending manual resolution.
   `--ahead-of-log` reconciles the pages whose `.md` holds content that exists in no op, **bypassing the sidecar hash gate** (it clears `last_synced_hash` so `reconcile_md` stops short-circuiting).
   It has to exist because such a page is hash-faithful, so the ordinary reconcile reads it as in-sync and never looks at it.
   Opt-in on purpose: it emits ops for content the log has never seen, which is a deliberate write, not a repair.
   Detection is `outl_actions::content_lines_missing_from` against the **sidecar's blocks** — the same owner `doctor` and the write-side guard use, so the three cannot disagree about which pages qualify.
   Run it only on a build whose parser preserves the content: reconciling with a parser that still drops prose after a block property writes the truncated text into the log, which is the one place the loss currently is not.
+  `--allow-bulk-delete` is the **only** reachable `OrphanGuard::Disabled` in the binary.
+  `reconcile_md` refuses a pass that would trash more than 500 blocks of a page or more than 75% of one, and that refusal is only defensible while the user can say the deletion was meant — a guard with no escape hatch is a wall (root `CLAUDE.md` invariant 9).
+  It was unreachable from any user-facing surface for one commit, so `the_bulk_delete_escape_hatch_is_reachable_from_the_command_line` in `main.rs` pins the wiring rather than the policy.
+- `outl recover [<path>] [--apply] [--min-lines N]` — the **op-log-side** counterpart to `--ahead-of-log`, for a page whose `.md` was already overwritten before that guard existed.
+  Reads `Workspace::block_text_history` for a block whose current text is a proper prefix of an earlier `Op::Edit` — a truncating edit whose predecessor is still in the append-only log.
+  Issue #210's producer emitted the truncation as a real op; it never erased anything.
+  Read-only by default; `--apply` writes each recovered revision back as a **new** `Op::Edit` (never a log rewrite), refusing per-block when the text changed since the scan.
+  `--min-lines` (default 1) raises the report threshold.
+  Full behaviour: [`docs/cli.md`](../../docs/cli.md#outl-recover).
 - `outl migrate-to-shared [<path>]` — copy local sqlite log into shared `ops/` JSONL for cross-device sync.
 - `outl import roam|logseq|obsidian|auto <src> <dst>` — graph import.
   Every source routes through the adapter-based `outl-import` crate (`--dry-run`, `--json`, `--preserve-timestamps`; real `((blk-XXXXXX))` ref/embed resolution, `Op::SetCollapsed`).
@@ -239,6 +266,7 @@ src/
 │   │   ├── ops_guard.rs   #   restores ops/ byte-for-byte after the run
 │   │   └── repair.rs      #   the --repair pass
 │   ├── reconcile.rs       # outl reconcile
+│   ├── recover.rs         # outl recover — op-log-side text recovery
 │   ├── theme.rs           # outl theme
 │   ├── import/            # outl import — glue over the outl-import crate
 │   │   ├── mod.rs         #   adapters, --dry-run, auto-detect, progress line, report printing

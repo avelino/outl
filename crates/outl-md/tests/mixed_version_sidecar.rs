@@ -20,6 +20,57 @@
 //! binary explicitly (`ShippedSidecar` below — the exact v2 shape, with
 //! its version gate and without `text`) and running it against the
 //! current one over the same files.
+//!
+//! # The withheld `last_synced_hash` in a mixed fleet
+//!
+//! Invariant 8 made `reconcile_md` write an **empty** `last_synced_hash`
+//! for a page whose `.md` holds content the pass could not turn into an
+//! op. That value is perfectly readable by every already-shipped binary,
+//! and the second half of this file pins what they do with it, because
+//! the answer is not free.
+//!
+//! Measured against v0.11.0-beta.151 (the binary in users' hands when
+//! this landed), run from a `git worktree` over the same files:
+//!
+//! - `last_synced_hash: ""` → the shipped `reconcile_md` short-circuit
+//!   misses, so it **reconciles the page with its own parser** — the one
+//!   whose three #210 defects this release fixed. On a page carrying a
+//!   multi-line block it applied 3 ops and rewrote the block's text from
+//!   `"head\ndetail\n  deeper detail"` to `"head\ndetail"`: an `Op::Edit`
+//!   truncating content that *was* correctly in the log, replicated to
+//!   every device. It then stamped a real hash and `pipeline_version: 2`.
+//! - The same page with a real `last_synced_hash` → the shipped binary
+//!   short-circuits (0 ops) and the tree is untouched.
+//!
+//! So the withholding does have a cost on old peers, and it is real. It
+//! is still the right value, for two reasons this file pins as tests:
+//!
+//! 1. A real hash is **worse**, not better. The shipped
+//!    `apply_page_md_with_sidecar_if_stale` gates re-projection on
+//!    nothing but `last_synced_hash == file_hash(disk)` — it has no
+//!    `content_lines_missing_from`. A real hash authorises it to render
+//!    the tree straight over the `.md` and delete the unlogged content
+//!    outright, which is issue #210 with no guard anywhere in the fleet.
+//!    An empty hash is the one value that disarms it.
+//! 2. No third value exists. The shipped binary reconciles when the hash
+//!    does **not** match and re-projects when it **does**; the two gates
+//!    are complementary, so every possible `last_synced_hash` arms one of
+//!    them. Moving the signal into `version` would arm something far
+//!    worse — binaries older than the "refuse, don't rebuild" fix treat
+//!    an unreadable sidecar as a missing one and mint a fresh ULID per
+//!    block (the loop the top of this file describes).
+//!
+//! What is *not* true is the part that would have justified a riskier
+//! fix: the shipped binary cannot leave the page looking healthy to this
+//! one. Every old write path stamps its own (lower) `pipeline_version`,
+//! and its sidecar text can only be a subset of what the `.md` holds, so
+//! both the re-reconcile trigger and the content guard re-arm on the next
+//! boot here. That is pinned below too.
+//!
+//! Exposure at the time of writing: **0 of 2,827 pages** on the workspace
+//! that reported #210 trip the withholding, so nothing is in this state
+//! today. It is a guard for the next parser gap, and the next parser gap
+//! is exactly when a fleet is most mixed. Tracked in issue #210.
 
 use outl_core::hlc::HlcGenerator;
 use outl_core::id::{ActorId, NodeId};
@@ -96,6 +147,123 @@ fn shipped_binary_boot(md_path: &Path) -> Result<(), String> {
     sc.version = SHIPPED_SIDECAR_VERSION;
     shipped_write(&path, &sc);
     Ok(())
+}
+
+/// `CURRENT_PIPELINE_VERSION` as v0.11.0-beta.151 defines it.
+///
+/// Load-bearing that this is *lower* than the current constant: every
+/// write path in that binary (`reconcile_md`, `build_sidecar`,
+/// `build_sidecar_from_ast`) stamps its own value rather than preserving
+/// what it read, so an old peer touching a page necessarily re-queues it
+/// here.
+const SHIPPED_PIPELINE_VERSION: u32 = 2;
+
+/// The `reconcile_md` short-circuit as the shipped binary evaluates it:
+///
+/// ```text
+/// existing.last_synced_hash == md_hash
+///     && existing.pipeline_version >= CURRENT_PIPELINE_VERSION
+/// ```
+///
+/// `true` here means the shipped binary **reads the `.md` with its own
+/// parser** — the one that drops an over-indented continuation line and
+/// a blank line inside a block's text.
+fn shipped_would_reconcile(md_path: &Path) -> bool {
+    let Ok(sc) = shipped_read(&sidecar_path_for(md_path)) else {
+        // Unreadable or absent → the shipped binary reconciles from
+        // scratch, which is the worst arm of all.
+        return true;
+    };
+    let disk = fs::read_to_string(md_path).expect("read md");
+    !(sc.last_synced_hash == sidecar::file_hash(&disk)
+        && sc.pipeline_version >= SHIPPED_PIPELINE_VERSION)
+}
+
+/// The `apply_page_md_with_sidecar_if_stale` gate as the shipped binary
+/// evaluates it — the whole gate, verbatim:
+///
+/// ```text
+/// let faithful = sidecar::read(..).map(|sc| sc.last_synced_hash == disk_hash).unwrap_or(false);
+/// if !faithful { return Ok(None); }
+/// ```
+///
+/// There is no `content_lines_missing_from` on that side. `true` means
+/// the shipped binary is authorised to render the tree over the `.md`
+/// and drop whatever the tree does not hold.
+fn shipped_would_reproject(md_path: &Path) -> bool {
+    let Ok(sc) = shipped_read(&sidecar_path_for(md_path)) else {
+        return false;
+    };
+    let disk = fs::read_to_string(md_path).expect("read md");
+    sc.last_synced_hash == sidecar::file_hash(&disk)
+}
+
+/// The shipped binary finishing a reconcile: it stamps the hash of the
+/// bytes it just read and **its own** pipeline version, then writes the
+/// fields it knows.
+///
+/// Deliberately leaves the block texts alone. Modelling its parser here
+/// would add a second opinion about a defect already measured in a
+/// worktree (see the module doc), and every claim below is stronger for
+/// holding even when the old pass changed nothing at all.
+fn shipped_reconcile(md_path: &Path, keeps_text: bool) {
+    let path = sidecar_path_for(md_path);
+    let disk = fs::read_to_string(md_path).expect("read md");
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).expect("read sidecar")).expect("json");
+    raw["last_synced_hash"] = serde_json::json!(sidecar::file_hash(&disk));
+    raw["pipeline_version"] = serde_json::json!(SHIPPED_PIPELINE_VERSION);
+    if !keeps_text {
+        // A binary older than `SidecarBlock::text` serialises the struct
+        // it knows, so the field is gone from disk entirely.
+        for b in raw["blocks"].as_array_mut().expect("blocks") {
+            b.as_object_mut().expect("block").remove("text");
+        }
+    }
+    fs::write(&path, serde_json::to_string_pretty(&raw).expect("json")).expect("write sidecar");
+}
+
+/// Overwrite the sidecar's `last_synced_hash` in place.
+///
+/// `""` is exactly what `reconcile_md` writes when it read content it
+/// could not turn into an op — the hash is the *only* field that differs
+/// between a withheld pass and a clean one, since `blocks` and
+/// `pipeline_version` both come from the same plan either way.
+fn set_last_synced_hash(md_path: &Path, value: &str) {
+    let path = sidecar_path_for(md_path);
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).expect("read sidecar")).expect("json");
+    raw["last_synced_hash"] = serde_json::json!(value);
+    fs::write(&path, serde_json::to_string_pretty(&raw).expect("json")).expect("write sidecar");
+}
+
+/// Put the page into the state invariant 8 leaves behind: the `.md`
+/// carries a content line no block the log knows accounts for, and the
+/// hash was withheld rather than advanced over it.
+///
+/// Built with real APIs, not asserted into existence: the extra line goes
+/// on disk without a reconcile, and `content_lines_missing_from` is asked
+/// to confirm the page really is in the producer's condition before the
+/// hash is withheld.
+fn make_page_holding_unlogged_content(dir: &Path) -> PathBuf {
+    let md_path = write_page(dir, ORIGINAL);
+    let actor = ActorId::new();
+    let mut ws = Workspace::open_in_memory(actor).expect("workspace");
+    let hlc = HlcGenerator::new(actor);
+    reconcile_md(&mut ws, &hlc, &md_path, None).expect("reconcile");
+
+    let disk = format!("{ORIGINAL}- a line that exists in no op\n");
+    fs::write(&md_path, &disk).expect("write md");
+
+    let blocks = sidecar::read(&sidecar_path_for(&md_path))
+        .expect("sidecar")
+        .blocks;
+    assert!(
+        !outl_md::unlogged::content_lines_missing_from(&disk, &blocks).is_empty(),
+        "fixture is not in the producer's condition — nothing would be withheld"
+    );
+    set_last_synced_hash(&md_path, "");
+    md_path
 }
 
 // ---------------------------------------------------------------------
@@ -372,4 +540,204 @@ fn v1_sidecar_still_loads_and_keeps_its_ids() {
             "a v1 sidecar must not cost a block its id"
         );
     }
+}
+
+// ---------------------------------------------------------------------
+// The withheld `last_synced_hash` (invariant 8) in a mixed fleet
+// ---------------------------------------------------------------------
+
+/// **The cost, stated out loud.** An empty `last_synced_hash` puts the
+/// page back in front of the shipped binary's parser.
+///
+/// This is not a bug to fix by changing the value — see the sibling test
+/// for why every other value is worse — it is a property to keep visible.
+/// A future change that makes the withheld state common (a parser gap, a
+/// new guard reusing the same signal) is also making old peers re-read
+/// those pages with a parser that loses content, and it needs to know
+/// that before it ships, not after.
+///
+/// Measured consequence on v0.11.0-beta.151: 3 ops, a block's text
+/// rewritten from `"head\ndetail\n  deeper detail"` to `"head\ndetail"`.
+#[test]
+fn a_withheld_hash_hands_the_page_back_to_the_shipped_binarys_parser() {
+    let dir = TempDir::new().unwrap();
+    let md_path = make_page_holding_unlogged_content(dir.path());
+
+    assert!(
+        shipped_would_reconcile(&md_path),
+        "a withheld hash makes the shipped binary re-read the .md with its own parser"
+    );
+
+    // The counterfactual, in the same test so the trade is legible: the
+    // value this code wrote before invariant 8 was enforced.
+    let disk = fs::read_to_string(&md_path).unwrap();
+    set_last_synced_hash(&md_path, &sidecar::file_hash(&disk));
+    assert!(
+        !shipped_would_reconcile(&md_path),
+        "with a real hash the shipped binary short-circuits — this is what \
+         the withholding gives up"
+    );
+}
+
+/// **Why it is still the right value.** The shipped binary's
+/// re-projection is gated on the hash and nothing else, so a real hash
+/// authorises it to render the tree over the `.md` and delete the
+/// unlogged content outright.
+///
+/// The two gates are complementary — reconcile fires when the hash does
+/// not match, re-projection when it does — so there is no third value
+/// that disarms both. This test pins the half that decides the choice:
+/// the withheld hash is the only one that stops a binary with no content
+/// guard from writing over the file.
+#[test]
+fn a_withheld_hash_is_what_stops_the_shipped_binary_overwriting_the_md() {
+    let dir = TempDir::new().unwrap();
+    let md_path = make_page_holding_unlogged_content(dir.path());
+
+    assert!(
+        !shipped_would_reproject(&md_path),
+        "a withheld hash must leave the shipped binary unauthorised to \
+         re-render the tree over a .md holding unlogged content"
+    );
+
+    let disk = fs::read_to_string(&md_path).unwrap();
+    set_last_synced_hash(&md_path, &sidecar::file_hash(&disk));
+    assert!(
+        shipped_would_reproject(&md_path),
+        "with a real hash the shipped binary is authorised to overwrite the \
+         page — issue #210 with no guard anywhere in the fleet"
+    );
+}
+
+/// The claim that would have justified a riskier fix, refuted.
+///
+/// "The old peer stamps a real hash and this binary never sees the page as
+/// suspicious again" is false in both of its halves, and neither depends
+/// on what the old parser did:
+///
+/// - it stamps its **own** `pipeline_version`, which is lower, so the
+///   short-circuit here cannot fire and the page is reconciled again;
+/// - the sidecar text it leaves can only account for lines its parser
+///   read, so `content_lines_missing_from` still flags the page.
+///
+/// Asserted against the *best* case for the old binary — a pass that
+/// changed no block text at all. A lossier pass only makes both stronger.
+#[test]
+fn a_shipped_reconcile_cannot_leave_the_page_looking_healthy_to_this_binary() {
+    let dir = TempDir::new().unwrap();
+    let md_path = make_page_holding_unlogged_content(dir.path());
+    let disk = fs::read_to_string(&md_path).unwrap();
+
+    shipped_reconcile(&md_path, true);
+
+    let sc = sidecar::read(&sidecar_path_for(&md_path)).unwrap();
+    assert_eq!(sc.last_synced_hash, sidecar::file_hash(&disk));
+    assert!(
+        sc.pipeline_version < sidecar::CURRENT_PIPELINE_VERSION,
+        "an old write path stamps its own pipeline version, so the page is \
+         re-queued here; got {}",
+        sc.pipeline_version
+    );
+    assert!(
+        !outl_md::unlogged::content_lines_missing_from(&disk, &sc.blocks).is_empty(),
+        "the content guard must still refuse this page — a real hash from an \
+         old peer is not evidence the log holds the file"
+    );
+
+    // And the re-queue is not theoretical: reconciling here pulls the line
+    // into the log and only then advances the hash.
+    let actor = ActorId::new();
+    let mut ws = Workspace::open_in_memory(actor).unwrap();
+    let hlc = HlcGenerator::new(actor);
+    let report = reconcile_md(&mut ws, &hlc, &md_path, None).unwrap();
+    assert_eq!(report.unlogged_lines, 0);
+
+    let healed = sidecar::read(&sidecar_path_for(&md_path)).unwrap();
+    assert_eq!(healed.pipeline_version, sidecar::CURRENT_PIPELINE_VERSION);
+    assert!(!healed.last_synced_hash.is_empty());
+    assert!(
+        outl_md::unlogged::content_lines_missing_from(&disk, &healed.blocks).is_empty(),
+        "the line the old peer's hash claimed was logged must actually be \
+         logged after this binary's pass"
+    );
+}
+
+/// The other shape of the same claim: an old peer that predates
+/// `SidecarBlock::text` drops the field on write, which is the one input
+/// that makes `content_lines_missing_from` stand down.
+///
+/// That stand-down is **not** permission to write — `sidecar_can_answer`
+/// exists so the two empty results stay distinguishable, and this pins
+/// that it answers `false` here. It also pins the self-healing half the
+/// `outl-actions` docs assert: such a binary necessarily stamps its own
+/// lower `pipeline_version` (no old write path preserves what it read), so
+/// the page is re-queued and the next pass restores the text.
+#[test]
+fn a_shipped_binary_that_drops_text_cannot_disarm_the_guard_either() {
+    let dir = TempDir::new().unwrap();
+    let md_path = make_page_holding_unlogged_content(dir.path());
+    let disk = fs::read_to_string(&md_path).unwrap();
+
+    shipped_reconcile(&md_path, false);
+
+    let sc = sidecar::read(&sidecar_path_for(&md_path)).unwrap();
+    assert!(
+        sc.blocks.iter().all(|b| b.text.is_empty()),
+        "the fixture must actually model the text-less write"
+    );
+    assert!(
+        !outl_md::unlogged::sidecar_can_answer(&sc.blocks),
+        "a text-less sidecar cannot answer 'does the log know this line', \
+         and its empty verdict must not read as 'nothing at risk'"
+    );
+    assert!(
+        sc.pipeline_version < sidecar::CURRENT_PIPELINE_VERSION,
+        "otherwise the page would be frozen: unanswerable sidecar, no \
+         re-reconcile trigger, and no path back to a text-carrying one"
+    );
+
+    let actor = ActorId::new();
+    let mut ws = Workspace::open_in_memory(actor).unwrap();
+    let hlc = HlcGenerator::new(actor);
+    reconcile_md(&mut ws, &hlc, &md_path, None).unwrap();
+
+    let healed = sidecar::read(&sidecar_path_for(&md_path)).unwrap();
+    assert!(
+        outl_md::unlogged::sidecar_can_answer(&healed.blocks),
+        "one pass here must re-arm the guard"
+    );
+    assert!(outl_md::unlogged::content_lines_missing_from(&disk, &healed.blocks).is_empty());
+}
+
+/// `CURRENT_PIPELINE_VERSION` went 3 → 4 in the same change. Unlike
+/// `SIDECAR_VERSION` it is not a gate: every reader compares it with
+/// `>=` against its own constant, so a value from the future reads as
+/// "at least as new as mine" and costs an older binary nothing.
+///
+/// Pinned because the two constants sit ten lines apart and are easy to
+/// reason about as one thing. They are not: bumping the version number
+/// refuses the file fleet-wide, bumping the pipeline number re-runs a
+/// pass. Only one of them is safe to move in a patch.
+#[test]
+fn a_pipeline_version_from_the_future_costs_the_shipped_binary_nothing() {
+    let dir = TempDir::new().unwrap();
+    let md_path = write_page(dir.path(), ORIGINAL);
+    let actor = ActorId::new();
+    let mut ws = Workspace::open_in_memory(actor).unwrap();
+    let hlc = HlcGenerator::new(actor);
+    reconcile_md(&mut ws, &hlc, &md_path, None).unwrap();
+
+    const {
+        assert!(
+            sidecar::CURRENT_PIPELINE_VERSION > SHIPPED_PIPELINE_VERSION,
+            "this test is only meaningful while the current pipeline is ahead"
+        )
+    };
+    let sc = shipped_read(&sidecar_path_for(&md_path))
+        .expect("a pipeline version from the future must not fail the read");
+    assert_eq!(sc.pipeline_version, sidecar::CURRENT_PIPELINE_VERSION);
+    assert!(
+        !shipped_would_reconcile(&md_path),
+        "and it must not force the shipped binary to redo the page"
+    );
 }

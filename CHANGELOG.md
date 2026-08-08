@@ -5,7 +5,136 @@ Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the
 
 ## [Unreleased]
 
+### Added
+
+- **`outl recover` — brings back block text that an `Op::Edit` truncated, reading the op log rather than the `.md`.**
+  Everything else that recovers unlogged content (`outl reconcile --ahead-of-log`, the `doctor` listing) works by reading the `.md`, which only helps while the `.md` still holds it.
+  A page overwritten before the re-projection guard existed was assumed lost.
+  It is not: the log is append-only, so the truncating edit did not replace the earlier one, it followed it.
+
+  The signature is deliberately narrow — not "the text shrank" (deleting text is something users do) but "the current text is a **prefix**, character for character, of an earlier revision", which is what dropping everything after a point produces.
+  On a real 2,560-page workspace the whole-graph scan returns 8 blocks out of 67,213, four of them the multi-line briefings the original report was about.
+  Restoring is strictly additive by construction, and `restore_truncated_block` re-checks that instead of trusting it.
+  Read-only by default; `--apply` writes, and writes go through `block::edit_text` — a new op, never a rewrite of the log.
+
+- **`outl doctor --repair --force`, and a volume count before anything is written.**
+  The run that removed 1,426 lines from 233 pages printed `708 fixed` and no line count at all.
+  `doctor` now measures, per page, how many content lines the new projection would not reproduce, and reports it before writing — in `--repair` and in the default read-only mode alike.
+  Past 100 lines or 20 pages that lose content, page repairs stand down and `--force` is required.
+  A page the write only adds to counts as zero, so a device that just paired with the whole graph unprojected never trips it.
+
 ### Fixed
+
+- **Markdown containing a blank line inside a block, or a block whose text carried its own indentation, lost everything after that point — silently, and then permanently.**
+  This is the producer behind [issue #210](https://github.com/avelino/outl/issues/210), and it was not where [RFC 0210](docs/rfcs/0210-md-content-outside-op-log.md) guessed.
+  `render → parse` was not a roundtrip:
+
+  ```text
+  input:    a block whose text carries a blank line and its own indentation
+  render:   correct — every line emitted
+  parse:    one block, first line only
+  warnings: 0
+  ```
+
+  The `warnings: 0` is the part that mattered.
+  The parser's contract is that nothing is dropped in silence, and three separate arms of `parse_block_list` broke it: an over-indented line was recovered only at depth 0 and skipped mutely below it, a blank line inside a block's text was read as a separator (the renderer writes it indented; a real separator is empty — the indent tells them apart), and a continuation line's own indentation pushed it out of reach of the level that could have claimed it.
+  A fourth arm warned about an unplaceable line but dropped it from the AST anyway, on the reasoning that a guard in another crate would keep the bytes on disk.
+
+  The reconcile that followed then wrote the truncation into the op log as an `Op::Edit`, so the loss reached the one place the RFC had described as still holding the content.
+  Measured on a real 2,827-file workspace, running the same normalisation over both branches: pages holding unlogged content went from **41 to 8**, lines from **387 to 49**.
+
+  **The first version of this fix traded the bug for a worse one, three times over**, and none of the 237 green tests saw it — a five-minute probe against the real workspace saw all three.
+  `render → parse` has to be a **fixpoint**, not merely lossless, and the original bug at least converged while these mutated the document on every save:
+  a bullet at an irregular indent (`    - child`) was recovered as verbatim *text* carrying its own `- `, so each pass read one more level of nesting (`- parent\n  -     - child`, then `- parent\n  - - child`);
+  a whitespace-only line before a sibling appended a trailing `\n` to the previous block, which is invisible to the reader and a different `content_hash` to the log, so every page with that shape emitted an `Op::Edit` forever;
+  and a recovered block kept the leading indent the renderer then wrote *after* its own marker, so the file settled on the second save instead of the first.
+
+  The property is now stated as one — `render_then_parse_is_a_fixpoint_not_just_lossless` — and verified against all 2,827 `.md` files of a real workspace: **0 unstable, 0 losing a line**.
+
+- **Known cost, stated rather than filed away: withholding the hash invites an older peer in.**
+  A binary from before this release reads `last_synced_hash: ""` as "needs reconciling", reconciles with its own lossy parser, and emits an `Op::Edit` truncating a block the log held correctly.
+  Measured against a worktree of v0.11.0-beta.151, the build users actually have.
+
+  No value of the field avoids it: the old binary's two gates are complementary (`reconcile_md` when the hash mismatches, its re-projection when it matches), and a real hash is worse — it authorises deleting the unlogged content outright.
+  Two things bound the damage: no old write path preserves a `pipeline_version` it does not understand, so the page stays queued and a current binary heals it from the `.md`; and the truncation is an `Op::Edit`, so `outl recover` can read the revision before it.
+  Calibration on 2,827 real files: **0 pages trigger the withholding today** — this is a guard for the next parser gap, not for a live condition.
+
+- **The volume guard reported `0` lines removed in the exact scenario it was built for.**
+  `outl doctor` builds its reference from a **render**, and `content_lines_missing_from` carried a stand-down for "this reference cannot answer" — written for a pre-0.11 sidecar, where it is right.
+  A render of empty blocks hit the same branch, but it is a definitive answer ("the tree holds no text"), not an absence of one.
+  So a repair that would empty a page printed *"removes nothing"* and sailed past the `--force` threshold — the run that guard exists to stop.
+  Measured: 4 content lines on disk, tree rendering `-\n-\n`, reported 0.
+
+  The condition now lives at each call site, next to the knowledge of where the blocks came from, which is the only place that can tell a sidecar from a render.
+
+- **The post-mutation guard wrote anyway when the sidecar could not be read.**
+  Missing, corrupt, and written-by-a-newer-binary are three states where "does the log know this line" has one honest answer: *I cannot tell*.
+  The first version used `if let Ok(sidecar)` and fell through to the write on all three, so the page the read path protects was overwritten on the next keystroke commit — the door this guard was added to close, standing open on a different hinge.
+  Liveness is not at risk: `needs_reconcile` maps an unreadable sidecar to `true`, so the orphan pass rebuilds it and the page projects on the pass after.
+
+- **Withholding the hash made the page invisible to every warning the same release added.**
+  `reconcile_md` writes `last_synced_hash = ""` when it read content it could not log, and every gate downstream tests hash-equality — so `apply_page_md_with_sidecar_if_stale` returned `Ok(None)`, no `PageMarkdownAheadOfLog` was raised, and the banner never appeared.
+  `doctor` counted the page as an ordinary pending edit and never named it.
+  The producer fix was erasing the signal built to report it.
+  Both now treat the empty hash as what it is — withheld, not stale — and ask the content question anyway.
+
+- **A local edit deleted the unlogged lines the open path had just refused to touch.**
+  The re-projection guard covers the paths that *read* a page.
+  The background projection writer runs after a real mutation and wrote unconditionally, so the very deletion `apply_page_md_with_sidecar_if_stale` declines happened anyway on the next keystroke commit — same invariant 8, a door nobody had checked.
+  Found while wiring the warning banner for the first door.
+
+  `apply_page_md_with_sidecar_guarded` is the post-mutation counterpart, and it cannot just call `_if_stale`: that one declines whenever the `.md` carries an unreconciled external edit, which is the state a page is in *while the user types into it*.
+  So it asks the one question that matters — does the file hold content the log cannot account for — and skips the projection if it does.
+  The edit is never at risk either way: it went through `Workspace::apply` and lives in the op log, and only the on-disk projection lags, which is the recoverable direction.
+  Every GUI write path now routes through it (`ProjectionWriter`, block move, template instantiate).
+
+- **The unlogged-content check reported content the log already had, and that verdict freezes a healthy page.**
+  A bullet inside a code fence lives in the block's text **with its marker**, because the renderer only adds one for a block's first line.
+  The disk side stripped the marker anyway, so `- endpoint:` on disk never matched the `- endpoint:` the log held, and 8 pages of a real workspace were told they carried 49 lines of unlogged content they did not carry.
+
+  That is not an advisory verdict: it withholds `last_synced_hash`, refuses the page's re-projection, and reconciles it on every boot forever — the exact failure mode [RFC 0210](docs/rfcs/0210-md-content-outside-op-log.md) names as the worst one available.
+  Each disk line is now tried in both shapes, stripped and verbatim, which widens *how* a known line may match and never *which* lines are known — a line the log genuinely lacks still fails both lookups.
+  Residue on the reporting workspace: **0 pages, 0 lines**.
+
+- **`crates/outl-md/tests/corpus_gate.rs` — the throwaway probe became a test.**
+  Every defect this issue produced, the original and all four regressions introduced while fixing it, was found by running code over 2,827 real `.md` files; none by the unit suite, which was green at every one of those moments.
+  Three properties now run in CI over `tests/corpus/`, a set of files reduced from the real shapes: no line is lost, `render → parse` is a fixpoint, and the unlogged-content check does not cry wolf.
+  The maintenance rule is one line — when a `.md` bug is found in the wild, its shape becomes a file in that directory.
+
+- **`CURRENT_PIPELINE_VERSION` 3 → 4, so the parser fix actually reaches existing workspaces.**
+  A page that the old parser truncated is hash-faithful, and `reconcile_md`'s short-circuit consults only the hash — so a fixed parser never looks at it again and the content stays outside the log forever.
+  The bump makes every sidecar stale by pipeline and turns the first boot into a one-shot migration, which is the same mechanism version 3 used for the same reason.
+
+  It was missed in the first version of this change and caught in review.
+  Worth naming because of *where* the failure is invisible: on the author's machine the recovery commands get run by hand, so nothing looks wrong, while every other user keeps content outside the log with no symptom at all.
+
+- **`reconcile_md` claimed the op log held content it had never emitted an op for.**
+  Writing `last_synced_hash` is the claim "the log holds what is in this file", and every consumer downstream believes it.
+  `outl-md`'s invariant 8 already said the hash may only advance over content the same call emitted ops for — as prose, with no code checking it and no test pinning it.
+  It is now enforced: the hash is withheld when anything is unaccounted for, leaving the page dirty so the next pass looks at it again, and `ReconcileReport.unlogged_lines` carries the count.
+  A page that reconciles twice is a nuisance; a page that lies about its own state is a data-loss bug.
+
+  With the parser fixed this fires on nothing, which makes a **false positive** its real failure mode — a permanently dirty page, across 2,560 of them.
+  So the test that matters asserts the hash still advances for 17 shapes taken from the pages that actually held unlogged content: Roam's tab-indented ordinals and `*` bullets, a `U+2029` pasted from a PDF, non-breaking spaces, fences, properties followed by prose.
+
+- **Matching level 3 deleted one block and five thousand the same way.**
+  A `.md` that arrived truncated — an undownloaded iCloud placeholder, a half-flushed write — emptied a page as quietly as deleting a bullet.
+  `reconcile_md` now goes through `match_blocks_guarded`, which refuses past 500 orphans or 75% of a page (once it has at least 20 blocks).
+  The refusal covers the whole pass rather than shortening the orphan list, and is safe by construction because `match_blocks` is pure — refusing after it ran is refusing before anything exists to apply.
+
+  `outl reconcile --allow-bulk-delete` is the way to say the deletion was meant.
+  It needs its own mode rather than riding on `--ahead-of-log`, and the reason is that the two select **opposite** sets: `--ahead-of-log` visits pages whose `.md` holds *more* than the log, while a page the guard refused holds *less*, so `content_lines_missing_from` is zero and it never appeared in that list.
+  Wiring the flag only there — which is how it first shipped — left it unreachable for every page it existed to unblock, the "guard with no escape hatch is a wall" failure invariant 9 names, arrived at through the door marked "fixed".
+  `the_escape_hatch_applies_a_deletion_the_guard_refused` fabricates the refusal and resolves it, instead of asserting that a flag parses.
+
+- **`apply_page_md_with_sidecar_if_stale` read the sidecar twice with no lock between the reads**, so the hash that authorised the write and the blocks that validated it could describe different revisions.
+  This is the same defect `reconcile_md` had already fixed and documented.
+  It also now declines to write when the sidecar *cannot* answer the question at all (every one written before 0.11 carries `text: ""`): an empty verdict from a reference that could not check is not permission to overwrite, and reading it as one is how the page gets emptied.
+  `sidecar_can_answer` names that condition next to the stand-down it mirrors, so the two cannot drift.
+
+- **`desync::recover_desynced_projection` re-projected over text the op log had never seen.**
+  "Strictly additive" covered structure, not text: a block whose id the tree already knows kept the tree's text, so recovery overwrote what the `.md` said for it — and the ordinary offline session produces exactly that pair.
+  It keeps the recovered ops and no longer rewrites the file.
 
 - **The re-projection guard refused to update any page a peer had edited or deleted from, and the recovery command reverted the peer.**
   Found in code review of the commit that introduced it, by an executable probe, after 1,687 tests and a green `/check` had not.

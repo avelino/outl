@@ -80,6 +80,15 @@ fn messages(report: &DoctorReport) -> Vec<String> {
     report.findings.iter().map(|f| f.message.clone()).collect()
 }
 
+/// A doctor run with the default authority — no `--force`.
+///
+/// The whole battery goes through this rather than `collect_scoped` so
+/// that a test which *wants* the forced scope has to say so, and reads
+/// as the exception it is.
+fn collect(path: &Path, do_repair: bool) -> Result<DoctorReport, ApiError> {
+    collect_scoped(path, do_repair, RepairScope::Guarded)
+}
+
 /// Every file under `dir`, by relative path and content.
 ///
 /// The `ops/` assertions compare **directories**, not one file. The

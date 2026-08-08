@@ -29,9 +29,9 @@ import {
   setBlockProperty,
 } from "@outl/shared/api/commands";
 
-import type { PageView } from "@outl/shared/api/types";
+import type { MdAheadOfLog, PageView } from "@outl/shared/api/types";
 
-import { ParseWarningsBanner } from "@outl/shared/warnings";
+import { PageAheadOfLogBanner, ParseWarningsBanner } from "@outl/shared/warnings";
 import { isAssetLink } from "@outl/shared/links";
 import { journalSlugToDate } from "@outl/shared/journal";
 import {
@@ -196,10 +196,36 @@ export function OutlineView() {
     ),
   );
 
+  /**
+   * "Is this page still not syncing?", carried across same-page
+   * refreshes — but only across the replies that cannot answer.
+   *
+   * Only the open commands attempt the re-projection that discovers the
+   * condition; a mutation reply is built from the tree and never carries
+   * the flag. Reading it straight off every view would therefore clear
+   * the banner on the user's first edit — the exact action the banner
+   * warns against, since a local edit re-projects the page and
+   * overwrites the unlogged lines.
+   *
+   * `md_ahead_of_log_checked` is what separates the two: a reply that
+   * ran the check is authoritative in **both** directions, so an absent
+   * notice means the page is healthy again (the user ran
+   * `outl reconcile --ahead-of-log`) and the banner clears. Sticking
+   * past that would leave a permanent "this page isn't syncing" on a
+   * page that syncs — the mirror of the silence the banner exists to
+   * end, and a banner users learn to ignore.
+   */
+  function stickyAheadOfLog(view: PageView): MdAheadOfLog | undefined {
+    if (view.md_ahead_of_log_checked) return view.md_ahead_of_log;
+    if (view.md_ahead_of_log) return view.md_ahead_of_log;
+    return appState.page?.id === view.page.id ? appState.mdAheadOfLog : undefined;
+  }
+
   function applyView(view: PageView) {
     setAppState({
       page: view.page,
       parseWarnings: view.warnings ?? [],
+      mdAheadOfLog: stickyAheadOfLog(view),
     });
     // Reconcile the outline (see `setOutline`): only the block that
     // actually changed re-renders, not all N rows.
@@ -213,6 +239,7 @@ export function OutlineView() {
           setAppState({
             page: updated.page,
             parseWarnings: updated.warnings ?? [],
+            mdAheadOfLog: stickyAheadOfLog(updated),
           });
           setOutline(updated.outline);
           void resolvePageEmbeds(updated.outline);
@@ -825,6 +852,7 @@ export function OutlineView() {
 
       <div class="min-w-0 flex-1 overflow-y-auto px-12 py-6">
         <div class="mx-auto w-full max-w-3xl">
+          <PageAheadOfLogBanner info={appState.mdAheadOfLog} client="desktop" />
           <ParseWarningsBanner warnings={appState.parseWarnings} />
           <Show when={appState.page}>
             <div class="mb-2 flex justify-end">

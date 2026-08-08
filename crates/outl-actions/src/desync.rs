@@ -34,6 +34,16 @@
 //! Blocks that live in the tree but not in the stale `.md` (e.g. a
 //! peer edit that arrived while the projection was frozen) remain
 //! untouched and reappear when the page is re-projected at the end.
+//!
+//! ## The re-projection is not unconditional
+//!
+//! "Strictly additive" covers structure but not text: a block whose id
+//! the tree already knows keeps the tree's text, so re-projecting would
+//! overwrite whatever the `.md` says for it. When those two disagree the
+//! disk text may be an `Op::Edit` that was lost with the rest of the
+//! commit — content that exists in no op — and the recovery has no way to
+//! tell it apart from a peer edit. So the ops are recovered and the file
+//! is left alone. Root `CLAUDE.md` invariant 8.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,7 +54,7 @@ use outl_core::id::NodeId;
 use outl_core::op::{LogOp, Op};
 use outl_core::property::PropValue;
 use outl_core::workspace::Workspace;
-use outl_md::matching::flatten;
+use outl_md::matching::{flatten, FlatBlock};
 use outl_md::sidecar::{content_hash, file_hash, SidecarBlock};
 use outl_md::OutlineNode;
 use tracing::warn;
@@ -101,6 +111,13 @@ fn scan_dir(ws: &Workspace, dir: &Path, out: &mut Vec<PathBuf>) {
 /// `Tree::parent(id)` is `None` only for ids no op log ever created —
 /// a trashed node still has a parent (`TRASH_ROOT`), so a legitimate
 /// remote delete does **not** trip this check.
+///
+/// The hash comparison here **narrows** the scan, it never authorises a
+/// write: a match means "the orphan reconcile doesn't own this file", and
+/// a mismatch hands the page back to it. Nothing downstream of this
+/// function overwrites a `.md` on the strength of that match alone — see
+/// [`recover_desynced_projection`], which asks a second question before
+/// re-projecting (root `CLAUDE.md` invariant 8).
 fn is_desynced(ws: &Workspace, md_path: &Path) -> bool {
     let Ok(text) = fs::read_to_string(md_path) else {
         return false;
@@ -128,7 +145,10 @@ fn is_desynced(ws: &Workspace, md_path: &Path) -> bool {
 /// Strictly additive (see the module docs): blocks already in the tree
 /// — including trashed ones — are never created, moved, or edited.
 /// When at least one op was applied the page is re-projected
-/// (`.md` + sidecar) so the on-disk view shows the merged state.
+/// (`.md` + sidecar) so the on-disk view shows the merged state — unless
+/// a tree-known block's text disagrees with the `.md`, in which case the
+/// ops are kept and the file is left untouched (module docs → "The
+/// re-projection is not unconditional").
 ///
 /// Returns the number of ops applied.
 /// Returns `Ok(0)` without touching anything when the file no longer
@@ -156,13 +176,38 @@ pub fn recover_desynced_projection(
     // lines up 1:1 with `sc.blocks`. Verify before trusting the
     // pairing — a corrupt sidecar must not graft ids onto the wrong
     // blocks.
-    if !lockstep_matches(&ast.blocks, &sc.blocks) {
+    let flat = flatten(&ast.blocks);
+    if !lockstep_matches(&flat, &sc.blocks) {
         warn!(
             "desync recovery skipped {}: sidecar does not line up with the parsed .md",
             md_path.display()
         );
         return Ok(0);
     }
+    // Decide **now** whether the re-projection at the end may run, while
+    // the tree still holds the state the lost ops never reached.
+    //
+    // The shared verdict (`content_lines_missing_from`) cannot answer this
+    // one: it compares the file against the sidecar, and here the two were
+    // written together, so the sidecar accounts for every line on disk by
+    // construction. What it cannot express is a block the tree **already**
+    // knows whose text disagrees with the `.md` — the same lost-ops story
+    // one level down (the `Create` landed, the `Edit` did not), and the
+    // typical offline session produces exactly that pairing: one new block
+    // (id missing, recovered below) plus one reworded existing block (id
+    // present, text stranded on disk).
+    //
+    // The recovery deliberately does not re-emit that `Edit`: a peer edit
+    // that arrived while the projection was frozen is indistinguishable
+    // from a lost local one, and writing the disk text back as an op
+    // reverts the peer permanently on an append-only log (RFC 0210, "the
+    // recovery command the error message recommended made it worse").
+    // Since neither text can be preferred, the file is not overwritten
+    // either — a stale view is recoverable, deleted bytes are not.
+    let text_diverged = flat.iter().zip(&sc.blocks).any(|(node, entry)| {
+        ws.tree().parent(entry.id).is_some()
+            && ws.block_text(entry.id).as_deref() != Some(node.text)
+    });
 
     let page_id = sc.page_id;
     // The page node itself may be missing too (whole page authored
@@ -196,18 +241,30 @@ pub fn recover_desynced_projection(
     recover_level(ws, hlc, &ast.blocks, &sc.blocks, page_id, 0, &mut applied)?;
 
     if applied > 0 {
-        // Re-project so the on-disk `.md` + sidecar show the merged
-        // state: recovered blocks AND everything the log already had
-        // that the frozen projection was missing.
-        apply_page_md_with_sidecar(ws, workspace_root, page_id)?;
+        if text_diverged {
+            // Keep the recovered ops (strictly additive, pure gain) but
+            // leave the file: see the reasoning where `text_diverged` is
+            // computed. `outl doctor` names the page, `outl reconcile
+            // --ahead-of-log` is the deliberate way to bring the disk text in.
+            warn!(
+                "desync recovery for {} kept the recovered ops but left the .md alone: \
+                 a block the op log already knows carries different text on disk, and \
+                 re-projecting would delete it",
+                md_path.display()
+            );
+        } else {
+            // Re-project so the on-disk `.md` + sidecar show the merged
+            // state: recovered blocks AND everything the log already had
+            // that the frozen projection was missing.
+            apply_page_md_with_sidecar(ws, workspace_root, page_id)?;
+        }
     }
     Ok(applied)
 }
 
-/// `true` when a DFS-preorder flatten of `blocks` pairs 1:1 (count and
+/// `true` when the DFS-preorder flatten `flat` pairs 1:1 (count and
 /// per-block content hash) with the sidecar's block list.
-fn lockstep_matches(blocks: &[OutlineNode], entries: &[SidecarBlock]) -> bool {
-    let flat = flatten(blocks);
+fn lockstep_matches(flat: &[FlatBlock<'_>], entries: &[SidecarBlock]) -> bool {
     flat.len() == entries.len()
         && flat
             .iter()

@@ -128,6 +128,15 @@ enum Command {
         /// `.outl/repair-backup/<timestamp>/` first.
         #[arg(long)]
         repair: bool,
+        /// Authorise a `--repair` whose measured volume is past the
+        /// point it runs unattended.
+        ///
+        /// The report always states how many content lines the page
+        /// re-projections would remove, and from how many pages, before
+        /// anything is written. Past the ceiling those writes stand
+        /// down; this is how you say "yes, I read that and I meant it".
+        #[arg(long, requires = "repair")]
+        force: bool,
     },
     /// Resolve orphan matches via the TUI.
     Reconcile {
@@ -147,6 +156,45 @@ enum Command {
         /// loss permanent.
         #[arg(long = "ahead-of-log")]
         ahead_of_log: bool,
+        /// Apply a deletion the orphan-volume guard refused.
+        ///
+        /// A reconcile that would trash more than 500 blocks of a page,
+        /// or more than 75% of one, stops and writes nothing — a `.md`
+        /// that arrived truncated (an undownloaded iCloud placeholder, a
+        /// half-flushed write) is indistinguishable from a real bulk
+        /// delete by shape, only by scale.
+        ///
+        /// This is the way to say the deletion was intended. Check what
+        /// the `.md` actually holds before reaching for it: the guard
+        /// fires on the case where the file is the thing that is wrong.
+        #[arg(long = "allow-bulk-delete")]
+        allow_bulk_delete: bool,
+    },
+    /// Recover block text that an `Op::Edit` truncated.
+    ///
+    /// The mirror of `reconcile --ahead-of-log`, reading the other
+    /// source. That one reads the `.md` and can only recover content
+    /// still on disk; this reads the **op log**, where a truncating
+    /// edit's predecessor still carries the full text — the only route
+    /// left for a page whose `.md` was already overwritten (issue #210).
+    ///
+    /// Read-only unless `--apply`. A restore is a new op; the op log is
+    /// never rewritten.
+    Recover {
+        /// Workspace path. Overrides the global `--workspace`.
+        path: Option<PathBuf>,
+        /// Write the recovered text back as new `Op::Edit`s.
+        ///
+        /// Additive by construction: a block only qualifies when its
+        /// current text is a prefix of the revision being restored, so
+        /// nothing it shows today is dropped.
+        #[arg(long)]
+        apply: bool,
+        /// Only report blocks that lost at least this many non-blank
+        /// lines. Raise it when the listing is too long to read; a
+        /// one-line loss is often ordinary editing.
+        #[arg(long = "min-lines", default_value_t = cmd::recover::DEFAULT_MIN_LINES, value_parser = clap::value_parser!(u16).range(1..))]
+        min_lines: u16,
     },
     /// Take, list, and restore local snapshots of the workspace.
     ///
@@ -342,16 +390,38 @@ fn main() -> Result<()> {
             let p = resolve_path(cli.workspace.as_ref(), path.as_ref())?;
             cmd::serve::run(&p, once)
         }
-        Some(Command::Doctor { path, json, repair }) => {
+        Some(Command::Doctor {
+            path,
+            json,
+            repair,
+            force,
+        }) => {
             let p = resolve_path(cli.workspace.as_ref(), path.as_ref())?;
+            let scope = if force {
+                cmd::doctor::RepairScope::Forced
+            } else {
+                cmd::doctor::RepairScope::Guarded
+            };
             if json {
-                std::process::exit(cmd::doctor::run_json(&p, repair));
+                std::process::exit(cmd::doctor::run_json(&p, repair, scope));
             }
-            cmd::doctor::run(&p, repair)
+            cmd::doctor::run(&p, repair, scope)
         }
-        Some(Command::Reconcile { path, ahead_of_log }) => {
+        Some(Command::Reconcile {
+            path,
+            ahead_of_log,
+            allow_bulk_delete,
+        }) => {
             let p = resolve_path(cli.workspace.as_ref(), path.as_ref())?;
-            cmd::reconcile::run(&p, ahead_of_log)
+            cmd::reconcile::run(&p, ahead_of_log, allow_bulk_delete)
+        }
+        Some(Command::Recover {
+            path,
+            apply,
+            min_lines,
+        }) => {
+            let p = resolve_path(cli.workspace.as_ref(), path.as_ref())?;
+            cmd::recover::run(&p, apply, min_lines)
         }
         Some(Command::Backup { sub }) => {
             let p = resolve_path(cli.workspace.as_ref(), None)?;
@@ -750,4 +820,46 @@ fn init_tracing(verbosity: u8) {
         // from `JsonlStorage::reload` corrupts the response.
         .with_writer(std::io::stderr)
         .try_init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    /// The orphan-volume guard refuses a bulk delete, and that refusal is
+    /// only defensible while the user has a way to say the deletion was
+    /// meant. `OrphanGuard::Disabled` is that way, and this binary is the
+    /// only thing that reaches it — so the flag existing is what keeps the
+    /// guard from being a wall (root `CLAUDE.md` invariant 9).
+    ///
+    /// The escape hatch was unreachable from any user-facing surface for
+    /// one commit, which is exactly the state this pins against.
+    #[test]
+    fn the_bulk_delete_escape_hatch_is_reachable_from_the_command_line() {
+        let cli =
+            Cli::try_parse_from(["outl", "reconcile", "--ahead-of-log", "--allow-bulk-delete"])
+                .expect("`--allow-bulk-delete` must parse");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Reconcile {
+                allow_bulk_delete: true,
+                ahead_of_log: true,
+                ..
+            })
+        ));
+    }
+
+    /// And it is off unless asked for.
+    #[test]
+    fn the_guard_is_enforced_by_default() {
+        let cli = Cli::try_parse_from(["outl", "reconcile"]).expect("plain reconcile must parse");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Reconcile {
+                allow_bulk_delete: false,
+                ..
+            })
+        ));
+    }
 }

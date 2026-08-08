@@ -14,6 +14,7 @@ import type {
   Backlink,
   BacklinksOrder,
   BlockNode,
+  MdAheadOfLog,
   ParseWarning,
   PageMeta,
   ResolvedBlock,
@@ -44,6 +45,14 @@ export interface AppStateShape {
    * a clean file.
    */
   parseWarnings: ParseWarning[];
+  /**
+   * Set when the current page stopped syncing because its `.md` holds
+   * content the op log never recorded, so outl refuses to overwrite the
+   * file. Drives the `<PageAheadOfLogBanner />` above the outline.
+   * `undefined` on every healthy page — which is all of them until
+   * something upstream produced unlogged content.
+   */
+  mdAheadOfLog: MdAheadOfLog | undefined;
   /** Resolved source blocks keyed by ref handle, for `((blk-…))` inline
    *  refs and `!((blk-…))` embeds on the current page. Inline refs render
    *  `text`; embeds also expand `children` as a subtree. */
@@ -230,6 +239,7 @@ const [state, setState] = createStore<AppStateShape>({
   outline: [],
   backlinks: [],
   parseWarnings: [],
+  mdAheadOfLog: undefined,
   embeds: {},
   selectedPath: null,
   selectedBlockId: null,

@@ -6,7 +6,7 @@
 //! [`set_block_collapsed`], which bypasses reprojection — see its doc.
 
 use outl_actions::{
-    append_block, apply_page_md_with_sidecar, copy_markdown as action_copy_markdown,
+    append_block, apply_page_md_with_sidecar_guarded, copy_markdown as action_copy_markdown,
     create_after_or_append, create_before_or_append, delete, edit_text, enclosing_page_id, indent,
     move_after, move_down, move_up, outdent, paste_markdown as action_paste_markdown,
     paste_plain as action_paste_plain, render_block_md,
@@ -239,13 +239,17 @@ pub fn move_block_after<S: AppHost>(
         // one it landed on.
         let source_page = enclosing_page_id(ws, node);
         move_after(ws, state.hlc(), node, after).map_err(|e| e.to_string())?;
-        if let Err(e) = apply_page_md_with_sidecar(ws, &root, page) {
-            warn!("destination page md+sidecar sync failed: {e}");
+        // Guarded: a mutation must project, but projecting must not
+        // delete content the op log never saw (invariant 8). The move
+        // itself is already in the log; only the on-disk `.md` lags, and
+        // the open path raises a banner explaining why.
+        if let Err(e) = apply_page_md_with_sidecar_guarded(ws, &root, page) {
+            warn!("destination page md+sidecar sync skipped: {e}");
         }
         if let Some(src) = source_page {
             if src != page {
-                if let Err(e) = apply_page_md_with_sidecar(ws, &root, src) {
-                    warn!("source page md+sidecar sync failed: {e}");
+                if let Err(e) = apply_page_md_with_sidecar_guarded(ws, &root, src) {
+                    warn!("source page md+sidecar sync skipped: {e}");
                 }
             }
         }

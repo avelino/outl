@@ -12,11 +12,18 @@ Treat matching with the same paranoia as the CRDT.
 ## What this crate owns
 
 - Parse `.md` (clean, no IDs) → outline AST.
-  Parser is **permissive**:
-  lines that don't match the outl dialect (e.g. a leading `# heading`, a stray paragraph, an HTML snippet at depth 0) are preserved verbatim as regular blocks and recorded in `ParsedPage.warnings: Vec<ParseWarning>` (kind `UnrecognizedBlockMarker`).
-  Nothing is silently dropped; surfaces surface the warning list so the user can clean the file at their pace.
+  Parser is **permissive at every depth, not just depth 0**:
+  lines that don't match the outl dialect (e.g. a leading `# heading`, a stray paragraph, an HTML snippet) are preserved verbatim as a recovered block.
+  A sibling when found at depth 0, a child of the block above it when found indented with no open continuation to absorb it.
+  Every recovery is recorded in `ParsedPage.warnings: Vec<ParseWarning>` (kind `UnrecognizedBlockMarker`).
+  Nothing is silently dropped, at any depth; surfaces show the warning list so the user can clean the file at their pace.
   Multi-line bodies (including `> ` blockquote continuation lines, `TODO ` / `DONE ` continuations, and free-text continuations) land verbatim in `OutlineNode.text` separated by `\n`;
   the prefix on each continuation line is preserved by the same "trim leading indent, append to text" path so blockquote bodies round-trip cleanly as CommonMark.
+  **Blank lines and indentation inside a block's text now round-trip.**
+  A whitespace-only line indented deeper than the block (what `render::write_block_text` emits for a blank line mid-continuation) folds into `text`; only a genuinely empty line closes continuation.
+  A continuation line's own indentation survives via the private `strip_indent_levels` helper, which strips only the levels the renderer added.
+  An over-indented line the grammar still can't place is recovered as a **child block** at its written depth (warning, not a silent drop).
+  Getting any of these three wrong is the issue #210 producer — measured at 41 pages / 387 lines on a real workspace, and 0 after the fix.
 - Render outline AST → `.md` (clean, no IDs).
   Each line in `OutlineNode.text` after the first is emitted at `indent + 1`; the renderer **does not invent** prefixes on continuation lines — whatever the user (or the parser) put in `text` round-trips as-is.
   Block-kind markers (`TODO `, `DONE `, `> `) are owned by `outl-actions` (`todo.rs`, `quote.rs`); this crate only preserves them verbatim.
@@ -154,6 +161,29 @@ When an external save lands on `pages/foo.md`:
 **Hard rule:** a block that drops to level 3 must appear in `orphans.log` before being deleted.
 **Silent deletion is a P0 bug.**
 
+**Second hard rule: level 3 says *what* to delete, never *how much*.**
+One orphan and five thousand come back in the same `Vec<NodeId>`.
+So a `.md` that arrived truncated — an iCloud placeholder whose bytes never downloaded, a half-flushed write, a parser that stopped reading the dialect halfway — empties a page as quietly as deleting one bullet.
+Any caller that turns orphans into `Move(node, TRASH_ROOT)` goes through **`matching::guard::match_blocks_guarded`**, not the raw `match_blocks`.
+Three properties it is built to have, which are also the review checklist for changing it:
+
+- **It cannot lose half a page.**
+  `match_blocks` is pure, so refusing after it ran is refusing before anything exists to apply.
+- **It is never silent.**
+  The refusal is `Err(MatchGuardError::BulkDelete { volume, trip })`, not a shortened orphan list.
+  Quietly dropping the deletions leaves the blocks in the tree and out of the `.md`, which is the divergence the reconcile exists to close.
+- **It has a way out.**
+  `OrphanGuard::Disabled` is what a caller wires to the user saying "yes, I meant that" — today `outl reconcile --allow-bulk-delete`.
+  Reachable only from an explicit act; a retry is not consent (root `CLAUDE.md` invariant 9 and RFC 0211 name a guard with no escape hatch as its own defect class).
+
+The defaults, and why each number is what it is:
+
+| Constant | Value | Why |
+|---|---|---|
+| `MAX_ORPHANED_BLOCKS` | 500 | No hand edit removes five hundred blocks from one page in one save. An unattended import legitimately might, and that is exactly the caller that should have to say so out loud. |
+| `MAX_ORPHANED_RATIO` | 0.75 | Deliberately high. Deleting a section is ordinary editing and costs well under half a page, while a truncated read takes essentially all of it. RFC 0210 already recorded what a guard that fires on real edits costs: it gets disabled, and then it guards nothing. |
+| `RATIO_FLOOR_BLOCKS` | 20 | A ratio is meaningless on a four-block scratch note. Under the floor only the absolute arm applies, which cannot fire that low — small pages are unguarded on purpose: small blast radius, high false-positive cost. |
+
 **Level 1.5 compares parents, not just indents.**
 Indent is depth, not identity: two blocks at the same depth can live in different subtrees, and matching on indent alone handed one subtree's id — plus its `((blk-…))` handle — to a block in another.
 Parents are compared through the ids matching already resolved (DFS preorder guarantees a parent is resolved before its children), so an unresolved parent counts as disagreement — the conservative answer.
@@ -245,6 +275,12 @@ Therefore:
 Unparseable JSON still rebuilds (never block on a corrupt sidecar).
 Pinned by `tests/mixed_version_sidecar.rs`, which models the shipped v2 binary explicitly and runs it against the current one over the same files.
 
+**The withheld `last_synced_hash` (invariant 8) is not free on old peers, and no value is.**
+An empty hash makes a shipped binary re-read the page with its own parser; a real one authorises it to render the tree straight over the `.md`.
+Its two gates are complementary, so nothing disarms both, and moving the signal into `version` arms the duplication loop above.
+Measured numbers, the refuted "the guard never re-arms" claim, and four regression tests live in the `tests/mixed_version_sidecar.rs` module doc.
+Open in [issue #210](https://github.com/avelino/outl/issues/210).
+
 **Sidecar is not a sync surface.**
 UI state that must converge between devices — fold flags, pinned, selection, anything user-meaningful — goes through the op log (`outl-core`), not here.
 iCloud / Syncthing sync the sidecar file as one blob with last-write-wins semantics, so two devices flipping different fields in the same window lose data.
@@ -298,7 +334,10 @@ src/
 ├── render.rs       # AST → md (clean)
 ├── sidecar.rs      # read/write .outl JSON, derive_ref_handle, content_hash
 ├── matching.rs     # 3-level matching algorithm
+├── matching/
+│   └── guard.rs    # match_blocks_guarded — volume guard over level-3 orphans (OrphanGuard, OrphanVolume)
 ├── similarity.rs   # level-2 scoring + global-confidence assignment (private to the crate)
+├── unlogged.rs     # content_lines_missing_from, sidecar_can_answer — "does the op log know this line"
 ├── diff.rs         # AST diff → Op sequence (takes old_blocks to preserve ref_handle)
 ├── inline.rs       # the scan: tokenize / tokenize_owned, match_one precedence, inline_to_source
 ├── token.rs        # InlineTok (Plain/Bold/.../BlockRef/Embed/Emoji), owned InlineToken, RefTarget
@@ -329,7 +368,8 @@ tests/
 ├── identical_blocks_swap.rs  # two identical blocks change parents
 ├── heavy_edit.rs             # >20% content change → level 2 warning
 ├── similarity_contention.rs  # two new blocks claim one old entry: confidence decides, not index order
-└── mixed_version_sidecar.rs  # shipped v2 binary + current one over one folder: no dup, no handle rotation
+├── mixed_version_sidecar.rs  # shipped v2 binary + current one over one folder: no dup, no handle rotation
+└── multiline_block_roundtrip.rs  # render → parse roundtrip for multi-line/blank-line/indented block text (issue #210 producer)
 
 benches/
 └── block_index.rs            # resolve / search_block_text on 100k blocks
@@ -344,6 +384,27 @@ Today's numbers (M-series laptop):
   O(1) HashMap hit.
 - `search_block_text(query, limit)` — ~12 ms at 100k blocks (linear scan with case-fold + position scoring).
   Suitable for the autocomplete popup the TUI uses today; future fzf-style scoring can drop in behind the same signature.
+
+## The corpus gate
+
+`tests/corpus_gate.rs` runs three properties over `tests/corpus/`, and it exists because of a measured fact about this crate:
+
+> Across issue #210 — the original defect and all four regressions introduced while fixing it — **every** one was found by running code over 2,827 real `.md` files, and **none** by the unit suite, which was green (237 tests here) at every one of those moments.
+
+The unit tests pin shapes once someone knows them. The corpus is for the shapes nobody thought of: odd indentation, tabs, Roam leftovers, bullets inside fences, unicode separators pasted from PDFs.
+
+The three properties, in the order they were learned:
+
+1. **No line is lost** across `parse → render`.
+2. **`render → parse` is a fixpoint** — not merely lossless.
+   A document that changes shape on every save mutates the user's file forever and emits an `Op::Edit` per reconcile, which is worse than the bug it replaced: that one at least converged.
+3. **The unlogged-content check does not cry wolf.**
+   A page the log fully accounts for must not be reported, because that verdict withholds `last_synced_hash` and refuses re-projection — it freezes a page that has nothing wrong with it.
+
+Property 3 did not exist until the defect it catches had already shipped, inside the same PR that named false positives as the worst failure mode available.
+
+**Maintenance rule, the whole of it: when a `.md` bug is found in the wild, its shape becomes a file in `tests/corpus/`.**
+Reduce it to the smallest input that reproduces, and do not clean it up — the ugliness is the point.
 
 ## Invariants
 
@@ -370,6 +431,13 @@ Today's numbers (M-series laptop):
    Measured cost on a real workspace: 233 pages, 1,426 lines ([RFC 0210](../../docs/rfcs/0210-md-content-outside-op-log.md), root `CLAUDE.md` invariant 8).
    If you cannot emit an op for something you read, **do not advance the hash**.
    Leave the page looking dirty so the reconcile runs again: a page that reconciles twice is a nuisance, a page that lies about its own state is a data-loss bug.
+
+   **Enforced, not just followed.**
+   `reconcile_md` asks `unlogged::content_lines_missing_from` before writing the sidecar and, when it returns anything, writes an empty `last_synced_hash` instead of the real one so the page is looked at again next pass.
+   `ReconcileReport.unlogged_lines` carries the count for callers to surface.
+   `unlogged.rs` lives here (not `outl-actions`) so the producer can ask the same question its consumers ask; `outl_actions::content_lines_missing_from` / `sidecar_can_answer` are re-exports.
+   Pinned by `tests/multiline_block_roundtrip.rs` (`the_hash_is_still_advanced_for_every_shape_a_real_workspace_holds` and siblings).
+   The bulk-delete half has the same shape: `reconcile_md_with_guard` refuses the whole pass (`ReconcileError::BulkDelete`) instead of trashing an oversized orphan list — see "Second hard rule" under the matching algorithm.
 
 ## Things to never do here
 

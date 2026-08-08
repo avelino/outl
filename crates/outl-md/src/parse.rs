@@ -14,6 +14,33 @@
 //!
 //! See `docs/markdown-format.md` for the user-facing spec.
 //!
+//! ## Nothing is dropped in silence
+//!
+//! Every line of the file must end up somewhere: a block, a property, a
+//! block's text, or — when the grammar cannot place it — a recovered
+//! verbatim block plus a [`ParseWarning`]. Never advancing past a line
+//! without a record.
+//!
+//! That is not a style preference, it is the producer half of issue
+//! #210. `render → parse` used to lose content three ways, all of them
+//! reachable from one ordinary shape (a block whose text carries a blank
+//! line, which the renderer writes as indented whitespace):
+//!
+//! 1. an over-indented line was recovered only at `indent == 0` and
+//!    skipped mutely below it;
+//! 2. a blank line inside a block's text was read as a separator, which
+//!    closed continuation and stranded everything after it;
+//! 3. a continuation line's own indentation pushed it past the level
+//!    that could have claimed it.
+//!
+//! The reconcile that followed wrote the truncation into the op log as
+//! an `Op::Edit`, so the loss reached the source of truth. Measured on a
+//! real workspace: 41 pages, 387 lines, down to 0. Each arm below names which of
+//! the three it is; the story is here so it is told once.
+//!
+//! Pinned by `tests/multiline_block_roundtrip.rs`, in particular
+//! `no_non_blank_line_is_ever_lost_between_parse_and_render`.
+//!
 //! Sibling modules own one piece of that grammar each: `ast` (the
 //! types this module produces), `property` (the `key:: value` line)
 //! and `fence` (fenced code, where the outline grammar is suspended).
@@ -75,19 +102,55 @@ fn parse_block_list(
             // means a deeper-indented line landed BEFORE its parent
             // bullet (typical of imported markdown: an indented
             // snippet at the top of the file, or a code-fence the
-            // dialect cannot recognise). At depth 0 we recover with a
-            // verbatim block + warning so no content is silently
-            // dropped. At deeper levels we still skip (the outer
-            // recursive call owns the context) but the same recovery
-            // upstream caught the parent line, so nothing leaks.
-            if indent == 0 {
-                warnings.push(ParseWarning {
-                    line: *i + 1,
-                    raw: raw.to_string(),
-                    kind: ParseWarningKind::UnrecognizedBlockMarker,
-                });
+            // dialect cannot recognise).
+            //
+            // **Loss #1 in the module doc.** Recovery runs at every
+            // depth; this arm used to skip silently whenever
+            // `indent != 0`, on the reasoning that the recovery
+            // upstream had already caught the parent line. It had not.
+            //
+            // **A bullet stays a bullet, whatever its indent.** Recovering
+            // `    - child` as verbatim *text* preserves the bytes and
+            // corrupts the document: the text carries a `- ` the renderer
+            // then writes after its own marker, so the next parse reads
+            // one more level of nesting than the last, and the block's
+            // text grows a marker per save. Measured: `- parent\n    - child`
+            // rendered to `- parent\n  -     - child`, then to
+            // `- parent\n  - - child`. Content that mutates on every save
+            // is worse than content that is merely misplaced, and worse
+            // than the silent drop this arm replaced — that at least
+            // converged.
+            //
+            // So an over-indented *marker* line is claimed as a block at
+            // this level (its indentation was irregular, its meaning was
+            // not), and only a genuinely unplaceable line becomes verbatim
+            // text. `raw` there, for the same reason as the marker-less
+            // arm below: no byte of the user's file is this parser's to
+            // discard.
+            warnings.push(ParseWarning {
+                line: *i + 1,
+                raw: raw.to_string(),
+                kind: ParseWarningKind::UnrecognizedBlockMarker,
+            });
+            if is_block_marker(stripped) {
+                // Re-read the line at *our* indent so the marker is
+                // consumed rather than folded into the text. Recursing
+                // would loop: the callee sees the same over-indent.
+                let content = strip_block_marker(stripped);
                 blocks.push(OutlineNode {
-                    text: raw.to_string(),
+                    text: content.to_string(),
+                    properties: Vec::new(),
+                    children: Vec::new(),
+                });
+            } else {
+                // `trim_start`, not `raw`: the leading indent of a line
+                // the grammar could not place is the renderer's layout,
+                // not the user's content, and keeping it inside the text
+                // means the renderer writes it *after* its own marker —
+                // so the file settles on the second save instead of the
+                // first. The warning above carries the untouched line.
+                blocks.push(OutlineNode {
+                    text: raw.trim_start().to_string(),
                     properties: Vec::new(),
                     children: Vec::new(),
                 });
@@ -137,6 +200,12 @@ fn parse_block_list(
         // unambiguous.
         let mut accepting_continuation = true;
 
+        // Blank lines seen inside this block's text, not yet written.
+        // Held rather than appended so a blank line that turns out to be
+        // trailing (the next line is a sibling, not a continuation)
+        // leaves no mark on the text — see the blank-line arm below.
+        let mut pending_blanks = 0usize;
+
         // If the block's initial content is itself a fence opener (the
         // user wrote `- ```lisp` on one line), the opener already lives
         // in `node.text`. Pull the body and closing fence in *now*,
@@ -161,6 +230,36 @@ fn parse_block_list(
             }
             let next_raw = lines[*i];
             if next_raw.trim().is_empty() {
+                // A blank line inside the block's own text, or a
+                // separator between siblings? The indent answers it.
+                //
+                // **Loss #2 in the module doc.**
+                // `render::write_block_text` emits every line of
+                // `text` after the first at `indent + 1`, so an empty
+                // line *within* the text comes back as whitespace
+                // indented to that level, while a separator between
+                // blocks is a genuinely empty line.
+                //
+                // Only while still accepting continuation — once a
+                // child or a fence has claimed the slot, a blank line
+                // is a separator whatever its indent.
+                //
+                // **Held, not appended.** A trailing `\n` on the text is
+                // not what the user wrote and not what the renderer will
+                // write back, but it *is* a different `content_hash`, so
+                // appending eagerly made every page carrying this shape
+                // emit an `Op::Edit` on the next reconcile — churn in the
+                // log for a byte nobody typed. The newline is only
+                // materialised when a continuation line actually follows
+                // it (see `pending_blanks` below).
+                if accepting_continuation
+                    && !next_raw.is_empty()
+                    && leading_indent(next_raw) > indent
+                {
+                    pending_blanks += 1;
+                    *i += 1;
+                    continue;
+                }
                 // Blank line terminates continuation but not children
                 // (children can have blank gaps between them in the
                 // user's source).
@@ -220,30 +319,80 @@ fn parse_block_list(
                     if !node.text.is_empty() {
                         node.text.push('\n');
                     }
+                    for _ in 0..std::mem::take(&mut pending_blanks) {
+                        node.text.push('\n');
+                    }
                     node.text.push_str(next_stripped);
                     *i += 1;
                 } else {
-                    // A line the grammar cannot place. It still has to be
-                    // accounted for: this crate's contract is that nothing
-                    // is silently dropped, and this arm is where that
-                    // promise used to break (issue #210). Advancing `i`
-                    // without a record made the line invisible to the
-                    // user, to `doctor`, and to the op log at once.
+                    // A line the grammar cannot place, and the arm the
+                    // module doc's rule exists for.
                     //
-                    // Warn rather than append: continuation is closed at
-                    // this point (a blank line, or a child block already
-                    // claimed the slot), so folding the text into
-                    // `node.text` would silently re-flow the document.
-                    // The warning names the line so the user can fix it,
-                    // and `reconcile` no longer advances the sidecar hash
-                    // over content the log never saw.
+                    // Not folded into `node.text`: continuation is closed
+                    // at this point (a blank line, or a child block
+                    // already claimed the slot), so appending there would
+                    // silently re-flow the document. It becomes a
+                    // recovered **child** block instead, at the depth the
+                    // line was written, so the reader sees it where they
+                    // put it.
+                    //
+                    // Warning *and* a block, not one or the other. An
+                    // earlier version emitted only the warning, trusting
+                    // `reconcile` to refuse to advance the sidecar hash
+                    // so the `.md` would keep the text. That leaves the
+                    // page permanently dirty with its content permanently
+                    // outside the log, and makes not losing bytes depend
+                    // on a guard in another crate.
                     warnings.push(ParseWarning {
                         line: *i + 1,
                         raw: next_raw.to_string(),
                         kind: ParseWarningKind::UnrecognizedBlockMarker,
                     });
+                    // Strip the indentation the renderer will put back.
+                    // Storing `raw` here keeps a leading indent inside the
+                    // *text*, which the renderer then writes after its own
+                    // — `  body` became `  -   body`, and the next parse
+                    // read a different text than the one it wrote. The
+                    // warning above carries the untouched line, so nothing
+                    // about the original is lost for the reader.
+                    node.children.push(OutlineNode {
+                        // `trim_start` on top of the strip: an indent
+                        // that is not a whole number of levels (three
+                        // spaces where a level is two) leaves a residue
+                        // the renderer writes after its marker, and the
+                        // next parse trims it — so the file settled on
+                        // pass two instead of pass one. Measured on the
+                        // real workspace: 3 pages of 2,827, all of them
+                        // whitespace-only differences with no line lost.
+                        text: strip_indent_levels(next_raw, indent + 1)
+                            .trim_start()
+                            .to_string(),
+                        properties: Vec::new(),
+                        children: Vec::new(),
+                    });
                     *i += 1;
                 }
+            } else if accepting_continuation && !is_block_marker(next_raw.trim()) {
+                // Over-indented, but this block's text is still open and
+                // the line carries no bullet: it is a continuation line
+                // whose *own* text was indented.
+                //
+                // **Loss #3 in the module doc.**
+                // `render::write_block_text` writes each continuation at
+                // `indent + 1` and then the line verbatim, so a text like
+                // "head\n  detail" comes back at `indent + 2`. Recursing
+                // here (the old behaviour) handed it to a child list that
+                // could not place it either. Strip exactly the levels the
+                // renderer added so the internal indentation survives.
+                let body = strip_indent_levels(next_raw, indent + 1);
+                if !node.text.is_empty() {
+                    node.text.push('\n');
+                }
+                for _ in 0..std::mem::take(&mut pending_blanks) {
+                    node.text.push('\n');
+                }
+                node.text.push_str(body.trim_end());
+                *i += 1;
             } else {
                 // Over-indented; recurse so the deeper level can claim it.
                 accepting_continuation = false;
@@ -256,6 +405,37 @@ fn parse_block_list(
     }
 
     blocks
+}
+
+/// Drop exactly `levels` indent levels from the front of `line`,
+/// keeping whatever indentation the line carried beyond them.
+///
+/// The inverse of what [`crate::render::write_block_text`] adds when it
+/// emits a continuation line, so a block whose text is itself indented
+/// ("head\n  detail") survives `render → parse` unchanged. Trimming the
+/// whole prefix instead is what flattened that indentation and made the
+/// two directions disagree.
+///
+/// A line shallower than `levels` is returned with its leading
+/// whitespace removed and nothing else — there is no negative indent to
+/// preserve.
+fn strip_indent_levels(line: &str, levels: usize) -> &str {
+    let mut budget = levels * INDENT_WIDTH;
+    let mut cut = 0usize;
+    for b in line.bytes() {
+        if budget == 0 {
+            break;
+        }
+        match b {
+            b' ' => budget -= 1,
+            // A tab is one whole level (see `leading_indent`); it cannot
+            // be split, so stop rather than eat more than was asked for.
+            b'\t' if budget >= INDENT_WIDTH => budget -= INDENT_WIDTH,
+            _ => break,
+        }
+        cut += 1;
+    }
+    &line[cut..]
 }
 
 /// Outline depth of a line: leading whitespace divided by the
@@ -370,8 +550,16 @@ mod tests {
     fn permissive_recovers_over_indented_top_level_line() {
         let md = "  indented orphan\n- real bullet\n";
         let p = parse(md);
+        // The *content* is preserved; the leading indent is not, and that
+        // is deliberate. It is the renderer's layout, so keeping it inside
+        // the text means the renderer writes it after its own marker and
+        // the next parse trims it back — the file would settle on the
+        // second save instead of the first. Measured before the trim: 3
+        // pages of 2,827 in the real workspace differed between
+        // `render(parse(x))` and `render(parse(render(parse(x))))`, all of
+        // them by exactly this whitespace.
         assert!(
-            p.blocks.iter().any(|b| b.text == "  indented orphan"),
+            p.blocks.iter().any(|b| b.text == "indented orphan"),
             "indented orphan must be preserved as a block, got blocks: {:#?}",
             p.blocks,
         );

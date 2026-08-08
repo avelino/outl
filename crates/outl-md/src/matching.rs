@@ -26,12 +26,21 @@
 //! - **Level 3** — no match. New ULID assigned for new blocks; old blocks
 //!   without a match become orphans (caller moves them to `TRASH_ROOT`).
 //!
+//! Level 3 says nothing about *how much* it is deleting: one orphan and
+//! five thousand come back in the same vector. Any caller that turns
+//! orphans into `Move(node, TRASH_ROOT)` should go through
+//! [`guard::match_blocks_guarded`] instead of [`match_blocks`], which
+//! asks that second question and refuses the whole pass — rather than
+//! half of it — when the answer is "the page".
+//!
 //! A sidecar entry with no recorded text — written before the field
 //! existed, or by a peer binary that doesn't know it — simply doesn't
 //! fire level 2: the result is exactly the pre-level-2 behaviour, never
 //! worse. The next write by a binary that knows the field records it.
 //! The gate is the **empty string, not the sidecar version number**;
 //! see `SIDECAR_VERSION` for why the two are deliberately decoupled.
+
+pub mod guard;
 
 use crate::parse::OutlineNode;
 use crate::sidecar::{content_hash, SidecarBlock};

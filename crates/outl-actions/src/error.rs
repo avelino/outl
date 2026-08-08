@@ -108,6 +108,26 @@ pub enum ActionError {
         sample: String,
     },
 
+    /// A page's `.md` is present, but its sidecar cannot be read at all
+    /// — missing, corrupt, or written by a newer binary.
+    ///
+    /// The sidecar is what answers "does the op log know this line", so
+    /// without it the honest answer is *I cannot tell*, and a write on
+    /// that answer is how the loss [`Self::PageMarkdownAheadOfLog`]
+    /// guards against reopens on a different hinge. Refusing is
+    /// therefore the same decision, but it is **not** the same
+    /// condition: nothing here says the file holds unlogged content, and
+    /// `outl reconcile --ahead-of-log` is not the recovery. The sidecar
+    /// is rebuilt by the orphan pass (`sync::needs_reconcile` maps an
+    /// unreadable sidecar to `true`), and the page projects on the pass
+    /// after — so this is a local, transient condition, which is exactly
+    /// why it must not be reported to the user as the permanent one.
+    #[error(
+        "refusing to rewrite `{0}`: its sidecar is missing or unreadable, so there is no way \
+         to tell which of these lines the op log holds — the next reconcile pass rebuilds it"
+    )]
+    PageSidecarUnreadable(String),
+
     /// Underlying workspace failure (storage, etc).
     #[error(transparent)]
     Workspace(#[from] WorkspaceError),

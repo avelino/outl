@@ -218,10 +218,19 @@ fn unmappable_page_placeholders_degrade_via_file_fallback() {
 fn markers_in_prop_values_and_post_prop_lines_never_survive() {
     // The Omnivore-integration shape: a multiline quote block whose
     // embedded lines the parser lifts into block PROPERTIES. The
-    // `((uid))` then lives in a prop VALUE (never in any block text),
-    // and a bare `((uid))` line after a prop line isn't in the AST at
-    // all — both invisible to the block-level resolve path. The
-    // file-fallback sweep must still erase every marker.
+    // `((uid))` then lives in a prop VALUE, never in any block text, so
+    // it is invisible to the block-level resolve path and only the
+    // file-fallback sweep can erase the marker.
+    //
+    // The bare `((uid))` line after a prop line used to be the second
+    // half of that story — it wasn't in the AST at all, so a *known*
+    // uid degraded to a plain `[[Page]]` link even though outl could
+    // have pointed at the exact block. It is in the AST now (issue #210
+    // fixed the arm of `parse_block_list` that dropped it), which means
+    // the ordinary resolve path reaches it and the reference survives
+    // the import as a reference. Asserted below against the target's
+    // real `ref_handle`, because "contains a `((blk-…))`" would pass on
+    // a handle pointing anywhere.
     let json = r#"[
         {"title": "Target", "children": [
             {"string": "the referenced post", "uid": "LX2n3H5HX", "children": []}
@@ -241,12 +250,17 @@ fn markers_in_prop_values_and_post_prop_lines_never_survive() {
         page.contains("note:: ((unresolved:missing-uid))"),
         "unknown uid in a prop value stays greppable:\n{page}"
     );
+    let handle = read(&ws.root.join("pages/target.outl"))
+        .split("\"ref_handle\": \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next().map(str::to_string))
+        .expect("target sidecar records a ref handle");
     assert!(
-        page.contains("[[Target]]"),
-        "known uid degrades to a page link:\n{page}"
+        page.contains(&format!("(({handle}))")),
+        "a known uid must resolve to the target block's own handle \
+         ({handle}), not degrade to a page link:\n{page}"
     );
     assert_eq!(report.refs_unresolved, 1);
-    assert!(report.refs_page_fallback >= 1);
 }
 
 #[test]
