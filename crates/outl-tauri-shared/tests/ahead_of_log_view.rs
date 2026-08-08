@@ -145,3 +145,32 @@ fn a_healthy_page_carries_no_notice() {
 
     assert!(view.md_ahead_of_log.is_none());
 }
+
+/// An open reply says so, and that is what lets a client clear a banner
+/// the recovery already fixed.
+///
+/// The clients cannot read `md_ahead_of_log` off every reply — a
+/// mutation is built from the tree and never carries it, so doing that
+/// drops the warning on the user's first edit. They hold it instead, and
+/// without a positive "this reply ran the check" they hold it forever:
+/// the page keeps wearing "isn't syncing" after `outl reconcile
+/// --ahead-of-log` fixed it, which is the same silence in the other
+/// direction.
+#[test]
+fn an_open_reply_marks_itself_as_having_run_the_check() {
+    let (_tmp, host, md_path) = host_with_page("first");
+
+    let healthy = open_page_by_slug(&host, "notes".to_string()).unwrap();
+    assert!(
+        healthy.md_ahead_of_log_checked,
+        "a healthy open still ran the check — absent must mean healthy, not unknown"
+    );
+
+    std::fs::write(&md_path, "- first\n- only ever on disk\n").unwrap();
+    restamp_sidecar_as_faithful(&md_path);
+    let ahead = open_page_by_slug(&host, "notes".to_string()).unwrap();
+    assert!(
+        ahead.md_ahead_of_log_checked && ahead.md_ahead_of_log.is_some(),
+        "the refusing open must carry both halves"
+    );
+}

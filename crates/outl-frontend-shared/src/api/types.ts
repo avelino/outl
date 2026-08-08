@@ -212,6 +212,22 @@ export interface PageView {
    * Mirrors `outl_tauri_shared::state::MdAheadOfLog`.
    */
   md_ahead_of_log?: MdAheadOfLog;
+  /**
+   * `true` when this reply actually ran the check, so
+   * {@link PageView.md_ahead_of_log} is authoritative **in both
+   * directions**: absent then means the page is healthy again, and the
+   * banner must clear.
+   *
+   * Only the open commands run it. A mutation reply is built from the
+   * tree and can never carry the notice, which is why a client keeps the
+   * banner across those (clearing it there would drop the warning on the
+   * user's first edit — the very action it warns against). This bit is
+   * what tells the client when clearing *is* correct, e.g. right after
+   * `outl reconcile --ahead-of-log` fixed the page.
+   *
+   * Mirrors `outl_tauri_shared::state::PageView.md_ahead_of_log_checked`.
+   */
+  md_ahead_of_log_checked?: boolean;
 }
 
 /**

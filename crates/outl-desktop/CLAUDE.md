@@ -97,6 +97,7 @@ Convention: [`docs/clients.md` → Blockquote convention](../../docs/clients.md#
 That means the page's `.md` holds lines the op log never recorded, so outl refuses to overwrite it and the page has stopped converging with the user's other devices.
 The copy is owned by `@outl/shared/warnings::aheadOfLogNotice`, never written here; `client="desktop"` is what makes it name `outl reconcile --ahead-of-log` in the workspace folder.
 `appState.mdAheadOfLog` is sticky per page (`stickyAheadOfLog` in `OutlineView.tsx`): only the open commands carry the flag, so a mutation reply would otherwise clear the banner on the user's first edit — the very action it warns against.
+Sticky stops at `PageView.md_ahead_of_log_checked`: a reply that ran the check is authoritative in both directions, so the next open / refresh after `outl reconcile --ahead-of-log` clears the banner instead of leaving a healthy page marked as broken.
 Convention: [`docs/clients.md` → Surfacing a page that stopped syncing](../../docs/clients.md#surfacing-a-page-that-stopped-syncing).
 
 ## Theme tokens

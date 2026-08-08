@@ -193,6 +193,7 @@ Convention (three-surface parity): [`docs/clients.md` → Blockquote convention]
 That means the page's `.md` holds lines the op log never recorded, so outl refuses to overwrite it and the page has stopped converging with the user's other devices.
 The copy is owned by `@outl/shared/warnings::aheadOfLogNotice`, never written here; `client="mobile"` is what makes it say "open this workspace on your computer" instead of naming a terminal command, because **there is no `outl` binary on iOS**.
 The flag is held in `Journal.tsx`'s own `aheadOfLog` signal, **not** read off `view()`: only the open commands carry it, so an edit commit's reply would otherwise clear the banner on the user's first edit — the very action it warns against.
+It is cleared by a reply carrying `md_ahead_of_log_checked` with no notice (the next open / refresh once the page is healthy again), so the banner can't outlive the condition — same rule as desktop.
 Convention: [`docs/clients.md` → Surfacing a page that stopped syncing](../../docs/clients.md#surfacing-a-page-that-stopped-syncing).
 
 ## Zoom / focus on a block

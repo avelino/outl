@@ -198,16 +198,25 @@ export function OutlineView() {
 
   /**
    * "Is this page still not syncing?", carried across same-page
-   * refreshes.
+   * refreshes — but only across the replies that cannot answer.
    *
    * Only the open commands attempt the re-projection that discovers the
    * condition; a mutation reply is built from the tree and never carries
    * the flag. Reading it straight off every view would therefore clear
    * the banner on the user's first edit — the exact action the banner
    * warns against, since a local edit re-projects the page and
-   * overwrites the unlogged lines. Sticky until we navigate elsewhere.
+   * overwrites the unlogged lines.
+   *
+   * `md_ahead_of_log_checked` is what separates the two: a reply that
+   * ran the check is authoritative in **both** directions, so an absent
+   * notice means the page is healthy again (the user ran
+   * `outl reconcile --ahead-of-log`) and the banner clears. Sticking
+   * past that would leave a permanent "this page isn't syncing" on a
+   * page that syncs — the mirror of the silence the banner exists to
+   * end, and a banner users learn to ignore.
    */
   function stickyAheadOfLog(view: PageView): MdAheadOfLog | undefined {
+    if (view.md_ahead_of_log_checked) return view.md_ahead_of_log;
     if (view.md_ahead_of_log) return view.md_ahead_of_log;
     return appState.page?.id === view.page.id ? appState.mdAheadOfLog : undefined;
   }

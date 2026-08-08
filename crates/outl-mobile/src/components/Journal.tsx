@@ -269,15 +269,22 @@ export function Journal() {
     // outline every render, and falls back to the full page if the block
     // vanished.
     if (v.page.slug !== view()?.page.slug) setFocusBlockId(null);
-    // "This page isn't syncing" is sticky per page: only the open
-    // commands attempt the re-projection that discovers it, so a
-    // mutation reply never carries the flag. Reading it off the current
-    // view would clear the banner on the user's first edit — the exact
-    // action it warns against, since a local edit re-projects the page
-    // and overwrites the unlogged lines.
+    // "This page isn't syncing" is sticky per page across the replies
+    // that cannot answer: only the open commands attempt the
+    // re-projection that discovers it, so a mutation reply never carries
+    // the flag. Reading it off the current view would clear the banner
+    // on the user's first edit — the exact action it warns against,
+    // since a local edit re-projects the page and overwrites the
+    // unlogged lines.
+    //
+    // `md_ahead_of_log_checked` marks a reply that *did* run the check,
+    // and that one is authoritative in both directions: no notice means
+    // the page is healthy again (`outl reconcile --ahead-of-log` ran on
+    // a computer), so the banner has to go. Sticking past it would leave
+    // a page that syncs wearing a permanent "not syncing" warning.
     if (v.md_ahead_of_log) {
       setAheadOfLog({ slug: v.page.slug, info: v.md_ahead_of_log });
-    } else if (aheadOfLog()?.slug !== v.page.slug) {
+    } else if (v.md_ahead_of_log_checked || aheadOfLog()?.slug !== v.page.slug) {
       setAheadOfLog(null);
     }
     setView(v);

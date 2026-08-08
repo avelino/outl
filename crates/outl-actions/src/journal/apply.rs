@@ -110,9 +110,13 @@ fn unlogged_content_error(path: &Path, disk: &str, blocks: &[SidecarBlock]) -> O
 /// - **sidecar present but cannot answer** (every one written before
 ///   0.11 carries `text: ""`) → write; refusing here would freeze every
 ///   pre-0.11 page. See [`sidecar_can_answer`].
-/// - **sidecar missing, corrupt, or from a newer binary** → **refuse**.
-///   That is not "nothing at risk", it is "I cannot tell", and writing
-///   on it reopens this very door on a different hinge.
+/// - **sidecar missing, corrupt, or from a newer binary** → **refuse**,
+///   with [`ActionError::PageSidecarUnreadable`]. That is not "nothing
+///   at risk", it is "I cannot tell", and writing on it reopens this
+///   very door on a different hinge. It is a *different* error from the
+///   one above on purpose: "the file holds lines that exist in no op,
+///   run `reconcile --ahead-of-log`" names a condition this branch has
+///   not established and a recovery that would not apply.
 pub fn apply_page_md_with_sidecar_guarded(
     workspace: &Workspace,
     root: &Path,
@@ -150,12 +154,19 @@ pub fn apply_page_md_with_sidecar_guarded(
         // risk: `sync::needs_reconcile` maps `Err(_)` to `true`, so the
         // orphan pass rebuilds the sidecar and the page projects on the
         // pass after.
+        //
+        // It gets its **own** error rather than borrowing
+        // `PageMarkdownAheadOfLog`: that one states as fact that the
+        // file holds N lines the log lacks and tells the user to run
+        // `outl reconcile --ahead-of-log`. Here neither is established
+        // — the refusal is precisely because nothing could be
+        // established — and a `lines: 0` with a synthetic sample would
+        // reach the banner as a permanent sync failure instead of the
+        // transient local condition this is.
         let Ok(sidecar) = outl_md::sidecar::read(&sidecar_path_for(&path)) else {
-            return Err(ActionError::PageMarkdownAheadOfLog {
-                path: path.display().to_string(),
-                lines: 0,
-                sample: "\"(sidecar unreadable — cannot tell what the log holds)\"".to_string(),
-            });
+            return Err(ActionError::PageSidecarUnreadable(
+                path.display().to_string(),
+            ));
         };
         if let Some(e) = unlogged_content_error(&path, &disk, &sidecar.blocks) {
             return Err(e);

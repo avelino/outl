@@ -108,6 +108,11 @@ Both banners also warn against editing the page in the meantime: a local edit is
 The page **still opens** and still shows what is on disk — the guard withheld a write, not the page.
 Before this banner existed the refusal only reached a backend log line, so the page appeared to freeze with nothing said.
 
+**When the banner clears.**
+Only the open commands run the check, so a mutation reply can never carry the notice; a client that read it off every reply would clear the banner on the user's first edit, which is the action the banner warns against.
+`PageView.md_ahead_of_log_checked` marks the replies that *did* run it, and those are authoritative in both directions: the first checked reply with no notice (the next open or refresh of the page, after `outl reconcile --ahead-of-log` fixed it) clears the banner on both clients.
+A banner that outlives the condition is the mirror of the silence this section exists to end.
+
 ## Running code blocks
 
 Every client that lets the user execute a `` ```lang ``` `` block (TUI `g x`, desktop `Cmd+Shift+X` / Run button, mobile long-press → "Run code") goes through **one** shared entry point:

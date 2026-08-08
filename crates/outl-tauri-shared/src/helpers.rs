@@ -100,8 +100,11 @@ pub fn build_page_view(
         warnings: page_outline.warnings,
         // Set by the open commands, which are the ones that attempt the
         // re-projection this flag reports on. Reading the `.md` never
-        // discovers the condition on its own.
+        // discovers the condition on its own, so the view leaves both
+        // halves unset and `PageView::with_ahead_of_log_check` stamps
+        // them where the check actually ran.
         md_ahead_of_log: None,
+        md_ahead_of_log_checked: false,
     })
 }
 
@@ -132,6 +135,7 @@ pub fn build_page_view_from_tree(
         backlinks_order,
         warnings: Vec::new(),
         md_ahead_of_log: None,
+        md_ahead_of_log_checked: false,
     })
 }
 

@@ -12,10 +12,16 @@
  *   healthy case) and the component renders nothing.
  * - `client` picks the recovery sentence only — see `aheadOfLogNotice`,
  *   which owns every word shown here.
- * - Not dismissable on purpose. The condition does not clear on its own
- *   and the banner disappears the moment a reconcile fixes it; a dismiss
- *   button would let a user hide a page that is silently not syncing,
- *   which is the exact failure this replaces.
+ * - Not dismissable on purpose. The condition does not clear on its own,
+ *   and a dismiss button would let a user hide a page that is silently
+ *   not syncing, which is the exact failure this replaces.
+ * - It does clear once a reconcile fixes the page, but on the next reply
+ *   that *checked* — not instantly. Clients hold the notice across
+ *   mutation replies (a mutation is built from the tree and can never
+ *   carry it, so reading those would clear the banner on the user's
+ *   first edit, the very action it warns against) and drop it on the
+ *   first `PageView` with `md_ahead_of_log_checked` and no notice, i.e.
+ *   the next open / refresh of the page.
  */
 
 import { Show } from "solid-js";

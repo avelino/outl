@@ -256,9 +256,8 @@ pub fn open_today_journal<S: AppHost>(state: &S) -> Result<PageView, String> {
         // A refusal comes back as `md_ahead_of_log` and rides the view to
         // the user — the page still opens.
         let ahead = reproject_stale_md(ws, &root, id, "open_today_journal").ahead_of_log;
-        let mut view = build_page_view(ws, &root, id).map_err(|e| e.to_string())?;
-        view.md_ahead_of_log = ahead;
-        Ok(view)
+        let view = build_page_view(ws, &root, id).map_err(|e| e.to_string())?;
+        Ok(view.with_ahead_of_log_check(ahead))
     })
 }
 
@@ -271,9 +270,8 @@ pub fn open_journal_for<S: AppHost>(state: &S, slug: String) -> Result<PageView,
     with_ws(state, |ws| {
         let ahead =
             reproject_stale_md(ws, &root, id, &format!("open_journal_for {slug}")).ahead_of_log;
-        let mut view = build_page_view(ws, &root, id).map_err(|e| e.to_string())?;
-        view.md_ahead_of_log = ahead;
-        Ok(view)
+        let view = build_page_view(ws, &root, id).map_err(|e| e.to_string())?;
+        Ok(view.with_ahead_of_log_check(ahead))
     })
 }
 
@@ -311,9 +309,8 @@ pub fn open_page_by_slug<S: AppHost>(state: &S, slug: String) -> Result<PageView
         Ok(reproject_stale_md(ws, &root, id, &format!("open_page_by_slug {slug}")).ahead_of_log)
     })?;
     with_ws(state, |ws| {
-        let mut view = build_page_view(ws, &root, id).map_err(|e| e.to_string())?;
-        view.md_ahead_of_log = ahead;
-        Ok(view)
+        let view = build_page_view(ws, &root, id).map_err(|e| e.to_string())?;
+        Ok(view.with_ahead_of_log_check(ahead))
     })
 }
 
@@ -443,9 +440,8 @@ pub fn open_ref<S: AppHost>(
         );
     }
     with_ws(state, |ws| {
-        let mut view = build_page_view(ws, &root, id).map_err(|e| e.to_string())?;
-        view.md_ahead_of_log = outcome.ahead_of_log;
-        Ok(view)
+        let view = build_page_view(ws, &root, id).map_err(|e| e.to_string())?;
+        Ok(view.with_ahead_of_log_check(outcome.ahead_of_log))
     })
 }
 

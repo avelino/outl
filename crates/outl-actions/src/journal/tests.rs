@@ -762,8 +762,12 @@ fn the_guard_refuses_when_the_sidecar_cannot_be_read_at_all() {
         let result = apply_page_md_with_sidecar_guarded(&ws, root, page);
 
         assert!(
-            result.is_err(),
-            "{name}: an unreadable sidecar must refuse the write, got {result:?}"
+            matches!(
+                result,
+                Err(crate::error::ActionError::PageSidecarUnreadable(_))
+            ),
+            "{name}: an unreadable sidecar must refuse the write, and say *that* rather than \
+             claiming the file holds unlogged lines — got {result:?}"
         );
         assert_eq!(
             std::fs::read_to_string(&md_path).expect("read back"),
