@@ -39,6 +39,7 @@ mod similarity;
 pub mod slug;
 pub mod tag;
 mod token;
+pub mod unlogged;
 pub mod view;
 pub mod wikilink;
 
@@ -54,7 +55,9 @@ pub use inline::{
 };
 pub use matching::{match_blocks, Match, MatchLevel};
 pub use parse::{parse, OutlineNode, ParseWarning, ParseWarningKind, ParsedPage};
-pub use reconcile::{reconcile_dir, reconcile_md, ReconcileError, ReconcileReport};
+pub use reconcile::{
+    reconcile_dir, reconcile_md, reconcile_md_with_guard, ReconcileError, ReconcileReport,
+};
 pub use remind::{
     parse_remind, rule_from_properties, RemindAnchor, RemindParse, RemindRule, RemindStop,
     MAX_FIRES_CAP, MIN_INTERVAL_MINUTES, REMIND_KEY,
@@ -65,4 +68,5 @@ pub use sidecar::{
 };
 pub use slug::{slugify, UNTITLED_SLUG};
 pub use tag::text_contains_tag;
+pub use unlogged::content_lines_missing_from;
 pub use view::{block_to_rows, char_to_line_col, BlockRow, BlockRowKind};

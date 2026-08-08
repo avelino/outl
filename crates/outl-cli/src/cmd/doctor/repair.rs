@@ -77,13 +77,93 @@ const BACKUP_KEEP: usize = 10;
 /// Minimum age before a backup generation is even a prune candidate.
 const BACKUP_MIN_AGE_DAYS: u64 = 14;
 
+/// Content lines one `--repair` may remove across the whole workspace
+/// before it stops and asks.
+///
+/// On a healthy workspace this number is **zero**: re-projection exists
+/// to restore a render the tree already agrees with, not to remove text.
+/// A non-zero total means a peer genuinely deleted blocks — or that
+/// something systemic is wrong, which is what [RFC 0210] measured: 1,426
+/// lines across 233 pages, deleted in one pass that printed `708 fixed`.
+/// A hundred lines is comfortably above ordinary peer deletes and an
+/// order of magnitude below that incident.
+///
+/// [RFC 0210]: ../../../../../docs/rfcs/0210-md-content-outside-op-log.md
+const CONFIRM_ABOVE_LINES: usize = 100;
+
+/// Pages that would *lose content* before `--repair` stops and asks.
+///
+/// Counted separately from the line total because the two failures look
+/// different: one page losing 400 lines is a big page, while 40 pages
+/// losing 3 lines each is a pattern. Pages the write only *adds* to — the
+/// whole graph on a device that just paired and has nothing projected yet
+/// — are not counted at all, so the ordinary bulk case never asks for a
+/// flag it does not need.
+const CONFIRM_ABOVE_PAGES: usize = 20;
+
+/// One page the repair pass would rewrite, measured **before** the write.
+#[derive(Debug, Clone)]
+pub(super) struct PageWrite {
+    /// Page root node in the materialized tree.
+    pub page_root: NodeId,
+    /// Path of the `.md` the repair would write.
+    pub path: PathBuf,
+    /// Content lines on disk today that the new projection does not
+    /// reproduce — what this one write removes.
+    pub lines_removed: usize,
+}
+
+impl PageWrite {
+    /// A write that cannot remove anything: the `.md` is absent, or its
+    /// bytes already equal what the tree renders.
+    pub fn additive(page_root: NodeId, path: PathBuf) -> Self {
+        Self {
+            page_root,
+            path,
+            lines_removed: 0,
+        }
+    }
+}
+
+/// How much content a `--repair` pass would remove, totalled across the
+/// workspace.
+///
+/// Exists so the count is available *before* `run` is called. A
+/// destructive operation that reports its scale only afterwards — `708
+/// fixed`, with no mention of the 1,426 lines that went with it — cannot
+/// be consented to.
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+pub struct RepairVolume {
+    /// Pages whose rewrite removes at least one content line.
+    pub pages_losing_content: usize,
+    /// Total content lines removed across those pages.
+    pub lines_removed: usize,
+}
+
+impl RepairVolume {
+    /// Whether this volume needs an explicit opt-in.
+    pub fn needs_confirmation(&self) -> bool {
+        self.lines_removed > CONFIRM_ABOVE_LINES || self.pages_losing_content > CONFIRM_ABOVE_PAGES
+    }
+
+    /// Whether there is any content loss at all to announce.
+    pub fn is_destructive(&self) -> bool {
+        self.lines_removed > 0
+    }
+
+    /// The ceilings, for a message that has to name them.
+    pub fn ceilings() -> (usize, usize) {
+        (CONFIRM_ABOVE_PAGES, CONFIRM_ABOVE_LINES)
+    }
+}
+
 /// What the repair pass is allowed to act on, collected by the checks.
 #[derive(Debug, Default)]
 pub(super) struct Plan {
     /// Pages whose `.md` is missing or a stale faithful projection.
-    pub reproject: Vec<(NodeId, PathBuf)>,
+    pub reproject: Vec<PageWrite>,
     /// Pages whose `.md` already matches the tree but has no sidecar.
-    pub rebuild_sidecar: Vec<(NodeId, PathBuf)>,
+    pub rebuild_sidecar: Vec<PageWrite>,
     /// Snapshot files that failed to decode.
     pub corrupt_snapshots: Vec<PathBuf>,
     /// `.outl/repair-backup/` generations past **both** prune guards.
@@ -105,21 +185,45 @@ impl Plan {
             && self.prune_backups.is_empty()
     }
 
+    /// How much content the page writes in this plan would remove.
+    ///
+    /// Only the page writes are measured: dropping a corrupt snapshot
+    /// and pruning a backup generation delete files by design, and both
+    /// are already bounded and announced by their own rules.
+    ///
+    /// `rebuild_sidecar` contributes nothing because its precondition is
+    /// that the `.md` bytes already equal the render — it rewrites the
+    /// file byte-identical.
+    pub fn volume(&self) -> RepairVolume {
+        let losing = self.reproject.iter().filter(|p| p.lines_removed > 0);
+        RepairVolume {
+            pages_losing_content: losing.clone().count(),
+            lines_removed: losing.map(|p| p.lines_removed).sum(),
+        }
+    }
+
     /// Human-readable lines describing what a repair *would* do. Printed
     /// both in the dry (default) mode and before acting under `--repair`,
     /// so the two views never drift.
     pub fn describe(&self) -> Vec<String> {
         let mut out = Vec::new();
-        for (_, path) in &self.reproject {
+        for page in &self.reproject {
+            // The line count rides on the same line that offers the
+            // action, so "what will this cost me" and "what is this"
+            // cannot be read apart.
+            let cost = match page.lines_removed {
+                0 => "adds or reorders only, removes nothing".to_string(),
+                n => format!("removes {n} content line(s) from disk"),
+            };
             out.push(format!(
-                "re-project {} from the op log (backup first)",
-                path.display()
+                "re-project {} from the op log — {cost} (backup first)",
+                page.path.display()
             ));
         }
-        for (_, path) in &self.rebuild_sidecar {
+        for page in &self.rebuild_sidecar {
             out.push(format!(
                 "rebuild the sidecar next to {} (content unchanged)",
-                path.display()
+                page.path.display()
             ));
         }
         for path in &self.corrupt_snapshots {
@@ -176,11 +280,11 @@ pub(super) fn run(ws: &Workspace, root: &Path, plan: &Plan) -> RepairReport {
     let backup_dir = root.join(".outl").join("repair-backup").join(&stamp);
     let mut actions: Vec<RepairAction> = Vec::new();
 
-    for (page_root, path) in &plan.reproject {
-        actions.push(reproject(ws, root, &backup_dir, *page_root, path));
+    for page in &plan.reproject {
+        actions.push(reproject(ws, root, &backup_dir, page));
     }
-    for (page_root, path) in &plan.rebuild_sidecar {
-        actions.push(rebuild_sidecar(ws, root, &backup_dir, *page_root, path));
+    for page in &plan.rebuild_sidecar {
+        actions.push(rebuild_sidecar(ws, root, &backup_dir, page));
     }
     for path in &plan.corrupt_snapshots {
         actions.push(delete_snapshot(root, &backup_dir, path));
@@ -204,13 +308,8 @@ pub(super) fn run(ws: &Workspace, root: &Path, plan: &Plan) -> RepairReport {
 /// clobber a `.md` carrying an unreconciled external edit. Reusing it
 /// means the doctor cannot develop its own opinion about when a
 /// projection is safe to overwrite.
-fn reproject(
-    ws: &Workspace,
-    root: &Path,
-    backup_dir: &Path,
-    page_root: NodeId,
-    path: &Path,
-) -> RepairAction {
+fn reproject(ws: &Workspace, root: &Path, backup_dir: &Path, page: &PageWrite) -> RepairAction {
+    let (page_root, path) = (page.page_root, page.path.as_path());
     let sidecar = outl_md::sidecar::sidecar_path_for(path);
     let mut backed_up = Vec::new();
     for f in [path, sidecar.as_path()] {
@@ -271,9 +370,9 @@ fn rebuild_sidecar(
     ws: &Workspace,
     root: &Path,
     backup_dir: &Path,
-    page_root: NodeId,
-    path: &Path,
+    page: &PageWrite,
 ) -> RepairAction {
+    let (page_root, path) = (page.page_root, page.path.as_path());
     let action = |ok: bool, detail: String| RepairAction {
         kind: "rebuild_sidecar".to_string(),
         path: path.display().to_string(),

@@ -564,6 +564,22 @@ fn scan_dir(dir: &Path, out: &mut Vec<PathBuf>) {
 /// and the desktop's `@` autocomplete (which reads from the CRDT
 /// tree) silently disagrees with the TUI's (which reads
 /// `WorkspaceIndex`'s parse of the same `.md`).
+///
+/// **The hash gate here is safe in the only direction it runs, and it is
+/// also this codebase's oldest blind spot.**
+/// Safe: everything downstream of a `true` moves `.md → tree`
+/// (`reconcile_md`), so a false positive costs a redundant reconcile and
+/// can never overwrite a `.md` from the tree.
+/// Blind: a hash-faithful `.md` holding content that exists in **no op**
+/// reads as "in sync" and is never queued — which is why RFC 0210's 233
+/// pages went unnoticed for months while every integrity surface agreed
+/// they were healthy. Answering that question needs the sidecar's blocks
+/// (`outl_md::unlogged::content_lines_missing_from`), not its hash.
+/// It deliberately stays out of this scan: the fix is to emit ops for
+/// content the log has never seen, which is a write, not a repair, so it
+/// lives behind the opt-in `outl reconcile --ahead-of-log` and is
+/// *reported* by `outl doctor`. Widening this predicate would make every
+/// boot silently author ops on the user's behalf.
 fn needs_reconcile(md_path: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(md_path) else {
         return false;

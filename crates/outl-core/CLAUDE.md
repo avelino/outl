@@ -187,6 +187,14 @@ This is a materialization change only: the op log stays the source of truth, the
 `Workspace` is only ever reached through `Arc<Mutex<..>>`, so it needs `Send` (which `RefCell<T: Send>` keeps) but never `Sync`.
 The resident `OpLog` still holds every `Op::Edit`'s `text_op` bytes (the cheaper second copy of history); shrinking that is the separate per-page op-log shards work, not this change.
 
+### `Workspace::block_text_history` — the past, not just the present
+
+`block_text` answers "what does this block say now"; `block_text_history` (`src/workspace/text_history.rs`) answers "what did it say before", replaying a block's `Op::Edit`s in order into every intermediate string.
+`Op::Edit` carries a Yrs delta, not a snapshot, and the log is append-only — so an edit that *shrank* a block did not erase what it replaced, only the materialized tree stopped showing it.
+Reads from **storage**, never the resident log or text cache — both are boot-mode dependent (a snapshot boot's resident log holds only the post-cutoff delta).
+A caller asking "was anything lost here" getting a silently shortened history back is the one wrong answer to give it.
+`outl_actions::recover` is the consumer: it scans for a block whose current text is a proper prefix of an earlier entry — the signature a truncating `Op::Edit` leaves — and restores it as a **new** edit.
+
 ## What this crate does NOT own
 
 - Markdown parsing/rendering → `outl-md`
@@ -322,7 +330,8 @@ src/
 │   └── memory.rs       # MemoryStorage (test double, no disk)
 ├── workspace.rs        # Workspace entry point
 ├── workspace/
-│   └── batch.rs         # Workspace::begin_batch / WorkspaceBatch (deferred-persist batching)
+│   ├── batch.rs         # Workspace::begin_batch / WorkspaceBatch (deferred-persist batching)
+│   └── text_history.rs  # Workspace::block_text_history — replay a block's past text from storage
 ├── page.rs             # Page model (projection over op log)
 ├── journal.rs          # Journal (page with date-key)
 ├── block.rs            # Block (tree node, with Yrs TextRef for content)

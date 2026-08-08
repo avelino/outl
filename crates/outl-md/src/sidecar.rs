@@ -237,7 +237,23 @@ pub struct Sidecar {
 ///   content never enters the log, because the short-circuit in
 ///   `reconcile_md` only consults the hash. Measured on a real
 ///   workspace: 233 pages, 1,426 lines. See issue #210 / RFC 0210.
-pub const CURRENT_PIPELINE_VERSION: u32 = 3;
+/// - `4` — the parser stopped losing content three further ways, all of
+///   them reachable from one ordinary shape (a block whose text carries
+///   a blank line): an over-indented line was recovered only at depth 0
+///   and skipped mutely below it; a blank line inside a block's text was
+///   read as a separator; and a continuation line's own indentation
+///   pushed it past the level that could claim it. Same file, more text,
+///   so the same reasoning as `3` applies — without the bump those pages
+///   stay hash-faithful and their content never enters the log.
+///   Measured against the same workspace: pages holding unlogged content
+///   went from 41 to 8, lines from 387 to 49.
+///
+///   This bump was **missed** in the first version of that change and
+///   caught in review. Worth naming, because the failure is invisible
+///   exactly where it matters: on the author's own machine the recovery
+///   commands get run by hand, so nothing looks wrong, while every other
+///   user keeps content outside the log with no symptom at all.
+pub const CURRENT_PIPELINE_VERSION: u32 = 4;
 
 impl Sidecar {
     /// Build an empty sidecar for a new page.

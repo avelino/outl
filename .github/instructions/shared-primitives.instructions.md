@@ -52,6 +52,27 @@ That file rides the file-sync surface (Syncthing / Dropbox / NFS / git all repli
 Also block any `reconcile_md(.., None)` outside a test.
 Matching level 3 trashes the blocks it can't place, and `outl-md`'s hard rule is that they are recorded in `orphans.log` first — passing `None` is how the desktop and mobile boot paths deleted silently.
 
+Recently added — bulk-delete volume guards (catalog: `docs/primitives-markdown.md` → "Reconcile & matching").
+**Block any new caller that turns matching orphans into `Move(node, TRASH_ROOT)` through the raw `match_blocks`.**
+Level 3 treats 1 orphan and 5,000 identically, so a `.md` that arrived truncated (iCloud placeholder, half-flushed write) empties a page as quietly as deleting one bullet.
+
+| Intent | Use this | File |
+|---|---|---|
+| Match blocks with the volume of the resulting deletion checked first — `Err` over the **whole** pass, never a shortened orphan list | `outl_md::matching::guard::match_blocks_guarded` → `MatchGuardError` | `crates/outl-md/src/matching/guard.rs` |
+| The thresholds (500 orphans absolute, 0.75 of the page, ratio off under 20 known blocks) and the explicit opt-out a caller wires to a user-facing `--force` | `outl_md::matching::guard::{OrphanGuard, OrphanVolume}` (`OrphanGuard::Disabled` is the escape hatch, reached by `outl reconcile --allow-bulk-delete`) | `crates/outl-md/src/matching/guard.rs` |
+| `reconcile_md` with an explicit orphan-volume policy — `reconcile_md` itself delegates here with `OrphanGuard::Enforced` | `outl_md::reconcile::reconcile_md_with_guard` | `crates/outl-md/src/reconcile.rs` |
+| Whether a sidecar's blocks can answer "does the log know this line" at all — `false` only for a pre-0.11 sidecar whose entries all carry `text: ""`; an empty verdict from a reference that cannot answer is not permission to write | `outl_md::unlogged::sidecar_can_answer` (re-exported `outl_actions::sidecar_can_answer`) | `crates/outl-md/src/unlogged.rs` |
+| How much content a `outl doctor --repair` pass would remove, measured **before** the write, plus the ceilings past which it needs `--force` | `crate::cmd::doctor::{RepairVolume, RepairScope}` | `crates/outl-cli/src/cmd/doctor/{repair,mod}.rs` |
+
+Recently added — recovering text an `Op::Edit` truncated (catalog: `docs/primitives-actions.md` §2, `docs/primitives-core.md` §1).
+**Block a second "diff the op history for a truncation" implementation** — `outl-cli`'s `recover` subcommand must call these, not re-walk `Workspace::block_text_history` itself.
+
+| Intent | Use this | File |
+|---|---|---|
+| Scan the tree for a block whose current text is a proper prefix of an earlier `Op::Edit` revision (truncated, and the dropped tail is still in the log) | `outl_actions::scan_truncated_blocks` → `TruncatedBlock` | `crates/outl-actions/src/recover.rs` |
+| Write a recovered revision back as a **new** `Op::Edit`; refuses when the block changed since the scan | `outl_actions::restore_truncated_block` | `crates/outl-actions/src/recover.rs` |
+| Every intermediate text a block held, replayed from **storage** (never the resident log / text cache, so a snapshot boot can't silently shorten it) | `outl_core::Workspace::block_text_history` | `crates/outl-core/src/workspace/text_history.rs` |
+
 Recently added — check these before writing a parallel reminder helper (catalog: `docs/primitives-actions.md` → "Reminders"):
 
 | Intent | Use this | File |
@@ -89,7 +110,8 @@ Recently added — check these before writing a parallel template helper (catalo
 | Pre-computed inverted backlinks index — build once (`O(blocks)`, off the input path) then look a page's backlinks up in `O(refs)` instead of re-scanning the workspace on every navigation (`for_page` / `for_target` / `count_for_page` / `len` / `is_empty`); `backlinks_for_page` / `backlinks_for_target` are now one-shot wrappers over this | `outl_actions::BacklinkIndex` | `crates/outl-actions/src/backlinks_index.rs` |
 | Build the backlinks index from the `.md` files on disk (client-facing builder — no `Workspace` touched, no lock held, `Send`); `build_backlink_index` (from an in-memory `Workspace`) is for the one-shot wrappers only — building a client's index from the workspace forces a lazy-boot vault (#179) to materialize and holds the workspace lock across the walk | `outl_actions::build_backlink_index_from_disk` | `crates/outl-actions/src/backlinks_index.rs` |
 | Apply an already-rendered `.md` string back into the workspace + sidecar, skipping a redundant re-render (the GUI commit path renders once for the undo diff and reuses it) | `outl_actions::journal::apply_page_md_with_sidecar_rendered` | `crates/outl-actions/src/journal/apply.rs` |
-| Decide whether re-projecting a `.md` would delete content the op log never saw — multiset of content lines, whitespace-insensitive. **The** owner of that verdict, so the doctor's read-only listing and `--repair` cannot disagree. See [RFC 0210](../../docs/rfcs/0210-md-content-outside-op-log.md) | `outl_actions::content_lines_missing_from` | `crates/outl-actions/src/journal/apply.rs` |
+| Project a page after a **mutation** without deleting content the op log never saw — the post-mutation counterpart to `_if_stale`, which only guards read paths. Every GUI write path routes through it (`ProjectionWriter`, block move, template instantiate); refusing returns `PageMarkdownAheadOfLog` and the edit stays safe in the op log | `outl_actions::apply_page_md_with_sidecar_guarded` | `crates/outl-actions/src/journal/apply.rs` |
+| Decide whether re-projecting a `.md` would delete content the op log never saw — multiset of content lines, whitespace-insensitive. **The** owner of that verdict, so the doctor's read-only listing and `--repair` cannot disagree. Owned by `outl-md` (also `reconcile_md`'s own producer-side check, invariant 8); `outl_actions::content_lines_missing_from` is a re-export. See [RFC 0210](../../docs/rfcs/0210-md-content-outside-op-log.md) | `outl_md::unlogged::content_lines_missing_from` | `crates/outl-md/src/unlogged.rs` |
 | Split a block at a character offset (Enter mid-text): head stays in the block, tail becomes a new sibling right after it, children stay with the head | `outl_actions::block::split_block` | `crates/outl-actions/src/block/split.rs` |
 | Insert a sibling after a path, seeded with text (the TUI's in-flight block-split: tail of the split goes into the new sibling) | `outline_ops::insert_sibling_after_with_text` | `crates/outl-md/src/outline_ops.rs` |
 | Resolve the markdown link `[text](url)` under a caret position (anchor OR url) — the URL a client opens externally (TUI `gx` opens it in the browser when the block isn't code) | `outl_md::inline::link_at_cursor` → `Option<&str>` | `crates/outl-md/src/cursor.rs` |

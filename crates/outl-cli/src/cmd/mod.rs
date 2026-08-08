@@ -19,6 +19,7 @@ pub mod plugin_source;
 pub mod prop;
 pub mod query;
 pub mod reconcile;
+pub mod recover;
 pub mod search;
 pub mod serve;
 pub mod tag;

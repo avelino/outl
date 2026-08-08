@@ -79,8 +79,43 @@ Subsequent lines are indented **one level deeper** than the bullet and contain n
 Parsed as a single block with `text = "first line of the block\nsecond line of the same block\nthird line"`.
 Renders back identically.
 
-Continuation **ends** at the first line that is a block marker (`-`), a property (`key:: value`), or an unindent.
-After that point, plain indented text becomes "unrecognized" and is skipped — keeps the grammar unambiguous.
+**A blank line inside the text is not a separator — if it carries the indent.**
+While continuation is still open, a blank line indented one level deeper than the bullet stays part of the block's own text (a blank line the user typed inside a multi-paragraph block).
+
+The indent is what distinguishes the two cases, and it is invisible in a code fence, so `·` stands for a space below:
+
+```
+-·briefing
+··paragraph·one
+··
+··paragraph·two
+-·next·block
+```
+
+Parses to one block with `text = "briefing\nparagraph one\n\nparagraph two"`, and `next block` as its sibling.
+
+**A genuinely empty line (no indent at all) ends continuation**, and that is not a detail — it is the whole rule:
+
+```
+-·briefing
+··paragraph·one
+
+··paragraph·two
+-·next·block
+```
+
+Here the empty line closes the block, and `paragraph two` is recovered as a child block with a warning rather than folded into the text above it.
+Nothing is lost either way; what changes is where the line lands.
+
+This is what the renderer emits, so the round-trip holds by construction: `render` writes every line of `text` after the first at `indent + 1`, and an empty line in the text becomes an indented blank one.
+
+**A continuation line's own indentation survives.**
+The renderer writes each continuation line one level deeper than the bullet.
+A line whose own text is itself indented (`"head\n  detail"`) comes back one level deeper still on parse, and only that extra level is stripped — so nested indentation inside a block's text round-trips verbatim instead of flattening.
+
+Continuation **ends** at the first line that is a block marker (`-`), a property (`key:: value`), a genuinely empty line, or once a child block has claimed the slot after one.
+After that, a line the grammar still can't place — over-indented, no open continuation to absorb it — is recovered as a **child block** at the depth it was written (see "Permissive parsing & warnings" below).
+Nothing is silently skipped, at any depth.
 
 In the TUI: `Alt+Enter` (or `Ctrl+J`, or `Shift+Enter` in kitty-protocol-aware terminals) inserts a soft newline inside the current block.
 Plain `Enter` commits and creates a sibling — unless the cursor is inside an open fenced code block, in which case `Enter` auto-detects and inserts a soft newline instead (see below).
@@ -382,7 +417,8 @@ The `@`-prefixed link text is what makes the rendered reference visually a menti
 ### Permissive parsing & warnings
 
 A hand-written or imported `.md` may contain lines that don't fit the dialect — typically a leading `# heading`, a paragraph, an HTML snippet, or a table.
-The parser is **permissive**: every such line at depth 0 is preserved verbatim as a regular outline block, and the recovery is recorded in `ParsedPage.warnings: Vec<ParseWarning>`.
+The parser is **permissive at every depth, not just the top level**.
+Such a line is preserved verbatim as a recovered block — a sibling at depth 0, a child of the block above it when indented with no open continuation to absorb it — and the recovery is recorded in `ParsedPage.warnings: Vec<ParseWarning>`.
 
 Each warning carries:
 
@@ -392,8 +428,8 @@ Each warning carries:
 
 Two consequences worth knowing:
 
-- **No silent data loss.**
-  Open a file, save it, the content survives.
+- **No silent data loss, at any depth.**
+  Open a file, save it, the content survives — including a line nested inside another block's continuation that the grammar can't place.
   Render is still clean: blocks created from recovered lines render as `- <raw>\n`, so the next save normalizes the file to the dialect.
 - **Surfaces show the warnings.**
   The TUI banner, the mobile / desktop overlay, and `outl doctor` all read `ParsedPage.warnings` and present them as actionable hints (line number + first 60 chars of the raw text).

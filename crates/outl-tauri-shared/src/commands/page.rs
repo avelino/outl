@@ -17,7 +17,9 @@ use std::sync::Arc;
 use outl_core::workspace::Workspace;
 use parking_lot::Mutex;
 
-use crate::helpers::{build_page_view, parse_date, parse_node_id, with_ws, with_ws_mut};
+use crate::helpers::{
+    build_page_view, parse_date, parse_node_id, reproject_stale_md, with_ws, with_ws_mut,
+};
 use crate::host::AppHost;
 use crate::state::{BacklinksReply, BlockHit, PageView, ERR_LOADING};
 
@@ -251,10 +253,12 @@ pub fn open_today_journal<S: AppHost>(state: &S) -> Result<PageView, String> {
     with_ws(state, |ws| {
         // Refresh the `.md` the view reads when a peer's ops moved the tree
         // past the stale projection (issue #166); a no-op when in sync.
-        if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_stale(ws, &root, id) {
-            tracing::warn!("open_today_journal: reproject stale .md failed: {e}");
-        }
-        build_page_view(ws, &root, id).map_err(|e| e.to_string())
+        // A refusal comes back as `md_ahead_of_log` and rides the view to
+        // the user — the page still opens.
+        let ahead = reproject_stale_md(ws, &root, id, "open_today_journal").ahead_of_log;
+        let mut view = build_page_view(ws, &root, id).map_err(|e| e.to_string())?;
+        view.md_ahead_of_log = ahead;
+        Ok(view)
     })
 }
 
@@ -265,10 +269,11 @@ pub fn open_journal_for<S: AppHost>(state: &S, slug: String) -> Result<PageView,
         open_journal(ws, state.hlc(), date).map_err(|e| e.to_string())
     })?;
     with_ws(state, |ws| {
-        if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_stale(ws, &root, id) {
-            tracing::warn!("open_journal_for: reproject stale .md failed for {slug}: {e}");
-        }
-        build_page_view(ws, &root, id).map_err(|e| e.to_string())
+        let ahead =
+            reproject_stale_md(ws, &root, id, &format!("open_journal_for {slug}")).ahead_of_log;
+        let mut view = build_page_view(ws, &root, id).map_err(|e| e.to_string())?;
+        view.md_ahead_of_log = ahead;
+        Ok(view)
     })
 }
 
@@ -302,14 +307,13 @@ pub fn open_page_by_slug<S: AppHost>(state: &S, slug: String) -> Result<PageView
                 .map_err(|e| e.to_string())
         })?,
     };
-    with_ws_mut(state, |ws| {
-        if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_stale(ws, &root, id) {
-            tracing::warn!("open_page_by_slug: apply_page_md_with_sidecar failed for {slug}: {e}");
-        }
-        Ok(())
+    let ahead = with_ws_mut(state, |ws| {
+        Ok(reproject_stale_md(ws, &root, id, &format!("open_page_by_slug {slug}")).ahead_of_log)
     })?;
     with_ws(state, |ws| {
-        build_page_view(ws, &root, id).map_err(|e| e.to_string())
+        let mut view = build_page_view(ws, &root, id).map_err(|e| e.to_string())?;
+        view.md_ahead_of_log = ahead;
+        Ok(view)
     })
 }
 
@@ -411,27 +415,37 @@ pub fn open_ref<S: AppHost>(
     let id = with_ws_mut(state, |ws| {
         open_or_create_by_ref(ws, state.hlc(), &target).map_err(|e| e.to_string())
     })?;
-    with_ws_mut(state, |ws| {
-        if let Err(e) = outl_actions::apply_page_md_with_sidecar_if_stale(ws, &root, id) {
-            // Non-fatal: the op log already has the mutation; the `.md`
-            // projection will be retried on the next save / by the
-            // orphan scanner on the next boot. Surface both to the local
-            // log AND to the frontend via a dedicated event so the UI
-            // can show a toast — the ref is already in the user's buffer
-            // at this point, and silently leaving the `.md` un-projected
-            // means the next reopen shows a "link to nothing".
-            let msg = format!("{e}");
-            tracing::warn!("open_ref: apply_page_md_with_sidecar failed for {target}: {msg}");
-            let _ = tauri::Emitter::emit(
-                app,
-                "ref-projection-failed",
-                serde_json::json!({ "target": target, "error": msg }),
-            );
-        }
-        Ok(())
+    let outcome = with_ws_mut(state, |ws| {
+        Ok(reproject_stale_md(
+            ws,
+            &root,
+            id,
+            &format!("open_ref {target}"),
+        ))
     })?;
+    if let Some(msg) = &outcome.other_error {
+        // Non-fatal and *transient*: the op log already has the
+        // mutation; the `.md` projection will be retried on the next
+        // save / by the orphan scanner on the next boot. Still worth a
+        // toast — the ref is already in the user's buffer at this point,
+        // and silently leaving the `.md` un-projected means the next
+        // reopen shows a "link to nothing".
+        //
+        // `ahead_of_log` deliberately does NOT come through here: it is
+        // neither transient nor about this ref, and it rides the
+        // `PageView` to a banner that can explain the recovery. A toast
+        // that disappears in 4s is the wrong surface for a page that has
+        // stopped syncing until the user runs a command.
+        let _ = tauri::Emitter::emit(
+            app,
+            "ref-projection-failed",
+            serde_json::json!({ "target": target, "error": msg }),
+        );
+    }
     with_ws(state, |ws| {
-        build_page_view(ws, &root, id).map_err(|e| e.to_string())
+        let mut view = build_page_view(ws, &root, id).map_err(|e| e.to_string())?;
+        view.md_ahead_of_log = outcome.ahead_of_log;
+        Ok(view)
     })
 }
 

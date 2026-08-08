@@ -27,6 +27,7 @@ use std::thread::JoinHandle;
 use tracing::{debug, warn};
 
 mod batch;
+mod text_history;
 
 use batch::BatchRoute;
 pub use batch::WorkspaceBatch;

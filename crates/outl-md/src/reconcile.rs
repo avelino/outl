@@ -8,7 +8,6 @@
 //! Orphan ids are logged before being moved to `TRASH_ROOT`, so a
 //! deletion is never silent.
 
-use crate::matching::match_blocks;
 use crate::parse::{parse, OutlineNode};
 use crate::sidecar::{self, file_hash, sidecar_path_for, Sidecar, SidecarBlock, SIDECAR_VERSION};
 use outl_core::hlc::HlcGenerator;
@@ -30,6 +29,15 @@ pub struct ReconcileReport {
     pub orphans: usize,
     /// Whether the sidecar was created fresh.
     pub created_sidecar: bool,
+    /// Content lines this pass read from the `.md` but could not emit an
+    /// op for.
+    ///
+    /// Non-zero means the sidecar's `last_synced_hash` was deliberately
+    /// **not** advanced (invariant 8), so the page stays dirty and the
+    /// next reconcile looks at it again. Callers should surface the
+    /// count: a page that quietly reconciles forever is the symptom the
+    /// user gets to see, and the cause is content the log cannot hold.
+    pub unlogged_lines: usize,
 }
 
 /// Errors a reconcile pass may surface.
@@ -50,6 +58,14 @@ pub enum ReconcileError {
     /// Workspace failed to apply an op.
     #[error("workspace error: {0}")]
     Workspace(#[from] WorkspaceError),
+    /// The `.md` would delete more of the page than a guard allows.
+    ///
+    /// Not a failure of the reconcile — a refusal. The `.md` on disk and
+    /// the tree are both untouched, so the caller can re-run with
+    /// [`crate::matching::guard::OrphanGuard::Disabled`] once the user
+    /// says the deletion was intended.
+    #[error("{0}")]
+    BulkDelete(#[from] crate::matching::guard::MatchGuardError),
 }
 
 fn io_err(path: &Path, source: io::Error) -> ReconcileError {
@@ -80,15 +96,45 @@ fn page_id_from_stem(md_path: &Path) -> NodeId {
     NodeId::from_slug(&slug_from_md_path(md_path))
 }
 
-/// Reconcile a single `.md` file with the workspace.
+/// Reconcile a single `.md` file with the workspace, refusing a
+/// deletion large enough to be an accident.
 ///
 /// `orphan_log_path` receives one line per orphan id surfaced during
 /// matching. Pass `None` to suppress logging (mostly useful for tests).
+///
+/// This is the only production path that turns matching orphans into
+/// `Move(node, TRASH_ROOT)`, so it is where the volume guard has to be —
+/// see `matching::guard` for the thresholds and the reasoning. Use
+/// [`reconcile_md_with_guard`] with
+/// [`OrphanGuard::Disabled`](crate::matching::guard::OrphanGuard::Disabled)
+/// to apply a deletion the user has confirmed.
 pub fn reconcile_md(
     ws: &mut Workspace,
     hlc: &HlcGenerator,
     md_path: &Path,
     orphan_log_path: Option<&Path>,
+) -> Result<ReconcileReport, ReconcileError> {
+    reconcile_md_with_guard(
+        ws,
+        hlc,
+        md_path,
+        orphan_log_path,
+        &crate::matching::guard::OrphanGuard::Enforced,
+    )
+}
+
+/// [`reconcile_md`] with an explicit orphan-volume policy.
+///
+/// Separate entry point rather than a parameter on `reconcile_md`
+/// because the guarded form is what every caller should want; only the
+/// one wired to a user saying "yes, I meant to delete that" passes
+/// [`OrphanGuard::Disabled`](crate::matching::guard::OrphanGuard::Disabled).
+pub fn reconcile_md_with_guard(
+    ws: &mut Workspace,
+    hlc: &HlcGenerator,
+    md_path: &Path,
+    orphan_log_path: Option<&Path>,
+    guard: &crate::matching::guard::OrphanGuard,
 ) -> Result<ReconcileReport, ReconcileError> {
     let md_text = fs::read_to_string(md_path).map_err(|e| io_err(md_path, e))?;
     let new_ast = parse(&md_text);
@@ -149,11 +195,20 @@ pub fn reconcile_md(
                 ops_applied: 0,
                 orphans: 0,
                 created_sidecar: false,
+                unlogged_lines: 0,
             });
         }
     }
 
-    let (matches, orphans) = match_blocks(&new_ast.blocks, &old_blocks);
+    // Guarded, not raw: the orphans this produces become
+    // `Move(node, TRASH_ROOT)` a few lines down, and level 3 reports one
+    // orphan and five thousand the same way. A `.md` that arrived
+    // truncated — an undownloaded iCloud placeholder, a half-flushed
+    // write — would empty the page as quietly as deleting a bullet.
+    // Refusing here refuses before any op exists, since `match_blocks`
+    // is pure.
+    let (matches, orphans) =
+        crate::matching::guard::match_blocks_guarded(&new_ast.blocks, &old_blocks, guard)?;
 
     if !orphans.is_empty() {
         if let Some(log_path) = orphan_log_path {
@@ -250,10 +305,60 @@ pub fn reconcile_md(
     // returns an empty update when text is unchanged.
     ops_applied += sync_block_text(ws, hlc, &new_ast.blocks, &plan.new_sidecar.blocks)?;
 
+    // **Invariant 8, enforced.**
+    //
+    // Writing `last_synced_hash` is a claim: *the op log holds what is in
+    // this file*. Every consumer downstream believes it —
+    // `apply_page_md_with_sidecar_if_stale` reads it as permission to
+    // re-render the tree over these bytes, and `doctor` reads it as proof
+    // the page is healthy. This is the one place that both reads a `.md`
+    // and rewrites its sidecar, so it is the one place that can make the
+    // claim falsely.
+    //
+    // Until now it made the claim unconditionally. When the parser
+    // dropped a line it could not place, that line reached the `.md` and
+    // never the log, the hash was stamped over the whole file anyway, and
+    // the page became indistinguishable from a healthy one. Measured on a
+    // real 2,560-page workspace: 41 pages holding 387 lines that existed
+    // in no op, invisible to every check, deleted by the next
+    // re-projection.
+    //
+    // The parser fix above closes the case we know about. This closes the
+    // *class*: any future path that reads content it cannot emit an op
+    // for leaves the page dirty instead of lying about it. A page that
+    // reconciles twice is a nuisance; a page that lies about its own
+    // state is a data-loss bug.
+    //
+    // Same question, same owner as both consumers
+    // (`crate::unlogged::content_lines_missing_from`) — a second opinion
+    // here about what counts as logged is how the producer and the guard
+    // would drift apart.
+    let unlogged = crate::unlogged::content_lines_missing_from(&md_text, &plan.new_sidecar.blocks);
+    let unlogged_lines = unlogged.len();
+    if let Some(sample) = unlogged.first() {
+        tracing::warn!(
+            path = %md_path.display(),
+            lines = unlogged_lines,
+            sample = %sample,
+            "`.md` holds content this reconcile could not turn into ops; \
+             leaving the page unsynced rather than claiming the log has it"
+        );
+    }
+
     let new_sidecar = Sidecar {
         version: SIDECAR_VERSION,
         page_id,
-        last_synced_hash: md_hash,
+        // An empty hash never equals `file_hash(_)`, so the short-circuit
+        // above misses on the next pass and the page is looked at again.
+        // Deliberately not the *previous* hash: that would describe a
+        // revision of the file that no longer exists on disk, and level-2
+        // matching reads the sidecar as "what the log held at the last
+        // agreement" — there was no agreement here.
+        last_synced_hash: if unlogged.is_empty() {
+            md_hash
+        } else {
+            String::new()
+        },
         last_synced_at: plan.new_sidecar.last_synced_at,
         blocks: plan.new_sidecar.blocks,
         pipeline_version: plan.new_sidecar.pipeline_version,
@@ -265,6 +370,7 @@ pub fn reconcile_md(
         ops_applied,
         orphans: orphans.len(),
         created_sidecar,
+        unlogged_lines,
     })
 }
 

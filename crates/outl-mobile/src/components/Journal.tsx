@@ -11,6 +11,7 @@ import {
 } from "solid-js";
 import type {
   BlockNode,
+  MdAheadOfLog,
   PageView,
   PluginToolbarButton,
 } from "@outl/shared/api/types";
@@ -76,7 +77,7 @@ import {
   detectRefContext,
   withCreateNewPersonCandidate,
 } from "@outl/shared/autocomplete";
-import { ParseWarningsBanner } from "@outl/shared/warnings";
+import { PageAheadOfLogBanner, ParseWarningsBanner } from "@outl/shared/warnings";
 import { parkCaret, spliceText } from "../lib/textarea";
 import { withTimeout } from "../lib/async";
 
@@ -253,6 +254,14 @@ export function Journal() {
   // swap re-mints the block id → the `block <id> [Retry]` error + the freeze).
   let reloadPendingWhileEditing = false;
 
+  // See `applyView`: kept out of the `PageView` signal so an edit commit
+  // (which replies without the flag) can't silently drop it. Keyed by
+  // slug so navigating to another page clears it.
+  const [aheadOfLog, setAheadOfLog] = createSignal<{
+    slug: string;
+    info: MdAheadOfLog;
+  } | null>(null);
+
   function applyView(v: PageView) {
     // Dropping the zoom on a page switch keeps focus scoped to the page
     // it was set on. A same-page refresh (background poll, edit commit)
@@ -260,6 +269,17 @@ export function Journal() {
     // outline every render, and falls back to the full page if the block
     // vanished.
     if (v.page.slug !== view()?.page.slug) setFocusBlockId(null);
+    // "This page isn't syncing" is sticky per page: only the open
+    // commands attempt the re-projection that discovers it, so a
+    // mutation reply never carries the flag. Reading it off the current
+    // view would clear the banner on the user's first edit — the exact
+    // action it warns against, since a local edit re-projects the page
+    // and overwrites the unlogged lines.
+    if (v.md_ahead_of_log) {
+      setAheadOfLog({ slug: v.page.slug, info: v.md_ahead_of_log });
+    } else if (aheadOfLog()?.slug !== v.page.slug) {
+      setAheadOfLog(null);
+    }
     setView(v);
   }
 
@@ -1761,6 +1781,7 @@ export function Journal() {
               </Show>
             }
           >
+            <PageAheadOfLogBanner info={aheadOfLog()?.info} client="mobile" />
             <ParseWarningsBanner warnings={view()!.warnings ?? []} />
             {/* Zoom header — visible only while focused on a block. The
                 "← Back" chevron zooms out one level (or exits); each

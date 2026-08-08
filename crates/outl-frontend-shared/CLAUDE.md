@@ -31,6 +31,13 @@ crates/outl-frontend-shared/
     ├── api/
     │   ├── types.ts        # PageMeta, OutlineNode, BlockNode, Backlink, InlineToken, …
     │   └── commands.ts     # invoke<T>() wrappers for shared Tauri commands
+    ├── warnings/
+    │   ├── ParseWarningsBanner.tsx
+    │   ├── PageAheadOfLogBanner.tsx
+    │   ├── ahead-of-log.ts        # aheadOfLogNotice — the copy, one owner
+    │   ├── ahead-of-log.test.ts
+    │   ├── styles.css
+    │   └── index.ts
     ├── markdown/
     │   ├── MarkdownInline.tsx
     │   └── index.ts
@@ -131,6 +138,8 @@ When in doubt, ship in the client; promote later when the second client appears.
 | `autoPairBracket` (single `(`/`[`/`{` auto-pair + closer step-over; `autoDeletePair` also collapses empty `()`/`[]`/`{}`) | `@outl/shared/autocomplete` | `outl_tui::input::insert` (`insert_pair`) + `EditBuffer::delete_pair_back` |
 | `<ParseWarningsBanner />` + `@outl/shared/warnings/styles` CSS | `@outl/shared/warnings` | TUI `view::warnings_banner` (visual parity, neutral chrome). Clients **must** `@import "@outl/shared/warnings/styles"` from their root stylesheet — without it the banner renders with unstyled neutral classes and looks invisible against the page. |
 | `ParseWarning` / `ParseWarningKind` (DTO of `PageView.warnings`) | `@outl/shared/api/types` | `outl_md::ParseWarning` / `ParseWarningKind` |
+| `<PageAheadOfLogBanner info= client= />` + `aheadOfLogNotice(info, client)` + `RECONCILE_COMMAND`. Rendered above the outline when `PageView.md_ahead_of_log` is present: the page has stopped syncing because its `.md` holds lines the op log never recorded, so outl refuses to overwrite the file (root `CLAUDE.md` invariant 8). `aheadOfLogNotice` is the pure copy owner and is what's unit-tested — the wording is the deliverable here, not the markup, and it must say the same thing on both clients. `client` changes exactly one sentence: the desktop user gets the command to run in the workspace folder, the mobile user gets "open this workspace on your computer", because **iOS ships no `outl` binary** and a button that can't work would be worse than saying so. Not dismissable — the condition doesn't clear on its own | `@outl/shared/warnings` (+ `@outl/shared/warnings/styles` CSS) | `outl_tauri_shared::state::MdAheadOfLog`, produced by `helpers::reproject_stale_md`; the recovery is `outl reconcile --ahead-of-log` |
+| `MdAheadOfLog` (`path`, `lines`, `sample`) — DTO of `PageView.md_ahead_of_log` | `@outl/shared/api/types` | `outl_tauri_shared::state::MdAheadOfLog` |
 | `<PairingQR ticket=… />` (renders a pairing ticket as a scannable QR; owns its own async encoding via `ticketToSvg`, **no invoke inside** — host passes the ticket from `peerPairHost()`) + `<PeerList peers=… statusByNodeId? onRemove? />` (pure list of paired devices with online/offline/unknown status dot + optional remove button; **all data + callbacks via props, no invoke**) + `ticketToSvg` (pure ticket → SVG string, wraps the `qrcode` npm dep) + `peersOnline(statuses)` (pure: `true` when any peer has `online === true`; accepts the `PeerStatusDto[]` from `peerStatus()` or the desktop's `Map<node_id, …>`; both clients derive the sync dot from it identically) | `@outl/shared/peers` (+ `@outl/shared/peers/styles` CSS baseline) | the `outl_peer_*` commands in each client's `commands/peers.rs` (wrappers in `@outl/shared/api/commands`; `outl_sync_iroh::PeerEntry`/`PeerStatus`) |
 | `PeerDto` (`node_id`, `alias`, `added_at`) / `PeerStatusDto` (`node_id`, `alias`, `online`, `rtt_ms`) | `@outl/shared/api/types` | Rust `PeerDto` / `PeerStatusDto` in both clients' `commands/peers.rs` |
 | `createSyncProgress()` → `SyncProgressState { current, feed, clear }` (subscribes to the `sync-progress` Tauri event, resolves `received-ops` block ids to page/journal slugs via `resolvePageLabels`) + `<SyncProgressView current= feed= peers= />` (pure: phase pill + snapshot-% bar / live ops count + "device → page" activity feed; **no invoke inside**, host wires `createSyncProgress()` and passes the signals down) + `SyncFeedEntry` / `SyncProgressState` types. Both `DevicesSheet` (mobile) and `SyncPanel` (desktop) render this one implementation on the pairing screen | `@outl/shared/peers` (+ `@outl/shared/peers/styles` CSS baseline) | `outl_actions::SyncProgress`, bridged to the `sync-progress` event by `outl-tauri-shared::iroh_sync::start_with_reload_bridge` |

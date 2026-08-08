@@ -45,6 +45,43 @@ pub struct PageView {
     pub backlinks_order: outl_config::BacklinksOrder,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<outl_md::ParseWarning>,
+    /// Set when this page's `.md` could not be refreshed from the op log
+    /// because it holds content no op accounts for
+    /// (`ActionError::PageMarkdownAheadOfLog`). `None` on every healthy
+    /// page — `skip_serializing_if` keeps the JSON quiet.
+    ///
+    /// The page still opens: the guard only withholds the *write*, so
+    /// the view below is the `.md` as it stands on disk. What the user
+    /// loses is convergence — see [`MdAheadOfLog`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub md_ahead_of_log: Option<MdAheadOfLog>,
+}
+
+/// Why a page stopped syncing, in the shape a client can render.
+///
+/// The re-projection guard (root `CLAUDE.md` invariant 8) refuses to
+/// overwrite a `.md` holding content that exists in no op, because that
+/// write would delete it for good. The cost of refusing is that the page
+/// is frozen in *both* directions: those lines never reach another
+/// device, and a peer's edits never reach this `.md`.
+///
+/// Before this DTO existed the refusal died in a `tracing::warn!` and
+/// the page simply stopped updating with nothing said — the exact
+/// "silence is the defect" failure [RFC 0210] names. `outl reconcile
+/// --ahead-of-log` is the recovery, and a mobile-only device has no
+/// binary to run it with, which is why the copy is per-client and lives
+/// in `@outl/shared/warnings`.
+///
+/// [RFC 0210]: https://github.com/avelino/outl/blob/main/docs/rfcs/0210-md-content-outside-op-log.md
+#[derive(Debug, Clone, Serialize)]
+pub struct MdAheadOfLog {
+    /// The `.md` that was left alone, for the "which file" question.
+    pub path: String,
+    /// How many content lines exist only on disk.
+    pub lines: usize,
+    /// One of those lines (already quoted by `ActionError`), so the
+    /// banner names what is at risk instead of only counting it.
+    pub sample: String,
 }
 
 /// Reply shape for the lazy `page_backlinks` command.

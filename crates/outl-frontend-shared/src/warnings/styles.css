@@ -1,5 +1,5 @@
 /*
- * <ParseWarningsBanner /> styles.
+ * <ParseWarningsBanner /> + <PageAheadOfLogBanner /> styles.
  *
  * Imported by `outl-mobile/src/styles.css` and `outl-desktop/src/styles.css`
  * via `@import "@outl/shared/warnings/styles"`. The component renders
@@ -123,4 +123,102 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/*
+ * <PageAheadOfLogBanner /> — red, not amber.
+ *
+ * The parser banner above is "heads up, outl kept something odd". This
+ * one is "this page is no longer reaching your other devices", which is
+ * a different severity and must not read as the same class of notice.
+ */
+
+.outl-ahead-of-log-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin: 0.75rem 0 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid rgb(220 38 38 / 0.5); /* red-600 @ 50% */
+  border-left-width: 4px;
+  border-radius: 0.5rem;
+  background: rgb(254 242 242); /* red-50 */
+  color: rgb(127 29 29); /* red-900 */
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+@media (prefers-color-scheme: dark) {
+  .outl-ahead-of-log-banner {
+    background: rgb(69 10 10 / 0.45); /* dark red tint */
+    color: rgb(254 202 202); /* red-200 */
+    border-color: rgb(220 38 38 / 0.6);
+  }
+}
+
+.outl-ahead-of-log-banner__header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+.outl-ahead-of-log-banner__icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.outl-ahead-of-log-banner__title {
+  flex: 1;
+  min-width: 0;
+}
+
+.outl-ahead-of-log-banner__body,
+.outl-ahead-of-log-banner__action,
+.outl-ahead-of-log-banner__caution {
+  margin: 0;
+}
+
+.outl-ahead-of-log-banner__action {
+  font-weight: 600;
+}
+
+.outl-ahead-of-log-banner__caution {
+  opacity: 0.85;
+}
+
+.outl-ahead-of-log-banner__sample,
+.outl-ahead-of-log-banner__path {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  /* Long lines and absolute paths must not widen the outline column. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.outl-ahead-of-log-banner__path {
+  opacity: 0.6;
+  direction: rtl; /* keep the filename visible when the path is elided */
+  text-align: left;
+}
+
+.outl-ahead-of-log-banner__command {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  background: rgb(0 0 0 / 0.07);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  /* Selectable on desktop: the user is about to paste this into a shell. */
+  user-select: all;
+  overflow-x: auto;
+}
+
+@media (prefers-color-scheme: dark) {
+  .outl-ahead-of-log-banner__command {
+    background: rgb(255 255 255 / 0.1);
+  }
 }

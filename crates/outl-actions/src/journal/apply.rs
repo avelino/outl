@@ -1,7 +1,6 @@
 //! Write `.md` + `.outl` projections to disk — the `apply_*` family,
 //! `mutate_page_md`, and the workspace-wide sweep.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use outl_core::id::NodeId;
@@ -46,6 +45,123 @@ pub fn apply_page_md_with_sidecar(
 ) -> Result<PathBuf, ActionError> {
     let meta = page_meta(workspace, page_root)
         .ok_or_else(|| ActionError::NotInTree(page_root.to_string()))?;
+    let md = render_page_md(workspace, page_root);
+    write_page_projection(workspace, root, page_root, &meta, &md)
+}
+
+/// `Some(error)` when re-projecting over `disk` would delete content the
+/// op log cannot account for.
+///
+/// The one place that phrases this verdict as an `ActionError`, so the
+/// two callers cannot drift on what the message says or which fields it
+/// carries.
+///
+/// **`None` covers two different situations on purpose**, and the caller
+/// decides what each one means:
+///
+/// - nothing is at risk;
+/// - the sidecar cannot answer at all (every one written before 0.11).
+///
+/// [`apply_page_md_with_sidecar_guarded`] treats both as "go ahead" —
+/// there is a real mutation to project and refusing every pre-0.11 page
+/// would freeze the app. [`apply_page_md_with_sidecar_if_stale`] asks
+/// [`sidecar_can_answer`] *first* and declines the second case, because
+/// re-projecting a page it cannot vouch for is how bytes go missing.
+/// Reading one policy as the other is the bug this whole module guards.
+fn unlogged_content_error(path: &Path, disk: &str, blocks: &[SidecarBlock]) -> Option<ActionError> {
+    if !sidecar_can_answer(blocks) {
+        return None;
+    }
+    let unlogged = content_lines_missing_from(disk, blocks);
+    let sample = unlogged.first()?;
+    Some(ActionError::PageMarkdownAheadOfLog {
+        path: path.display().to_string(),
+        lines: unlogged.len(),
+        sample: format!("{sample:?}"),
+    })
+}
+
+/// [`apply_page_md_with_sidecar`], but refusing when the write would
+/// delete content the op log has never seen.
+///
+/// **Why this exists next to the unconditional one.**
+/// The re-projection guard in [`apply_page_md_with_sidecar_if_stale`]
+/// only covers the *read* paths — opening a page. The background
+/// projection writer runs after a real mutation, and it wrote
+/// unconditionally, so the very deletion the open path refuses happened
+/// anyway on the user's next keystroke commit. Same invariant 8, a door
+/// nobody had checked.
+///
+/// It cannot simply call `_if_stale`: that one declines whenever the
+/// `.md` carries an unreconciled external edit, which is exactly the
+/// state a page is in *while the user is typing into it*. The write has
+/// to happen; what must not happen is losing bytes to it.
+///
+/// So this asks the single question that matters and nothing else:
+/// **does the file hold content the log cannot account for?** If it
+/// does, the projection is skipped and [`ActionError::PageMarkdownAheadOfLog`]
+/// comes back. The user's edit is not lost — it went through
+/// `Workspace::apply` and lives in the op log; only the on-disk
+/// projection stays behind, which is the recoverable direction.
+///
+/// Three outcomes, and the third was missing from the first version:
+///
+/// - **no `.md` yet** → write; there is nothing on disk to lose.
+/// - **sidecar present but cannot answer** (every one written before
+///   0.11 carries `text: ""`) → write; refusing here would freeze every
+///   pre-0.11 page. See [`sidecar_can_answer`].
+/// - **sidecar missing, corrupt, or from a newer binary** → **refuse**.
+///   That is not "nothing at risk", it is "I cannot tell", and writing
+///   on it reopens this very door on a different hinge.
+pub fn apply_page_md_with_sidecar_guarded(
+    workspace: &Workspace,
+    root: &Path,
+    page_root: NodeId,
+) -> Result<PathBuf, ActionError> {
+    let meta = page_meta(workspace, page_root)
+        .ok_or_else(|| ActionError::NotInTree(page_root.to_string()))?;
+    let path = page_md_path(root, &meta);
+
+    // Absent `.md` → nothing on disk can be lost. An unreadable one is
+    // *not* treated as absent: that is how a transient I/O error or an
+    // undownloaded iCloud placeholder turns into an overwrite.
+    let disk = match std::fs::read_to_string(&path) {
+        Ok(disk) => Some(disk),
+        // Absent `.md` → nothing on disk can be lost.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        // Present but unreadable is *not* absent: that is how a
+        // transient I/O error or an undownloaded iCloud placeholder
+        // turns into an overwrite.
+        Err(e) => return Err(e.into()),
+    };
+    if let Some(disk) = disk {
+        // **An unreadable sidecar is a refusal, not a fall-through.**
+        //
+        // Missing, corrupt, or written by a newer binary
+        // (`UnsupportedVersion`) are three states where "does the log
+        // know this line" has one honest answer: *I cannot tell*. The
+        // first version of this function used `if let Ok(sidecar)` and
+        // wrote anyway on all three — so a page the read path protects
+        // was overwritten on the next keystroke commit, which is the
+        // door this function was added to close, standing open on a
+        // different hinge.
+        //
+        // `_if_stale` already declines these, and liveness is not at
+        // risk: `sync::needs_reconcile` maps `Err(_)` to `true`, so the
+        // orphan pass rebuilds the sidecar and the page projects on the
+        // pass after.
+        let Ok(sidecar) = outl_md::sidecar::read(&sidecar_path_for(&path)) else {
+            return Err(ActionError::PageMarkdownAheadOfLog {
+                path: path.display().to_string(),
+                lines: 0,
+                sample: "\"(sidecar unreadable — cannot tell what the log holds)\"".to_string(),
+            });
+        };
+        if let Some(e) = unlogged_content_error(&path, &disk, &sidecar.blocks) {
+            return Err(e);
+        }
+    }
+
     let md = render_page_md(workspace, page_root);
     write_page_projection(workspace, root, page_root, &meta, &md)
 }
@@ -125,7 +241,7 @@ pub fn apply_page_md_with_sidecar_if_absent(
 /// keeps rendering blank even though the tree holds the blocks. That is the
 /// "day created on one device shows empty on another" bug.
 ///
-/// Three cases:
+/// Four cases:
 /// - `.md` absent → project it (subsumes `_if_absent`, issue #120).
 /// - `.md` present and a **faithful projection** (its hash matches the
 ///   sidecar's `last_synced_hash`, i.e. no unreconciled external edit) but the
@@ -134,6 +250,11 @@ pub fn apply_page_md_with_sidecar_if_absent(
 /// - `.md` present but **not** matching its sidecar → an external edit is
 ///   pending; leave it untouched (`.md → tree` reconcile owns that), so this
 ///   never clobbers a hand-edited file.
+/// - `.md` present, hash-faithful, tree ahead — but the file holds content
+///   that exists in no op, or its sidecar cannot answer whether it does →
+///   refuse (`ActionError::PageMarkdownAheadOfLog`) or leave it alone. The
+///   hash proves outl wrote these bytes, never that the log holds them; see
+///   root `CLAUDE.md` invariant 8.
 ///
 /// Only writes on a real change, so it does not churn the sidecar's
 /// `last_synced_at` on a page already in sync.
@@ -159,15 +280,41 @@ pub fn apply_page_md_with_sidecar_if_stale(
         Err(e) => return Err(e.into()),
     };
     let disk_hash = file_hash(&disk);
+    // Read the sidecar **once**: the hash gate below needs `last_synced_hash`
+    // and the unlogged-content check needs `blocks`, and nothing holds a lock
+    // between them. Reading it twice leaves a window where a peer's sync, the
+    // background projection writer, or an `outl serve` in the same folder
+    // rewrites the file mid-call, so the hash that authorised the write and
+    // the blocks that vetted it would describe different revisions. Same
+    // defect `reconcile_md` was fixed for.
+    let sidecar_path = sidecar_path_for(&path);
     // Only re-project a file that is a faithful projection of the tree its
     // sidecar was built from. A `.md` whose hash no longer matches its sidecar
     // carries an external edit — that is the orphan reconcile's job
-    // (`.md → tree`); re-projecting here would clobber it.
-    let sidecar_path = sidecar_path_for(&path);
-    let faithful = outl_md::sidecar::read(&sidecar_path)
-        .map(|sc| sc.last_synced_hash == disk_hash)
-        .unwrap_or(false);
-    if !faithful {
+    // (`.md → tree`); re-projecting here would clobber it. No readable sidecar
+    // means the same thing: nothing establishes that outl wrote these bytes.
+    let Ok(sidecar) = outl_md::sidecar::read(&sidecar_path) else {
+        return Ok(None);
+    };
+    if sidecar.last_synced_hash != disk_hash {
+        // **One exception: the empty hash is not a stale projection, it
+        // is a withheld one.**
+        //
+        // `reconcile_md` writes `last_synced_hash = ""` when it read
+        // content it could not turn into ops (invariant 8). Every gate
+        // downstream tests hash-equality, so without this arm the page
+        // that the producer flagged is the one page the user is never
+        // told about: no `PageMarkdownAheadOfLog`, so no banner — the
+        // fix erasing the signal the same release built.
+        //
+        // Asking the content question here costs one comparison on a
+        // page that is already known to need attention, and it is the
+        // honest answer: the page really does hold lines the log lacks.
+        if sidecar.last_synced_hash.is_empty() && sidecar_can_answer(&sidecar.blocks) {
+            if let Some(e) = unlogged_content_error(&path, &disk, &sidecar.blocks) {
+                return Err(e);
+            }
+        }
         return Ok(None);
     }
     // The tree has moved past the projection iff rendering it now differs from
@@ -176,8 +323,8 @@ pub fn apply_page_md_with_sidecar_if_stale(
     if file_hash(&rendered) == disk_hash {
         return Ok(None);
     }
-    // `faithful` proves the sidecar agrees with these bytes — it does NOT
-    // prove the bytes came from the op log. A `reconcile_md` that rewrote
+    // The hash gate above proves the sidecar agrees with these bytes — it
+    // does NOT prove the bytes came from the op log. A `reconcile_md` that rewrote
     // the sidecar without emitting ops for everything it read leaves a
     // page in exactly that state, and re-rendering the tree over it drops
     // the difference for good.
@@ -189,16 +336,17 @@ pub fn apply_page_md_with_sidecar_if_stale(
     // every remote delete also answers yes to — that version of this
     // guard froze any page a peer had touched, reintroducing #166 for
     // the most ordinary sync case there is.
-    let sidecar_blocks = outl_md::sidecar::read(&sidecar_path)
-        .map(|sc| sc.blocks)
-        .unwrap_or_default();
-    let unlogged = content_lines_missing_from(&disk, &sidecar_blocks);
-    if let Some(sample) = unlogged.first() {
-        return Err(ActionError::PageMarkdownAheadOfLog {
-            path: path.display().to_string(),
-            lines: unlogged.len(),
-            sample: format!("{sample:?}"),
-        });
+    //
+    // A sidecar that cannot answer at all does not get to authorise the
+    // write either — see `sidecar_can_answer`.
+    if !sidecar_can_answer(&sidecar.blocks) {
+        return Ok(None);
+    }
+    // Same verdict as the post-mutation guard, phrased once — see
+    // `unlogged_content_error`. The policy split is above: this path
+    // declines a sidecar that cannot answer, that one writes anyway.
+    if let Some(e) = unlogged_content_error(&path, &disk, &sidecar.blocks) {
+        return Err(e);
     }
     write_page_projection(workspace, root, page_root, &meta, &rendered).map(Some)
 }
@@ -206,120 +354,19 @@ pub fn apply_page_md_with_sidecar_if_stale(
 /// The content lines in `disk` that **no block the op log knows** can
 /// account for.
 ///
-/// `sidecar_blocks` is the reference, not a fresh render of the tree, and
-/// the distinction is the whole point. The sidecar's blocks are what the
-/// log held when the two last agreed, so comparing against them answers
-/// *"does the op log know this line"*. Comparing against a render answers
-/// *"do disk and tree disagree"*, which is also yes for every remote
-/// edit, every remote delete and every reorder — a guard built on that
-/// question refuses to re-project any page a peer has touched, which is
-/// issue #166 with the blame moved.
-///
-/// Compared as a multiset, so a line duplicated on disk but present once
-/// in the log still counts as at-risk.
-///
-/// Lines are normalised before comparison: the bullet marker, the indent
-/// and trailing whitespace all come from the renderer's layout, not from
-/// the content, so a pure indent or outdent must not read as new text.
-/// Blank lines are dropped. Everything else is compared verbatim — this
-/// decides whether bytes get deleted, so it errs toward calling a line
-/// at-risk.
+/// Re-exported from [`outl_md::unlogged`], which is where it lives so
+/// that `reconcile_md` — the *producer* of the unlogged state, one
+/// crate down — can ask the same question before it advances
+/// `last_synced_hash`. Every existing `outl_actions::` path still
+/// resolves through this re-export.
 ///
 /// Public because `outl doctor` must reach the *same* verdict in its
 /// read-only listing that `--repair` reaches when it writes; two opinions
 /// about which pages are safe is how a listing promises a repair the pass
 /// then silently skips.
-pub fn content_lines_missing_from(disk: &str, sidecar_blocks: &[SidecarBlock]) -> Vec<String> {
-    /// One line of the `.md`, reduced to the text a sidecar block would
-    /// hold, or `None` when the line is not block content at all.
-    ///
-    /// The two sides are deliberately asymmetric: the `.md` carries the
-    /// renderer's layout (indent, `- ` marker) and a sidecar's `text` does
-    /// not, so only this side strips.
-    fn disk_line(line: &str) -> Option<&str> {
-        let t = line.trim();
-        if t.is_empty() {
-            return None;
-        }
-        // Strip the marker exactly once. Repeating it would turn
-        // `- - - x` into `x` and let it match a logged block `x`, which is
-        // a false negative: unlogged content walking past the guard.
-        // A bare `-` is an empty block, a first-class state (every Enter in
-        // the TUI makes one), and normalises to the empty text its sidecar
-        // entry carries.
-        if let Some(body) = t.strip_prefix("- ") {
-            return Some(body.trim_start());
-        }
-        if t == "-" {
-            return Some("");
-        }
-        // No marker. Either a `key:: value` line the renderer emits for a
-        // page or block property — which never lives in a block's `text`,
-        // so comparing it would flag every page that has one — or a
-        // continuation line, which is content. `parse_property_line` is
-        // the single owner of that distinction, and it is the same one the
-        // parser applies, so the two cannot disagree.
-        //
-        // Note this is decided *after* the marker check on purpose: a
-        // bullet whose own text looks like a property (`- note:: remember`)
-        // is stored by the parser as the block's text, so skipping it here
-        // would hide real content.
-        if outl_md::parse::parse_property_line(t).is_some() {
-            return None;
-        }
-        Some(t)
-    }
-    /// A sidecar block's `text` split into the lines it occupies in the
-    /// `.md`. No marker to strip and no property filtering: whatever is in
-    /// `text` is, by definition, content the log holds.
-    ///
-    /// An empty block still occupies one line (the renderer emits a bare
-    /// `-`), and `"".lines()` yields nothing, so it is contributed
-    /// explicitly. Without this the bare `-` on disk matches no block and
-    /// every page holding an empty block reads as unlogged.
-    fn logged_lines(text: &str) -> impl Iterator<Item = &str> {
-        std::iter::once("")
-            .take(usize::from(text.is_empty()))
-            .chain(text.lines().map(str::trim))
-    }
+pub use outl_md::unlogged::content_lines_missing_from;
 
-    // `SidecarBlock::text` arrived in 0.11; every sidecar written before
-    // it carries `text: ""`. Such a sidecar cannot answer "does the log
-    // know this line", and answering anyway means every line on disk
-    // reads as unknown: on a real workspace that flagged 615 pages
-    // holding 35,261 lines against the 233 / 1,426 that are genuinely
-    // unlogged, which would freeze most of the graph instead of guarding
-    // it. A reference that cannot answer does not get to veto the write.
-    //
-    // Self-healing: the `CURRENT_PIPELINE_VERSION` bump re-reconciles
-    // every page on first boot, rewriting sidecars with text, so the
-    // guard arms itself from there.
-    // `every`, not `any`: an empty block is a first-class state whose
-    // entry legitimately carries `text: ""`, so standing down on a single
-    // one disarmed the guard for the whole page. Only a sidecar where
-    // *nothing* has text is the pre-0.11 case this is about.
-    if !sidecar_blocks.is_empty() && sidecar_blocks.iter().all(|b| b.text.is_empty()) {
-        return Vec::new();
-    }
-
-    // A block's text can span lines (continuation), and each of those
-    // lands as its own line in the `.md`, so index the pieces.
-    let mut known: HashMap<&str, usize> = HashMap::new();
-    for block in sidecar_blocks {
-        for piece in logged_lines(&block.text) {
-            *known.entry(piece).or_insert(0) += 1;
-        }
-    }
-
-    let mut missing = Vec::new();
-    for line in disk.lines().filter_map(disk_line) {
-        match known.get_mut(line) {
-            Some(n) if *n > 0 => *n -= 1,
-            _ => missing.push(line.to_string()),
-        }
-    }
-    missing
-}
+pub use outl_md::unlogged::sidecar_can_answer;
 
 /// Construct a sidecar that lines up with the `.md` we just rendered
 /// from the workspace. Walks the page subtree in DFS preorder — the

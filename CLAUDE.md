@@ -65,6 +65,10 @@ Violating any one breaks user trust irreversibly.
    The sidecar is what the log held when the two last agreed, so it answers *"does the log know this line"*; a render answers *"do disk and tree disagree"*, and that is also yes for every remote edit, remote delete and reorder.
    The first version of this guard compared against the render and therefore refused to re-project any page a peer had touched — issue #166 reintroduced, with the blame moved.
    That function is the single owner of the verdict; a second opinion about which pages are safe to overwrite is how a read-only listing promises a repair the writing pass then refuses.
+   **A refusal has to reach the user.**
+   Refusing freezes the page in both directions until `outl reconcile --ahead-of-log` runs.
+   A client that swallows the error into a log line therefore ships a page that silently stopped syncing — the same "silence is the defect" failure this invariant exists to prevent, moved one layer up.
+   Every surface names it: [`docs/clients.md` → Surfacing a page that stopped syncing](docs/clients.md#surfacing-a-page-that-stopped-syncing).
 
    **Why this is an invariant and not a code comment.**
    Issue #166 fixed a real bug (tree ahead of `.md`, page renders empty) by re-projecting whenever the tree outran a *faithful* projection, where faithful meant the hash matched.
@@ -72,7 +76,16 @@ Violating any one breaks user trust irreversibly.
    On a real 2,560-page workspace that cost 233 pages holding 1,426 lines of work that existed in no op.
    They were deleted by `doctor --repair` (which printed `708 fixed`) and by every GUI page open, with the rebuilt sidecar making the loss undetectable afterwards.
    Full reasoning, rejected alternatives and what this change makes *worse*: [RFC 0210](docs/rfcs/0210-md-content-outside-op-log.md).
-   Open work (the producer, recovering the existing 1,426 lines, volume guards): [issue #210](https://github.com/avelino/outl/issues/210).
+
+   **The producer is fixed too, not just the guard.**
+   The state above only exists because `render → parse` was not a roundtrip for a block whose text held a blank line or its own indentation.
+   `outl-md`'s permissive parser used to close continuation on the first blank line (dropping everything after it) and silently skip an unplaceable line at any depth below 0.
+   Both are fixed in `crates/outl-md/src/parse.rs`; see `crates/outl-md/CLAUDE.md` → "What this crate owns" and its own invariant 8 entry.
+   `reconcile_md` now enforces invariant 8 in code — it will not advance `last_synced_hash` over content it could not emit an op for.
+   The matching side has the mirrored guard: `reconcile_md_with_guard` refuses a bulk delete instead of trashing an oversized orphan list (`crates/outl-md/src/matching/guard.rs`).
+   `outl recover` (op log, a truncating `Op::Edit`'s still-live predecessor) and `outl reconcile --ahead-of-log` (the `.md`, content the log never saw) are the two routes to recover the 1,426 lines this incident already produced.
+   See `docs/cli.md` → "outl recover".
+   Full status: [issue #210](https://github.com/avelino/outl/issues/210).
 
    **The general rule this is an instance of:** when you fix one direction of a `.md` ↔ tree divergence, state what happens in the opposite direction *before* merging.
    Reconciliation bugs come in mirrored pairs, and the pair that deletes is never the one being reported.
@@ -81,10 +94,17 @@ Violating any one breaks user trust irreversibly.
    These tests exist to fail if someone re-simplifies the gate back to a hash comparison — do not delete or relax them:
    `if_stale_refuses_when_the_md_carries_content_the_log_lacks`,
    `if_stale_still_reprojects_when_the_md_holds_no_unlogged_content`,
-   `if_stale_ignores_whitespace_only_differences_when_deciding`
+   `if_stale_ignores_whitespace_only_differences_when_deciding`,
+   `if_stale_declines_when_the_sidecar_cannot_answer` (an empty verdict from a reference that *cannot* answer is not permission to write — that is how a peer on an older binary re-arms the loss),
+   `if_stale_still_projects_a_page_whose_sidecar_has_no_blocks` (the opposite case: nothing on disk to lose)
    (`crates/outl-actions/src/journal/tests.rs`), plus
+   `recovery_does_not_reproject_over_text_the_log_never_saw`
+   (`crates/outl-actions/tests/desync_recovery.rs`, the same defect reached through the desync recovery's re-projection), plus
    `a_torn_op_log_never_lets_repair_overwrite_a_good_md`
    (`crates/outl-cli/src/cmd/doctor/tests/safety.rs`), which pins the precedence order: a damaged op log is reported as the damaged log, not as 2,000 pages of "unlogged content".
+   The producer side has its own net, pinning that a line is never dropped rather than just refused-to-overwrite:
+   `crates/outl-md/tests/multiline_block_roundtrip.rs` (blank lines, indentation and unplaceable lines round-trip, never truncating the op log on the next reconcile).
+   `crates/outl-actions/src/recover/tests.rs` (the truncation signature and the additive-only restore).
 
 9. **When state crosses a boundary, say what its new home requires.**
    Moving state out of the workspace, out of a file, out of the op log, or into a process global does not delete its problems — it hands them to a place with different rules.

@@ -201,6 +201,37 @@ export interface PageView {
    * markdown). Mirrors `outl_md::ParseWarning` exactly.
    */
   warnings?: ParseWarning[];
+  /**
+   * Present when this page stopped syncing because its `.md` holds
+   * content that exists in no op, so outl refuses to overwrite the file
+   * (root `CLAUDE.md` invariant 8). Absent on every healthy page.
+   *
+   * Drives the `<PageAheadOfLogBanner />` above the outline. Rendering
+   * nothing here is what the state used to do — the refusal died in a
+   * backend log line and the page just quietly stopped updating.
+   * Mirrors `outl_tauri_shared::state::MdAheadOfLog`.
+   */
+  md_ahead_of_log?: MdAheadOfLog;
+}
+
+/**
+ * Why a page stopped syncing.
+ *
+ * outl will not re-project a `.md` that holds lines the op log never
+ * recorded, because that write deletes them for good. The cost of
+ * refusing is that the page is frozen in both directions until
+ * `outl reconcile --ahead-of-log` runs: those lines never reach another
+ * device, and a peer's edits never reach this file.
+ *
+ * Mirrors `outl_tauri_shared::state::MdAheadOfLog`.
+ */
+export interface MdAheadOfLog {
+  /** Absolute path of the `.md` that was left alone. */
+  path: string;
+  /** How many content lines exist only on this device. */
+  lines: number;
+  /** One of those lines, already quoted by the backend. */
+  sample: string;
 }
 
 /**

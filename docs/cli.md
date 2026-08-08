@@ -259,8 +259,9 @@ CLI exit code is `1` in that case; MCP returns the payload via the normal envelo
 |----------------------------------------------|-------------------------|
 | `outl init <path>`                           | —                       |
 | `outl serve [--workspace=…]`                 | —                       |
-| `outl doctor [--json] [--repair]`            | `outl_workspace_doctor` |
-| `outl reconcile [--ahead-of-log]`            | —                       |
+| `outl doctor [--json] [--repair] [--force]`  | `outl_workspace_doctor` |
+| `outl reconcile [--ahead-of-log] [--allow-bulk-delete]` | —             |
+| `outl recover [--apply] [--min-lines=N]`     | —                       |
 | `outl mcp serve [--workspace=…]`             | —                       |
 | `outl peer pair\|list\|remove\|status`        | —                       |
 | `outl plugin init\|search\|list\|install\|run\|config\|secret\|enable\|disable\|remove` | — |
@@ -268,7 +269,7 @@ CLI exit code is `1` in that case; MCP returns the payload via the normal envelo
 | `outl workspace info [--json]`               | `outl_workspace_info`   |
 | `outl import roam\|logseq\|obsidian\|auto <src> <dst> [--dry-run] [--json] [--preserve-timestamps] [--no-assets] [--force]` | — |
 
-`init`, `serve`, `reconcile`, `import`, `mcp serve`, `peer`, `plugin`, and `sync` are CLI-only on purpose — they're either interactive, long-running, or bootstrap commands that don't fit a tool-call shape.
+`init`, `serve`, `reconcile`, `recover`, `import`, `mcp serve`, `peer`, `plugin`, and `sync` are CLI-only on purpose — they're either interactive, long-running, or bootstrap commands that don't fit a tool-call shape.
 
 `outl import` runs the adapter-based pipeline in the `outl-import` crate for every source (`roam` = JSON backup file, `logseq` = graph directory, `obsidian` = vault directory; `auto` detects from the source's shape).
 `((uid))` block refs and `{{embed}}`s resolve to real `((blk-XXXXXX))` handles, not page-link fallbacks.
@@ -399,8 +400,20 @@ The only thing a default run writes is its own stdout.
   Content in this state also does not sync to your other devices — peers exchange ops, not files.
   **`outl reconcile --ahead-of-log` is what brings it into the log.**
   Plain `outl reconcile` will not: the page is hash-faithful, so it reads as in-sync and the ordinary pass skips it.
-  The flag clears the recorded hash on exactly the pages listed here and reconciles them, which emits ops for that content.
+
+  It clears the recorded hash on exactly the pages listed here and reconciles them, which emits ops for that content.
   Detection is shared with this check, so the two can never disagree about which pages qualify.
+  This only helps while the content is still **on disk**.
+  A page whose `.md` was already overwritten (before this guard existed) is unreachable this way.
+  [`outl recover`](#outl-recover) reads the **op log** instead, where the same producer bug left the pre-truncation text as a recoverable earlier revision.
+
+  **`outl reconcile --allow-bulk-delete`** is a different flag for a different state, and the two are worth keeping apart.
+  A reconcile stops, writing nothing, when one page's `.md` would send more than **500 blocks** to the trash or more than **75%** of the blocks its sidecar knew (the share arm stands down under 20 blocks — clearing a scratch note is routine).
+  The failure it guards is not a user deleting a section.
+  It is a `.md` that arrived *wrong* — an iCloud placeholder whose bytes never downloaded, a half-flushed write — indistinguishable from a real bulk delete by shape, and only by scale.
+  It does **not** clear any hash — it only turns the volume guard off.
+  It also selects the opposite set from `--ahead-of-log`: that one visits pages holding *more* than the log, while a refused page holds *less*.
+  Read what the `.md` actually holds before reaching for it — the guard fires precisely when the file, not the log, is the thing that is wrong.
 
 **Files on disk.**
 
@@ -449,6 +462,24 @@ Three things count as damaged:
 Recover the log first — restore `ops/` from a backup, or let a healthy paired device sync it back — then re-run.
 Corrupt-snapshot deletion is not withheld: it is a pure cache, and dropping it only forces the full replay a damaged log wants anyway.
 
+##### A large deletion is announced first, and needs `--force`
+
+Re-projecting a page removes content whenever the op log says so — a paired device deleted a block, the log is right, this `.md` is behind.
+That is normal and it is why the fix exists.
+
+What is not normal is removing *thousands* of lines in one pass.
+That happened: a `--repair` run removed 1,426 lines from 233 pages and printed `708 fixed`, with nothing in the output mentioning a single line ([RFC 0210](rfcs/0210-md-content-outside-op-log.md)).
+
+So the doctor now measures, **before writing anything**, how many content lines on disk each re-projection would not reproduce:
+
+- Every offered action carries its own cost — `re-project pages/notes.md from the op log — removes 12 content line(s) from disk`.
+- A totals line states the workspace-wide figure, in `--repair` **and** in the default read-only mode, because read-only is where you decide whether to authorise the write.
+- Past **100 content lines** or **20 pages that lose content**, the page repairs stand down and the run tells you so.
+  Add `--force` to authorise them: `outl doctor --repair --force`.
+
+A page the write only *adds* to counts as zero, so the ordinary bulk case — a device that just paired and has the whole graph unprojected — never asks for a flag it does not need.
+Suppression is all-or-nothing over the page writes; corrupt-snapshot deletion and backup pruning still run.
+
 ##### Backups
 
 Every file `--repair` touches is copied to `.outl/repair-backup/<timestamp>/<relative path>` **before** the write, so undoing a repair is a plain `cp` back.
@@ -472,6 +503,47 @@ Emits the standard envelope.
 `data` carries `workspace`, `actor`, `op_count`, `error_count`, `warn_count`, plus `findings[]` (each `{severity, message}`, severity being `ok` / `info` / `warn` / `error`) and `repairable[]` (what `--repair` would do).
 Only after an actual `--repair` run, `data.repair` is present with `backup_dir`, `actions[]`, `repaired`, and `failed`.
 
+### `outl recover`
+
+Recovers block text an `Op::Edit` truncated — the mirror of `outl reconcile --ahead-of-log`, reading a different source.
+Both close the same gap ([RFC 0210](rfcs/0210-md-content-outside-op-log.md)), and neither replaces the other:
+
+- `reconcile --ahead-of-log` reads the **`.md`**.
+  It recovers content still on disk but in no op.
+  It cannot help a page whose `.md` was already overwritten.
+- `recover` reads the **op log**.
+  The producer bug did not lose text into thin air: the reconcile that followed it emitted an `Op::Edit` carrying the *truncated* text, and the edit before that one — carrying the full text — is still in the append-only log.
+  So a page whose `.md` was already overwritten before the guard existed is unreachable by the first and recoverable by the second.
+
+**Read-only by default.**
+A plain `outl recover` lists what it found and writes nothing.
+`--apply` is the only writing mode, and what it writes is a **new** `Op::Edit` per block — the log is never rewritten (root `CLAUDE.md` invariant 1).
+
+```
+outl recover [<path>] [--apply] [--min-lines=N]
+```
+
+- `--min-lines` (default `1`) — only report a block that lost at least this many non-blank lines.
+  A one-line loss is often ordinary editing, so the default is noisy on purpose: a false positive costs a line of output, a false negative costs the content.
+  Raise it when the listing is too long to read.
+- `--apply` — write the recovered text back.
+  Additive by construction: a block only qualifies when its current text is a *prefix* of the revision being restored, so nothing the block shows today is dropped.
+  `outl_actions::restore_truncated_block` re-checks that at write time rather than trusting the scan, and refuses a block that changed in between.
+
+A `--apply` run re-projects the `.md` of every page it touched, best-effort.
+The common, harmless outcome there is the page's `.md` already carrying the full text (only the *log* was truncated).
+The re-projection guard reports and skips that page rather than overwrite it — nothing is lost, since the `.md` is the party that is ahead.
+What it leaves behind is a **stale sidecar**: it still lists the truncated text, so the guard keeps refusing that page's future re-projections, and `outl serve --once` does not clear it (measured: 0 ops applied, the `.md` unchanged).
+`outl doctor` names each such page and points at the fix, which is `outl reconcile --ahead-of-log` — that clears `last_synced_hash` and rebuilds the sidecar.
+
+**Run `reconcile --ahead-of-log` first, then `recover`.**
+Reconcile is the wider net (it recovers whole blocks the log never saw, not just truncated ones) and it refreshes sidecars, so running it first leaves `recover` with only the cases the `.md` genuinely cannot answer.
+Measured on the workspace that surfaced issue #210: reconcile-first recovered 40 pages / 623 ops and left `recover` reporting 4 blocks holding 4 lines, all of them one-line editing artifacts.
+Recover-first restored the same content as 4 blocks / 77 lines but parked two pages behind the guard until a reconcile ran anyway.
+
+Cost is one op-log read per node in the workspace, since there is no cheaper prefilter that wouldn't itself be a second opinion about which blocks deserve a look.
+Measured at ~4.7s over 67,213 nodes / 214k ops on the workspace that surfaced issue #210.
+
 ## MCP
 
 Every machine-shaped command above is also exposed as an MCP tool through `outl mcp serve` — same binary, same handler, same JSON shape.
@@ -482,7 +554,7 @@ This document stays focused on the surface; how to attach it to a host lives ove
 
 ## What does not map 1:1 (and that's fine)
 
-- **Interactive commands** (`init`, `reconcile`, `mcp serve`) stay CLI-only.
+- **Interactive commands** (`init`, `reconcile`, `recover`, `mcp serve`) stay CLI-only.
   A wizard inside a tool call is the wrong shape.
 - **Long-running watchers** (`serve`) stay CLI-only.
   MCP tools are request/response; the file watcher is a process, not a tool.
@@ -524,7 +596,7 @@ No business logic lives in either layer — they format input and output, that's
 
 Shipping today:
 
-- `outl init`, `outl serve`, `outl doctor`, `outl reconcile`, `outl import logseq|obsidian|roam`, `outl theme`.
+- `outl init`, `outl serve`, `outl doctor`, `outl reconcile`, `outl recover`, `outl import logseq|obsidian|roam`, `outl theme`.
 - `outl` (no subcommand) opens the TUI.
 - `outl page get|create|update|delete|list|rename|render` (`create` accepts `--content` to seed the outline in one call)
 - `outl block get|append|append-tree|insert|update|move|delete|toggle-todo|tree`

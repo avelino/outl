@@ -187,6 +187,14 @@ Detection is `splitQuote` + `stripQuoteFromTokens` (`@outl/shared/markdown`, mir
 Toggling: `toggleQuote(id)` → `toggle_quote` → `outl_actions::block::toggle_quote` (no TS string surgery).
 Convention (three-surface parity): [`docs/clients.md` → Blockquote convention](../../docs/clients.md#blockquote-convention).
 
+## "This page isn't syncing" banner
+
+`<PageAheadOfLogBanner client="mobile" />` (from `@outl/shared/warnings`) renders above the outline when `PageView.md_ahead_of_log` comes back set.
+That means the page's `.md` holds lines the op log never recorded, so outl refuses to overwrite it and the page has stopped converging with the user's other devices.
+The copy is owned by `@outl/shared/warnings::aheadOfLogNotice`, never written here; `client="mobile"` is what makes it say "open this workspace on your computer" instead of naming a terminal command, because **there is no `outl` binary on iOS**.
+The flag is held in `Journal.tsx`'s own `aheadOfLog` signal, **not** read off `view()`: only the open commands carry it, so an edit commit's reply would otherwise clear the banner on the user's first edit — the very action it warns against.
+Convention: [`docs/clients.md` → Surfacing a page that stopped syncing](../../docs/clients.md#surfacing-a-page-that-stopped-syncing).
+
 ## Zoom / focus on a block
 
 Tap a block's plain bullet dot to zoom in — it becomes the outline root (Roam/Workflowy focus); `← Back` + breadcrumb zoom out.

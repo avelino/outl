@@ -10,15 +10,16 @@ use std::str::FromStr;
 
 use chrono::NaiveDate;
 use outl_actions::{
-    apply_page_md_with_sidecar_rendered, date_from_slug, page_meta as page_meta_action,
-    project_outline, read_page_outline_with_workspace, render_page_md, ActionError, PageOutline,
+    apply_page_md_with_sidecar_if_stale, apply_page_md_with_sidecar_rendered, date_from_slug,
+    page_meta as page_meta_action, project_outline, read_page_outline_with_workspace,
+    render_page_md, ActionError, PageOutline,
 };
 use outl_core::id::NodeId;
 use outl_core::workspace::Workspace;
 use tracing::warn;
 
 use crate::host::AppHost;
-use crate::state::{PageView, ERR_LOADING};
+use crate::state::{MdAheadOfLog, PageView, ERR_LOADING};
 
 pub fn parse_node_id(s: &str) -> Result<NodeId, String> {
     ulid::Ulid::from_str(s)
@@ -97,6 +98,10 @@ pub fn build_page_view(
         backlinks: Vec::new(),
         backlinks_order,
         warnings: page_outline.warnings,
+        // Set by the open commands, which are the ones that attempt the
+        // re-projection this flag reports on. Reading the `.md` never
+        // discovers the condition on its own.
+        md_ahead_of_log: None,
     })
 }
 
@@ -126,7 +131,93 @@ pub fn build_page_view_from_tree(
         backlinks: Vec::new(),
         backlinks_order,
         warnings: Vec::new(),
+        md_ahead_of_log: None,
     })
+}
+
+/// What a stale-`.md` refresh attempt has to say back to its caller.
+///
+/// Both fields are already logged by [`reproject_stale_md`]; they are
+/// carried out so a caller with a user-facing surface can use them.
+#[derive(Debug, Default)]
+pub struct ReprojectOutcome {
+    /// The write was refused because the `.md` holds content that exists
+    /// in no op — the one condition the user must be told about, since
+    /// nothing else will resolve it.
+    pub ahead_of_log: Option<MdAheadOfLog>,
+    /// Any other failure (I/O, permissions, unreadable sidecar). Local
+    /// and retryable, so most callers ignore it; `open_ref` reports it
+    /// through its own `ref-projection-failed` event.
+    pub other_error: Option<String>,
+}
+
+/// Refresh `page_id`'s `.md` when the tree has moved past it, and report
+/// the one failure the **user** has to know about.
+///
+/// Every GUI open path calls this before reading the `.md` back into a
+/// view (issue #166: a peer's ops landed, the projection was never
+/// refreshed, the page renders stale or empty).
+///
+/// Two failures, deliberately handled differently:
+///
+/// - [`ActionError::PageMarkdownAheadOfLog`] is **the user's problem**.
+///   The write was refused because the file holds content that exists in
+///   no op, so the page has stopped converging in both directions until
+///   `outl reconcile --ahead-of-log` runs (root `CLAUDE.md` invariant 8,
+///   [RFC 0210]). Logging it and moving on is what left a page silently
+///   frozen with nothing on screen. It comes back as an
+///   [`MdAheadOfLog`] the caller hangs on the [`PageView`].
+/// - Everything else (I/O, permissions, an unreadable sidecar) is a
+///   local, retryable condition the next open or the orphan scanner
+///   picks up; it stays a log line.
+///
+/// Never fails the open. The page opens either way — the guard withheld
+/// a *write*, and the `.md` on disk is still perfectly readable. Turning
+/// this into an error would trade a stale page for no page at all, on
+/// the hottest path in the app.
+///
+/// [RFC 0210]: https://github.com/avelino/outl/blob/main/docs/rfcs/0210-md-content-outside-op-log.md
+pub fn reproject_stale_md(
+    workspace: &Workspace,
+    storage_root: &Path,
+    page_id: NodeId,
+    context: &str,
+) -> ReprojectOutcome {
+    let Err(e) = apply_page_md_with_sidecar_if_stale(workspace, storage_root, page_id) else {
+        return ReprojectOutcome::default();
+    };
+    warn!("{context}: reproject stale .md failed: {e}");
+    match md_ahead_of_log(&e) {
+        Some(ahead) => ReprojectOutcome {
+            ahead_of_log: Some(ahead),
+            other_error: None,
+        },
+        None => ReprojectOutcome {
+            ahead_of_log: None,
+            other_error: Some(e.to_string()),
+        },
+    }
+}
+
+/// Project the one [`ActionError`] variant the user must see onto its
+/// wire shape; every other variant maps to `None`.
+///
+/// Split from [`reproject_stale_md`] so the classification is testable
+/// without a workspace on disk — it is the piece that decides whether
+/// anything reaches the screen at all.
+fn md_ahead_of_log(err: &ActionError) -> Option<MdAheadOfLog> {
+    match err {
+        ActionError::PageMarkdownAheadOfLog {
+            path,
+            lines,
+            sample,
+        } => Some(MdAheadOfLog {
+            path: path.clone(),
+            lines: *lines,
+            sample: sample.clone(),
+        }),
+        _ => None,
+    }
 }
 
 /// Apply a workspace mutation `f` and project the result back to
@@ -233,4 +324,32 @@ pub fn announce_after_commit<S: AppHost>(state: &S, ws: &Workspace, page_id: Nod
         return;
     };
     transport.announce_local_ops(&meta.slug, state.hlc().next());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::md_ahead_of_log;
+    use outl_actions::ActionError;
+
+    #[test]
+    fn the_refusal_carries_the_count_and_the_sample_forward() {
+        let err = ActionError::PageMarkdownAheadOfLog {
+            path: "/w/pages/infra.md".into(),
+            lines: 12,
+            sample: "\"restarted the ingest worker\"".into(),
+        };
+        let info = md_ahead_of_log(&err).expect("this is the variant the user must see");
+        assert_eq!(info.lines, 12);
+        assert_eq!(info.path, "/w/pages/infra.md");
+        assert!(info.sample.contains("ingest worker"));
+    }
+
+    #[test]
+    fn an_unrelated_failure_puts_nothing_on_screen() {
+        // A banner that fires on ordinary I/O trouble is a banner users
+        // learn to ignore, and then the one that means "this page is not
+        // syncing" goes unread too. Only the refusal gets the surface.
+        let err = ActionError::NotInTree("01ABC".into());
+        assert!(md_ahead_of_log(&err).is_none());
+    }
 }

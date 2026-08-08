@@ -256,3 +256,68 @@ fn fully_synced_pages_are_not_flagged() {
 
     assert!(scan_for_desynced_projections(&ws, root).is_empty());
 }
+
+/// The typical offline session is not "one lost `Create`" — it is a new
+/// block **and** a reworded existing one, and only the first half has an
+/// id the tree has never seen.
+///
+/// The recovery is strictly additive by design, so it re-creates the new
+/// block and leaves the existing one alone: the log's text may be a peer
+/// edit that landed while the projection was frozen, and writing the disk
+/// text back as an `Op::Edit` would revert that peer permanently on an
+/// append-only log.
+///
+/// But the re-projection that followed then rendered the tree over the
+/// file, deleting the reworded text — which exists in no op, so nowhere
+/// else. Same defect as RFC 0210, reached through a different door: a
+/// write authorised by `last_synced_hash` agreeing with the bytes on
+/// disk, which only ever proved outl wrote them.
+///
+/// Keep the recovered ops, leave the file.
+#[test]
+fn recovery_does_not_reproject_over_text_the_log_never_saw() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    let actor = ActorId::new();
+    let hlc = HlcGenerator::new(actor);
+    let mut ws = open_ws(root, actor);
+
+    let date = NaiveDate::from_ymd_opt(2026, 4, 4).unwrap();
+    let page_id = open_journal(&mut ws, &hlc, date).unwrap();
+    let alpha = append_block(&mut ws, &hlc, Some(page_id), Some("alpha")).unwrap();
+    apply_page_md_with_sidecar(&ws, root, page_id).unwrap();
+
+    // The offline session: alpha reworded, gamma created. The projection
+    // pair reached disk together (hashes agree); the ops append did not.
+    let md_path = root.join("journals/2026-04-04.md");
+    let sc_path = root.join("journals/2026-04-04.outl");
+    let md_offline = "- alpha reworded offline\n- gamma\n";
+    let ghost = NodeId(ulid::Ulid::new());
+    let mut sc = outl_md::sidecar::read(&sc_path).unwrap();
+    sc.blocks = vec![
+        outl_md::sidecar::SidecarBlock::from_text(alpha, 1, 0, "alpha reworded offline"),
+        outl_md::sidecar::SidecarBlock::from_text(ghost, 2, 0, "gamma"),
+    ];
+    sc.last_synced_hash = outl_md::sidecar::file_hash(md_offline);
+    fs::write(&md_path, md_offline).unwrap();
+    outl_md::sidecar::write(&sc_path, &sc).unwrap();
+
+    assert_eq!(
+        scan_for_desynced_projections(&ws, root),
+        vec![md_path.clone()]
+    );
+    let applied = recover_desynced_projection(&mut ws, &hlc, root, &md_path).unwrap();
+
+    // The additive half still runs: gamma's ops reach the log.
+    assert!(applied > 0, "the lost Create must still be recovered");
+    assert_eq!(ws.tree().parent(ghost), Some(page_id));
+    assert_eq!(ws.block_text(ghost).as_deref(), Some("gamma"));
+    // alpha keeps the log's text — the recovery never overrides the log.
+    assert_eq!(ws.block_text(alpha).as_deref(), Some("alpha"));
+    // And the file keeps the text that exists in no op.
+    assert_eq!(
+        fs::read_to_string(&md_path).unwrap(),
+        md_offline,
+        "re-projecting here deletes content the op log has never seen"
+    );
+}

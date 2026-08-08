@@ -72,6 +72,7 @@ pub mod page_repair_titles;
 pub mod paste;
 pub mod person;
 pub mod quote;
+pub mod recover;
 pub mod reminders;
 pub mod resolve;
 pub mod storage_scope;
@@ -107,10 +108,10 @@ pub use exec::{run_code_block, ExecOutputDto, RunCodeBlockOutcome};
 pub use history::{restore_page_md, HistoryStacks, DEFAULT_HISTORY_CAP};
 pub use journal::{
     apply_all_pages_md, apply_page_md, apply_page_md_with_sidecar,
-    apply_page_md_with_sidecar_if_absent, apply_page_md_with_sidecar_if_stale,
-    apply_page_md_with_sidecar_rendered, content_lines_missing_from, journals_dir, mutate_page_md,
-    page_md_path, pages_dir, remove_page_projection, render_block_md, render_page_md,
-    write_md_atomic,
+    apply_page_md_with_sidecar_guarded, apply_page_md_with_sidecar_if_absent,
+    apply_page_md_with_sidecar_if_stale, apply_page_md_with_sidecar_rendered,
+    content_lines_missing_from, journals_dir, mutate_page_md, page_md_path, pages_dir,
+    remove_page_projection, render_block_md, render_page_md, sidecar_can_answer, write_md_atomic,
 };
 pub use outl_md::parse::{ParseWarning, ParseWarningKind};
 pub use outline::{
@@ -130,6 +131,7 @@ pub use paste::{
     PasteOutcome,
 };
 pub use person::{search_persons, PERSON_TYPE, TYPE_KEY};
+pub use recover::{restore_truncated_block, scan_truncated_blocks, TruncatedBlock};
 pub use reminders::{
     epoch_ms_to_local_naive, local_naive_to_epoch_ms, next_fire_at, scan_reminders, snooze,
     snooze_until, take_due, FiredLog, FiredRecord, Reminder, ReminderState, SnoozePreset, Urgency,

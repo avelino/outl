@@ -91,6 +91,14 @@ A `"> "`-prefixed block renders with a left border + ~6% tint, right-rounded, bo
 Detection is `splitQuote` + `stripQuoteFromTokens`; toggling routes `toggleQuote` → `toggle_quote` → `outl_actions::block::toggle_quote`.
 Convention: [`docs/clients.md` → Blockquote convention](../../docs/clients.md#blockquote-convention).
 
+## "This page isn't syncing" banner
+
+`<PageAheadOfLogBanner client="desktop" />` (from `@outl/shared/warnings`) renders above the outline when `PageView.md_ahead_of_log` comes back set.
+That means the page's `.md` holds lines the op log never recorded, so outl refuses to overwrite it and the page has stopped converging with the user's other devices.
+The copy is owned by `@outl/shared/warnings::aheadOfLogNotice`, never written here; `client="desktop"` is what makes it name `outl reconcile --ahead-of-log` in the workspace folder.
+`appState.mdAheadOfLog` is sticky per page (`stickyAheadOfLog` in `OutlineView.tsx`): only the open commands carry the flag, so a mutation reply would otherwise clear the banner on the user's first edit — the very action it warns against.
+Convention: [`docs/clients.md` → Surfacing a page that stopped syncing](../../docs/clients.md#surfacing-a-page-that-stopped-syncing).
+
 ## Theme tokens
 
 `src/lib/palette.ts::applyPaletteToRoot` writes the canonical `--color-outl-*` namespace plus the legacy `--color-ios-*` one `MarkdownInline` still consumes.

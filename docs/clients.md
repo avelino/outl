@@ -86,6 +86,28 @@ Tauri commands on mobile + desktop expose this directly; the TUI calls it via `l
 The contract is intentionally non-blocking: a file with warnings is still editable, still saves cleanly (render normalises it to `- <raw>` on the next write), and never refuses to load.
 Users decide when to clean up; outl never deletes content on their behalf.
 
+## Surfacing a page that stopped syncing
+
+A parser warning says "outl kept a line that doesn't match the dialect".
+This is a different, louder condition: **the page is no longer converging with your other devices.**
+
+It happens when a page's `.md` holds content that exists in no op.
+outl refuses to overwrite such a file (root `CLAUDE.md` invariant 8, [RFC 0210](rfcs/0210-md-content-outside-op-log.md)), because that write deletes the content for good.
+The cost of refusing is that the page is frozen in both directions until `outl reconcile --ahead-of-log` runs: those lines never reach another device, and a peer's edits never reach this `.md`.
+
+| Client | Surface |
+|--------|---------|
+| CLI | `outl doctor` names the page, the line count and one sample; `outl reconcile --ahead-of-log` is the recovery. |
+| Desktop | `<PageAheadOfLogBanner client="desktop" />` above the outline, from `PageView.md_ahead_of_log`. Names the command to run in the workspace folder. |
+| Mobile | Same banner, `client="mobile"`. **There is no `outl` binary on iOS**, so the copy says to open the workspace on a computer instead of pointing at a terminal that doesn't exist. |
+| TUI | Not surfaced yet — the TUI does not call `apply_page_md_with_sidecar_if_stale` on its load path. |
+
+The user-facing wording is owned by `@outl/shared/warnings::aheadOfLogNotice` (unit-tested), never written inline in a client.
+Both banners also warn against editing the page in the meantime: a local edit is safe: `ProjectionWriter` routes through `apply_page_md_with_sidecar_guarded`, which refuses to project over unlogged content exactly as the open path does. The `.md` simply stays behind until the lines are recorded.
+
+The page **still opens** and still shows what is on disk — the guard withheld a write, not the page.
+Before this banner existed the refusal only reached a backend log line, so the page appeared to freeze with nothing said.
+
 ## Running code blocks
 
 Every client that lets the user execute a `` ```lang ``` `` block (TUI `g x`, desktop `Cmd+Shift+X` / Run button, mobile long-press → "Run code") goes through **one** shared entry point:
@@ -384,6 +406,20 @@ No client blocks a keystroke or a Tauri command reply on a `.md` render, an fsyn
 
 A crash between the op-log write and a queued projection leaves the `.md` briefly behind the op log — that's not data loss.
 The op log is authoritative: the next boot re-projects any stale page, and peers sync ops, never `.md` files.
+
+### When re-projection is withheld
+
+"The next boot re-projects any stale page" has three exceptions, and they are user-visible: the page keeps showing what is on disk instead of what the tree holds.
+`outl_actions::apply_page_md_with_sidecar_if_stale` — the call every GUI open path makes — declines to write when:
+
+- the `.md` no longer matches its sidecar (an external edit is pending; `outl reconcile` owns it);
+- the `.md` holds content that exists in **no op**, which surfaces as an error naming the line count and one sample (`outl doctor` lists the pages, `outl reconcile --ahead-of-log` brings them into the log);
+- the sidecar cannot answer whether it does — every block written without `SidecarBlock::text`, i.e. by a peer still on a pre-0.11 binary.
+  That page is already queued for the pipeline migration, whose reconcile rewrites the sidecar with text; the next open re-projects normally.
+
+The same rule governs the desync recovery (`recover_desynced_projection`): it recovers the lost ops but leaves the file alone when a block the log already knows carries different text on disk.
+A stale view is recoverable; deleted bytes are not.
+Reasoning and the incident behind it: [RFC 0210](rfcs/0210-md-content-outside-op-log.md), root `CLAUDE.md` invariant 8.
 
 Plugin `onOp` hooks on desktop/mobile are fire-and-forget (no `await` on the reply path) for the same reason — a slow plugin can't stall the next keystroke or command.
 

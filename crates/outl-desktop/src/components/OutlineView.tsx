@@ -29,9 +29,9 @@ import {
   setBlockProperty,
 } from "@outl/shared/api/commands";
 
-import type { PageView } from "@outl/shared/api/types";
+import type { MdAheadOfLog, PageView } from "@outl/shared/api/types";
 
-import { ParseWarningsBanner } from "@outl/shared/warnings";
+import { PageAheadOfLogBanner, ParseWarningsBanner } from "@outl/shared/warnings";
 import { isAssetLink } from "@outl/shared/links";
 import { journalSlugToDate } from "@outl/shared/journal";
 import {
@@ -196,10 +196,27 @@ export function OutlineView() {
     ),
   );
 
+  /**
+   * "Is this page still not syncing?", carried across same-page
+   * refreshes.
+   *
+   * Only the open commands attempt the re-projection that discovers the
+   * condition; a mutation reply is built from the tree and never carries
+   * the flag. Reading it straight off every view would therefore clear
+   * the banner on the user's first edit — the exact action the banner
+   * warns against, since a local edit re-projects the page and
+   * overwrites the unlogged lines. Sticky until we navigate elsewhere.
+   */
+  function stickyAheadOfLog(view: PageView): MdAheadOfLog | undefined {
+    if (view.md_ahead_of_log) return view.md_ahead_of_log;
+    return appState.page?.id === view.page.id ? appState.mdAheadOfLog : undefined;
+  }
+
   function applyView(view: PageView) {
     setAppState({
       page: view.page,
       parseWarnings: view.warnings ?? [],
+      mdAheadOfLog: stickyAheadOfLog(view),
     });
     // Reconcile the outline (see `setOutline`): only the block that
     // actually changed re-renders, not all N rows.
@@ -213,6 +230,7 @@ export function OutlineView() {
           setAppState({
             page: updated.page,
             parseWarnings: updated.warnings ?? [],
+            mdAheadOfLog: stickyAheadOfLog(updated),
           });
           setOutline(updated.outline);
           void resolvePageEmbeds(updated.outline);
@@ -825,6 +843,7 @@ export function OutlineView() {
 
       <div class="min-w-0 flex-1 overflow-y-auto px-12 py-6">
         <div class="mx-auto w-full max-w-3xl">
+          <PageAheadOfLogBanner info={appState.mdAheadOfLog} client="desktop" />
           <ParseWarningsBanner warnings={appState.parseWarnings} />
           <Show when={appState.page}>
             <div class="mb-2 flex justify-end">

@@ -69,6 +69,39 @@ fn build_doc<'a>(updates: impl Iterator<Item = &'a [u8]>) -> Doc {
     doc
 }
 
+/// Replay `updates` one at a time, capturing the block's text after each
+/// one. Entry `i` is the block's text once updates `0..=i` are applied, so
+/// the returned vector is aligned 1:1 with the `Op::Edit`s it was built
+/// from and its last entry equals [`build_doc`] + [`doc_string`] over the
+/// same input.
+///
+/// This is what makes an `Op::Edit` that *shrank* a block recoverable: the
+/// pre-edit text is not stored anywhere as text, but every `Edit` carries
+/// the Yrs delta that produced it, so replaying a prefix of the history
+/// reconstructs the state the block was in before the shrink.
+///
+/// Order matters here in a way it does not for [`build_doc`]. Yrs is a
+/// CRDT, so the *final* string is order-independent; the intermediate ones
+/// are not, and are only meaningful when the caller feeds updates in HLC
+/// order — the order the ops actually happened in.
+///
+/// A malformed update still contributes an entry (the unchanged text)
+/// rather than being dropped, so a caller can map entry `i` back to the
+/// op it came from.
+pub(crate) fn text_revisions<'a>(updates: impl Iterator<Item = &'a [u8]>) -> Vec<String> {
+    let doc = Doc::new();
+    let text = doc.get_or_insert_text("content");
+    let mut out = Vec::new();
+    for update in updates {
+        let mut txn = doc.transact_mut();
+        if let Ok(decoded) = yrs::Update::decode_v1(update) {
+            let _ = txn.apply_update(decoded);
+        }
+        out.push(text.get_string(&txn));
+    }
+    out
+}
+
 /// Materialize a `Doc`'s `content` text into a plain string.
 fn doc_string(doc: &Doc) -> String {
     let text = doc.get_or_insert_text("content");
