@@ -118,21 +118,26 @@ pub fn scan_truncated_blocks(
 
 /// Write a recovered revision back as a **new** `Op::Edit`.
 ///
-/// Refuses when the recovered text no longer contains the block's current
-/// text as a prefix — either the scan is stale (someone edited the block
-/// in between) or the entry was built by hand. Either way the write would
-/// stop being additive, and silently overwriting a block with a revision
-/// from before an edit the user made is the same class of bug this whole
-/// module exists to undo.
+/// Refuses when the block changed since the scan, or when the recovered text
+/// no longer contains the block's current text as a prefix. Either way the
+/// write would stop being additive, and silently overwriting a block with a
+/// revision from before an edit the user made is the same class of bug this
+/// whole module exists to undo.
 pub fn restore_truncated_block(
     workspace: &mut Workspace,
     hlc: &HlcGenerator,
     found: &TruncatedBlock,
 ) -> Result<(), ActionError> {
     let live = workspace.block_text(found.node).unwrap_or_default();
-    if !found.recovered.trim_end().starts_with(live.trim_end()) {
+    if live.trim_end() != found.current {
         return Err(ActionError::NotInTree(format!(
             "{} changed since the scan; re-run the scan before restoring",
+            found.node
+        )));
+    }
+    if !found.recovered.trim_end().starts_with(live.trim_end()) {
+        return Err(ActionError::NotInTree(format!(
+            "{} cannot be restored additively; re-run the scan before restoring",
             found.node
         )));
     }

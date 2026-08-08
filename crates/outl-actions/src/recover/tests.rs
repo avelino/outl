@@ -205,6 +205,28 @@ fn restoring_refuses_a_block_that_changed_since_the_scan() {
     );
 }
 
+#[test]
+fn restoring_refuses_a_block_cleared_since_the_scan() {
+    let (mut ws, hlc) = workspace();
+    let node = block_through(&mut ws, &hlc, None, &[LONG, "🚨 Briefing"]);
+    let found = scan_truncated_blocks(&ws, 1).expect("scan");
+
+    edit_text(&mut ws, &hlc, node, "").expect("edit");
+    assert!(restore_truncated_block(&mut ws, &hlc, &found[0]).is_err());
+    assert_eq!(ws.block_text(node).as_deref(), Some(""));
+}
+
+#[test]
+fn restoring_refuses_a_shorter_prefix_since_the_scan() {
+    let (mut ws, hlc) = workspace();
+    let node = block_through(&mut ws, &hlc, None, &[LONG, "🚨 Briefing"]);
+    let found = scan_truncated_blocks(&ws, 1).expect("scan");
+
+    edit_text(&mut ws, &hlc, node, "🚨").expect("edit");
+    assert!(restore_truncated_block(&mut ws, &hlc, &found[0]).is_err());
+    assert_eq!(ws.block_text(node).as_deref(), Some("🚨"));
+}
+
 /// A workspace where nothing was ever truncated must cost nothing and
 /// report nothing — the ordinary case for every user who never hit the
 /// parser bug.
